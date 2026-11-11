@@ -176,6 +176,30 @@ TEST(vram_budget, only_device_local_heaps_are_capped)
   CHECK(budget.admit(1u, 31 * gib));
   CHECK_EQ(ledger.used(), 7 * gib); }
 
+TEST(vram_budget, the_largest_allocation_a_query_reports_never_exceeds_the_largest_advertised_heap)
+{ av::FailingBlocks blocks;
+  VramLedger ledger;
+  ledger.learn(8 * gib);
+  VramBudget budget(blocks);
+  budget.bind(&ledger, nullptr);
+  budget.learn(host_with_vram(16 * gib));
+  VkPhysicalDeviceMaintenance3Properties three = {};
+  three.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_3_PROPERTIES;
+  three.maxMemoryAllocationSize = 64 * gib;
+  VkPhysicalDeviceMaintenance4Properties four = {};
+  four.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_PROPERTIES;
+  four.pNext = &three;
+  four.maxBufferSize = 64 * gib;
+  VkPhysicalDeviceProperties2 properties = {};
+  properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+  properties.pNext = &four;
+  budget.clamp(properties);
+  CHECK_EQ(three.maxMemoryAllocationSize, 32 * gib);
+  CHECK_EQ(four.maxBufferSize, 32 * gib);
+  three.maxMemoryAllocationSize = gib;
+  budget.clamp(properties);
+  CHECK_EQ(three.maxMemoryAllocationSize, gib); }
+
 TEST(vram_budget, the_budget_report_follows_commits_and_releases)
 { av::FailingBlocks blocks;
   VramLedger ledger;

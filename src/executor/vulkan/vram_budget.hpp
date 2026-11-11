@@ -23,6 +23,7 @@ public:
     void     bind(ByteLedger *vram, ByteLedger *host);
     void     learn(const VkPhysicalDeviceMemoryProperties &host);
     void     clamp(VkPhysicalDeviceMemoryProperties &answer) const;
+    void     clamp(VkPhysicalDeviceProperties2 &answer) const;
     void     report(VkPhysicalDeviceMemoryBudgetPropertiesEXT &budget) const;
     [[nodiscard]] bool admit(uint32_t heap, uint64_t size);
     void     refund(uint32_t heap, uint64_t size);

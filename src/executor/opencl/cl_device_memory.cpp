@@ -107,6 +107,18 @@ uint64_t ClDeviceMemory::cap() const
     return account_.cap();
 }
 
+uint64_t ClDeviceMemory::advertised() const
+{
+    AV_SCOPE("ClDeviceMemory::advertised");
+    return account_.advertised();
+}
+
+bool ClDeviceMemory::bound() const
+{
+    AV_SCOPE("ClDeviceMemory::bound");
+    return account_.bound();
+}
+
 uint64_t ClDeviceMemory::free_bytes() const
 {
     AV_SCOPE("ClDeviceMemory::free_bytes");

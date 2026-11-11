@@ -622,6 +622,22 @@ void VulkanBackend::on_vkGetPhysicalDeviceMemoryProperties2(VkPhysicalDevice phy
             vram_.report(*reinterpret_cast<VkPhysicalDeviceMemoryBudgetPropertiesEXT *>(link));
 }
 
+void VulkanBackend::on_vkGetPhysicalDeviceProperties2(VkPhysicalDevice physicalDevice,
+                                                      VkPhysicalDeviceProperties2 *pProperties)
+{
+    AV_SCOPE("VulkanBackend::on_vkGetPhysicalDeviceProperties2");
+    RealVulkanDispatch::on_vkGetPhysicalDeviceProperties2(physicalDevice, pProperties);
+    learn_types(physicalDevice);
+    vram_.clamp(*pProperties);
+}
+
+void VulkanBackend::on_vkGetPhysicalDeviceProperties2KHR(VkPhysicalDevice physicalDevice,
+                                                         VkPhysicalDeviceProperties2 *pProperties)
+{
+    AV_SCOPE("VulkanBackend::on_vkGetPhysicalDeviceProperties2KHR");
+    on_vkGetPhysicalDeviceProperties2(physicalDevice, pProperties);
+}
+
 void VulkanBackend::on_vkGetPhysicalDeviceMemoryProperties2KHR(VkPhysicalDevice physicalDevice,
                                                                VkPhysicalDeviceMemoryProperties2 *pMemoryProperties)
 {

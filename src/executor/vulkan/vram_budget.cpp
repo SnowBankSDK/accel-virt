@@ -46,6 +46,42 @@ void VramBudget::clamp(VkPhysicalDeviceMemoryProperties &answer) const
     }
 }
 
+void VramBudget::clamp(VkPhysicalDeviceProperties2 &answer) const
+{
+    AV_SCOPE("VramBudget::clamp");
+    VkPhysicalDeviceMemoryProperties view = host_;
+    clamp(view);
+    uint64_t largest = 0u;
+    for (uint32_t heap = 0u; heap < view.memoryHeapCount && heap < VK_MAX_MEMORY_HEAPS; heap++)
+        if (view.memoryHeaps[heap].size > largest) largest = view.memoryHeaps[heap].size;
+    if (largest == 0u) return;
+    for (auto *link = static_cast<VkBaseOutStructure *>(answer.pNext); link != nullptr; link = link->pNext) {
+        switch (link->sType) {
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_3_PROPERTIES: {
+            auto &limits = *reinterpret_cast<VkPhysicalDeviceMaintenance3Properties *>(link);
+            if (limits.maxMemoryAllocationSize > largest) limits.maxMemoryAllocationSize = largest;
+            break;
+        }
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES: {
+            auto &limits = *reinterpret_cast<VkPhysicalDeviceVulkan11Properties *>(link);
+            if (limits.maxMemoryAllocationSize > largest) limits.maxMemoryAllocationSize = largest;
+            break;
+        }
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_PROPERTIES: {
+            auto &limits = *reinterpret_cast<VkPhysicalDeviceMaintenance4Properties *>(link);
+            if (limits.maxBufferSize > largest) limits.maxBufferSize = largest;
+            break;
+        }
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_PROPERTIES: {
+            auto &limits = *reinterpret_cast<VkPhysicalDeviceVulkan13Properties *>(link);
+            if (limits.maxBufferSize > largest) limits.maxBufferSize = largest;
+            break;
+        }
+        default: break;
+        }
+    }
+}
+
 void VramBudget::report(VkPhysicalDeviceMemoryBudgetPropertiesEXT &budget) const
 {
     AV_SCOPE("VramBudget::report");

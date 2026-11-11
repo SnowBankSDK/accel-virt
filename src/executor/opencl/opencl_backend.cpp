@@ -161,17 +161,17 @@ cl_int OpenClBackend::capped_device_info(cl_device_id device, cl_device_info par
 {
     AV_SCOPE("OpenClBackend::capped_device_info");
     if (param_name == CL_DEVICE_GLOBAL_FREE_MEMORY_AMD) {
-        const cl_int asked = RealDispatch::on_clGetDeviceInfo(device, param_name, param_value_size, param_value,
-                                                              param_value_size_ret);
-        if (param_value == nullptr || param_value_size < sizeof(size_t)) return asked;
+        if (!device_memory_.bound())
+            return RealDispatch::on_clGetDeviceInfo(device, param_name, param_value_size, param_value,
+                                                    param_value_size_ret);
+        constexpr size_t entries = 2u;
+        if (param_value_size_ret != nullptr) *param_value_size_ret = entries * sizeof(size_t);
+        if (param_value == nullptr) return CL_SUCCESS;
+        if (param_value_size < sizeof(size_t)) return CL_INVALID_VALUE;
         size_t *const kilobytes = static_cast<size_t *>(param_value);
-        const uint64_t free_kib = device_memory_.free_bytes() / 1024u;
-        if (asked != CL_SUCCESS) {
-            kilobytes[0] = static_cast<size_t>(free_kib);
-            if (param_value_size_ret != nullptr) *param_value_size_ret = sizeof(size_t);
-            return CL_SUCCESS;
-        }
-        if (free_kib < kilobytes[0]) kilobytes[0] = static_cast<size_t>(free_kib);
+        const size_t  free_kib = static_cast<size_t>(device_memory_.free_bytes() / 1024u);
+        kilobytes[0] = free_kib;
+        if (param_value_size >= entries * sizeof(size_t)) kilobytes[1] = free_kib;
         return CL_SUCCESS;
     }
     cl_ulong     host_value = 0u;
@@ -180,8 +180,8 @@ cl_int OpenClBackend::capped_device_info(cl_device_id device, cl_device_info par
     if (param_value_size_ret != nullptr) *param_value_size_ret = sizeof host_value;
     if (param_value == nullptr) return CL_SUCCESS;
     if (param_value_size < sizeof host_value) return CL_INVALID_VALUE;
-    const cl_ulong cap = device_memory_.cap();
-    *static_cast<cl_ulong *>(param_value) = host_value < cap ? host_value : cap;
+    const cl_ulong advertised = device_memory_.advertised();
+    *static_cast<cl_ulong *>(param_value) = host_value < advertised ? host_value : advertised;
     return CL_SUCCESS;
 }
 

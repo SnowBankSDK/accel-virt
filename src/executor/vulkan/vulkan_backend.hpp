@@ -160,6 +160,10 @@ public:
                                                 VkPhysicalDeviceMemoryProperties *pMemoryProperties) override;
     void on_vkGetPhysicalDeviceMemoryProperties2(VkPhysicalDevice physicalDevice,
                                                  VkPhysicalDeviceMemoryProperties2 *pMemoryProperties) override;
+    void on_vkGetPhysicalDeviceProperties2(VkPhysicalDevice physicalDevice,
+                                           VkPhysicalDeviceProperties2 *pProperties) override;
+    void on_vkGetPhysicalDeviceProperties2KHR(VkPhysicalDevice physicalDevice,
+                                              VkPhysicalDeviceProperties2 *pProperties) override;
     void on_vkGetPhysicalDeviceMemoryProperties2KHR(VkPhysicalDevice physicalDevice,
                                                     VkPhysicalDeviceMemoryProperties2 *pMemoryProperties) override;
 

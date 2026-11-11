@@ -32,6 +32,8 @@ public:
     uint64_t held() const;
     uint64_t host_held() const;
     uint64_t cap() const;
+    uint64_t advertised() const;
+    bool     bound() const;
     uint64_t free_bytes() const;
     uint32_t objects() const;
 
