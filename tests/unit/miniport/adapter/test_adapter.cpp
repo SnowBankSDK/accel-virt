@@ -5826,7 +5826,7 @@ void spend_log_budget(Fixture &fixture) { AdapterProbe(fixture.adapter()).spend_
 
 }
 
-TEST(adapter_dpc_routine, a_context_whose_release_is_held_past_the_deadline_is_lost_and_its_neighbour_is_not)
+TEST(adapter_dpc_routine, a_release_held_past_the_deadline_lets_its_packet_go_and_publishes_when_its_predecessor_comes)
 { Fixture fixture; av::FakeHandleTable handles;
   fixture.function().add_doorbell_region();
   CHECK_EQ(fixture.start(), success);
@@ -5844,7 +5844,7 @@ TEST(adapter_dpc_routine, a_context_whose_release_is_held_past_the_deadline_is_l
   CHECK_EQ(nt(fixture.adapter().create_context(other.device(), &follower)), success);
 
   std::uint8_t release[av::ReleaseRecord::encoded_size] = {};
-  CHECK_STATUS(av::ReleaseRecord(process.ring().kmt_handle(), av::SubmissionDescriptor(1u, 32u, 64u))
+  CHECK_STATUS(av::ReleaseRecord(process.ring().kmt_handle(), av::SubmissionDescriptor(2u, 32u, 64u))
                    .encode(release, sizeof release),
                av::Status::ok);
   CHECK_EQ(submit_packet(fixture, queue.hContext, 5u, release, sizeof release), success);
@@ -5855,10 +5855,17 @@ TEST(adapter_dpc_routine, a_context_whose_release_is_held_past_the_deadline_is_l
   const std::uint32_t before = fixture.dxgkrnl().interrupts();
   fixture.platform().advance_time(av::ExecutionNode::park_deadline);
   run_dpc(fixture);
-  CHECK(fixture.platform().logged_line("avgpu: a held packet passed its deadline and was let go"));
-  CHECK(fixture.platform().logged_line("avgpu: a context's batches cannot be released in order: the context is lost"));
+  CHECK(fixture.platform().logged_line("avgpu: a held packet passed its deadline and was let go: adapter "));
+  CHECK(fixture.platform().logged_line(" batches_held 1"));
+  CHECK(!fixture.platform().logged_line("the context is lost"));
   CHECK_EQ(fixture.dxgkrnl().interrupts(), before + 2u);
-  CHECK_EQ(submit_packet(fixture, queue.hContext, 7u, release, sizeof release), invalid_parameter);
+  const std::uint32_t rings = fixture.function().doorbells().rings(0u);
+  CHECK_STATUS(av::ReleaseRecord(process.ring().kmt_handle(), av::SubmissionDescriptor(1u, 0u, 32u))
+                   .encode(release, sizeof release),
+               av::Status::ok);
+  CHECK_EQ(submit_packet(fixture, queue.hContext, 7u, release, sizeof release), success);
+  CHECK_EQ(fixture.function().doorbells().rings(0u), rings + 2u);
+  CHECK(!fixture.platform().logged_line("the context is lost"));
   CHECK_EQ(submit_packet(fixture, follower.hContext, 8u, follow, sizeof follow), success);
   CHECK(fixture.adapter().invariants_hold());
   CHECK_EQ(nt(fixture.adapter().destroy_context(follower.hContext)), success);

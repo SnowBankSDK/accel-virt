@@ -12,6 +12,7 @@
 #include "core/platform/wait_mutex_guard.hpp"
 #include "miniport/av_context/context_pages.hpp"
 #include "miniport/scheduling/execution_node.hpp"
+#include "miniport/scheduling/stamped_line.hpp"
 #include "core/platform/invariant_scope.hpp"
 #include "core/support/nt_status.hpp"
 #include "core/support/scope_exit.hpp"
@@ -37,7 +38,7 @@ AvContextTable::AvContextTable(Platform &platform, DxgkrnlInterface &dxgkrnl, Al
     : platform_(platform), dxgkrnl_(dxgkrnl), allocations_(allocations), window_(window),
       lock_(platform, LockRank::av_context_slots),
       reader_(platform), bindings_(), contexts_{}, names_{}, memories_(), chunks_(platform), ids_(platform, HostBlobId::most), held_chunks_{}, orders_{},
-      wakes_{}, raised_{}, told_lost_{}, generations_{}, live_{}, request_{}, requests_(platform, LockRank::av_control_requests)
+      wakes_{}, raised_{}, told_lost_{}, generations_{}, live_{}, request_{}, requests_(platform, LockRank::av_control_requests), adapter_(0u)
       {
           AV_SCOPE("AvContextTable::AvContextTable");
       }
@@ -447,7 +448,10 @@ Status AvContextTable::release_batch(void *context, const SubmissionDescriptor &
     SpinLockGuard  locked(lock_);
     const uint32_t slot = slot_of(context);
     if (slot == no_slot || !live_[slot] || lost(slot)) return Status::invalid_parameter;
-    if (batch.validate_against(RingHeader(orders_[slot], 0u, 0u)) != Status::ok) return Status::invalid_parameter;
+    if (batch.validate_against(RingHeader(orders_[slot], 0u, 0u)) != Status::ok) {
+        lose(slot, batch);
+        return Status::invalid_parameter;
+    }
     in_turn(slot, batch);
     awaited = batch.fence_id();
     return Status::ok;
@@ -461,37 +465,48 @@ void AvContextTable::in_turn(uint32_t slot, const SubmissionDescriptor &batch)
     const ReleaseQueue::Turn turn = queue.arrive(batch, binding.next_begin());
     if (turn == ReleaseQueue::Turn::held || turn == ReleaseQueue::Turn::released_already) return;
     if (turn == ReleaseQueue::Turn::refused || binding.submit(batch) != Status::ok) {
-        lose(slot);
+        lose(slot, batch);
         return;
     }
     queue.released(batch);
     SubmissionDescriptor next;
     while (queue.next_held(next)) {
         if (binding.submit(next) != Status::ok) {
-            lose(slot);
+            lose(slot, next);
             return;
         }
         queue.released(next);
     }
 }
 
-void AvContextTable::lose(uint32_t slot)
+void AvContextTable::lose(uint32_t slot, const SubmissionDescriptor &batch)
 {
     AV_SCOPE("AvContextTable::lose");
+    StampedLine(platform_, adapter_, "avgpu: a context's batches cannot be released in order: the context is lost")
+        .number("doorbell", slot)
+        .number("held", releases_[slot].held())
+        .number("next", releases_[slot].next())
+        .number("begin", batch.begin())
+        .number("end", batch.end())
+        .number("fence", batch.fence_id())
+        .write();
     bindings_[slot].object().fail(FaultCode::batch_order);
     releases_[slot].clear();
-    platform_.log("avgpu: a context's batches cannot be released in order: the context is lost");
 }
 
-bool AvContextTable::fault_if_held(void *context)
+uint32_t AvContextTable::held_batches(const void *context)
 {
-    AV_SCOPE("AvContextTable::fault_if_held");
-    platform_.require_irql_at_most(Irql::dispatch, "AvContextTable::fault_if_held");
+    AV_SCOPE("AvContextTable::held_batches");
+    platform_.require_irql_at_most(Irql::dispatch, "AvContextTable::held_batches");
     SpinLockGuard  locked(lock_);
     const uint32_t slot = slot_of(context);
-    if (slot == no_slot || !live_[slot] || releases_[slot].held() == 0u) return false;
-    lose(slot);
-    return true;
+    return slot == no_slot || !live_[slot] ? 0u : releases_[slot].held();
+}
+
+void AvContextTable::adapter_is(uint64_t adapter)
+{
+    AV_SCOPE("AvContextTable::adapter_is");
+    adapter_ = adapter;
 }
 
 void AvContextTable::kick(void *context)

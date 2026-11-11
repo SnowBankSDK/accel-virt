@@ -1913,24 +1913,55 @@ TEST(av_context_table_release_batch, refuses_a_context_it_does_not_hold_and_a_ba
                Status::invalid_parameter);
   fixture.platform().set_irql(Irql::passive);
   CHECK_EQ(fixture.mapped().function().doorbells().rings(0u), 0u);
+  CHECK(fixture.platform().logged_line("the context is lost"));
+  std::uint32_t told = 0u;
+  std::memcpy(&told, fixture.ring_memory() + av::RingHeader::lost_at, sizeof told);
+  CHECK_EQ(told, static_cast<std::uint32_t>(av::FaultCode::batch_order));
   CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok); }
 
-TEST(av_context_table_fault_if_held, loses_a_context_that_holds_a_batch_no_earlier_one_released)
+TEST(av_context_table_held_batches, a_held_batch_and_an_overdue_packet_leave_the_context_live_until_its_predecessor_comes)
 { Fixture fixture;
   Host host(fixture.mapped());
   CHECK_STATUS(fixture.bind(&first_context), Status::ok);
   std::uint64_t awaited = 0u;
   fixture.platform().set_irql(Irql::dispatch);
-  CHECK(!fixture.table().fault_if_held(&first_context));
-  CHECK(!fixture.table().fault_if_held(nullptr));
+  CHECK_EQ(fixture.table().held_batches(&first_context), 0u);
+  CHECK_EQ(fixture.table().held_batches(nullptr), 0u);
   CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(2u, 32u, 64u), awaited), Status::ok);
-  CHECK(!fixture.table().fault_if_held(&second_context));
-  CHECK(fixture.table().fault_if_held(&first_context));
-  CHECK(!fixture.table().fault_if_held(&first_context));
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(1u, 0u, 32u), awaited),
-               Status::invalid_parameter);
+  CHECK_STATUS(fixture.node().submit(5u, &first_context, awaited), Status::ok);
+  CHECK_EQ(fixture.table().held_batches(&first_context), 1u);
+  CHECK_EQ(fixture.table().held_batches(&second_context), 0u);
+  fixture.platform().advance_time(ExecutionNode::park_deadline);
+  CHECK_EQ(fixture.node().release_overdue(fixture.platform().interrupt_time()), 1u);
   fixture.platform().set_irql(Irql::passive);
+  fixture.complete_through(0u);
+  fixture.serve();
+  CHECK_EQ(fixture.node().current_fence(), 5u);
+  CHECK_EQ(fixture.mapped().function().doorbells().rings(0u), 0u);
+  CHECK(!fixture.platform().logged_line("the context is lost"));
+  fixture.platform().set_irql(Irql::dispatch);
+  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(1u, 0u, 32u), awaited), Status::ok);
+  CHECK_EQ(fixture.table().held_batches(&first_context), 0u);
+  fixture.platform().set_irql(Irql::passive);
+  CHECK_EQ(fixture.mapped().function().doorbells().rings(0u), 2u);
+  std::uint64_t tail = 0u;
+  std::memcpy(&tail, fixture.ring_memory() + 8u, sizeof tail);
+  CHECK_EQ(tail, 64u);
   CHECK(fixture.table().invariants_hold());
+  CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok); }
+
+TEST(av_context_table_adapter_is, the_line_of_a_lost_context_names_the_adapter_the_slot_and_the_batch)
+{ Fixture fixture;
+  Host host(fixture.mapped());
+  fixture.table().adapter_is(0x7801u);
+  CHECK_STATUS(fixture.bind(&first_context), Status::ok);
+  std::uint64_t awaited = 0u;
+  fixture.platform().set_irql(Irql::dispatch);
+  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(1u, 0u, 32u), awaited), Status::ok);
+  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(2u, 16u, 48u), awaited), Status::ok);
+  fixture.platform().set_irql(Irql::passive);
+  CHECK(fixture.platform().logged_line("the context is lost: adapter 0000000000007801 at "));
+  CHECK(fixture.platform().logged_line(" doorbell 0 held 0 next 32 begin 16 end 48 fence 2"));
   CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok); }
 
 TEST(av_context_table_bind, a_ring_order_or_reply_the_memory_cannot_be_is_refused_as_such)
@@ -1987,7 +2018,7 @@ TEST(av_context_table_release_batch, a_slot_not_yet_live_takes_nothing_and_has_n
   AvContextTableProbe::set_live(fixture.table(), 0u, false);
   CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(1u, 0u, 32u), awaited),
                Status::invalid_parameter);
-  CHECK(!fixture.table().fault_if_held(&first_context));
+  CHECK_EQ(fixture.table().held_batches(&first_context), 0u);
   const std::uint32_t rings = fixture.mapped().function().doorbells().rings(0u);
   fixture.table().kick(&first_context);
   CHECK_EQ(fixture.mapped().function().doorbells().rings(0u), rings);
@@ -2028,7 +2059,7 @@ TEST(av_context_table_release_batch, a_batch_overlapping_one_released_or_refused
   const std::uint32_t held = fixture.platform().logged();
   CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(9u, 0u, 32u), awaited), Status::ok);
   CHECK(fixture.platform().logged() > held);
-  CHECK(!fixture.table().fault_if_held(&first_context));
+  CHECK_EQ(fixture.table().held_batches(&first_context), 0u);
   fixture.platform().set_irql(Irql::passive);
   CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok); }
 

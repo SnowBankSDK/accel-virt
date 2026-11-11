@@ -84,3 +84,11 @@ TEST(release_queue, the_next_held_is_found_past_batches_that_are_not_next)
   CHECK(queue.next_held(next));
   CHECK(next.fence_id() == 3u);
   CHECK_EQ(queue.held(), 0u); }
+
+TEST(release_queue_next, is_where_the_next_batch_released_begins)
+{ ReleaseQueue queue;
+  CHECK_EQ(queue.next(), 0u);
+  CHECK(queue.arrive(batch(1u, 96u, 160u), 96u) == ReleaseQueue::Turn::release_now);
+  CHECK_EQ(queue.next(), 96u);
+  queue.released(batch(1u, 96u, 160u));
+  CHECK_EQ(queue.next(), 160u); }

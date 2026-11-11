@@ -59,7 +59,8 @@ public:
     [[nodiscard]] Status submit(void *context, const uint8_t *private_data, size_t size, uint64_t &awaited);
     [[nodiscard]] Status release_batch(void *context, const SubmissionDescriptor &batch, uint64_t &awaited);
     void                 serve(ExecutionNode &node, HwQueueSubmissions &queues);
-    bool                 fault_if_held(void *context);
+    uint32_t             held_batches(const void *context);
+    void                 adapter_is(uint64_t adapter);
     bool                 completed_already(void *context, uint64_t fence);
     void                 kick(void *context);
     void                 abandon_all();
@@ -89,7 +90,7 @@ private:
                                 RegisterWindow &doorbells, const CapsetInfo &capset);
     void                 release(uint32_t slot);
     void                 in_turn(uint32_t slot, const SubmissionDescriptor &batch);
-    void                 lose(uint32_t slot);
+    void                 lose(uint32_t slot, const SubmissionDescriptor &batch);
     void                 release_chunks(uint32_t slot, VirtioGpuDevice *device, bool host_let_go);
     [[nodiscard]] Status open_window(uint32_t slot, HostWindowRecord &record, VirtioGpuDevice &device);
     [[nodiscard]] Status adopt_pages(uint32_t slot, HostWindowRecord &record, VirtioGpuDevice &device);
@@ -123,6 +124,7 @@ private:
     bool                             live_[max_contexts];
     uint8_t                          request_[AvContextBinding::request_bytes];
     WaitMutex                        requests_;
+    uint64_t                         adapter_;
 
     friend struct AvContextTableProbe;
 };

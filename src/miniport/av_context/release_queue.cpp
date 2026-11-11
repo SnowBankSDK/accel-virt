@@ -58,6 +58,12 @@ void ReleaseQueue::clear()
     active_ = false;
 }
 
+uint64_t ReleaseQueue::next() const
+{
+    AV_SCOPE("ReleaseQueue::next");
+    return next_;
+}
+
 uint32_t ReleaseQueue::held() const
 {
     AV_SCOPE("ReleaseQueue::held");

@@ -21,6 +21,7 @@ public:
     bool     active() const;
     void     clear();
     uint32_t held() const;
+    uint64_t next() const;
 
 private:
     SubmissionDescriptor held_[most_held];

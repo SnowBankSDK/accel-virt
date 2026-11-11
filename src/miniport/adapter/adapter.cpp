@@ -108,6 +108,7 @@
 #include "proto/virtio_gpu/av_request_writer.hpp"
 #include "core/support/scope_exit.hpp"
 #include "proto/escape/release_record.hpp"
+#include "miniport/scheduling/stamped_line.hpp"
 #include "miniport/memory/point_view.hpp"
 #include "miniport/vidpn/cofunc_modality.hpp"
 #include "miniport/vidpn/path_transformation.hpp"
@@ -342,6 +343,7 @@ int32_t Adapter::start_device(void *start_info, const DxgkrnlInterfaceRecord *dx
         uint32_t luid[2] = {};
         __builtin_memcpy(luid, static_cast<const uint8_t *>(start_info) + start_info_luid_offset, sizeof(luid));
         luid_ = static_cast<uint64_t>(luid[1]) << 32u | luid[0];
+        av_contexts_.adapter_is(luid_);
     }
     if (dxgkrnl_interface == nullptr || sources == nullptr || children == nullptr)
         return NtStatus(Status::invalid_parameter).value();
@@ -444,11 +446,14 @@ void Adapter::dpc_routine()
     void        *overdue_owners[8] = {};
     uint32_t     named = 0u;
     const uint32_t overdue = node_.release_overdue(now, overdue_owners, 8u, &named);
-    if (overdue != 0u && budget_.allows()) platform_.log("avgpu: a held packet passed its deadline and was let go");
-    bool lost_context = false;
-    for (uint32_t index = 0u; index < named; index++)
-        lost_context = av_contexts_.fault_if_held(overdue_owners[index]) || lost_context;
-    if (lost_context) av_contexts_.serve(node_, hw_submissions_);
+    if (overdue != 0u && budget_.allows())
+        StampedLine(platform_, luid_, "avgpu: a held packet passed its deadline and was let go")
+            .number("packets", overdue)
+            .number("owners", named)
+            .address("owner", overdue_owners[0])
+            .number("bound", av_contexts_.holds(overdue_owners[0]) ? 1u : 0u)
+            .number("batches_held", av_contexts_.held_batches(overdue_owners[0]))
+            .write();
     if (node_.complete(notification_) != Status::ok && budget_.allows())
         platform_.log("avgpu: a completion was refused in the DPC");
     if (hw_submissions_.complete(notification_) != Status::ok && budget_.allows())
