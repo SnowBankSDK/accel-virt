@@ -325,12 +325,14 @@ bool D3d12Session::place(uint32_t id, IUnknown *made, uint64_t address, uint64_t
     const bool            within = address != 0u && addresses_.translate(address, width) == host;
     const bool            registering = address != 0u && !within;
     D3dObjectKind  taken = D3dObjectKind::none;
-    const Status   registered = objects_.find_any(id, taken) != nullptr ? Status::conflict
+    const bool     named = objects_.find_any(id, taken) != nullptr;
+    const Status   registered = named ? Status::conflict
                                 : registering ? addresses_.insert(address, width, host, id)
                                               : Status::ok;
     if (registered != Status::ok) {
-        LogLine(lines_).text("a buffer's address kept nowhere, status ").number(static_cast<uint32_t>(registered))
-            .text(", ").number(addresses_.count()).text(" ranges held").write();
+        LogLine(lines_).text("a buffer's address kept nowhere: id ").number(id).text(named ? " is in use" : " overlaps")
+            .text(" at guest address ").hex(address, 16u).text(" over ").number(width).text(" bytes, status ")
+            .number(static_cast<uint32_t>(registered)).text(", ").number(addresses_.count()).text(" ranges held").write();
         made->Release();
         return false;
     }
