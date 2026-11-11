@@ -714,6 +714,11 @@ bool D3d12Session::create_heap(uint32_t heap, const d3d12proto::HeapProperties &
     if (cpu_visible(properties)) {
         if (placing_ && memory == 0u && (properties.type == heap_upload || properties.type == heap_readback))
             return native_heap(heap, size, alignment, hresult, placed);
+        if (placing_) {
+            LogLine(lines_).text("a heap of ").number(size).text(" bytes over guest memory is refused: this host imports no heap").write();
+            hresult = static_cast<uint32_t>(E_OUTOFMEMORY);
+            return true;
+        }
         return window_heap(heap, size, memory, offset, hresult);
     }
     D3D12_HEAP_DESC desc = {};
