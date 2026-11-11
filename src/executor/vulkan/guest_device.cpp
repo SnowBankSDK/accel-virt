@@ -4,7 +4,7 @@
 
 namespace av {
 
-GuestDevice::GuestDevice() : table_(), memory_(table_), invalid_shader_extension_(false), placement_(false)
+GuestDevice::GuestDevice() : table_(), memory_(table_), invalid_shader_extension_(false), placement_(false), ordered_teardown_(false)
 {
     AV_SCOPE("GuestDevice::GuestDevice");
 }
@@ -43,6 +43,18 @@ bool GuestDevice::placement() const
 {
     AV_SCOPE("GuestDevice::placement");
     return placement_;
+}
+
+void GuestDevice::order_teardown(bool ordered)
+{
+    AV_SCOPE("GuestDevice::order_teardown");
+    ordered_teardown_ = ordered;
+}
+
+bool GuestDevice::orders_teardown() const
+{
+    AV_SCOPE("GuestDevice::orders_teardown");
+    return ordered_teardown_;
 }
 
 void GuestDevice::note_invalid_shader_extension(bool enabled)
