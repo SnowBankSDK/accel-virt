@@ -80,7 +80,7 @@ Status InterruptNotification::report_multiplane_vsync(uint32_t target, const Dxg
 }
 
 Status InterruptNotification::report_presented_vsync(uint32_t target, const DxgkMultiplaneOverlayVsyncInfo2Record *layers,
-                                                     uint32_t count)
+                                                     uint32_t count, uint64_t ago_ns)
 {
     AV_SCOPE("InterruptNotification::report_presented_vsync");
     platform_.require_irql_at_most(Irql::dispatch, "InterruptNotification::report_presented_vsync");
@@ -93,7 +93,9 @@ Status InterruptNotification::report_presented_vsync(uint32_t target, const Dxgk
     data_.UnionRemainder[0] = static_cast<uint32_t>(address);
     data_.UnionRemainder[1] = static_cast<uint32_t>(static_cast<uint64_t>(address) >> 32u);
     uint64_t       frequency = 0u;
-    const uint64_t counter = platform_.performance_counter(frequency);
+    const uint64_t now = platform_.performance_counter(frequency);
+    const uint64_t back = ago_ns / nanoseconds_per_second * frequency + ago_ns % nanoseconds_per_second * frequency / nanoseconds_per_second;
+    const uint64_t counter = back < now ? now - back : 0u;
     data_.UnionRemainder[2] = static_cast<uint32_t>(frequency);
     data_.UnionRemainder[3] = static_cast<uint32_t>(frequency >> 32u);
     data_.UnionRemainder[4] = static_cast<uint32_t>(counter);

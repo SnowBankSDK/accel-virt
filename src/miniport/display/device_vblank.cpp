@@ -127,12 +127,15 @@ void DeviceVblank::tick(uint64_t now, bool latching)
         const bool     behind = latched != 0u && static_cast<int32_t>(latched - reported_frame_) < 0;
         const uint32_t frame = behind ? reported_frame_ : latched;
         const FlipView shown = sources_.shown(target, frame);
+        const uint32_t before = reported_frame_;
         reported_frame_ = frame != 0u ? frame : newest;
         sources_.note_reported(shown, blank.sequence(), blank.vblank_ns());
         const uint64_t passed = seen == 0u ? 1u : blank.sequence() - seen;
         const uint64_t owed = passed < catch_up_most ? passed : catch_up_most;
+        const FlipView earlier = owed > 1u && before != 0u ? sources_.shown(target, before) : shown;
         for (uint64_t each = 0u; each < owed; each++) {
-            if (report(shown) == Status::ok) reported_++;
+            const uint64_t ago = (owed - 1u - each) * blank.period_ns();
+            if (report(each + 1u == owed ? shown : earlier, ago) == Status::ok) reported_++;
             else platform_.log("avgpu: a vsync was refused");
         }
     }
@@ -146,10 +149,10 @@ void DeviceVblank::report_now()
     reported_frame_ = frame;
     const FlipView shown = sources_.shown(target, 0u);
     sources_.note_reported(shown, 0u, 1u);
-    static_cast<void>(report(shown));
+    static_cast<void>(report(shown, 0u));
 }
 
-Status DeviceVblank::report(const FlipView &shown)
+Status DeviceVblank::report(const FlipView &shown, uint64_t ago_ns)
 {
     AV_SCOPE("DeviceVblank::report");
     switch (shown.kind()) {
@@ -158,7 +161,7 @@ Status DeviceVblank::report(const FlipView &shown)
         shown.layer(layer_);
         return notification_.report_multiplane_vsync(target, &layer_, 1u);
     case FlipView::Kind::presented_plane:
-        return notification_.report_presented_vsync(target, presented_layers_, shown.layers(presented_layers_));
+        return notification_.report_presented_vsync(target, presented_layers_, shown.layers(presented_layers_), ago_ns);
     default: break;
     }
     return notification_.report_vsync(target, shown.address());

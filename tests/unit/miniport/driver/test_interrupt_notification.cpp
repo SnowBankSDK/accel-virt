@@ -128,8 +128,8 @@ TEST(interrupt_notification_report_presented_vsync, counts_layers_only_when_it_h
 { Fixture fixture;
   fixture.platform().set_irql(Irql::dispatch);
   av::DxgkMultiplaneOverlayVsyncInfo2Record layers[2] = {};
-  CHECK_STATUS(fixture.notification().report_presented_vsync(0u, layers, 2u), Status::ok);
-  CHECK_STATUS(fixture.notification().report_presented_vsync(0u, nullptr, 2u), Status::ok);
+  CHECK_STATUS(fixture.notification().report_presented_vsync(0u, layers, 2u, 0u), Status::ok);
+  CHECK_STATUS(fixture.notification().report_presented_vsync(0u, nullptr, 2u, 0u), Status::ok);
   fixture.platform().set_irql(Irql::passive);
   CHECK_EQ(fixture.dxgkrnl().interrupts(), 2u);
   CHECK_EQ(fixture.dxgkrnl().interrupt(0u).Argument2, 2u);

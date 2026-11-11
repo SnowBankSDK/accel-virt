@@ -485,3 +485,57 @@ TEST(device_vblank_attach, needs_its_page_and_an_answer_the_device_gave_whole_an
   mapped.platform().on_stall(nullptr, nullptr);
   vsync.destroy();
   storage.destroy(); }
+
+TEST(device_vblank_tick, a_late_tick_dates_each_blank_it_missed_one_period_apart)
+{ Fixture fixture;
+  PresentedFlips flips(fixture);
+  CHECK_STATUS(fixture.vsync().initialize(), Status::ok);
+  fixture.take_page();
+  CHECK_STATUS(fixture.vsync().enable(), Status::ok);
+  fixture.platform().advance_time(50000000u);
+  flips.present(10u, false);
+  fixture.blank(1u);
+  fixture.tick(100u);
+  CHECK_EQ(fixture.dxgkrnl().interrupts(), 1u);
+  CHECK_EQ(flips.id_of(0u), 10u);
+  flips.present(11u, false);
+  fixture.blank(4u);
+  fixture.tick(200u);
+  CHECK_EQ(fixture.dxgkrnl().interrupts(), 4u);
+  CHECK_EQ(flips.id_of(3u), 11u);
+  std::uint64_t frequency = 0u;
+  const std::uint64_t now = fixture.platform().performance_counter(frequency);
+  const auto counter = [&fixture](std::uint32_t at) {
+      const auto &record = fixture.dxgkrnl().interrupt(at);
+      return (static_cast<std::uint64_t>(record.UnionRemainder[5]) << 32u) | record.UnionRemainder[4];
+  };
+  const std::uint64_t period = 16666666u * frequency / 1000000000u;
+  CHECK_EQ(counter(3u), now);
+  CHECK(counter(2u) + period - counter(3u) <= 1u || counter(3u) - counter(2u) - period <= 1u);
+  CHECK(counter(1u) < counter(2u));
+  CHECK_EQ(counter(3u) - counter(1u), counter(3u) - counter(2u) + (counter(2u) - counter(1u)));
+  CHECK(counter(2u) - counter(1u) >= period - 1u && counter(2u) - counter(1u) <= period + 1u); }
+
+TEST(device_vblank_tick, a_late_tick_shows_a_new_flip_only_at_the_last_blank_it_missed)
+{ Fixture fixture;
+  CHECK_STATUS(fixture.vsync().initialize(), Status::ok);
+  fixture.take_page();
+  CHECK_STATUS(fixture.vsync().enable(), Status::ok);
+  std::uint32_t allocation = 0u;
+  fixture.platform().set_irql(Irql::isr);
+  CHECK_STATUS(fixture.sources().set_scanout(0u, 0x40000000, &allocation), Status::ok);
+  fixture.platform().set_irql(Irql::passive);
+  fixture.blank(1u);
+  fixture.tick(100u);
+  CHECK_EQ(fixture.dxgkrnl().interrupts(), 1u);
+  CHECK_EQ(fixture.dxgkrnl().interrupt(0u).Argument2, 0x40000000u);
+  fixture.platform().set_irql(Irql::isr);
+  CHECK_STATUS(fixture.sources().set_scanout(0u, 0x50000000, &allocation), Status::ok);
+  fixture.platform().set_irql(Irql::passive);
+  fixture.blank(4u);
+  fixture.tick(200u);
+  CHECK_EQ(fixture.dxgkrnl().interrupts(), 4u);
+  CHECK_EQ(fixture.dxgkrnl().interrupt(1u).Argument2, 0x40000000u);
+  CHECK_EQ(fixture.dxgkrnl().interrupt(2u).Argument2, 0x40000000u);
+  CHECK_EQ(fixture.dxgkrnl().interrupt(3u).Argument2, 0x50000000u);
+  CHECK_EQ(fixture.vsync().reported(), 4u); }

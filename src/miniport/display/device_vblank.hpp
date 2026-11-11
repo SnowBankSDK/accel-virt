@@ -51,7 +51,7 @@ private:
 
     void                 ask();
     void                 report_now();
-    [[nodiscard]] Status report(const FlipView &shown);
+    [[nodiscard]] Status report(const FlipView &shown, uint64_t ago_ns);
 
     Platform             &platform_;
     DisplaySources       &sources_;
