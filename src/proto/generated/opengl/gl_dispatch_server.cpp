@@ -713,6 +713,11 @@ static bool decode_glBindFramebuffer(const RealGl& av_gl, ::av::WireReader& av_r
     GLuint framebuffer{};
     { uint64_t av_v = 0; if (!av_r.read_varint(av_v)) return false;
       framebuffer = static_cast<GLuint>(av_v); }
+    auto av_refuse = [&](uint32_t av_code) -> bool {
+        if (av_gl.av_record_error != nullptr) av_gl.av_record_error(av_gl.av_error_user, av_code);
+        return true;
+    };
+    if (av_gl.av_framebuffer_bound != nullptr && !av_gl.av_framebuffer_bound(av_gl.av_framebuffer_user, &framebuffer)) return av_refuse(0x0502u);
     if (av_gl.glBindFramebuffer == nullptr) return false;
     av_gl.glBindFramebuffer(target, framebuffer);
     return true;
@@ -1353,6 +1358,12 @@ static bool decode_glBlitNamedFramebuffer(const RealGl& av_gl, ::av::WireReader&
     GLenum filter{};
     { uint64_t av_v = 0; if (!av_r.read_varint(av_v)) return false;
       filter = static_cast<GLenum>(av_v); }
+    auto av_refuse = [&](uint32_t av_code) -> bool {
+        if (av_gl.av_record_error != nullptr) av_gl.av_record_error(av_gl.av_error_user, av_code);
+        return true;
+    };
+    if (av_gl.av_framebuffer_named != nullptr && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &readFramebuffer)) return av_refuse(0x0502u);
+    if (av_gl.av_framebuffer_named != nullptr && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &drawFramebuffer)) return av_refuse(0x0502u);
     if (av_gl.glBlitNamedFramebuffer == nullptr) return false;
     av_gl.glBlitNamedFramebuffer(readFramebuffer, drawFramebuffer, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
     return true;
@@ -1549,6 +1560,12 @@ static bool decode_glCheckNamedFramebufferStatus(const RealGl& av_gl, ::av::Wire
     GLenum target{};
     { uint64_t av_v = 0; if (!av_r.read_varint(av_v)) return false;
       target = static_cast<GLenum>(av_v); }
+    auto av_refuse = [&](uint32_t av_code) -> bool {
+        if (av_gl.av_record_error != nullptr) av_gl.av_record_error(av_gl.av_error_user, av_code);
+        av_reply.write_varint(0);
+        return true;
+    };
+    if (av_gl.av_framebuffer_named != nullptr && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &framebuffer)) return av_refuse(0x0502u);
     if (av_gl.glCheckNamedFramebufferStatus == nullptr) return false;
     const auto av_ret = av_gl.glCheckNamedFramebufferStatus(framebuffer, target);
     av_reply.write_varint(static_cast<uint64_t>(av_ret));
@@ -2058,6 +2075,11 @@ static bool decode_glClearNamedFramebufferfi(const RealGl& av_gl, ::av::WireRead
     GLint stencil{};
     { uint64_t av_v = 0; if (!av_r.read_varint(av_v)) return false;
       stencil = static_cast<GLint>(av_v); }
+    auto av_refuse = [&](uint32_t av_code) -> bool {
+        if (av_gl.av_record_error != nullptr) av_gl.av_record_error(av_gl.av_error_user, av_code);
+        return true;
+    };
+    if (av_gl.av_framebuffer_named != nullptr && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &framebuffer)) return av_refuse(0x0502u);
     if (av_gl.glClearNamedFramebufferfi == nullptr) return false;
     av_gl.glClearNamedFramebufferfi(framebuffer, buffer, drawbuffer, depth, stencil);
     return true;
@@ -2103,10 +2125,15 @@ static bool decode_glClearNamedFramebufferfv(const RealGl& av_gl, ::av::WireRead
             value = reinterpret_cast<const GLfloat*>(av_run);
         }
     }
+    auto av_refuse = [&](uint32_t av_code) -> bool {
+        if (av_gl.av_record_error != nullptr) av_gl.av_record_error(av_gl.av_error_user, av_code);
+        return true;
+    };
     const uint64_t value_elements = static_cast<uint64_t>((static_cast<int64_t>(buffer) == 0x1800 ? 4 : 1));
     uint64_t value_needed = 0;
     if (__builtin_mul_overflow(value_elements, static_cast<uint64_t>(sizeof(GLfloat)), &value_needed)) return false;
     if (value == nullptr ? (value_needed != 0 && !(false)) : value_room < value_needed) return false;
+    if (av_gl.av_framebuffer_named != nullptr && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &framebuffer)) return av_refuse(0x0502u);
     if (av_gl.glClearNamedFramebufferfv == nullptr) return false;
     av_gl.glClearNamedFramebufferfv(framebuffer, buffer, drawbuffer, value);
     return true;
@@ -2152,10 +2179,15 @@ static bool decode_glClearNamedFramebufferiv(const RealGl& av_gl, ::av::WireRead
             value = reinterpret_cast<const GLint*>(av_run);
         }
     }
+    auto av_refuse = [&](uint32_t av_code) -> bool {
+        if (av_gl.av_record_error != nullptr) av_gl.av_record_error(av_gl.av_error_user, av_code);
+        return true;
+    };
     const uint64_t value_elements = static_cast<uint64_t>((static_cast<int64_t>(buffer) == 0x1800 ? 4 : 1));
     uint64_t value_needed = 0;
     if (__builtin_mul_overflow(value_elements, static_cast<uint64_t>(sizeof(GLint)), &value_needed)) return false;
     if (value == nullptr ? (value_needed != 0 && !(false)) : value_room < value_needed) return false;
+    if (av_gl.av_framebuffer_named != nullptr && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &framebuffer)) return av_refuse(0x0502u);
     if (av_gl.glClearNamedFramebufferiv == nullptr) return false;
     av_gl.glClearNamedFramebufferiv(framebuffer, buffer, drawbuffer, value);
     return true;
@@ -2201,10 +2233,15 @@ static bool decode_glClearNamedFramebufferuiv(const RealGl& av_gl, ::av::WireRea
             value = reinterpret_cast<const GLuint*>(av_run);
         }
     }
+    auto av_refuse = [&](uint32_t av_code) -> bool {
+        if (av_gl.av_record_error != nullptr) av_gl.av_record_error(av_gl.av_error_user, av_code);
+        return true;
+    };
     const uint64_t value_elements = static_cast<uint64_t>((static_cast<int64_t>(buffer) == 0x1800 ? 4 : 1));
     uint64_t value_needed = 0;
     if (__builtin_mul_overflow(value_elements, static_cast<uint64_t>(sizeof(GLuint)), &value_needed)) return false;
     if (value == nullptr ? (value_needed != 0 && !(false)) : value_room < value_needed) return false;
+    if (av_gl.av_framebuffer_named != nullptr && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &framebuffer)) return av_refuse(0x0502u);
     if (av_gl.glClearNamedFramebufferuiv == nullptr) return false;
     av_gl.glClearNamedFramebufferuiv(framebuffer, buffer, drawbuffer, value);
     return true;
@@ -3775,6 +3812,7 @@ static bool decode_glCreateFramebuffers(const RealGl& av_gl, ::av::WireReader& a
     }
     if (av_gl.glCreateFramebuffers == nullptr) return false;
     av_gl.glCreateFramebuffers(n, framebuffers);
+    if (av_gl.av_framebuffers_made != nullptr && framebuffers != nullptr) av_gl.av_framebuffers_made(av_gl.av_framebuffer_user, n, framebuffers);
     if (framebuffers_answered) {
         av_reply.write_varint(static_cast<uint64_t>(framebuffers_bytes));
         if (framebuffers_bytes != 0) av_reply.write(framebuffers, framebuffers_bytes);
@@ -4407,6 +4445,10 @@ static bool decode_glDeleteFramebuffers(const RealGl& av_gl, ::av::WireReader& a
     uint64_t framebuffers_needed = 0;
     if (__builtin_mul_overflow(framebuffers_elements, static_cast<uint64_t>(sizeof(GLuint)), &framebuffers_needed)) return false;
     if (framebuffers == nullptr ? (framebuffers_needed != 0 && !(false)) : framebuffers_room < framebuffers_needed) return false;
+    if (av_gl.av_framebuffers_deleted != nullptr) {
+        av_gl.av_framebuffers_deleted(av_gl.av_framebuffer_user, n, framebuffers);
+        return true;
+    }
     if (av_gl.glDeleteFramebuffers == nullptr) return false;
     av_gl.glDeleteFramebuffers(n, framebuffers);
     return true;
@@ -5815,6 +5857,7 @@ static bool decode_glGenFramebuffers(const RealGl& av_gl, ::av::WireReader& av_r
     }
     if (av_gl.glGenFramebuffers == nullptr) return false;
     av_gl.glGenFramebuffers(n, framebuffers);
+    if (av_gl.av_framebuffers_made != nullptr && framebuffers != nullptr) av_gl.av_framebuffers_made(av_gl.av_framebuffer_user, n, framebuffers);
     if (framebuffers_answered) {
         av_reply.write_varint(static_cast<uint64_t>(framebuffers_bytes));
         if (framebuffers_bytes != 0) av_reply.write(framebuffers, framebuffers_bytes);
@@ -7968,6 +8011,8 @@ static bool decode_glGetDoublev(const RealGl& av_gl, ::av::WireReader& av_r, ::a
     }
     if (av_gl.glGetDoublev == nullptr) return false;
     av_gl.glGetDoublev(pname, data);
+    if (av_gl.av_framebuffer_guest != nullptr && data != nullptr && (pname == 0x8CA6u || pname == 0x8CAAu))
+        data[0] = static_cast<GLdouble>(av_gl.av_framebuffer_guest(av_gl.av_framebuffer_user, static_cast<GLuint>(data[0])));
     if (data_answered) {
         av_reply.write_varint(static_cast<uint64_t>(data_bytes));
         if (data_bytes != 0) av_reply.write(data, data_bytes);
@@ -8083,6 +8128,8 @@ static bool decode_glGetFloatv(const RealGl& av_gl, ::av::WireReader& av_r, ::av
     }
     if (av_gl.glGetFloatv == nullptr) return false;
     av_gl.glGetFloatv(pname, data);
+    if (av_gl.av_framebuffer_guest != nullptr && data != nullptr && (pname == 0x8CA6u || pname == 0x8CAAu))
+        data[0] = static_cast<GLfloat>(av_gl.av_framebuffer_guest(av_gl.av_framebuffer_user, static_cast<GLuint>(data[0])));
     if (data_answered) {
         av_reply.write_varint(static_cast<uint64_t>(data_bytes));
         if (data_bytes != 0) av_reply.write(data, data_bytes);
@@ -8353,6 +8400,8 @@ static bool decode_glGetInteger64v(const RealGl& av_gl, ::av::WireReader& av_r, 
     }
     if (av_gl.glGetInteger64v == nullptr) return false;
     av_gl.glGetInteger64v(pname, data);
+    if (av_gl.av_framebuffer_guest != nullptr && data != nullptr && (pname == 0x8CA6u || pname == 0x8CAAu))
+        data[0] = static_cast<GLint64>(av_gl.av_framebuffer_guest(av_gl.av_framebuffer_user, static_cast<GLuint>(data[0])));
     if (data_answered) {
         av_reply.write_varint(static_cast<uint64_t>(data_bytes));
         if (data_bytes != 0) av_reply.write(data, data_bytes);
@@ -8459,6 +8508,8 @@ static bool decode_glGetIntegerv(const RealGl& av_gl, ::av::WireReader& av_r, ::
     }
     if (av_gl.glGetIntegerv == nullptr) return false;
     av_gl.glGetIntegerv(pname, data);
+    if (av_gl.av_framebuffer_guest != nullptr && data != nullptr && (pname == 0x8CA6u || pname == 0x8CAAu))
+        data[0] = static_cast<GLint>(av_gl.av_framebuffer_guest(av_gl.av_framebuffer_user, static_cast<GLuint>(data[0])));
     if (data_answered) {
         av_reply.write_varint(static_cast<uint64_t>(data_bytes));
         if (data_bytes != 0) av_reply.write(data, data_bytes);
@@ -8790,6 +8841,11 @@ static bool decode_glGetNamedFramebufferAttachmentParameteriv(const RealGl& av_g
             params_bytes = static_cast<size_t>(av_bytes);
         }
     }
+    auto av_refuse = [&](uint32_t av_code) -> bool {
+        if (av_gl.av_record_error != nullptr) av_gl.av_record_error(av_gl.av_error_user, av_code);
+        if (params_answered) av_reply.write_varint(0);
+        return true;
+    };
     const uint64_t params_elements = kQuerySlack;
     if (true) {
         uint64_t av_room = static_cast<uint64_t>(params_bytes / sizeof(GLint));
@@ -8801,6 +8857,7 @@ static bool decode_glGetNamedFramebufferAttachmentParameteriv(const RealGl& av_g
         for (size_t av_z = 0; av_z < params_storage_count; ++av_z) { params_storage[av_z] = {}; }
         params = params_storage;
     }
+    if (av_gl.av_framebuffer_named != nullptr && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &framebuffer)) return av_refuse(0x0502u);
     if (av_gl.glGetNamedFramebufferAttachmentParameteriv == nullptr) return false;
     av_gl.glGetNamedFramebufferAttachmentParameteriv(framebuffer, attachment, pname, params);
     if (params_answered) {
@@ -8834,6 +8891,11 @@ static bool decode_glGetNamedFramebufferParameteriv(const RealGl& av_gl, ::av::W
             param_bytes = static_cast<size_t>(av_bytes);
         }
     }
+    auto av_refuse = [&](uint32_t av_code) -> bool {
+        if (av_gl.av_record_error != nullptr) av_gl.av_record_error(av_gl.av_error_user, av_code);
+        if (param_answered) av_reply.write_varint(0);
+        return true;
+    };
     const uint64_t param_elements = kQuerySlack;
     if (true) {
         uint64_t av_room = static_cast<uint64_t>(param_bytes / sizeof(GLint));
@@ -8845,6 +8907,7 @@ static bool decode_glGetNamedFramebufferParameteriv(const RealGl& av_gl, ::av::W
         for (size_t av_z = 0; av_z < param_storage_count; ++av_z) { param_storage[av_z] = {}; }
         param = param_storage;
     }
+    if (av_gl.av_framebuffer_named != nullptr && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &framebuffer)) return av_refuse(0x0502u);
     if (av_gl.glGetNamedFramebufferParameteriv == nullptr) return false;
     av_gl.glGetNamedFramebufferParameteriv(framebuffer, pname, param);
     if (param_answered) {
@@ -8969,6 +9032,7 @@ static bool decode_glGetObjectLabel(const RealGl& av_gl, ::av::WireReader& av_r,
         for (size_t av_z = 0; av_z < label_storage_count; ++av_z) { label_storage[av_z] = {}; }
         label = label_storage;
     }
+    if (identifier == 0x8D40u && av_gl.av_framebuffer_named != nullptr && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &name)) return av_refuse(0x0501u);
     if (av_gl.glGetObjectLabel == nullptr) return false;
     av_gl.glGetObjectLabel(identifier, name, bufSize, length, label);
     if (length_answered) {
@@ -13297,6 +13361,7 @@ static bool decode_glInvalidateNamedFramebufferData(const RealGl& av_gl, ::av::W
     uint64_t attachments_needed = 0;
     if (__builtin_mul_overflow(attachments_elements, static_cast<uint64_t>(sizeof(GLenum)), &attachments_needed)) return false;
     if (attachments == nullptr ? (attachments_needed != 0 && !(false)) : attachments_room < attachments_needed) return false;
+    if (av_gl.av_framebuffer_named != nullptr && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &framebuffer)) return av_refuse(0x0502u);
     if (av_gl.glInvalidateNamedFramebufferData == nullptr) return false;
     av_gl.glInvalidateNamedFramebufferData(framebuffer, numAttachments, attachments);
     return true;
@@ -13360,6 +13425,7 @@ static bool decode_glInvalidateNamedFramebufferSubData(const RealGl& av_gl, ::av
     uint64_t attachments_needed = 0;
     if (__builtin_mul_overflow(attachments_elements, static_cast<uint64_t>(sizeof(GLenum)), &attachments_needed)) return false;
     if (attachments == nullptr ? (attachments_needed != 0 && !(false)) : attachments_room < attachments_needed) return false;
+    if (av_gl.av_framebuffer_named != nullptr && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &framebuffer)) return av_refuse(0x0502u);
     if (av_gl.glInvalidateNamedFramebufferSubData == nullptr) return false;
     av_gl.glInvalidateNamedFramebufferSubData(framebuffer, numAttachments, attachments, x, y, width, height);
     return true;
@@ -13519,6 +13585,10 @@ static bool decode_glIsFramebuffer(const RealGl& av_gl, ::av::WireReader& av_r, 
     GLuint framebuffer{};
     { uint64_t av_v = 0; if (!av_r.read_varint(av_v)) return false;
       framebuffer = static_cast<GLuint>(av_v); }
+    if (av_gl.av_framebuffer_named != nullptr && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &framebuffer)) {
+        av_reply.write_varint(0);
+        return true;
+    }
     if (av_gl.glIsFramebuffer == nullptr) return false;
     const auto av_ret = av_gl.glIsFramebuffer(framebuffer);
     av_reply.write_varint(static_cast<uint64_t>(av_ret));
@@ -14514,6 +14584,11 @@ static bool decode_glNamedFramebufferDrawBuffer(const RealGl& av_gl, ::av::WireR
     GLenum buf{};
     { uint64_t av_v = 0; if (!av_r.read_varint(av_v)) return false;
       buf = static_cast<GLenum>(av_v); }
+    auto av_refuse = [&](uint32_t av_code) -> bool {
+        if (av_gl.av_record_error != nullptr) av_gl.av_record_error(av_gl.av_error_user, av_code);
+        return true;
+    };
+    if (av_gl.av_framebuffer_named != nullptr && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &framebuffer)) return av_refuse(0x0502u);
     if (av_gl.glNamedFramebufferDrawBuffer == nullptr) return false;
     av_gl.glNamedFramebufferDrawBuffer(framebuffer, buf);
     return true;
@@ -14565,6 +14640,7 @@ static bool decode_glNamedFramebufferDrawBuffers(const RealGl& av_gl, ::av::Wire
     uint64_t bufs_needed = 0;
     if (__builtin_mul_overflow(bufs_elements, static_cast<uint64_t>(sizeof(GLenum)), &bufs_needed)) return false;
     if (bufs == nullptr ? (bufs_needed != 0 && !(false)) : bufs_room < bufs_needed) return false;
+    if (av_gl.av_framebuffer_named != nullptr && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &framebuffer)) return av_refuse(0x0502u);
     if (av_gl.glNamedFramebufferDrawBuffers == nullptr) return false;
     av_gl.glNamedFramebufferDrawBuffers(framebuffer, n, bufs);
     return true;
@@ -14582,6 +14658,11 @@ static bool decode_glNamedFramebufferParameteri(const RealGl& av_gl, ::av::WireR
     GLint param{};
     { uint64_t av_v = 0; if (!av_r.read_varint(av_v)) return false;
       param = static_cast<GLint>(av_v); }
+    auto av_refuse = [&](uint32_t av_code) -> bool {
+        if (av_gl.av_record_error != nullptr) av_gl.av_record_error(av_gl.av_error_user, av_code);
+        return true;
+    };
+    if (av_gl.av_framebuffer_named != nullptr && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &framebuffer)) return av_refuse(0x0502u);
     if (av_gl.glNamedFramebufferParameteri == nullptr) return false;
     av_gl.glNamedFramebufferParameteri(framebuffer, pname, param);
     return true;
@@ -14596,6 +14677,11 @@ static bool decode_glNamedFramebufferReadBuffer(const RealGl& av_gl, ::av::WireR
     GLenum src{};
     { uint64_t av_v = 0; if (!av_r.read_varint(av_v)) return false;
       src = static_cast<GLenum>(av_v); }
+    auto av_refuse = [&](uint32_t av_code) -> bool {
+        if (av_gl.av_record_error != nullptr) av_gl.av_record_error(av_gl.av_error_user, av_code);
+        return true;
+    };
+    if (av_gl.av_framebuffer_named != nullptr && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &framebuffer)) return av_refuse(0x0502u);
     if (av_gl.glNamedFramebufferReadBuffer == nullptr) return false;
     av_gl.glNamedFramebufferReadBuffer(framebuffer, src);
     return true;
@@ -14616,6 +14702,11 @@ static bool decode_glNamedFramebufferRenderbuffer(const RealGl& av_gl, ::av::Wir
     GLuint renderbuffer{};
     { uint64_t av_v = 0; if (!av_r.read_varint(av_v)) return false;
       renderbuffer = static_cast<GLuint>(av_v); }
+    auto av_refuse = [&](uint32_t av_code) -> bool {
+        if (av_gl.av_record_error != nullptr) av_gl.av_record_error(av_gl.av_error_user, av_code);
+        return true;
+    };
+    if (av_gl.av_framebuffer_named != nullptr && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &framebuffer)) return av_refuse(0x0502u);
     if (av_gl.glNamedFramebufferRenderbuffer == nullptr) return false;
     av_gl.glNamedFramebufferRenderbuffer(framebuffer, attachment, renderbuffertarget, renderbuffer);
     return true;
@@ -14636,6 +14727,11 @@ static bool decode_glNamedFramebufferTexture(const RealGl& av_gl, ::av::WireRead
     GLint level{};
     { uint64_t av_v = 0; if (!av_r.read_varint(av_v)) return false;
       level = static_cast<GLint>(av_v); }
+    auto av_refuse = [&](uint32_t av_code) -> bool {
+        if (av_gl.av_record_error != nullptr) av_gl.av_record_error(av_gl.av_error_user, av_code);
+        return true;
+    };
+    if (av_gl.av_framebuffer_named != nullptr && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &framebuffer)) return av_refuse(0x0502u);
     if (av_gl.glNamedFramebufferTexture == nullptr) return false;
     av_gl.glNamedFramebufferTexture(framebuffer, attachment, texture, level);
     return true;
@@ -14659,6 +14755,11 @@ static bool decode_glNamedFramebufferTextureLayer(const RealGl& av_gl, ::av::Wir
     GLint layer{};
     { uint64_t av_v = 0; if (!av_r.read_varint(av_v)) return false;
       layer = static_cast<GLint>(av_v); }
+    auto av_refuse = [&](uint32_t av_code) -> bool {
+        if (av_gl.av_record_error != nullptr) av_gl.av_record_error(av_gl.av_error_user, av_code);
+        return true;
+    };
+    if (av_gl.av_framebuffer_named != nullptr && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &framebuffer)) return av_refuse(0x0502u);
     if (av_gl.glNamedFramebufferTextureLayer == nullptr) return false;
     av_gl.glNamedFramebufferTextureLayer(framebuffer, attachment, texture, level, layer);
     return true;
@@ -14802,7 +14903,12 @@ static bool decode_glObjectLabel(const RealGl& av_gl, ::av::WireReader& av_r, ::
             label_length = av_n;
         }
     }
+    auto av_refuse = [&](uint32_t av_code) -> bool {
+        if (av_gl.av_record_error != nullptr) av_gl.av_record_error(av_gl.av_error_user, av_code);
+        return true;
+    };
     if (label != nullptr && length >= 0 && static_cast<uint64_t>(length) > label_length) return false;
+    if (identifier == 0x8D40u && av_gl.av_framebuffer_named != nullptr && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &name)) return av_refuse(0x0501u);
     if (av_gl.glObjectLabel == nullptr) return false;
     av_gl.glObjectLabel(identifier, name, length, label);
     return true;
@@ -38212,6 +38318,7 @@ static bool decode_glNamedFramebufferSampleLocationsfvNV(const RealGl& av_gl, ::
     uint64_t v_needed = 0;
     if (__builtin_mul_overflow(v_elements, static_cast<uint64_t>(sizeof(GLfloat)), &v_needed)) return false;
     if (v == nullptr ? (v_needed != 0 && !(false)) : v_room < v_needed) return false;
+    if (av_gl.av_framebuffer_named != nullptr && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &framebuffer)) return av_refuse(0x0502u);
     if (av_gl.glNamedFramebufferSampleLocationsfvNV == nullptr) return false;
     av_gl.glNamedFramebufferSampleLocationsfvNV(framebuffer, start, count, v);
     return true;
@@ -48800,6 +48907,12 @@ static bool decode_glCheckNamedFramebufferStatusEXT(const RealGl& av_gl, ::av::W
     GLenum target{};
     { uint64_t av_v = 0; if (!av_r.read_varint(av_v)) return false;
       target = static_cast<GLenum>(av_v); }
+    auto av_refuse = [&](uint32_t av_code) -> bool {
+        if (av_gl.av_record_error != nullptr) av_gl.av_record_error(av_gl.av_error_user, av_code);
+        av_reply.write_varint(0);
+        return true;
+    };
+    if (av_gl.av_framebuffer_named != nullptr && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &framebuffer)) return av_refuse(0x0502u);
     if (av_gl.glCheckNamedFramebufferStatusEXT == nullptr) return false;
     const auto av_ret = av_gl.glCheckNamedFramebufferStatusEXT(framebuffer, target);
     av_reply.write_varint(static_cast<uint64_t>(av_ret));
@@ -48824,6 +48937,11 @@ static bool decode_glNamedFramebufferTexture1DEXT(const RealGl& av_gl, ::av::Wir
     GLint level{};
     { uint64_t av_v = 0; if (!av_r.read_varint(av_v)) return false;
       level = static_cast<GLint>(av_v); }
+    auto av_refuse = [&](uint32_t av_code) -> bool {
+        if (av_gl.av_record_error != nullptr) av_gl.av_record_error(av_gl.av_error_user, av_code);
+        return true;
+    };
+    if (av_gl.av_framebuffer_named != nullptr && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &framebuffer)) return av_refuse(0x0502u);
     if (av_gl.glNamedFramebufferTexture1DEXT == nullptr) return false;
     av_gl.glNamedFramebufferTexture1DEXT(framebuffer, attachment, textarget, texture, level);
     return true;
@@ -48847,6 +48965,11 @@ static bool decode_glNamedFramebufferTexture2DEXT(const RealGl& av_gl, ::av::Wir
     GLint level{};
     { uint64_t av_v = 0; if (!av_r.read_varint(av_v)) return false;
       level = static_cast<GLint>(av_v); }
+    auto av_refuse = [&](uint32_t av_code) -> bool {
+        if (av_gl.av_record_error != nullptr) av_gl.av_record_error(av_gl.av_error_user, av_code);
+        return true;
+    };
+    if (av_gl.av_framebuffer_named != nullptr && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &framebuffer)) return av_refuse(0x0502u);
     if (av_gl.glNamedFramebufferTexture2DEXT == nullptr) return false;
     av_gl.glNamedFramebufferTexture2DEXT(framebuffer, attachment, textarget, texture, level);
     return true;
@@ -48873,6 +48996,11 @@ static bool decode_glNamedFramebufferTexture3DEXT(const RealGl& av_gl, ::av::Wir
     GLint zoffset{};
     { uint64_t av_v = 0; if (!av_r.read_varint(av_v)) return false;
       zoffset = static_cast<GLint>(av_v); }
+    auto av_refuse = [&](uint32_t av_code) -> bool {
+        if (av_gl.av_record_error != nullptr) av_gl.av_record_error(av_gl.av_error_user, av_code);
+        return true;
+    };
+    if (av_gl.av_framebuffer_named != nullptr && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &framebuffer)) return av_refuse(0x0502u);
     if (av_gl.glNamedFramebufferTexture3DEXT == nullptr) return false;
     av_gl.glNamedFramebufferTexture3DEXT(framebuffer, attachment, textarget, texture, level, zoffset);
     return true;
@@ -48893,6 +49021,11 @@ static bool decode_glNamedFramebufferRenderbufferEXT(const RealGl& av_gl, ::av::
     GLuint renderbuffer{};
     { uint64_t av_v = 0; if (!av_r.read_varint(av_v)) return false;
       renderbuffer = static_cast<GLuint>(av_v); }
+    auto av_refuse = [&](uint32_t av_code) -> bool {
+        if (av_gl.av_record_error != nullptr) av_gl.av_record_error(av_gl.av_error_user, av_code);
+        return true;
+    };
+    if (av_gl.av_framebuffer_named != nullptr && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &framebuffer)) return av_refuse(0x0502u);
     if (av_gl.glNamedFramebufferRenderbufferEXT == nullptr) return false;
     av_gl.glNamedFramebufferRenderbufferEXT(framebuffer, attachment, renderbuffertarget, renderbuffer);
     return true;
@@ -48925,6 +49058,11 @@ static bool decode_glGetNamedFramebufferAttachmentParameterivEXT(const RealGl& a
             params_bytes = static_cast<size_t>(av_bytes);
         }
     }
+    auto av_refuse = [&](uint32_t av_code) -> bool {
+        if (av_gl.av_record_error != nullptr) av_gl.av_record_error(av_gl.av_error_user, av_code);
+        if (params_answered) av_reply.write_varint(0);
+        return true;
+    };
     uint64_t params_elements = kQuerySlack;
     if (true) {
         uint64_t av_room = static_cast<uint64_t>(params_bytes / sizeof(GLint));
@@ -48936,6 +49074,7 @@ static bool decode_glGetNamedFramebufferAttachmentParameterivEXT(const RealGl& a
         for (size_t av_z = 0; av_z < params_storage_count; ++av_z) { params_storage[av_z] = {}; }
         params = params_storage;
     }
+    if (av_gl.av_framebuffer_named != nullptr && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &framebuffer)) return av_refuse(0x0502u);
     if (av_gl.glGetNamedFramebufferAttachmentParameterivEXT == nullptr) return false;
     av_gl.glGetNamedFramebufferAttachmentParameterivEXT(framebuffer, attachment, pname, params);
     if (params_answered) {
@@ -48982,6 +49121,11 @@ static bool decode_glFramebufferDrawBufferEXT(const RealGl& av_gl, ::av::WireRea
     GLenum mode{};
     { uint64_t av_v = 0; if (!av_r.read_varint(av_v)) return false;
       mode = static_cast<GLenum>(av_v); }
+    auto av_refuse = [&](uint32_t av_code) -> bool {
+        if (av_gl.av_record_error != nullptr) av_gl.av_record_error(av_gl.av_error_user, av_code);
+        return true;
+    };
+    if (av_gl.av_framebuffer_named != nullptr && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &framebuffer)) return av_refuse(0x0502u);
     if (av_gl.glFramebufferDrawBufferEXT == nullptr) return false;
     av_gl.glFramebufferDrawBufferEXT(framebuffer, mode);
     return true;
@@ -49033,6 +49177,7 @@ static bool decode_glFramebufferDrawBuffersEXT(const RealGl& av_gl, ::av::WireRe
     uint64_t bufs_needed = 0;
     if (__builtin_mul_overflow(bufs_elements, static_cast<uint64_t>(sizeof(GLenum)), &bufs_needed)) return false;
     if (bufs == nullptr ? (bufs_needed != 0 && !(false)) : bufs_room < bufs_needed) return false;
+    if (av_gl.av_framebuffer_named != nullptr && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &framebuffer)) return av_refuse(0x0502u);
     if (av_gl.glFramebufferDrawBuffersEXT == nullptr) return false;
     av_gl.glFramebufferDrawBuffersEXT(framebuffer, n, bufs);
     return true;
@@ -49047,6 +49192,11 @@ static bool decode_glFramebufferReadBufferEXT(const RealGl& av_gl, ::av::WireRea
     GLenum mode{};
     { uint64_t av_v = 0; if (!av_r.read_varint(av_v)) return false;
       mode = static_cast<GLenum>(av_v); }
+    auto av_refuse = [&](uint32_t av_code) -> bool {
+        if (av_gl.av_record_error != nullptr) av_gl.av_record_error(av_gl.av_error_user, av_code);
+        return true;
+    };
+    if (av_gl.av_framebuffer_named != nullptr && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &framebuffer)) return av_refuse(0x0502u);
     if (av_gl.glFramebufferReadBufferEXT == nullptr) return false;
     av_gl.glFramebufferReadBufferEXT(framebuffer, mode);
     return true;
@@ -49076,6 +49226,11 @@ static bool decode_glGetFramebufferParameterivEXT(const RealGl& av_gl, ::av::Wir
             params_bytes = static_cast<size_t>(av_bytes);
         }
     }
+    auto av_refuse = [&](uint32_t av_code) -> bool {
+        if (av_gl.av_record_error != nullptr) av_gl.av_record_error(av_gl.av_error_user, av_code);
+        if (params_answered) av_reply.write_varint(0);
+        return true;
+    };
     uint64_t params_elements = kQuerySlack;
     if (true) {
         uint64_t av_room = static_cast<uint64_t>(params_bytes / sizeof(GLint));
@@ -49087,6 +49242,7 @@ static bool decode_glGetFramebufferParameterivEXT(const RealGl& av_gl, ::av::Wir
         for (size_t av_z = 0; av_z < params_storage_count; ++av_z) { params_storage[av_z] = {}; }
         params = params_storage;
     }
+    if (av_gl.av_framebuffer_named != nullptr && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &framebuffer)) return av_refuse(0x0502u);
     if (av_gl.glGetFramebufferParameterivEXT == nullptr) return false;
     av_gl.glGetFramebufferParameterivEXT(framebuffer, pname, params);
     if (params_answered) {
@@ -49134,6 +49290,11 @@ static bool decode_glNamedFramebufferTextureEXT(const RealGl& av_gl, ::av::WireR
     GLint level{};
     { uint64_t av_v = 0; if (!av_r.read_varint(av_v)) return false;
       level = static_cast<GLint>(av_v); }
+    auto av_refuse = [&](uint32_t av_code) -> bool {
+        if (av_gl.av_record_error != nullptr) av_gl.av_record_error(av_gl.av_error_user, av_code);
+        return true;
+    };
+    if (av_gl.av_framebuffer_named != nullptr && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &framebuffer)) return av_refuse(0x0502u);
     if (av_gl.glNamedFramebufferTextureEXT == nullptr) return false;
     av_gl.glNamedFramebufferTextureEXT(framebuffer, attachment, texture, level);
     return true;
@@ -49157,6 +49318,11 @@ static bool decode_glNamedFramebufferTextureLayerEXT(const RealGl& av_gl, ::av::
     GLint layer{};
     { uint64_t av_v = 0; if (!av_r.read_varint(av_v)) return false;
       layer = static_cast<GLint>(av_v); }
+    auto av_refuse = [&](uint32_t av_code) -> bool {
+        if (av_gl.av_record_error != nullptr) av_gl.av_record_error(av_gl.av_error_user, av_code);
+        return true;
+    };
+    if (av_gl.av_framebuffer_named != nullptr && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &framebuffer)) return av_refuse(0x0502u);
     if (av_gl.glNamedFramebufferTextureLayerEXT == nullptr) return false;
     av_gl.glNamedFramebufferTextureLayerEXT(framebuffer, attachment, texture, level, layer);
     return true;
@@ -49180,6 +49346,11 @@ static bool decode_glNamedFramebufferTextureFaceEXT(const RealGl& av_gl, ::av::W
     GLenum face{};
     { uint64_t av_v = 0; if (!av_r.read_varint(av_v)) return false;
       face = static_cast<GLenum>(av_v); }
+    auto av_refuse = [&](uint32_t av_code) -> bool {
+        if (av_gl.av_record_error != nullptr) av_gl.av_record_error(av_gl.av_error_user, av_code);
+        return true;
+    };
+    if (av_gl.av_framebuffer_named != nullptr && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &framebuffer)) return av_refuse(0x0502u);
     if (av_gl.glNamedFramebufferTextureFaceEXT == nullptr) return false;
     av_gl.glNamedFramebufferTextureFaceEXT(framebuffer, attachment, texture, level, face);
     return true;
@@ -49854,6 +50025,11 @@ static bool decode_glNamedFramebufferParameteriEXT(const RealGl& av_gl, ::av::Wi
     GLint param{};
     { uint64_t av_v = 0; if (!av_r.read_varint(av_v)) return false;
       param = static_cast<GLint>(av_v); }
+    auto av_refuse = [&](uint32_t av_code) -> bool {
+        if (av_gl.av_record_error != nullptr) av_gl.av_record_error(av_gl.av_error_user, av_code);
+        return true;
+    };
+    if (av_gl.av_framebuffer_named != nullptr && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &framebuffer)) return av_refuse(0x0502u);
     if (av_gl.glNamedFramebufferParameteriEXT == nullptr) return false;
     av_gl.glNamedFramebufferParameteriEXT(framebuffer, pname, param);
     return true;
@@ -49883,6 +50059,11 @@ static bool decode_glGetNamedFramebufferParameterivEXT(const RealGl& av_gl, ::av
             params_bytes = static_cast<size_t>(av_bytes);
         }
     }
+    auto av_refuse = [&](uint32_t av_code) -> bool {
+        if (av_gl.av_record_error != nullptr) av_gl.av_record_error(av_gl.av_error_user, av_code);
+        if (params_answered) av_reply.write_varint(0);
+        return true;
+    };
     uint64_t params_elements = kQuerySlack;
     if (true) {
         uint64_t av_room = static_cast<uint64_t>(params_bytes / sizeof(GLint));
@@ -49894,6 +50075,7 @@ static bool decode_glGetNamedFramebufferParameterivEXT(const RealGl& av_gl, ::av
         for (size_t av_z = 0; av_z < params_storage_count; ++av_z) { params_storage[av_z] = {}; }
         params = params_storage;
     }
+    if (av_gl.av_framebuffer_named != nullptr && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &framebuffer)) return av_refuse(0x0502u);
     if (av_gl.glGetNamedFramebufferParameterivEXT == nullptr) return false;
     av_gl.glGetNamedFramebufferParameterivEXT(framebuffer, pname, params);
     if (params_answered) {

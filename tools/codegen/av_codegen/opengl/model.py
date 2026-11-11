@@ -52,6 +52,7 @@ class Param:
     size_param: str | None = None
     length_param: str | None = None
     has_lengths: bool = False
+    object_class: str = ""
 
     @property
     def is_out(self) -> bool:

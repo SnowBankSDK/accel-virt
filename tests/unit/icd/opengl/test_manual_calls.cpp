@@ -2342,14 +2342,14 @@ TEST(manual_calls, a_negative_name_count_is_an_invalid_value_without_a_host_call
   CHECK_EQ(current.error(), gl_invalid_value);
   CHECK_EQ(current.sent(), before); }
 
-TEST(manual_calls, a_framebuffer_name_is_only_this_contexts_once_it_has_bound_it)
+TEST(manual_calls, a_framebuffer_name_is_the_hosts_to_answer_and_zero_is_never_one)
 { Current current;
   const std::uint32_t before = current.sent();
-  CHECK_EQ(gen::Wrap_glIsFramebuffer(5u), 0u);
+  CHECK_EQ(gen::Wrap_glIsFramebuffer(0u), 0u);
   CHECK_EQ(current.sent(), before);
-  gen::Wrap_glBindFramebuffer(0x8D40u, 5u);
-  current.rig().host().gl_varint(1u);
-  CHECK_EQ(gen::Wrap_glIsFramebuffer(5u), 1u);
   current.rig().host().gl_varint(0u);
   CHECK_EQ(gen::Wrap_glIsFramebuffer(5u), 0u);
-  CHECK_EQ(gen::Wrap_glIsFramebuffer(6u), 0u); }
+  CHECK_EQ(current.sent(), before + 1u);
+  CHECK_EQ(current.argument_since(before, 0u), 5u);
+  current.rig().host().gl_varint(1u);
+  CHECK_EQ(gen::Wrap_glIsFramebuffer(5u), 1u); }

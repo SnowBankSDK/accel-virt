@@ -389,6 +389,71 @@ TEST(fullstack_opengl_icd, a_legacy_context_draws_the_fixed_function_pipeline_th
   CHECK_EQ(rig.kmt().open_objects(), 0u);
   CHECK_EQ(rig.device().device().contexts(), 0u); }
 
+TEST(fullstack_opengl_icd, a_framebuffer_name_made_in_one_context_binds_an_incomplete_framebuffer_in_another_of_its_share_group)
+{ const WidestHostGpu &gpu = widest_gpu();
+  if ((gpu.sub_apis() & AV_EXECUTOR_SUB_API_OPENGL) == 0u) return;
+  const ExecutorLibraryFile &library = shared_library();
+  CHECK(library.ops() != nullptr);
+  if (library.ops() == nullptr) return;
+  FullStackRig rig(*library.ops(), gpu.uuid());
+  rig.kmt().let_process_watch();
+  CHECK_EQ(rig.started(), 0);
+  { GlProcess process(rig.kmt());
+    FakeOpengl32 &gl = process.opengl32();
+    CHECK(gl.load(GlIcdRoot::icd_version, 1u) == FakeOpengl32::Load::loaded);
+    CHECK(gl.set_pixel_format(process.dc(), 1));
+    void *const first = gl.create_context(process.dc());
+    void *const second = gl.create_context(process.dc());
+    CHECK(first != nullptr && second != nullptr);
+    CHECK(gl.share_lists(first, second));
+    using GenFramebuffers = void (APIENTRY *)(GLsizei, GLuint *);
+    using BindFramebuffer = void (APIENTRY *)(GLenum, GLuint);
+    using IsFramebuffer = GLboolean (APIENTRY *)(GLuint);
+    using FramebufferTexture2D = void (APIENTRY *)(GLenum, GLenum, GLenum, GLuint, GLint);
+    using CheckFramebufferStatus = GLenum (APIENTRY *)(GLenum);
+    CHECK(gl.make_current(process.dc(), first));
+    const auto gen = reinterpret_cast<GenFramebuffers>(gl.get_proc_address("glGenFramebuffers"));
+    const auto bind = reinterpret_cast<BindFramebuffer>(gl.get_proc_address("glBindFramebuffer"));
+    const auto is = reinterpret_cast<IsFramebuffer>(gl.get_proc_address("glIsFramebuffer"));
+    const auto attach = reinterpret_cast<FramebufferTexture2D>(gl.get_proc_address("glFramebufferTexture2D"));
+    const auto status = reinterpret_cast<CheckFramebufferStatus>(gl.get_proc_address("glCheckFramebufferStatus"));
+    GLuint texture = 0u, framebuffer = 0u;
+    gl.gl<void (APIENTRY *)(GLsizei, GLuint *)>(slot_gen_textures)(1, &texture);
+    gl.gl<void (APIENTRY *)(GLenum, GLuint)>(slot_bind_texture)(gl_texture_2d, texture);
+    gl.gl<void (APIENTRY *)(GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum, GLenum, const void *)>(
+        slot_tex_image_2d)(gl_texture_2d, 0, static_cast<GLint>(gl_rgba), side, side, 0, gl_rgba,
+                           gl_unsigned_byte, nullptr);
+    gen(1, &framebuffer);
+    bind(gl_framebuffer, framebuffer);
+    attach(gl_framebuffer, gl_color_attachment0, gl_texture_2d, texture, 0);
+    CHECK(framebuffer != 0u);
+    CHECK_EQ(status(gl_framebuffer), gl_framebuffer_complete);
+    CHECK_EQ(is(framebuffer), 1u);
+    bind(gl_framebuffer, 0u);
+    gl.gl<void (APIENTRY *)()>(slot_finish)();
+    CHECK(gl.make_current(process.dc(), second));
+    CHECK_EQ(is(framebuffer), 0u);
+    bind(gl_framebuffer, framebuffer);
+    CHECK_EQ(gl.gl<GLenum (APIENTRY *)()>(slot_get_error)(), 0u);
+    const GLenum other = status(gl_framebuffer);
+    std::fprintf(stderr, "second context: framebuffer %u is 0x%x\n", framebuffer, other);
+    CHECK(other != gl_framebuffer_complete);
+    CHECK_EQ(is(framebuffer), 1u);
+    GLuint next = 0u;
+    gen(1, &next);
+    CHECK(next != 0u && next != framebuffer);
+    bind(gl_framebuffer, 0u);
+    CHECK(gl.make_current(process.dc(), first));
+    bind(gl_framebuffer, framebuffer);
+    CHECK_EQ(status(gl_framebuffer), gl_framebuffer_complete);
+    bind(gl_framebuffer, 0u);
+    CHECK(process.root().invariants_hold());
+    CHECK(gl.make_current(nullptr, nullptr));
+    CHECK(gl.delete_context(second));
+    CHECK(gl.delete_context(first)); }
+  CHECK_EQ(rig.kmt().open_objects(), 0u);
+  CHECK_EQ(rig.device().device().contexts(), 0u); }
+
 TEST(fullstack_opengl_icd, the_gl_probe_passes_every_step_on_the_host_gpu)
 { const WidestHostGpu &gpu = widest_gpu();
   if ((gpu.sub_apis() & AV_EXECUTOR_SUB_API_OPENGL) == 0u) return;

@@ -140,7 +140,8 @@ def _lower_command(raw: RawCommand, prof: Profile, tier: str) -> Command:
         if role is Role.STRING_IN:
             length = Length(LengthKind.STRING)
         param = Param(name=raw_param.name, type=raw_param.type, role=role,
-                      length=length, element=raw_param.type.base)
+                      length=length, element=raw_param.type.base,
+                      object_class=raw_param.object_class or "")
         if role is Role.STRING_ARRAY_IN:
             param.has_lengths = any(other.name == "length"
                                     for other in raw.params)

@@ -13,6 +13,7 @@
 #include "executor/opengl/gl_buffer_slices.hpp"
 #include "executor/opengl/gl_client_reads.hpp"
 #include "executor/opengl/gl_fence_deferral.hpp"
+#include "executor/opengl/gl_framebuffer_names.hpp"
 #include "executor/opengl/gl_error_queue.hpp"
 #include "executor/opengl/gl_memory_objects.hpp"
 #include "executor/opengl/gl_texture_slices.hpp"
@@ -115,6 +116,7 @@ private:
     GlDmaBufImages  images_;
     GlBufferSlices  slices_;
     GlTextureSlices textures_;
+    GlFramebufferNames framebuffers_;
     GuestBytes  guest_;
     GuestRegion region_;
     PublishedSlots published_;

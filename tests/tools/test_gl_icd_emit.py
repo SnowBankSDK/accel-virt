@@ -233,6 +233,60 @@ class GeneratedGlIcd(unittest.TestCase):
         self.assertIn(".give_back(data_lease)", dropped)
 
 
+class ServerFramebufferNames(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        def framebuffer(name="framebuffer"):
+            return Param(name=name, type=CType(base="GLuint"), role=Role.SCALAR, object_class="framebuffer")
+        reg = Registry()
+        for cmd in [
+            command("glBindFramebuffer", [scalar("target", "GLenum"), framebuffer()], ident=1),
+            command("glIsFramebuffer", [framebuffer()], returns="GLboolean", ident=2),
+            command("glCheckNamedFramebufferStatus", [framebuffer(), scalar("target", "GLenum")], returns="GLenum",
+                    ident=3),
+            command("glBlitNamedFramebuffer", [framebuffer("readFramebuffer"), framebuffer("drawFramebuffer")],
+                    ident=4),
+            command("glObjectLabel", [scalar("identifier", "GLenum"), scalar("name", "GLuint")], ident=5),
+            command("glCullFace", [scalar("cap", "GLenum")], ident=6),
+        ]:
+            reg.commands[cmd.name] = cmd
+        cls.out = pathlib.Path(tempfile.mkdtemp())
+        emit.emit_server(reg, cls.out)
+        cls.server = (cls.out / "gl_dispatch_server.cpp").read_text()
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.out)
+
+    def decoder(self, name):
+        match = re.search(r"static bool decode_" + name + r"\(.*?\n\}\n", self.server, re.S)
+        assert match is not None, name
+        return match.group(0)
+
+    def test_every_framebuffer_name_crosses_the_contexts_table_before_the_host_call(self):
+        for name, names in (("glCheckNamedFramebufferStatus", ["framebuffer"]),
+                            ("glBlitNamedFramebuffer", ["readFramebuffer", "drawFramebuffer"])):
+            body = self.decoder(name)
+            for param in names:
+                line = (f"!av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &{param})) "
+                        "return av_refuse(0x0502u);")
+                self.assertIn(line, body, name)
+                self.assertLess(body.index(line), body.index(f"av_gl.{name}("), name)
+
+    def test_a_bind_may_make_the_name_and_a_question_about_an_unknown_one_is_answered_no(self):
+        self.assertIn("!av_gl.av_framebuffer_bound(av_gl.av_framebuffer_user, &framebuffer)) return av_refuse(0x0502u);",
+                      self.decoder("glBindFramebuffer"))
+        asked = self.decoder("glIsFramebuffer")
+        self.assertIn("!av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &framebuffer)) {", asked)
+        self.assertNotIn("av_refuse(0x0502u)", asked)
+
+    def test_a_label_names_a_framebuffer_only_when_it_says_so(self):
+        self.assertIn("if (identifier == 0x8D40u && av_gl.av_framebuffer_named != nullptr && "
+                      "!av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &name)) return av_refuse(0x0501u);",
+                      self.decoder("glObjectLabel"))
+        self.assertNotIn("av_framebuffer", self.decoder("glCullFace"))
+
+
 class ProcTableOrder(unittest.TestCase):
     def test_a_table_row_the_registry_does_not_carry_is_refused(self):
         with tempfile.TemporaryDirectory() as directory:

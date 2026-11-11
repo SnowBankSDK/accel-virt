@@ -13,6 +13,7 @@ class RawParam:
     type: CType
     len_text: str | None = None
     group: str | None = None
+    object_class: str | None = None
     text: str = ""
 
 
@@ -116,6 +117,7 @@ def _read(path: Path, api: str, reg: RawRegistry) -> None:
                 type=_ctype_from(p),
                 len_text=p.get("len"),
                 group=p.get("group"),
+                object_class=p.get("class"),
                 text=" ".join("".join(p.itertext()).split()),
             ))
         reg.commands[name] = raw

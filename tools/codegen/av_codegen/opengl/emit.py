@@ -1587,6 +1587,58 @@ def _output_room(cmd: Command, p: Param) -> list[str]:
     return out
 
 
+FRAMEBUFFER_LABELS = {"glObjectLabel": ("identifier", "name"), "glGetObjectLabel": ("identifier", "name"),
+                      "glLabelObjectEXT": ("type", "object"), "glGetObjectLabelEXT": ("type", "object")}
+
+FRAMEBUFFER_BINDING_QUERIES = ("glGetIntegerv", "glGetInteger64v", "glGetFloatv", "glGetDoublev")
+
+GL_FRAMEBUFFER = "0x8D40u"
+FRAMEBUFFER_BINDINGS = ("0x8CA6u", "0x8CAAu")
+
+
+def _server_framebuffer_names(cmd: Command) -> list[str]:
+    out: list[str] = []
+    named = "av_gl.av_framebuffer_named != nullptr"
+    for name in _framebuffer_scalars(cmd):
+        if cmd.name.startswith("glBind"):
+            out.append(f"    if (av_gl.av_framebuffer_bound != nullptr && "
+                       f"!av_gl.av_framebuffer_bound(av_gl.av_framebuffer_user, &{name})) return av_refuse(0x0502u);")
+        elif cmd.name.startswith("glIs"):
+            out.append(f"    if ({named} && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &{name})) {{")
+            out.append("        av_reply.write_varint(0);")
+            out.append("        return true;")
+            out.append("    }")
+        else:
+            out.append(f"    if ({named} && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &{name})) "
+                       "return av_refuse(0x0502u);")
+    if cmd.name in FRAMEBUFFER_LABELS:
+        kind, name = FRAMEBUFFER_LABELS[cmd.name]
+        out.append(f"    if ({kind} == {GL_FRAMEBUFFER} && {named} && "
+                   f"!av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &{name})) return av_refuse(0x0501u);")
+    for p in cmd.params:
+        if p.object_class == "framebuffer" and p.role is Role.ARRAY_IN:
+            out.append("    if (av_gl.av_framebuffers_deleted != nullptr) {")
+            out.append(f"        av_gl.av_framebuffers_deleted(av_gl.av_framebuffer_user, {p.length.text}, {p.name});")
+            out.append("        return true;")
+            out.append("    }")
+    return out
+
+
+def _server_framebuffer_answers(cmd: Command) -> list[str]:
+    out: list[str] = []
+    for p in cmd.params:
+        if p.object_class == "framebuffer" and p.role is Role.ARRAY_OUT:
+            out.append(f"    if (av_gl.av_framebuffers_made != nullptr && {p.name} != nullptr) "
+                       f"av_gl.av_framebuffers_made(av_gl.av_framebuffer_user, {p.length.text}, {p.name});")
+    if cmd.name in FRAMEBUFFER_BINDING_QUERIES:
+        data = cmd.params[1]
+        asked = " || ".join(f"pname == {value}" for value in FRAMEBUFFER_BINDINGS)
+        out.append(f"    if (av_gl.av_framebuffer_guest != nullptr && {data.name} != nullptr && ({asked}))")
+        out.append(f"        {data.name}[0] = static_cast<{data.type.base}>(av_gl.av_framebuffer_guest("
+                   f"av_gl.av_framebuffer_user, static_cast<GLuint>({data.name}[0])));")
+    return out
+
+
 def emit_server(reg: Registry, out_dir: Path) -> None:
     h = [HEADER, "#pragma once\n",
          "#include <stddef.h>", "#include <stdint.h>\n",
@@ -1653,6 +1705,7 @@ def emit_server(reg: Registry, out_dir: Path) -> None:
              if p.role is Role.PIXELS_OUT and p.type.base != "void"
              else (f"({p.name}_packs ? {p.name}_packed : {p.name})" if p in packed else p.name))
             for p in cmd.params)
+        c.extend(_server_framebuffer_names(cmd))
         c.append(f"    if (av_gl.{cmd.name} == nullptr) return false;")
         if cmd.name in VRAM_GUARDED:
             scalars = ", ".join(
@@ -1684,6 +1737,7 @@ def emit_server(reg: Registry, out_dir: Path) -> None:
         if cmd.name in TEXTURE_FOLLOWED:
             after = f"av_gl.av_after_{cmd.name}"
             c.append(f"    if ({after} != nullptr) {after}(av_gl.av_texture_user, {call_args});")
+        c.extend(_server_framebuffer_answers(cmd))
         for p in packed:
             c.append(f"    if ({p.name}_packs) av_gl.av_unpack_blob(av_gl.av_blob_user);")
         if cmd.mints_handle:
@@ -1804,6 +1858,13 @@ def emit_real_dispatch(reg: Registry, out_dir: Path) -> None:
            "",
            "    void (*av_record_error)(void*, uint32_t) = nullptr;",
            "    void* av_error_user = nullptr;",
+           "",
+           "    bool (*av_framebuffer_named)(void*, GLuint*) = nullptr;",
+           "    bool (*av_framebuffer_bound)(void*, GLuint*) = nullptr;",
+           "    GLuint (*av_framebuffer_guest)(void*, GLuint) = nullptr;",
+           "    void (*av_framebuffers_made)(void*, GLsizei, GLuint*) = nullptr;",
+           "    void (*av_framebuffers_deleted)(void*, GLsizei, const GLuint*) = nullptr;",
+           "    void* av_framebuffer_user = nullptr;",
            "",
            "    // The vertex array objects a draw found reading only from",
            "    // buffers (arrays_verified). Mutable because dispatch is handed",
@@ -2154,13 +2215,15 @@ def _icd_pixel_bytes(cmd: Command, p: Param) -> str:
             f"{depth}, {packing})")
 
 
+def _framebuffer_scalars(cmd) -> list[str]:
+    return [p.name for p in cmd.params
+            if p.object_class == "framebuffer" and p.type.pointer_depth == 0]
+
+
 def _framebuffer_names(cmd) -> list[str]:
     if cmd.name == "glIsFramebuffer" or cmd.name == "glBindFramebuffer":
         return []
-    wanted = {"framebuffer", "srcFramebuffer", "dstFramebuffer",
-              "readFramebuffer", "drawFramebuffer"}
-    return [p.name for p in cmd.params
-            if p.name in wanted and p.type.pointer_depth == 0]
+    return _framebuffer_scalars(cmd)
 
 
 STAGE_ARRAYS = {"glDrawArraysInstancedBaseInstance"}

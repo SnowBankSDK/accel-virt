@@ -128,7 +128,7 @@ OpenGlBackend::OpenGlBackend(DriverLog &lines) : OpenGlBackend(heap_, lines)
 
 OpenGlBackend::OpenGlBackend(BlockSource &blocks, DriverLog &lines)
     : heap_(), context_(), gl_(), import_(), buffers_(), natives_(), wake_(), pack_(gl_, buffers_), fences_(blocks), pacer_(), shared_fences_(nullptr), progress_(gl_, natives_, wake_), pending_(gl_, errors_), vram_guard_(blocks, gl_, pending_), memories_(blocks, progress_), images_(blocks), slices_(memories_, gl_, import_, progress_, pending_, guest_, lines),
-      textures_(blocks, gl_, memories_, images_, pending_), guest_(), region_(guest_, lines), published_(guest_), errors_(),
+      textures_(blocks, gl_, memories_, images_, pending_), framebuffers_(blocks, gl_, pending_), guest_(), region_(guest_, lines), published_(guest_), errors_(),
       resolved_(0u), ran_(0u), submitted_(0u), fenced_at_(0u), drained_at_(0u), drain_fence_(nullptr),
       current_(false), fence_owed_(false), poll_failure_logged_(false), lines_(lines)
 {
@@ -185,6 +185,7 @@ void OpenGlBackend::install_hooks()
     gl_.av_error_user = this;
     slices_.install();
     textures_.install();
+    framebuffers_.install();
     vram_guard_.install();
 }
 
@@ -245,6 +246,7 @@ void OpenGlBackend::shut_down()
         if (drain_fence_ != nullptr && gl_.glDeleteSync != nullptr) gl_.glDeleteSync(static_cast<GLsync>(drain_fence_));
         if (gl_.glFinish != nullptr && drained_at_ != submitted_) gl_.glFinish();
         client_reads_.release(gl_);
+        framebuffers_.release();
         pack_.release();
         pack_.abandon_all();
         buffers_.give_back();
@@ -259,6 +261,7 @@ void OpenGlBackend::shut_down()
             if (gl_.glDeleteSync != nullptr) gl_.glDeleteSync(static_cast<GLsync>(fence));
         }
     } else {
+        framebuffers_.forget_all();
         memories_.forget_all();
         memories_.part();
         progress_.forget();

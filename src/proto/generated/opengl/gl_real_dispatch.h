@@ -108,6 +108,13 @@ struct RealGl {
     void (*av_record_error)(void*, uint32_t) = nullptr;
     void* av_error_user = nullptr;
 
+    bool (*av_framebuffer_named)(void*, GLuint*) = nullptr;
+    bool (*av_framebuffer_bound)(void*, GLuint*) = nullptr;
+    GLuint (*av_framebuffer_guest)(void*, GLuint) = nullptr;
+    void (*av_framebuffers_made)(void*, GLsizei, GLuint*) = nullptr;
+    void (*av_framebuffers_deleted)(void*, GLsizei, const GLuint*) = nullptr;
+    void* av_framebuffer_user = nullptr;
+
     // The vertex array objects a draw found reading only from
     // buffers (arrays_verified). Mutable because dispatch is handed
     // the table const: these are a cache of what the context would
