@@ -550,7 +550,7 @@ switch ($Stage) {
             SetDword $key Enabled 1
             SetDword $key AllowExperimental 1
         }
-        Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\Dwm' -Name DisableDDisplay -ErrorAction SilentlyContinue
+        SetDword 'HKLM:\SOFTWARE\Microsoft\Windows\Dwm' DisableDDisplay 1
         pnputil /add-driver "$Package\avgpu.inf" /install
         if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne $RebootRequired) { exit $LASTEXITCODE }
         if (-not (StoreMatchesPackage)) { exit 1 }
