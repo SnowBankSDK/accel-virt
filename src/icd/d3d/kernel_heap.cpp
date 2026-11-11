@@ -9,14 +9,13 @@
 
 namespace av::d3d {
 
-KernelHeap::KernelHeap() : allocation_(), resource_{}, bytes_(0u), host_object_(0u), cpu_visible_(false)
+KernelHeap::KernelHeap() : allocation_(), resource_{}, bytes_(0u), host_object_(0u)
 {
     AV_SCOPE("KernelHeap::KernelHeap");
 }
 
-KernelHeap::KernelHeap(uint64_t bytes, bool cpu_visible, uint64_t host_object)
-    : allocation_(), resource_{}, bytes_(SharedBytes(bytes).pages()), host_object_(host_object),
-      cpu_visible_(cpu_visible)
+KernelHeap::KernelHeap(uint64_t bytes, uint64_t host_object)
+    : allocation_(), resource_{}, bytes_(SharedBytes(bytes).pages()), host_object_(host_object)
 {
     AV_SCOPE("KernelHeap::KernelHeap");
 }
@@ -26,7 +25,7 @@ Status KernelHeap::make()
     AV_SCOPE("KernelHeap::make");
     if (bytes_ == 0u) return Status::invalid_parameter;
     allocation_ = SharedAllocationData(
-        AllocationDescriptor(AllocationKind::host_heap, cpu_visible_, SurfaceLayout(), bytes_, ScanoutTarget(),
+        AllocationDescriptor(AllocationKind::host_heap, false, SurfaceLayout(), bytes_, ScanoutTarget(),
                              host_object_),
         SharedObjectKind(SharedObjectKind::memory), bytes_);
     resource_[0] = mark;
@@ -48,7 +47,6 @@ Status KernelHeap::open(const void *resource, size_t resource_size, const void *
     __builtin_memcpy(resource_, marked, resource_bytes);
     allocation_ = read;
     bytes_ = described.size();
-    cpu_visible_ = described.cpu_visible();
     host_object_ = described.host_key();
     return Status::ok;
 }
@@ -69,12 +67,6 @@ uint64_t KernelHeap::bytes() const
 {
     AV_SCOPE("KernelHeap::bytes");
     return bytes_;
-}
-
-bool KernelHeap::cpu_visible() const
-{
-    AV_SCOPE("KernelHeap::cpu_visible");
-    return cpu_visible_;
 }
 
 uint64_t KernelHeap::host_object() const

@@ -596,7 +596,7 @@ HRESULT D3d12Device::allocate_heap(HeapRecord &heap, D3D12DDI_HRTRESOURCE runtim
     AV_SCOPE("D3d12Device::allocate_heap");
     if (heap.size == 0u) return S_OK;
     const uint32_t  object = resource != nullptr ? resource->header.stamp.id() : heap.header.stamp.id();
-    d3d::KernelHeap kernel(heap.size, heap.type != heap_default, object);
+    d3d::KernelHeap kernel(heap.size, object);
     if (kernel.make() != Status::ok) return E_INVALIDARG;
     D3D12DDI_ALLOCATION_INFO_0022 info = {};
     info.pPrivateDriverData = kernel.allocation_data();

@@ -15,7 +15,7 @@ public:
     static constexpr size_t resource_bytes = 2u * sizeof(uint64_t);
 
     KernelHeap();
-    KernelHeap(uint64_t bytes, bool cpu_visible, uint64_t host_object);
+    KernelHeap(uint64_t bytes, uint64_t host_object);
     KernelHeap(const KernelHeap &) = delete;
     KernelHeap &operator=(const KernelHeap &) = delete;
 
@@ -26,7 +26,6 @@ public:
     uint8_t        *allocation_data();
     const uint64_t *resource_data() const;
     uint64_t        bytes() const;
-    bool            cpu_visible() const;
     uint64_t        host_object() const;
     uint64_t        key() const;
 
@@ -37,7 +36,6 @@ private:
     uint64_t             resource_[2];
     uint64_t             bytes_;
     uint64_t             host_object_;
-    bool                 cpu_visible_;
 };
 
 }

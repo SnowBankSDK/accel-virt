@@ -88,7 +88,8 @@ void Allocation::report_to(DxgkAllocationInfoRecord &info)
     info.hAllocation = this;
     const bool cached = kind == AllocationKind::staging ||
                         (kind == AllocationKind::cross_adapter && descriptor_.layout().format() != 0u);
-    info.Flags = (descriptor_.cpu_visible() ? flag_cpu_visible : 0u) | (cached ? flag_cached : 0u) |
+    const bool process_view = descriptor_.cpu_visible() && kind != AllocationKind::host_heap;
+    info.Flags = (process_view ? flag_cpu_visible : 0u) | (cached ? flag_cached : 0u) |
                  (pinned ? flag_accessed_physically : 0u);
     info.AllocationPriority = priority_normal;
     info.Flags2 = 0u;
