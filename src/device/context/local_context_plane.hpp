@@ -42,8 +42,10 @@ public:
     bool                 holds(uint32_t id) override;
     [[nodiscard]] Status bind(uint32_t id, const ContextSetup &setup, const CapsetInfo &capset) override;
     bool                 holds_doorbell(uint32_t index) override;
+    bool                 retiring_pins(uint32_t resource) override;
     bool                 can_share(uint32_t asking, uint32_t share) override;
     uint32_t             live() const override;
+    uint32_t             reaping() const override;
 
     void blob_created(uint32_t id) override;
     void blob_released(uint32_t id) override;

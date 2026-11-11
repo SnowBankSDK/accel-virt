@@ -28,7 +28,7 @@ ContextExecutor::~ContextExecutor()
 {
     AV_SCOPE("ContextExecutor::~ContextExecutor");
     if (executor_ == nullptr) return;
-    shares_.withdraw(id_);
+    shares_.withdraw(id_, executor_);
     library_.destroy(executor_);
 }
 
@@ -84,9 +84,16 @@ void ContextExecutor::destroy()
     AV_SCOPE("ContextExecutor::destroy");
     host_.require_worker("ContextExecutor::destroy");
     if (executor_ == nullptr) return;
-    shares_.withdraw(id_);
+    shares_.withdraw(id_, executor_);
     library_.destroy(executor_);
     executor_ = nullptr;
+}
+
+void ContextExecutor::withdraw()
+{
+    AV_SCOPE("ContextExecutor::withdraw");
+    const AvExecutor *const made = __atomic_load_n(&executor_, __ATOMIC_ACQUIRE);
+    if (made != nullptr) shares_.withdraw(id_, made);
 }
 
 HostPoll ContextExecutor::poll()

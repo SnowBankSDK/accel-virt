@@ -927,7 +927,7 @@ void VulkanBackend::on_vkDestroyDevice(VkDevice device, const VkAllocationCallba
     layouts_.forget_device(reinterpret_cast<uint64_t>(device));
     fence_watch_.forget(device);
     progress_.forget(device);
-    timing_.forget(device);
+    timing_.forget(device, idle);
     GuestDevice *const ending = device_of(reinterpret_cast<uint64_t>(device));
     if (ending != nullptr && ending == adopting_) {
         adopting_ = nullptr;

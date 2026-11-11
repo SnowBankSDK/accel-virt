@@ -26,7 +26,7 @@ public:
 
     [[nodiscard]] Status initialize();
     [[nodiscard]] Status publish(uint32_t id, const uint8_t *uuid, AvExecutor *executor);
-    void                 withdraw(uint32_t id);
+    void                 withdraw(uint32_t id, const AvExecutor *executor);
     AvExecutor         *create_sharing(SubApi api, uint32_t share_id, const uint8_t *uuid,
                                         const AvContextOptions &options);
     uint32_t             published();

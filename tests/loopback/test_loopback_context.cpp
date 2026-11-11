@@ -108,6 +108,7 @@ TEST(loopback_capset, the_device_refuses_a_setup_of_another_major)
       CHECK_STATUS(writer.unref(40u + blob), Status::ok);
       CHECK_EQ(answer_type(rig, writer, request), GpuResponse::ok_nodata);
   }
+  rig.settle();
   CHECK_EQ(rig.device().device().contexts(), 0u);
   CHECK_EQ(rig.device().device().blobs(), 0u); }
 
@@ -138,6 +139,7 @@ TEST(loopback_context, sets_up_runs_batches_with_a_reply_and_tears_down)
   CHECK_EQ(reply.size(), 8u);
   CHECK(std::memcmp(rig.reply(0u) + ReplyHeader::encoded_size, "loopback", 8u) == 0);
   CHECK(rig.retire(0u));
+  rig.settle();
   CHECK_EQ(rig.device().device().contexts(), 0u);
   CHECK_EQ(rig.device().device().blobs(), 0u);
   CHECK(rig.context(0u).invariants_hold()); }
@@ -241,6 +243,7 @@ TEST(loopback_faults, an_executor_that_loses_the_device_loses_one_context_and_no
 
   CHECK(rig.retire(0u));
   CHECK(rig.retire(1u));
+  rig.settle();
   CHECK_EQ(rig.device().device().contexts(), 0u);
   CHECK_EQ(rig.device().device().blobs(), 0u); }
 
@@ -253,6 +256,7 @@ TEST(loopback_reset, after_a_device_reset_serving_finds_nothing_more_and_a_new_c
   CHECK_STATUS(rig.submit(0u, 1u, 0u, ring.tail()), Status::ok);
   CHECK(rig.driver().serve_until(rig.context(0u), rig.line(0u), 1u));
   rig.device().device().reset();
+  rig.settle();
   CHECK_EQ(rig.device().device().contexts(), 0u);
   CHECK_EQ(rig.device().device().blobs(), 0u);
   CHECK_STATUS(rig.serve(0u), Status::ok);

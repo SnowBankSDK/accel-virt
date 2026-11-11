@@ -82,7 +82,7 @@ TEST(device_module_report, writes_every_live_device_under_its_slot)
                                 "host_window_bytes=0 contexts=0 driver_ok=false\n"
                                 "module/0/device/1/host_blobs/0 live=0\n"
                                 "module/0/device/1/window_stats/0 attached=false stable=false\n"
-                                "module/0/device/1/contexts/0 live=0") == 0);
+                                "module/0/device/1/contexts/0 live=0 reaping=0") == 0);
   CHECK_STATUS(module.destroy(second), Status::ok); }
 
 TEST(device_module_destroy, finds_the_device_named_among_others)

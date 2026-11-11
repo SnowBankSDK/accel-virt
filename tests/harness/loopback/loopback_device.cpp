@@ -56,6 +56,7 @@ LoopbackDevice::~LoopbackDevice()
 {
     executor_.release();
     device_.reset();
+    static_cast<void>(host_.run_main_loop());
 }
 
 MockHost          &LoopbackDevice::host() { return host_; }

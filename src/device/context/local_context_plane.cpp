@@ -143,6 +143,12 @@ bool LocalContextPlane::holds_doorbell(uint32_t index)
     return contexts_.holds_doorbell(index);
 }
 
+bool LocalContextPlane::retiring_pins(uint32_t resource)
+{
+    AV_SCOPE("LocalContextPlane::retiring_pins");
+    return contexts_.retiring_pins(resource);
+}
+
 bool LocalContextPlane::can_share(uint32_t asking, uint32_t share)
 {
     AV_SCOPE("LocalContextPlane::can_share");
@@ -153,6 +159,12 @@ uint32_t LocalContextPlane::live() const
 {
     AV_SCOPE("LocalContextPlane::live");
     return contexts_.live();
+}
+
+uint32_t LocalContextPlane::reaping() const
+{
+    AV_SCOPE("LocalContextPlane::reaping");
+    return contexts_.reaping();
 }
 
 bool LocalContextPlane::export_image(const uint8_t *, uint64_t key, AvExportedImage &image)

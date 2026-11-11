@@ -40,6 +40,7 @@ public:
     FenceWindow            fence_window();
     uint32_t               reply_resource() const;
     BlobWindow             reply_window();
+    bool                   pins(uint32_t resource) const;
 
 private:
     Host           &host_;

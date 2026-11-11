@@ -61,6 +61,7 @@ TEST(table_host, a_worker_runs_over_the_c_table)
   CHECK_EQ(mock.run_main_loop(), 1u);
   CHECK_EQ(ran, 11u);
   worker.stop();
+  worker.join();
   CHECK_EQ(mock.live_threads(), 0u);
   CHECK_EQ(mock.logged(), 0u); }
 

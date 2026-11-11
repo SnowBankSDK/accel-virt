@@ -265,6 +265,12 @@ Status RendererContextPlane::bind(uint32_t id, const ContextSetup &setup, const 
     return outcome;
 }
 
+bool RendererContextPlane::retiring_pins(uint32_t)
+{
+    AV_SCOPE("RendererContextPlane::retiring_pins");
+    return false;
+}
+
 bool RendererContextPlane::holds_doorbell(uint32_t index)
 {
     AV_SCOPE("RendererContextPlane::holds_doorbell");
@@ -288,6 +294,12 @@ uint32_t RendererContextPlane::live() const
     for (const ObjectStorage<RemoteContext> &slot : slots_)
         if (slot.constructed()) count++;
     return count;
+}
+
+uint32_t RendererContextPlane::reaping() const
+{
+    AV_SCOPE("RendererContextPlane::reaping");
+    return 0u;
 }
 
 void RendererContextPlane::blob_created(uint32_t id)

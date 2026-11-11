@@ -47,8 +47,10 @@ public:
     void          hold_context(std::uint32_t id) { held_context_ = id; }
     Status        bind(std::uint32_t, const ContextSetup &, const CapsetInfo &) override { return Status::not_supported; }
     bool          holds_doorbell(std::uint32_t) override { return false; }
+    bool          retiring_pins(std::uint32_t) override { return false; }
     bool          can_share(std::uint32_t, std::uint32_t) override { return false; }
     std::uint32_t live() const override { return 0u; }
+    std::uint32_t reaping() const override { return 0u; }
     void          blob_created(std::uint32_t id) override { if (created_count_ < capacity) created_[created_count_++] = id; }
     void          blob_released(std::uint32_t id) override { if (released_count_ < capacity) released_[released_count_++] = id; }
     void          shared_released(const std::uint8_t *gpu_uuid, std::uint64_t object_id) override

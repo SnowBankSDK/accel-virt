@@ -334,22 +334,47 @@ TEST(vulkan_submit_progress, a_submission_whose_fence_cannot_be_queued_holds_its
   CHECK_EQ(driver.idles, 0u);
   CHECK(rig.progress.invariants_hold()); }
 
-TEST(vulkan_submit_progress, a_wait_for_a_submission_whose_fence_cannot_be_queued_retries_it_then_waits_for_the_whole_device)
+TEST(vulkan_submit_progress, a_wait_for_a_submission_whose_fence_cannot_be_queued_retries_it_and_never_waits_for_the_whole_device)
 { Rig rig;
   driver.submit_fails = true;
   CHECK_EQ(rig.submit(), 1u);
   CHECK_EQ(rig.progress.stuck(device), 1u);
-  driver.idle_fails = true;
   CHECK(!rig.progress.wait_idle(device));
-  CHECK_EQ(driver.idles, 1u);
+  CHECK_EQ(driver.idles, 0u);
   CHECK_EQ(rig.progress.stuck(device), 1u);
   CHECK_EQ(rig.progress.reached(device), 0u);
-  driver.idle_fails = false;
-  CHECK(rig.progress.wait_idle(device));
-  CHECK_EQ(driver.idles, 2u);
+  driver.submit_fails = false;
+  CHECK(!rig.progress.wait_idle(device));
   CHECK_EQ(rig.progress.stuck(device), 0u);
+  rig.signal_all();
+  CHECK(rig.progress.wait_idle(device));
+  CHECK_EQ(driver.idles, 0u);
   CHECK_EQ(rig.progress.reached(device), 1u);
   CHECK(rig.progress.invariants_hold()); }
+
+TEST(vulkan_submit_progress, a_wait_for_a_device_with_many_unfinished_submissions_shares_one_bounded_budget)
+{ Rig rig;
+  for (std::uint64_t mark = 1u; mark <= 3u; mark++) CHECK_EQ(rig.submit(), mark);
+  CHECK(!rig.progress.wait_idle(device));
+  CHECK_EQ(driver.waits, 3u);
+  CHECK(driver.last_wait_ns <= 5000000000u);
+  CHECK_EQ(driver.idles, 0u);
+  const std::uint64_t marks[2] = {1u, 3u};
+  CHECK(!rig.progress.wait_marks(device, marks, 2u));
+  CHECK(driver.last_wait_ns <= 5000000000u);
+  CHECK_EQ(driver.idles, 0u); }
+
+TEST(vulkan_submit_progress, forgetting_a_device_never_waits_for_its_unfinished_fences)
+{ Rig rig;
+  CHECK_EQ(rig.submit(), 1u);
+  CHECK_EQ(rig.submit(), 2u);
+  driver.fences[0].signalled = true;
+  const std::uint32_t waits = driver.waits;
+  rig.progress.forget(device_of(device));
+  CHECK_EQ(driver.waits, waits);
+  CHECK_EQ(driver.idles, 0u);
+  CHECK(!driver.fences[0].alive);
+  CHECK(driver.fences[1].alive); }
 
 TEST(vulkan_submit_progress, a_wait_for_marks_waits_for_those_submissions_only_and_not_for_earlier_or_later_ones)
 { Rig rig;

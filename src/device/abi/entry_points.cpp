@@ -12,6 +12,8 @@
 #include "device/context/ring_consumer.hpp"
 #include "device/shim/device_trace.hpp"
 #include "device/threading/worker.hpp"
+#include "device/threading/worker_reaper.hpp"
+#include "device/context/device_context_table.hpp"
 
 namespace av {
 
@@ -100,6 +102,12 @@ int av_device_destroy(AvDevice *device)
 
 void AvWorkerRun(void *worker)
 { static_cast<av::Worker *>(worker)->run(); }
+
+void AvWorkerReaperRun(void *reaper)
+{ static_cast<av::WorkerReaper *>(reaper)->run(); }
+
+void AvContextsReaped(void *table)
+{ static_cast<av::DeviceContextTable *>(table)->finish_reaped(); }
 
 void AvRingAttach(void *ring)
 { static_cast<av::RingConsumer *>(ring)->attach(); }

@@ -83,6 +83,10 @@ void run_alone(FullStackRig &rig, GuestReport &report)
     if (report.failed() != 0u) print(report);
     CHECK_EQ(rig.kmt().open_objects(), 0u);
     CHECK_EQ(rig.device().device().contexts(), 0u);
+    for (int round = 0; round < 5000 && rig.device().device().reaping() != 0u; round++)
+        if (rig.device().host().wait_for_main_loop_work(1u, 1u)) static_cast<void>(rig.device().host().run_main_loop());
+    CHECK_EQ(rig.device().device().reaping(), 0u);
+    static_cast<void>(rig.device().host().run_main_loop());
 }
 
 }

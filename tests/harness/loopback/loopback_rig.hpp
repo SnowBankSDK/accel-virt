@@ -38,6 +38,7 @@ public:
     Status set_up(std::uint32_t index);
     bool   establish(std::uint32_t index);
     bool   retire(std::uint32_t index);
+    void   settle();
     Status submit(std::uint32_t index, std::uint64_t fence, std::uint64_t begin, std::uint64_t end);
     Status serve(std::uint32_t index);
 

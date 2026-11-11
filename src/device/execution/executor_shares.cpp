@@ -59,13 +59,13 @@ Status ExecutorShares::publish(uint32_t id, const uint8_t *uuid, AvExecutor *exe
     return status;
 }
 
-void ExecutorShares::withdraw(uint32_t id)
+void ExecutorShares::withdraw(uint32_t id, const AvExecutor *executor)
 {
     AV_SCOPE("ExecutorShares::withdraw");
     if (lock_ == nullptr) return;
     host_.lock_mutex(lock_);
     const uint32_t index = index_of(id);
-    if (index != none) {
+    if (index != none && executors_[index] == executor) {
         ids_[index] = 0u;
         executors_[index] = nullptr;
     }

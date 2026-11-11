@@ -110,6 +110,7 @@ public:
     ~Fixture()
     {
         worker_.stop();
+        worker_.join();
         on_worker([](RingConsumer &consumer) { consumer.detach(); });
     }
 
@@ -872,6 +873,7 @@ TEST(d3d_ordering, a_stream_waited_on_is_woken_to_run_its_batch)
   CHECK(now_ns() - started < 20000000u);
   CHECK_EQ(waiting.consumer().batches(), 1u);
   other.worker().stop();
+  other.worker().join();
   CHECK_EQ(other.consumer().batches(), 1u);
   CHECK_EQ(other.ring().head(), other.ring().tail());
   ordering.remove(other.consumer());

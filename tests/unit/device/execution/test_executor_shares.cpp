@@ -89,7 +89,9 @@ TEST(executor_shares, a_published_executor_is_shared_by_a_create_on_the_same_gpu
       CHECK(fixture.ops().last_share_live());
       CHECK_EQ(fixture.ops().last_options().major, 4u);
       CHECK_EQ(fixture.ops().last_sub_api(), AV_EXECUTOR_SUB_API_OPENGL);
-      shares.withdraw(3u);
+      shares.withdraw(3u, second);
+      CHECK_EQ(shares.published(), 1u);
+      shares.withdraw(3u, first);
       CHECK_EQ(shares.published(), 0u);
       CHECK(shares.invariants_hold());
       fixture.library().destroy(second);
@@ -109,16 +111,16 @@ TEST(executor_shares, nothing_published_on_that_gpu_is_no_executor_and_no_call)
       CHECK(shares.create_sharing(av::SubApi::opengl, 4u, gpu, core_46) == nullptr);
       CHECK(shares.create_sharing(av::SubApi::opengl, 0u, gpu, core_46) == nullptr);
       CHECK(shares.create_sharing(av::SubApi::opengl, 3u, other_gpu, core_46) == nullptr);
-      shares.withdraw(3u);
-      shares.withdraw(3u);
-      shares.withdraw(9u);
+      shares.withdraw(3u, first);
+      shares.withdraw(3u, first);
+      shares.withdraw(9u, first);
       CHECK(shares.create_sharing(av::SubApi::opengl, 3u, gpu, core_46) == nullptr);
       CHECK_EQ(fixture.ops().option_creates(), asked);
       CHECK_STATUS(shares.publish(3u, gpu, first), Status::ok);
       fixture.ops().fail_create_at(1u);
       CHECK(shares.create_sharing(av::SubApi::opengl, 3u, gpu, core_46) == nullptr);
       CHECK_EQ(fixture.ops().option_creates(), asked + 1u);
-      shares.withdraw(3u);
+      shares.withdraw(3u, first);
       fixture.library().destroy(first);
   });
   CHECK_EQ(fixture.ops().misuses(), 0u); }
@@ -137,7 +139,7 @@ TEST(executor_shares, a_withdraw_waits_for_a_create_that_is_using_the_executor)
       published = true;
       while (!destroy_now) sched_yield();
       withdrawing = true;
-      shares.withdraw(5u);
+      shares.withdraw(5u, shared);
       withdrawn = true;
       fixture.library().destroy(shared);
   };
@@ -172,7 +174,7 @@ TEST(executor_shares, publishing_needs_the_lock_and_a_free_entry)
   AvExecutor *const fake = static_cast<AvExecutor *>(static_cast<void *>(&host));
   CHECK_STATUS(shares.publish(1u, gpu, fake), Status::invalid_state);
   CHECK(shares.create_sharing(av::SubApi::opengl, 1u, gpu, core_46) == nullptr);
-  shares.withdraw(1u);
+  shares.withdraw(1u, fake);
   CHECK_EQ(shares.published(), 0u);
   CHECK_EQ(ops.option_creates(), 0u);
   host.fail_mutex_at(1u);
@@ -187,7 +189,7 @@ TEST(executor_shares, publishing_needs_the_lock_and_a_free_entry)
   CHECK_STATUS(shares.publish(1u, gpu, fake), Status::conflict);
   CHECK_EQ(shares.published(), ExecutorShares::capacity);
   CHECK(shares.invariants_hold());
-  shares.withdraw(7u);
+  shares.withdraw(7u, fake);
   CHECK_STATUS(shares.publish(ExecutorShares::capacity + 1u, gpu, fake), Status::ok);
   CHECK(shares.invariants_hold()); }
 

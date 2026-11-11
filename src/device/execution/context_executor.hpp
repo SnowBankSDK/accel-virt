@@ -34,6 +34,7 @@ public:
     void                 signals_through(ContextSignal &signal);
     [[nodiscard]] Status create();
     void                 destroy();
+    void                 withdraw();
     void                 end_batch();
     HostPoll             poll();
     void                 gpu_progress(uint64_t &marked, uint64_t &reached) const;

@@ -36,8 +36,10 @@ public:
     virtual bool                 holds(uint32_t id) = 0;
     [[nodiscard]] virtual Status bind(uint32_t id, const ContextSetup &setup, const CapsetInfo &capset) = 0;
     virtual bool                 holds_doorbell(uint32_t index) = 0;
+    virtual bool                 retiring_pins(uint32_t resource) = 0;
     virtual bool                 can_share(uint32_t asking, uint32_t share) = 0;
     virtual uint32_t             live() const = 0;
+    virtual uint32_t             reaping() const = 0;
 
     virtual void blob_created(uint32_t id) = 0;
     virtual void blob_released(uint32_t id) = 0;

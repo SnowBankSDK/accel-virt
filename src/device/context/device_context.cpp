@@ -51,6 +51,21 @@ Status DeviceContext::start()
     return worker_.start();
 }
 
+void DeviceContext::retire()
+{
+    AV_SCOPE("DeviceContext::retire");
+    ordering_.remove(ring_);
+    pulse_.drop(fences_);
+    executor_.withdraw();
+    worker_.stop();
+}
+
+Worker &DeviceContext::worker()
+{
+    AV_SCOPE("DeviceContext::worker");
+    return worker_;
+}
+
 Status DeviceContext::post(const WorkItem &item)
 {
     AV_SCOPE("DeviceContext::post");

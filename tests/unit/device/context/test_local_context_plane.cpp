@@ -243,7 +243,9 @@ TEST(local_context_plane, runs_contexts_through_its_table)
   CHECK_STATUS(fixture.plane().destroy(3u), Status::ok);
   CHECK_STATUS(fixture.plane().destroy(3u), Status::not_found);
   CHECK(!fixture.plane().holds_doorbell(5u));
-  CHECK_EQ(fixture.plane().live(), 1u); }
+  CHECK_EQ(fixture.plane().live(), 1u);
+  CHECK(fixture.host().wait_for_main_loop_work(1u, 5000u));
+  CHECK_EQ(fixture.host().run_main_loop(), 1u); }
 
 TEST(local_context_plane, opens_the_device_s_domain_once_and_closes_it_as_it_goes)
 { MockExecutorOps ops(vulkan_only);

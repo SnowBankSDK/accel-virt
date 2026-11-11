@@ -43,6 +43,8 @@ public:
     DeviceContext &operator=(const DeviceContext &) = delete;
 
     [[nodiscard]] Status start();
+    void                 retire();
+    Worker              &worker();
     [[nodiscard]] Status post(const WorkItem &item);
     [[nodiscard]] Status  bind(const ContextSetup &setup, const CapsetInfo &capset);
     Status                refused(const char *step, Status status) const;

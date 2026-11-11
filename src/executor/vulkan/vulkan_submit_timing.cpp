@@ -23,7 +23,7 @@ VulkanSubmitTiming::VulkanSubmitTiming(DriverLog &lines)
 VulkanSubmitTiming::~VulkanSubmitTiming()
 {
     AV_SCOPE("VulkanSubmitTiming::~VulkanSubmitTiming");
-    if (device_ != VK_NULL_HANDLE) forget(device_);
+    if (device_ != VK_NULL_HANDLE) forget(device_, false);
 }
 
 bool VulkanSubmitTiming::enabled() const
@@ -163,13 +163,12 @@ VkResult VulkanSubmitTiming::submit(VkQueue queue, uint32_t count, const VkSubmi
     return submitted;
 }
 
-void VulkanSubmitTiming::forget(VkDevice device)
+void VulkanSubmitTiming::forget(VkDevice device, bool idle)
 {
     AV_SCOPE("VulkanSubmitTiming::forget");
     if (device != device_ || device_ == VK_NULL_HANDLE) return;
-    vkDeviceWaitIdle(device_);
-    if (queries_ != VK_NULL_HANDLE) vkDestroyQueryPool(device_, queries_, nullptr);
-    if (pool_ != VK_NULL_HANDLE) vkDestroyCommandPool(device_, pool_, nullptr);
+    if (idle && queries_ != VK_NULL_HANDLE) vkDestroyQueryPool(device_, queries_, nullptr);
+    if (idle && pool_ != VK_NULL_HANDLE) vkDestroyCommandPool(device_, pool_, nullptr);
     device_ = VK_NULL_HANDLE;
     queue_ = VK_NULL_HANDLE;
     queries_ = VK_NULL_HANDLE;

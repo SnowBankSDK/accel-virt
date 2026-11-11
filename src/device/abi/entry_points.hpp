@@ -14,6 +14,8 @@ extern constinit DeviceModule device_module;
 extern "C" {
 
 void AvWorkerRun(void *worker);
+void AvWorkerReaperRun(void *reaper);
+void AvContextsReaped(void *table);
 void AvRingAttach(void *ring);
 void AvDisplayClockRun(void *clock);
 void AvDevicePulseRun(void *pulse);

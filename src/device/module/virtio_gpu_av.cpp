@@ -296,6 +296,12 @@ uint32_t VirtioGpuAv::contexts() const
     return contexts_->live();
 }
 
+uint32_t VirtioGpuAv::reaping() const
+{
+    AV_SCOPE("VirtioGpuAv::reaping");
+    return contexts_->reaping();
+}
+
 bool VirtioGpuAv::realized() const
 {
     AV_SCOPE("VirtioGpuAv::realized");

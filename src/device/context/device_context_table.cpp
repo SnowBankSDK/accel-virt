@@ -3,6 +3,7 @@
 #include "core/trace/function_scope.hpp"
 #include "core/trace/state_writer.hpp"
 #include "device/context/context_binding.hpp"
+#include "device/abi/entry_points.hpp"
 #include "device/host/host.hpp"
 #include "proto/context/sub_api.hpp"
 
@@ -15,7 +16,7 @@ DeviceContextTable::DeviceContextTable(Host &host, BlobTable &blobs, HostBlobOwn
                                        WireRecorder &recorder)
     : host_(host), blobs_(blobs), owners_(owners), interrupts_(interrupts), library_(library),
       recorder_(recorder), shares_(host, library), ordering_(host),
-      pulse_(host), slots_{}
+      pulse_(host), slots_{}, retired_{}, reaper_(host, &AvContextsReaped, this)
     {
         AV_SCOPE("DeviceContextTable::DeviceContextTable");
     }
@@ -53,9 +54,48 @@ bool DeviceContextTable::can_share(uint32_t asking, uint32_t share)
 ObjectStorage<DeviceContext> *DeviceContextTable::slot_of(uint32_t id)
 {
     AV_SCOPE("DeviceContextTable::slot_of");
-    for (ObjectStorage<DeviceContext> &slot : slots_)
-        if (slot.constructed() && slot.object().id() == id) return &slot;
+    for (uint32_t index = 0u; index < max_contexts; index++)
+        if (live_at(index) && slots_[index].object().id() == id) return &slots_[index];
     return nullptr;
+}
+
+bool DeviceContextTable::live_at(uint32_t index) const
+{
+    AV_SCOPE("DeviceContextTable::live_at");
+    return slots_[index].constructed() && !retired_[index];
+}
+
+void DeviceContextTable::retire(uint32_t index)
+{
+    AV_SCOPE("DeviceContextTable::retire");
+    DeviceContext &context = slots_[index].object();
+    context.retire();
+    if (!reaper_.running()) static_cast<void>(reaper_.start());
+    if (reaper_.running() && reaper_.take(context.worker(), index) == Status::ok) {
+        retired_[index] = true;
+        return;
+    }
+    slots_[index].destroy();
+}
+
+void DeviceContextTable::finish_reaped()
+{
+    AV_SCOPE("DeviceContextTable::finish_reaped");
+    host_.require_main_loop("DeviceContextTable::finish_reaped");
+    uint32_t       reaped[max_contexts] = {};
+    const uint32_t count = reaper_.collect(reaped, max_contexts);
+    for (uint32_t at = 0u; at < count; at++) {
+        slots_[reaped[at]].destroy();
+        retired_[reaped[at]] = false;
+    }
+}
+
+uint32_t DeviceContextTable::reaping() const
+{
+    AV_SCOPE("DeviceContextTable::reaping");
+    uint32_t count = 0u;
+    for (bool retired : retired_) count += retired ? 1u : 0u;
+    return count;
 }
 
 Status DeviceContextTable::create(uint32_t id, const char *name)
@@ -64,6 +104,7 @@ Status DeviceContextTable::create(uint32_t id, const char *name)
     host_.require_main_loop("DeviceContextTable::create");
     if (id == 0u) return Status::invalid_parameter;
     if (slot_of(id) != nullptr) return Status::conflict;
+    finish_reaped();
     for (ObjectStorage<DeviceContext> &slot : slots_) {
         if (slot.construct(host_, blobs_, owners_, interrupts_, library_, shares_, recorder_, ordering_, pulse_,
                            id, name) != Status::ok)
@@ -81,7 +122,7 @@ Status DeviceContextTable::destroy(uint32_t id)
     host_.require_main_loop("DeviceContextTable::destroy");
     ObjectStorage<DeviceContext> *const slot = slot_of(id);
     if (slot == nullptr) return Status::not_found;
-    slot->destroy();
+    retire(static_cast<uint32_t>(slot - slots_));
     return Status::ok;
 }
 
@@ -89,7 +130,14 @@ void DeviceContextTable::destroy_all()
 {
     AV_SCOPE("DeviceContextTable::destroy_all");
     host_.require_main_loop("DeviceContextTable::destroy_all");
-    for (ObjectStorage<DeviceContext> &slot : slots_) slot.destroy();
+    for (uint32_t index = 0u; index < max_contexts; index++)
+        if (live_at(index)) slots_[index].object().retire();
+    reaper_.stop();
+    finish_reaped();
+    for (uint32_t index = 0u; index < max_contexts; index++) {
+        slots_[index].destroy();
+        retired_[index] = false;
+    }
 }
 
 DeviceContext *DeviceContextTable::find(uint32_t id)
@@ -100,12 +148,21 @@ DeviceContext *DeviceContextTable::find(uint32_t id)
     return slot != nullptr ? &slot->object() : nullptr;
 }
 
+bool DeviceContextTable::retiring_pins(uint32_t resource)
+{
+    AV_SCOPE("DeviceContextTable::retiring_pins");
+    host_.require_main_loop("DeviceContextTable::retiring_pins");
+    for (uint32_t at = 0u; at < max_contexts; at++)
+        if (retired_[at] && slots_[at].object().binding().pins(resource)) return true;
+    return false;
+}
+
 bool DeviceContextTable::holds_doorbell(uint32_t index)
 {
     AV_SCOPE("DeviceContextTable::holds_doorbell");
     host_.require_main_loop("DeviceContextTable::holds_doorbell");
-    for (const ObjectStorage<DeviceContext> &slot : slots_)
-        if (slot.constructed() && slot.object().binding().bound() && slot.object().binding().doorbell() == index)
+    for (uint32_t at = 0u; at < max_contexts; at++)
+        if (live_at(at) && slots_[at].object().binding().bound() && slots_[at].object().binding().doorbell() == index)
             return true;
     return false;
 }
@@ -114,7 +171,7 @@ uint32_t DeviceContextTable::live() const
 {
     AV_SCOPE("DeviceContextTable::live");
     uint32_t count = 0u;
-    for (const ObjectStorage<DeviceContext> &slot : slots_) count += slot.constructed() ? 1u : 0u;
+    for (uint32_t index = 0u; index < max_contexts; index++) count += live_at(index) ? 1u : 0u;
     return count;
 }
 
@@ -122,13 +179,14 @@ bool DeviceContextTable::invariants_hold() const
 {
     AV_SCOPE("DeviceContextTable::invariants_hold");
     for (uint32_t first = 0u; first < max_contexts; first++) {
-        if (!slots_[first].constructed()) continue;
+        if (retired_[first] && !slots_[first].constructed()) return false;
+        if (!live_at(first)) continue;
         const DeviceContext &context = slots_[first].object();
         if (!context.running() || context.id() == 0u) return false;
         for (uint32_t second = first + 1u; second < max_contexts; second++)
-            if (slots_[second].constructed() && slots_[second].object().id() == context.id()) return false;
+            if (live_at(second) && slots_[second].object().id() == context.id()) return false;
     }
-    return true;
+    return reaper_.invariants_hold();
 }
 
 void DeviceContextTable::report(StateWriter &writer)
@@ -136,8 +194,9 @@ void DeviceContextTable::report(StateWriter &writer)
     AV_SCOPE("DeviceContextTable::report");
     writer.open("contexts", 0u);
     writer.number("live", live());
-    for (ObjectStorage<DeviceContext> &slot : slots_)
-        if (slot.constructed()) slot.object().report(writer);
+    writer.number("reaping", reaping());
+    for (uint32_t index = 0u; index < max_contexts; index++)
+        if (live_at(index)) slots_[index].object().report(writer);
     writer.close();
 }
 

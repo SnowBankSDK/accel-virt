@@ -22,6 +22,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <sched.h>
 
 using av::BlobTable;
 using av::DeviceContext;
@@ -78,13 +79,13 @@ TEST(device_context_table_report, writes_each_context_and_its_worker)
   av::StateWriter empty(bytes, sizeof bytes);
   empty.open("device", 0u);
   table.report(empty);
-  CHECK(std::strcmp(empty.dump(), "device/0\ndevice/0/contexts/0 live=0") == 0);
+  CHECK(std::strcmp(empty.dump(), "device/0\ndevice/0/contexts/0 live=0 reaping=0") == 0);
   CHECK_STATUS(table.create(1u, "test"), Status::ok);
   CHECK_STATUS(table.create(7u, "test"), Status::ok);
   av::StateWriter two(bytes, sizeof bytes);
   table.report(two);
   const char *const expected =
-      "contexts/0 live=2\n"
+      "contexts/0 live=2 reaping=0\n"
       "contexts/0/context/1 name=test bound=false attached=false faulted=false head=0 last_fence=0 batches=0 executor=false\n"
       "contexts/0/context/1/worker/0 running=true pending=0 stopping=false\n"
       "contexts/0/context/7 name=test bound=false attached=false faulted=false head=0 last_fence=0 batches=0 executor=false\n"
@@ -122,8 +123,14 @@ TEST(device_context_table_destroy, stops_the_worker_once)
   CHECK_STATUS(table.create(4u, "test"), Status::ok);
   CHECK_STATUS(table.destroy(4u), Status::ok);
   CHECK(table.invariants_hold());
-  CHECK_EQ(host.live_threads(), 0u);
-  CHECK_STATUS(table.destroy(4u), Status::not_found); }
+  CHECK(table.find(4u) == nullptr);
+  CHECK_STATUS(table.destroy(4u), Status::not_found);
+  CHECK(host.wait_for_main_loop_work(1u, 5000u));
+  CHECK_EQ(host.run_main_loop(), 1u);
+  CHECK_EQ(table.reaping(), 0u);
+  CHECK_EQ(host.live_threads(), 1u);
+  table.destroy_all();
+  CHECK_EQ(host.live_threads(), 0u); }
 
 TEST(device_context_table_holds_doorbell, only_a_bound_context_holds_its_doorbell)
 { MockHost host; BlobTable blobs(host); av::HostBlobTable owners(host); FenceInterrupts interrupts(host); ExecutorLibrary library; av::WireRecorder recorder(host);
@@ -146,7 +153,68 @@ TEST(device_context_table_holds_doorbell, only_a_bound_context_holds_its_doorbel
   CHECK(table.holds_doorbell(5u));
   CHECK(!table.holds_doorbell(0u));
   CHECK_STATUS(table.destroy(2u), Status::ok);
-  CHECK(!table.holds_doorbell(5u)); }
+  CHECK(!table.holds_doorbell(5u));
+  CHECK(host.wait_for_main_loop_work(1u, 5000u));
+  CHECK_EQ(host.run_main_loop(), 1u); }
+
+namespace {
+
+struct Gate {
+    MockHost *host;
+    void     *event;
+};
+
+}
+
+TEST(device_context_table_destroy, a_busy_context_is_destroyed_at_once_and_its_pins_and_slot_go_when_its_worker_ends)
+{ MockHost host; BlobTable blobs(host); av::HostBlobTable owners(host); FenceInterrupts interrupts(host); ExecutorLibrary library; av::WireRecorder recorder(host);
+  DeviceContextTable table(host, blobs, owners, interrupts, library, recorder);
+  host.set_hostmem_size(0x10000u);
+  CHECK_STATUS(blobs.initialize(), Status::ok);
+  CHECK_STATUS(table.initialize(), Status::ok);
+  av::GuestBlobMaker maker(host, blobs);
+  CHECK_STATUS(maker.create(1u, 0x2000u), Status::ok);
+  CHECK_STATUS(maker.create(2u, 0x1000u), Status::ok);
+  av::RingBlobWriter(blobs).write_header(1u, 12u);
+  CHECK_STATUS(table.create(2u, "test"), Status::ok);
+  const std::uint8_t uuid[av::GpuIdentity::uuid_bytes] = {};
+  const av::CapsetInfo capset(av::ProtocolVersion(1u, 0u), 1u, 64u, 12u, 24u, 0u,
+                              av::GpuIdentity(0u, 0u, 0u, uuid, 0u, 0u, ""));
+  const av::ContextSetup setup(av::ProtocolVersion(1u, 0u), av::SubApi::vulkan, 1u, 12u, 2u, 5u, 0u);
+  CHECK_STATUS(table.find(2u)->bind(setup, capset), Status::ok);
+  Gate gate{&host, nullptr};
+  CHECK_STATUS(host.create_event(gate.event), Status::ok);
+  CHECK_STATUS(table.find(2u)->post(WorkItem([](void *held) {
+                                                 auto *const g = static_cast<Gate *>(held);
+                                                 g->host->wait_event(g->event);
+                                             },
+                                             nullptr, &gate)),
+               Status::ok);
+  while (table.find(2u)->worker().pending() != 0u) sched_yield();
+  CHECK_STATUS(table.destroy(2u), Status::ok);
+  CHECK(table.find(2u) == nullptr);
+  CHECK_EQ(table.live(), 0u);
+  CHECK_EQ(table.reaping(), 1u);
+  CHECK(table.retiring_pins(1u));
+  CHECK(table.retiring_pins(2u));
+  CHECK(!table.retiring_pins(3u));
+  CHECK_STATUS(blobs.release(1u), Status::invalid_state);
+  CHECK_STATUS(blobs.retire(1u), Status::ok);
+  CHECK(blobs.contains(1u));
+  CHECK_STATUS(table.create(2u, "test"), Status::ok);
+  CHECK(table.invariants_hold());
+  CHECK_EQ(host.run_main_loop(), 0u);
+  host.signal_event(gate.event);
+  CHECK(host.wait_for_main_loop_work(1u, 5000u));
+  CHECK_EQ(host.run_main_loop(), 1u);
+  CHECK_EQ(table.reaping(), 0u);
+  CHECK(!table.retiring_pins(1u));
+  CHECK(!blobs.contains(1u));
+  CHECK_STATUS(blobs.release(2u), Status::ok);
+  CHECK_EQ(table.live(), 1u);
+  CHECK(table.invariants_hold());
+  table.destroy_all();
+  host.destroy_event(gate.event); }
 
 TEST(device_context_table, is_main_loop_only)
 { MockHost host; BlobTable blobs(host); av::HostBlobTable owners(host); FenceInterrupts interrupts(host); ExecutorLibrary library; av::WireRecorder recorder(host);

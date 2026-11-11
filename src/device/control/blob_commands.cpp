@@ -57,7 +57,9 @@ bool BlobCommands::unref(ControlRequest &request, GpuResponse &response)
         recorder_.record_blob(0u, BlobAction::released, 0u, resource, 0u, 0u);
         return true;
     }
-    switch (blobs_.release(resource)) {
+    Status released = blobs_.release(resource);
+    if (released == Status::invalid_state && contexts_.retiring_pins(resource)) released = blobs_.retire(resource);
+    switch (released) {
     case Status::ok:
         recorder_.record_blob(0u, BlobAction::released, 0u, resource, 0u, 0u);
         contexts_.blob_released(resource);

@@ -66,6 +66,7 @@ public:
     [[nodiscard]] Status create_context(uint32_t id, const char *name);
     [[nodiscard]] Status destroy_context(uint32_t id);
     uint32_t             contexts() const;
+    uint32_t             reaping() const;
     void                 renderer_lost();
     bool                 export_accepted(int connection, bool same_user);
     bool                 realized() const;

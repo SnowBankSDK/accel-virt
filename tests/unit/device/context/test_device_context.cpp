@@ -260,6 +260,7 @@ TEST(device_context, the_worker_releases_the_executor_it_made)
   CHECK(fixture.published(guest.tail()));
   CHECK_EQ(fixture.ops().created(), 1u);
   av::DeviceContextProbe::worker(fixture.context()).stop();
+  av::DeviceContextProbe::worker(fixture.context()).join();
   CHECK_EQ(fixture.ops().destroyed(), 1u);
   CHECK_EQ(fixture.ops().misuses(), 0u); }
 
@@ -333,6 +334,7 @@ TEST(device_context_bind, a_worker_that_is_not_running_binds_nothing)
 { Fixture fixture;
   static_cast<void>(fixture.guest());
   av::DeviceContextProbe::worker(fixture.context()).stop();
+  av::DeviceContextProbe::worker(fixture.context()).join();
   CHECK_STATUS(fixture.context().bind(setup(), capset()), Status::invalid_state);
   CHECK(!fixture.context().binding().bound());
   CHECK_STATUS(fixture.blobs().release(fence), Status::ok); }

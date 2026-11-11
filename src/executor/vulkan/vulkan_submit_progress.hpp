@@ -2,6 +2,7 @@
 #define AV_VULKAN_SUBMIT_PROGRESS_HPP
 
 #include "core/platform/block_source.hpp"
+#include "executor/monotonic_clock.hpp"
 #include "executor/vulkan/vulkan_progress.hpp"
 #include "executor/vulkan/vulkan_queue_timelines.hpp"
 
@@ -62,7 +63,6 @@ private:
     bool     waited(Slot &slot, uint64_t nanoseconds = wait_ns);
     bool     settled_within(Slot &slot, TeardownBudget &budget);
     bool     queued(Slot &slot);
-    bool     settled(Slot &slot);
     uint32_t oldest() const;
     uint32_t vacancy();
     uint32_t reserved_for(uint64_t mark) const;
@@ -76,6 +76,7 @@ private:
     bool     stale_;
     VulkanQueueTimelines timelines_;
     bool     lost_;
+    MonotonicClock clock_;
 };
 
 }

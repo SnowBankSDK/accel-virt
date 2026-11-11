@@ -154,6 +154,9 @@ TEST(virtio_gpu_av_realize, binds_once_and_contexts_follow)
   CHECK_EQ(device.contexts(), 2u);
   CHECK_STATUS(device.destroy_context(1u), Status::ok);
   CHECK_STATUS(device.destroy_context(1u), Status::not_found);
+  CHECK(host.wait_for_main_loop_work(1u, 5000u));
+  CHECK_EQ(host.run_main_loop(), 1u);
+  CHECK_EQ(device.contexts(), 1u);
   device.reset();
   CHECK(device.invariants_hold());
   CHECK_EQ(device.contexts(), 0u);
@@ -277,7 +280,7 @@ TEST(virtio_gpu_av_report, an_unrealized_device_says_so_and_has_no_contexts)
   device.report(writer);
   CHECK(std::strcmp(writer.dump(), "device/0 realized=false\ndevice/0/host_blobs/0 live=0\n"
                                   "device/0/window_stats/0 attached=false stable=false\n"
-                                  "device/0/contexts/0 live=0") == 0); }
+                                  "device/0/contexts/0 live=0 reaping=0") == 0); }
 
 TEST(virtio_gpu_av_control, an_unrealized_device_answers_nothing_and_offers_no_capset)
 { MockHost host;
@@ -438,13 +441,13 @@ TEST(virtio_gpu_av_control, answers_context_requests_and_reset_destroys_contexts
   CHECK(std::strncmp(writer.dump(), "device/3 realized=true gpu=0 capsets=1 blobs=2 scanouts=0 host_window_bytes=65536 contexts=1 driver_ok=true\n"
                                     "device/3/host_blobs/0 live=0\n"
                                     "device/3/window_stats/0 attached=false stable=false\n"
-                                    "device/3/contexts/0 live=1\n"
+                                    "device/3/contexts/0 live=1 reaping=0\n"
                                     "device/3/contexts/0/context/7 name= bound=true sub_api=1 version=2.0 ring=1 "
                                     "ring_order=12 fence=2 doorbell=0 reply=0 attached=",
                      std::strlen("device/3 realized=true gpu=0 capsets=1 blobs=2 scanouts=0 host_window_bytes=65536 contexts=1 driver_ok=true\n"
                                  "device/3/host_blobs/0 live=0\n"
                                  "device/3/window_stats/0 attached=false stable=false\n"
-                                 "device/3/contexts/0 live=1\n"
+                                 "device/3/contexts/0 live=1 reaping=0\n"
                                  "device/3/contexts/0/context/7 name= bound=true sub_api=1 version=2.0 ring=1 "
                                  "ring_order=12 fence=2 doorbell=0 reply=0 attached=")) == 0);
   CHECK(std::strstr(writer.dump(), "\ndevice/3/contexts/0/context/7/worker/0 running=true ") != nullptr);
@@ -577,7 +580,7 @@ TEST(virtio_gpu_av, lifecycle_is_main_loop_only)
                    &device, thread),
                Status::ok);
   host.join_thread(thread);
-  for (int violation = 0; violation < 20; violation++) CHECK(host.claim(HostViolation::main_loop_required));
+  for (int violation = 0; violation < 23; violation++) CHECK(host.claim(HostViolation::main_loop_required));
   CHECK_EQ(host.unclaimed_violations(), 0u);
   CHECK_EQ(host.logged(), 1u); }
 
@@ -711,7 +714,7 @@ TEST(virtio_gpu_av_realize, opens_the_recording_its_properties_asked_for)
   CHECK(device.invariants_hold()); }
 
 namespace {
-void bind_and_destroy(VirtioGpuAv &device, std::uint32_t context)
+void bind_and_destroy(MockHost &host, VirtioGpuAv &device, std::uint32_t context)
 {
     GpuRequestBuilder create(0x0200u);
     create.context(context).u32(0u).u32(0x72u).zeros(64u);
@@ -732,6 +735,8 @@ void bind_and_destroy(VirtioGpuAv &device, std::uint32_t context)
     MockRequest destroy_request(destroy.bytes(), destroy.size());
     CHECK(device.control(&destroy_request, 0x0201u));
     CHECK_EQ(destroy_request.response_type(), 0x1100u);
+    CHECK(host.wait_for_main_loop_work(1u, 5000u));
+    static_cast<void>(host.run_main_loop());
 }
 
 }
@@ -753,8 +758,8 @@ TEST(virtio_gpu_av_realize, record_wrap_decides_what_the_ceiling_does)
       CHECK_STATUS(device.realize("auto", false, &executor.table(), &options, nullptr, nullptr, 0u, 0u, message), Status::ok);
       device.status(DriverStatus::driver_ok);
       make_the_ring(host, device);
-      bind_and_destroy(device, 7u);
-      bind_and_destroy(device, 8u);
+      bind_and_destroy(host, device, 7u);
+      bind_and_destroy(host, device, 8u);
       av::RecordedFile file(host, "run.av");
       CHECK_EQ(file.header().wraps(), c.wraps);
       CHECK(host.recording_length("run.av") <= ceiling);

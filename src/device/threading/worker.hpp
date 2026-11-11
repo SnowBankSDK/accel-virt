@@ -31,6 +31,9 @@ public:
     void                 wake();
     void                 disconnect_doorbell();
     void                 stop();
+    void                 watch_exit(void *event);
+    bool                 exited() const;
+    void                 join();
     bool                 running() const;
     uint32_t             pending();
     bool                 stopping();
@@ -43,6 +46,7 @@ private:
     enum class Step { work, idle, stop };
 
     Step next(WorkItem &item);
+    void serve();
     bool work_within_spin();
     void release();
 
@@ -57,6 +61,9 @@ private:
     uint32_t       head_;
     uint32_t       count_;
     bool           stopping_;
+    void          *exit_watch_;
+    bool           exited_;
+    bool           joined_;
 
     friend struct WorkerProbe;
 };

@@ -21,7 +21,7 @@ public:
     bool     enabled() const;
     void     queue_made(VkPhysicalDevice physical, VkDevice device, uint32_t family, VkQueue queue);
     VkResult submit(VkQueue queue, uint32_t count, const VkSubmitInfo *submits, VkFence fence);
-    void     forget(VkDevice device);
+    void     forget(VkDevice device, bool idle);
 
 private:
     static constexpr uint32_t slots = 64u;
