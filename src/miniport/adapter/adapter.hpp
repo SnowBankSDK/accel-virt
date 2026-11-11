@@ -344,6 +344,7 @@ private:
     void                 refresh_scanout(uint64_t now);
     void                 follow_display_change();
     void                 log_status(const char *step, int32_t status);
+    [[nodiscard]] Status unbind_av(void *context);
     void                 log_failure(const char *step, int32_t status);
     void                 log_refused_gdi_surface(const DxgkargGetStandardAllocationDriverDataRecord &request);
     void                 log_allocation(const DxgkargCreateAllocationRecord &request, int32_t status);

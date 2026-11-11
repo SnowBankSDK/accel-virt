@@ -122,6 +122,7 @@ private:
     bool                             told_lost_[max_contexts];
     uint32_t                         generations_[max_contexts];
     bool                             live_[max_contexts];
+    void                            *departed_[max_contexts];
     uint8_t                          request_[AvContextBinding::request_bytes];
     WaitMutex                        requests_;
     uint64_t                         adapter_;

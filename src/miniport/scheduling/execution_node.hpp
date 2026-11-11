@@ -29,7 +29,7 @@ public:
     uint32_t             release_overdue(uint64_t now, void **owners = nullptr, uint32_t room = 0u,
                                          uint32_t *named = nullptr);
     [[nodiscard]] Status preempt(uint32_t fence);
-    [[nodiscard]] Status complete(InterruptNotification &notification);
+    [[nodiscard]] Status complete(InterruptNotification &notification, uint32_t *returned = nullptr);
     uint32_t             current_fence();
     uint32_t             pending();
     uint32_t             last_submitted();
@@ -45,7 +45,7 @@ public:
 private:
     [[nodiscard]] Status queue(uint32_t fence, void *owner, uint64_t awaited);
     bool take(uint32_t &fence);
-    bool take_preemption(uint32_t &fence, uint32_t &last_completed);
+    bool take_preemption(uint32_t &fence, uint32_t &last_completed, uint32_t &returned);
 
     Platform &platform_;
     SpinLock  lock_;
@@ -61,6 +61,7 @@ private:
     void     *owners_[capacity];
     uint64_t  awaited_[capacity];
     uint64_t  queued_at_[capacity];
+    uint64_t  preempted_;
 
     friend struct ExecutionNodeProbe;
 };

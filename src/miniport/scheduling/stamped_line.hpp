@@ -18,6 +18,7 @@ public:
 
     StampedLine &number(const char *name, uint64_t value);
     StampedLine &address(const char *name, const void *value);
+    StampedLine &code(const char *name, uint32_t value);
     void         write();
 
 private:

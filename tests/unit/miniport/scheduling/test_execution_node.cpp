@@ -198,22 +198,99 @@ TEST(execution_node_preempt, the_next_completion_reports_the_preemption_after_th
   CHECK_STATUS(fixture.node().complete(fixture.notification()), Status::ok);
   CHECK_EQ(fixture.dxgkrnl().interrupts(), 2u); }
 
-TEST(execution_node_preempt, waits_for_a_packet_the_host_is_still_running)
+TEST(execution_node_preempt, gives_back_a_packet_the_host_is_still_running_and_takes_it_again_when_submitted_again)
 { Fixture fixture;
   int owner = 0;
+  CHECK_STATUS(fixture.node().submit(8u), Status::ok);
   CHECK_STATUS(fixture.node().submit(9u, &owner, 4u), Status::ok);
   CHECK_STATUS(fixture.node().preempt(10u), Status::ok);
-  CHECK_STATUS(fixture.node().complete(fixture.notification()), Status::ok);
-  CHECK_EQ(fixture.dxgkrnl().interrupts(), 0u);
-  fixture.node().finish(&owner, 4u);
-  CHECK_STATUS(fixture.node().complete(fixture.notification()), Status::ok);
+  std::uint32_t returned = 99u;
+  CHECK_STATUS(fixture.node().complete(fixture.notification(), &returned), Status::ok);
+  CHECK_EQ(returned, 1u);
   CHECK_EQ(fixture.dxgkrnl().interrupts(), 2u);
   CHECK_EQ(fixture.dxgkrnl().interrupt(0u).InterruptType, 1);
-  CHECK_EQ(fixture.dxgkrnl().interrupt(0u).FenceId, 9u);
+  CHECK_EQ(fixture.dxgkrnl().interrupt(0u).FenceId, 8u);
   CHECK_EQ(fixture.dxgkrnl().interrupt(1u).InterruptType, 2);
   CHECK_EQ(fixture.dxgkrnl().interrupt(1u).FenceId, 10u);
-  CHECK_EQ(fixture.dxgkrnl().interrupt(1u).Argument1, 9u);
+  CHECK_EQ(fixture.dxgkrnl().interrupt(1u).Argument1, 8u);
+  CHECK_EQ(fixture.node().pending(), 0u);
+  CHECK_EQ(fixture.node().current_fence(), 8u);
+  CHECK(fixture.node().invariants_hold());
+  fixture.node().finish(&owner, 4u);
+  returned = 99u;
+  CHECK_STATUS(fixture.node().complete(fixture.notification(), &returned), Status::ok);
+  CHECK_EQ(returned, 99u);
+  CHECK_EQ(fixture.dxgkrnl().interrupts(), 2u);
+  CHECK_STATUS(fixture.node().submit(8u, &owner, 4u), Status::invalid_parameter);
+  CHECK_EQ(fixture.node().last_submitted(), 8u);
+  CHECK_STATUS(fixture.node().submit(11u, &owner, 4u), Status::ok);
+  CHECK_STATUS(fixture.node().complete(fixture.notification()), Status::ok);
+  CHECK_EQ(fixture.dxgkrnl().interrupts(), 2u);
+  fixture.node().finish(&owner, 4u);
+  CHECK_STATUS(fixture.node().complete(fixture.notification()), Status::ok);
+  CHECK_EQ(fixture.dxgkrnl().interrupts(), 3u);
+  CHECK_EQ(fixture.dxgkrnl().interrupt(2u).InterruptType, 1);
+  CHECK_EQ(fixture.dxgkrnl().interrupt(2u).FenceId, 11u);
   CHECK(fixture.node().invariants_hold()); }
+
+TEST(execution_node_preempt, an_owner_whose_fence_is_complete_is_not_kept_behind_another_owner_s_held_packet)
+{ Fixture fixture;
+  int held = 0;
+  int ready = 0;
+  CHECK_STATUS(fixture.node().submit(3u), Status::ok);
+  CHECK_STATUS(fixture.node().complete(fixture.notification()), Status::ok);
+  CHECK_STATUS(fixture.node().submit(4u, &held, 7u), Status::ok);
+  CHECK_STATUS(fixture.node().submit(5u, &ready, 2u), Status::ok);
+  fixture.node().finish(&ready, 2u);
+  CHECK_STATUS(fixture.node().complete(fixture.notification()), Status::ok);
+  CHECK_EQ(fixture.dxgkrnl().interrupts(), 1u);
+  CHECK_STATUS(fixture.node().preempt(6u), Status::ok);
+  std::uint32_t returned = 0u;
+  CHECK_STATUS(fixture.node().complete(fixture.notification(), &returned), Status::ok);
+  CHECK_EQ(returned, 2u);
+  CHECK_EQ(fixture.dxgkrnl().interrupts(), 2u);
+  CHECK_EQ(fixture.dxgkrnl().interrupt(1u).InterruptType, 2);
+  CHECK_EQ(fixture.dxgkrnl().interrupt(1u).FenceId, 6u);
+  CHECK_EQ(fixture.dxgkrnl().interrupt(1u).Argument1, 3u);
+  CHECK_STATUS(fixture.node().submit(5u, &ready, 2u), Status::ok);
+  fixture.node().finish(&ready, 2u);
+  CHECK_STATUS(fixture.node().submit(8u, &held, 7u), Status::ok);
+  CHECK_STATUS(fixture.node().complete(fixture.notification()), Status::ok);
+  CHECK_EQ(fixture.dxgkrnl().interrupts(), 3u);
+  CHECK_EQ(fixture.dxgkrnl().interrupt(2u).InterruptType, 1);
+  CHECK_EQ(fixture.dxgkrnl().interrupt(2u).FenceId, 5u);
+  CHECK_EQ(fixture.node().pending(), 1u);
+  fixture.node().finish(&held, 7u);
+  CHECK_STATUS(fixture.node().complete(fixture.notification()), Status::ok);
+  CHECK_EQ(fixture.dxgkrnl().interrupt(3u).FenceId, 8u);
+  CHECK(fixture.node().invariants_hold()); }
+
+TEST(execution_node_preempt, a_packet_given_back_starts_its_deadline_again_when_it_returns)
+{ Fixture fixture;
+  int owner = 0;
+  CHECK_STATUS(fixture.node().submit(1u, &owner, 4u), Status::ok);
+  fixture.platform().advance_time(ExecutionNode::park_deadline - 1u);
+  CHECK_STATUS(fixture.node().preempt(2u), Status::ok);
+  CHECK_STATUS(fixture.node().complete(fixture.notification()), Status::ok);
+  CHECK_STATUS(fixture.node().submit(3u, &owner, 4u), Status::ok);
+  fixture.platform().advance_time(ExecutionNode::park_deadline - 1u);
+  CHECK_EQ(fixture.node().release_overdue(fixture.platform().interrupt_time()), 0u);
+  fixture.platform().advance_time(1u);
+  CHECK_EQ(fixture.node().release_overdue(fixture.platform().interrupt_time()), 1u);
+  CHECK(fixture.node().invariants_hold()); }
+
+TEST(execution_node_finish, an_owner_that_went_has_all_its_packets_finished_at_once_and_its_neighbour_s_stay)
+{ Fixture fixture;
+  int gone = 0;
+  int neighbour = 0;
+  CHECK_STATUS(fixture.node().submit(1u, &gone, 4u), Status::ok);
+  CHECK_STATUS(fixture.node().submit(2u, &gone, 900u), Status::ok);
+  CHECK_STATUS(fixture.node().submit(3u, &neighbour, 5u), Status::ok);
+  fixture.node().finish(&gone, UINT64_MAX);
+  CHECK_STATUS(fixture.node().complete(fixture.notification()), Status::ok);
+  CHECK_EQ(fixture.dxgkrnl().interrupts(), 2u);
+  CHECK_EQ(fixture.dxgkrnl().interrupt(1u).FenceId, 2u);
+  CHECK_EQ(fixture.node().pending(), 1u); }
 
 TEST(execution_node_complete, stops_at_the_first_refused_report)
 { Fixture fixture;
@@ -340,7 +417,7 @@ TEST(execution_node_report, writes_the_fences_and_each_pending_packet_in_order)
   char expected[512];
   std::snprintf(expected, sizeof expected,
                 "execution_node/0 busy=false pending=2 last_submitted=5 last_completed=1"
-                " preemption_requested=false preemption_fence=0 stopped=false progress_time=0\n"
+                " preemption_requested=false preemption_fence=0 stopped=false progress_time=0 preempted=0\n"
                 "execution_node/0/packet/0 fence=4 owner=0x%016llX awaited=9\n"
                 "execution_node/0/packet/1 fence=5 owner=0x0000000000000000 awaited=0",
                 static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(&owner)));

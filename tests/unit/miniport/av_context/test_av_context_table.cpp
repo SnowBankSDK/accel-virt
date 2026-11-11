@@ -2226,3 +2226,32 @@ TEST(av_context_table_release_batch, a_release_that_overtakes_a_batch_still_comi
   CHECK_EQ(fixture.mapped().function().doorbells().rings(0u), 4u);
   CHECK(!fixture.platform().logged_line("the context is lost"));
   CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok); }
+
+TEST(av_context_table_unbind, the_packets_that_waited_on_the_context_are_finished_by_the_next_serve)
+{ Fixture fixture;
+  Host host(fixture.mapped());
+  CHECK_STATUS(fixture.bind(&first_context), Status::ok);
+  ProcessAllocation other(fixture.platform(), fixture.allocations(), fixture.handles(), AllocationKind::context_ring,
+                         page);
+  CHECK_STATUS(fixture.bind(&second_context, AvContextRecord(SubApi::vulkan, 12u, other.handle(), page)), Status::ok);
+  std::uint64_t awaited = 0u;
+  CHECK_STATUS(fixture.submit(&first_context, SubmissionDescriptor(1u, 0u, 32u), awaited), Status::ok);
+  fixture.platform().set_irql(Irql::dispatch);
+  CHECK_STATUS(fixture.node().submit(5u, &first_context, 1u), Status::ok);
+  CHECK_STATUS(fixture.node().submit(6u, &first_context, 77u), Status::ok);
+  CHECK_STATUS(fixture.node().submit(7u, &second_context, 3u), Status::ok);
+  fixture.platform().set_irql(Irql::passive);
+  fixture.complete_through(0u);
+  fixture.complete_through(0u, 0u);
+  static_cast<void>(FencePage(0u, 0u).encode(fixture.fence_page(1u), FencePage::encoded_size));
+  fixture.serve();
+  CHECK_EQ(fixture.node().current_fence(), 0u);
+  CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok);
+  fixture.serve();
+  CHECK_EQ(fixture.node().current_fence(), 6u);
+  CHECK_EQ(fixture.node().pending(), 1u);
+  fixture.serve();
+  CHECK_EQ(fixture.node().pending(), 1u);
+  CHECK_STATUS(fixture.table().unbind(&second_context, &fixture.device()), Status::ok);
+  fixture.serve();
+  CHECK_EQ(fixture.node().pending(), 0u); }

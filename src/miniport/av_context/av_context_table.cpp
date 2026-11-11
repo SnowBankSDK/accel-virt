@@ -38,7 +38,7 @@ AvContextTable::AvContextTable(Platform &platform, DxgkrnlInterface &dxgkrnl, Al
     : platform_(platform), dxgkrnl_(dxgkrnl), allocations_(allocations), window_(window),
       lock_(platform, LockRank::av_context_slots),
       reader_(platform), bindings_(), contexts_{}, names_{}, memories_(), chunks_(platform), ids_(platform, HostBlobId::most), held_chunks_{}, orders_{},
-      wakes_{}, raised_{}, told_lost_{}, generations_{}, live_{}, request_{}, requests_(platform, LockRank::av_control_requests), adapter_(0u)
+      wakes_{}, raised_{}, told_lost_{}, generations_{}, live_{}, departed_{}, request_{}, requests_(platform, LockRank::av_control_requests), adapter_(0u)
       {
           AV_SCOPE("AvContextTable::AvContextTable");
       }
@@ -184,6 +184,7 @@ Status AvContextTable::unbind(void *context, VirtioGpuDevice *device)
         slot = slot_of(context);
         if (slot == no_slot) return Status::invalid_parameter;
         live_[slot] = false;
+        departed_[slot] = context;
     }
     AvContextBinding &binding = bindings_[slot].object();
     const bool held = binding.state() == GuestContext::State::established ||
@@ -537,6 +538,11 @@ void AvContextTable::serve(ExecutionNode &node, HwQueueSubmissions &queues)
     platform_.require_irql_at_most(Irql::dispatch, "AvContextTable::serve");
     SpinLockGuard locked(lock_);
     for (uint32_t slot = 0u; slot < max_contexts; slot++) {
+        if (departed_[slot] != nullptr) {
+            node.finish(departed_[slot], UINT64_MAX);
+            queues.completed_through(departed_[slot], UINT64_MAX);
+            departed_[slot] = nullptr;
+        }
         if (!live_[slot]) continue;
         AvContextBinding &binding = bindings_[slot].object();
         static_cast<void>(binding.serve());
@@ -648,7 +654,7 @@ bool AvContextTable::holds(const void *context) const
 void AvContextTable::log_binding(uint32_t slot, uint32_t message, Status status)
 {
     AV_SCOPE("AvContextTable::log_binding");
-    char       bytes[96];
+    char       bytes[160];
     TextBuffer line(bytes, sizeof bytes);
     line.append("avgpu: av context on doorbell ");
     line.append_decimal(slot);
@@ -656,6 +662,11 @@ void AvContextTable::log_binding(uint32_t slot, uint32_t message, Status status)
     line.append_decimal(message);
     line.append(" status 0x");
     line.append_hex(static_cast<uint32_t>(NtStatus(status).value()), 8u);
+    line.append(" adapter ");
+    line.append_hex(adapter_, 16u);
+    line.append(" at ");
+    line.append_decimal(platform_.interrupt_time() / StampedLine::ticks_per_millisecond);
+    line.append(" ms");
     platform_.log(line.text());
 }
 

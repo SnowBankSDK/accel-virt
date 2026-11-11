@@ -36,6 +36,16 @@ StampedLine &StampedLine::address(const char *name, const void *value)
     return *this;
 }
 
+StampedLine &StampedLine::code(const char *name, uint32_t value)
+{
+    AV_SCOPE("StampedLine::code");
+    text_.append(" ");
+    text_.append(name);
+    text_.append(" 0x");
+    text_.append_hex(value, 8u);
+    return *this;
+}
+
 void StampedLine::write()
 {
     AV_SCOPE("StampedLine::write");

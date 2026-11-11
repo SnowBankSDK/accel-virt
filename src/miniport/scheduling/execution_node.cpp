@@ -12,7 +12,7 @@ namespace av {
 ExecutionNode::ExecutionNode(Platform &platform)
     : platform_(platform), lock_(platform, LockRank::execution_node), pending_{}, head_(0u), count_(0u),
       last_submitted_(0u), last_completed_(0u), preemption_fence_(0u), preemption_requested_(false),
-      stopped_(false), progress_time_(0u), owners_{}, awaited_{}, queued_at_{}
+      stopped_(false), progress_time_(0u), owners_{}, awaited_{}, queued_at_{}, preempted_(0u)
       {
           AV_SCOPE("ExecutionNode::ExecutionNode");
       }
@@ -107,18 +107,25 @@ bool ExecutionNode::take(uint32_t &fence)
     return true;
 }
 
-bool ExecutionNode::take_preemption(uint32_t &fence, uint32_t &last_completed)
+bool ExecutionNode::take_preemption(uint32_t &fence, uint32_t &last_completed, uint32_t &returned)
 {
     AV_SCOPE("ExecutionNode::take_preemption");
     SpinLockGuard lock(lock_);
-    if (!preemption_requested_ || count_ != 0u) return false;
+    InvariantScope<ExecutionNode> guard(platform_, *this, "take_preemption");
+    if (!preemption_requested_) return false;
     preemption_requested_ = false;
+    returned = count_;
+    preempted_ += count_;
+    head_ = 0u;
+    count_ = 0u;
+    last_submitted_ = last_completed_;
+    progress_time_ = platform_.interrupt_time();
     fence = preemption_fence_;
     last_completed = last_completed_;
     return true;
 }
 
-Status ExecutionNode::complete(InterruptNotification &notification)
+Status ExecutionNode::complete(InterruptNotification &notification, uint32_t *returned)
 {
     AV_SCOPE("ExecutionNode::complete");
     platform_.require_irql_at_most(Irql::dispatch, "ExecutionNode::complete");
@@ -128,7 +135,9 @@ Status ExecutionNode::complete(InterruptNotification &notification)
         if (status != Status::ok) return status;
     }
     uint32_t last_completed = 0u;
-    if (!take_preemption(fence, last_completed)) return Status::ok;
+    uint32_t taken_back = 0u;
+    if (!take_preemption(fence, last_completed, taken_back)) return Status::ok;
+    if (returned != nullptr) *returned = taken_back;
     return notification.report_preempted(fence, last_completed);
 }
 
@@ -213,6 +222,7 @@ void ExecutionNode::report(StateWriter &writer)
         writer.number("preemption_fence", preemption_fence_);
         writer.flag("stopped", stopped_);
         writer.number("progress_time", progress_time_);
+        writer.number("preempted", preempted_);
         for (uint32_t index = 0u; index < count_; index++) {
             const uint32_t slot = (head_ + index) % capacity;
             writer.open("packet", index);
