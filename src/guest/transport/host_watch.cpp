@@ -50,6 +50,12 @@ uint64_t HostWatch::completed() const
 bool HostWatch::faulted() const
 {
     AV_SCOPE("HostWatch::faulted");
+    return faulted_by_host() || ring_.lost_code() != 0u;
+}
+
+bool HostWatch::faulted_by_host() const
+{
+    AV_SCOPE("HostWatch::faulted_by_host");
     if (page_ == nullptr) return false;
     return (__atomic_load_n(reinterpret_cast<const uint32_t *>(page_ + flags_at), __ATOMIC_ACQUIRE) & faulted_flag) !=
            0u;
@@ -58,7 +64,7 @@ bool HostWatch::faulted() const
 uint32_t HostWatch::fault_code() const
 {
     AV_SCOPE("HostWatch::fault_code");
-    if (!faulted()) return 0u;
+    if (!faulted_by_host()) return ring_.lost_code();
     return __atomic_load_n(reinterpret_cast<const uint32_t *>(page_ + fault_code_at), __ATOMIC_ACQUIRE);
 }
 

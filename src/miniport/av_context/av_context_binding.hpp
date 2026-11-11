@@ -38,7 +38,7 @@ public:
     void                 abandon();
     [[nodiscard]] Status submit(const SubmissionDescriptor &submission);
     void                 kick();
-    void                 fail();
+    void                 fail(FaultCode reason);
     uint64_t             next_begin() const;
     void                 user_mode_submits(uint64_t *progress);
     void                 driver_submits();

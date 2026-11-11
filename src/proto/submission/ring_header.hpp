@@ -13,6 +13,7 @@ public:
     static constexpr size_t  encoded_size  = 32u;
     static constexpr uint8_t lowest_order  = 12u;
     static constexpr uint8_t highest_order = 24u;
+    static constexpr size_t  lost_at       = 24u;
 
     RingHeader();
     RingHeader(uint8_t order, uint64_t tail, uint64_t head);

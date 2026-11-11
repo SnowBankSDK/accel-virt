@@ -8,6 +8,7 @@
 #include "miniport/av_context/fence_observer.hpp"
 #include "miniport/av_context/ring_submitter.hpp"
 #include "core/support/status.hpp"
+#include "proto/submission/fault_code.hpp"
 #include "proto/submission/fence_progress.hpp"
 
 #include <stddef.h>
@@ -40,7 +41,7 @@ public:
     bool                 forget_progress(const uint64_t *progress);
     [[nodiscard]] Status serve();
     [[nodiscard]] Status tear_down();
-    void                 fail();
+    void                 fail(FaultCode reason);
     uint64_t             next_begin() const;
     void                 abandon();
     [[nodiscard]] Status release();
@@ -58,6 +59,7 @@ public:
 
 private:
     void finish_sequence();
+    void tell_process(FaultCode reason);
 
     Platform              &platform_;
     SpinLock               lock_;

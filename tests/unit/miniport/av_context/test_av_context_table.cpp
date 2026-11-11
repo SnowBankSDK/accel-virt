@@ -20,6 +20,10 @@
 #include "harness/dxgkrnl/fake_handle_table.hpp"
 #include "core/trace/state_writer.hpp"
 #include "harness/framework/test_registry.hpp"
+#include "harness/guest/mock_kmt.hpp"
+#include "guest/transport/host_watch.hpp"
+#include "guest/transport/transport_ring.hpp"
+#include "proto/submission/fault_code.hpp"
 #include "harness/platform/violation.hpp"
 #include "proto/context/capset_info.hpp"
 #include "proto/context/context_capacity.hpp"
@@ -2075,3 +2079,29 @@ TEST(av_context_table_invariants, detect_a_free_slot_that_still_holds_a_binding)
   AvContextTableProbe::set_context(table, 1u, &second_context);
   AvContextTableProbe::set_live(table, 1u, true);
   CHECK(table.invariants_hold()); }
+
+TEST(av_context_table_release_batch, a_lost_context_ends_the_wait_of_the_process_at_once_and_finishes_its_packets)
+{ Fixture fixture;
+  Host host(fixture.mapped());
+  CHECK_STATUS(fixture.bind(&first_context), Status::ok);
+  av::MockKmt       kmt;
+  av::TransportRing ring;
+  CHECK_STATUS(ring.initialize(fixture.ring_memory(), 12u), Status::ok);
+  av::HostWatch watch(kmt, ring);
+  watch.read_page(fixture.fence_page());
+  fixture.complete_through(0u);
+  watch.start();
+  CHECK(watch.keeps_waiting());
+  std::uint64_t awaited = 0u;
+  fixture.platform().set_irql(Irql::dispatch);
+  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(1u, 0u, 32u), awaited), Status::ok);
+  CHECK_STATUS(fixture.node().submit(5u, &first_context, awaited), Status::ok);
+  CHECK(watch.keeps_waiting());
+  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(2u, 16u, 48u), awaited), Status::ok);
+  fixture.platform().set_irql(Irql::passive);
+  CHECK(watch.faulted());
+  CHECK(!watch.keeps_waiting());
+  CHECK_EQ(watch.fault_code(), static_cast<std::uint32_t>(av::FaultCode::batch_order));
+  fixture.serve();
+  CHECK_EQ(fixture.node().current_fence(), 5u);
+  CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok); }

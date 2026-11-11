@@ -62,10 +62,10 @@ Status AvContextBinding::submit(const SubmissionDescriptor &submission)
     return context_.submit(submission);
 }
 
-void AvContextBinding::fail()
+void AvContextBinding::fail(FaultCode reason)
 {
     AV_SCOPE("AvContextBinding::fail");
-    context_.fail();
+    context_.fail(reason);
 }
 
 uint64_t AvContextBinding::next_begin() const

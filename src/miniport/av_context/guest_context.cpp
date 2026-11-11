@@ -4,6 +4,7 @@
 #include "core/trace/function_scope.hpp"
 #include "proto/context/capset_info.hpp"
 #include "proto/context/context_setup.hpp"
+#include "proto/submission/ring_header.hpp"
 
 namespace av {
 
@@ -84,7 +85,10 @@ Status GuestContext::submit(const SubmissionDescriptor &submission)
     SpinLockGuard guard(lock_);
     if (state_ != State::established) return Status::invalid_state;
     const Status status = submitter_.submit(submission);
-    if (submitter_.failed()) state_ = State::failed;
+    if (submitter_.failed()) {
+        state_ = State::failed;
+        tell_process(FaultCode::ring_header);
+    }
     return status;
 }
 
@@ -125,7 +129,10 @@ Status GuestContext::serve()
     SpinLockGuard guard(lock_);
     if (state_ != State::established) return Status::invalid_state;
     const Status status = observer_.observe();
-    if (observer_.failed()) state_ = State::failed;
+    if (observer_.failed()) {
+        state_ = State::failed;
+        tell_process(FaultCode::device_lost);
+    }
     const bool lost = observer_.faulted() || observer_.failed();
     if (progress_ != nullptr) *progress_ = lost ? UINT64_MAX : fences_.completed_fence();
     return status;
@@ -148,12 +155,23 @@ Status GuestContext::tear_down()
     return Status::ok;
 }
 
-void GuestContext::fail()
+void GuestContext::fail(FaultCode reason)
 {
     AV_SCOPE("GuestContext::fail");
     platform_.require_irql_at_most(Irql::dispatch, "GuestContext::fail");
     SpinLockGuard guard(lock_);
-    if (state_ == State::established) state_ = State::failed;
+    if (state_ != State::established) return;
+    state_ = State::failed;
+    tell_process(reason);
+}
+
+void GuestContext::tell_process(FaultCode reason)
+{
+    AV_SCOPE("GuestContext::tell_process");
+    uint8_t *const ring = pages_.ring_view();
+    if (ring == nullptr) return;
+    __atomic_store_n(reinterpret_cast<uint32_t *>(ring + RingHeader::lost_at), static_cast<uint32_t>(reason),
+                     __ATOMIC_RELEASE);
 }
 
 uint64_t GuestContext::next_begin() const

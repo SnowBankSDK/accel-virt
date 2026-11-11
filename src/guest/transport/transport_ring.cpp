@@ -85,6 +85,13 @@ bool TransportRing::consumer_awake() const
     return __atomic_load_n(ring_ + awake_offset, __ATOMIC_ACQUIRE) != 0u;
 }
 
+uint32_t TransportRing::lost_code() const
+{
+    AV_SCOPE("TransportRing::lost_code");
+    if (ring_ == nullptr) return 0u;
+    return __atomic_load_n(reinterpret_cast<const uint32_t *>(ring_ + RingHeader::lost_at), __ATOMIC_ACQUIRE);
+}
+
 uint64_t TransportRing::tail() const
 {
     AV_SCOPE("TransportRing::tail");

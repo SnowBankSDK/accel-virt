@@ -5,6 +5,8 @@
 #include "core/support/status.hpp"
 #include "harness/virtio/fake_doorbell_pages.hpp"
 #include "harness/framework/test_registry.hpp"
+#include "proto/submission/ring_header.hpp"
+#include "proto/submission/fault_code.hpp"
 #include "harness/platform/mock_platform.hpp"
 #include "harness/platform/violation.hpp"
 #include "proto/context/capset_info.hpp"
@@ -413,13 +415,26 @@ TEST(guest_context_next_begin, is_the_later_of_the_tail_it_kept_and_the_one_the_
 TEST(guest_context_fail, fails_an_established_context_only)
 { Fixture fixture;
   fixture.platform().set_irql(Irql::dispatch);
-  fixture.context().fail();
+  fixture.context().fail(av::FaultCode::batch_order);
   fixture.platform().set_irql(Irql::passive);
   CHECK(fixture.context().state() == GuestContext::State::idle);
   fixture.established();
   fixture.platform().set_irql(Irql::dispatch);
-  fixture.context().fail();
-  fixture.context().fail();
+  fixture.context().fail(av::FaultCode::batch_order);
+  fixture.context().fail(av::FaultCode::device_lost);
   fixture.platform().set_irql(Irql::passive);
   CHECK(fixture.context().state() == GuestContext::State::failed);
   CHECK(fixture.context().invariants_hold()); }
+
+TEST(guest_context_fail, writes_the_reason_where_the_process_reads_its_ring_header)
+{ Fixture fixture;
+  fixture.established();
+  std::uint32_t told = 9u;
+  std::memcpy(&told, fixture.memory().pages().ring_view() + av::RingHeader::lost_at, sizeof told);
+  CHECK_EQ(told, 0u);
+  fixture.platform().set_irql(Irql::dispatch);
+  fixture.context().fail(av::FaultCode::batch_order);
+  fixture.context().fail(av::FaultCode::device_lost);
+  fixture.platform().set_irql(Irql::passive);
+  std::memcpy(&told, fixture.memory().pages().ring_view() + av::RingHeader::lost_at, sizeof told);
+  CHECK_EQ(told, static_cast<std::uint32_t>(av::FaultCode::batch_order)); }

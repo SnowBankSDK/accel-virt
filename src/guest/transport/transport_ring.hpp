@@ -25,6 +25,7 @@ public:
     uint64_t capacity() const;
     uint64_t free_space() const;
     bool     consumer_awake() const;
+    uint32_t lost_code() const;
 
     bool invariants_hold() const;
 

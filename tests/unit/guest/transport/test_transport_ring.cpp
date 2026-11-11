@@ -6,6 +6,7 @@
 #include "proto/wire/wire_writer.hpp"
 
 #include <cstdint>
+#include <cstring>
 
 using av::BatchHeader;
 using av::RingHeader;
@@ -255,3 +256,15 @@ TEST(transport_ring, the_consumer_is_awake_only_while_the_device_says_so)
   memory.bytes[awake_byte - 1u] = 0xFFu;
   memory.bytes[awake_byte + 1u] = 0xFFu;
   CHECK(!ring.consumer_awake()); }
+
+TEST(transport_ring_lost_code, is_the_word_the_kernel_writes_in_the_header_and_nothing_before_a_ring)
+{ std::uint8_t  bytes[32u + 4096u] = {};
+  TransportRing ring;
+  CHECK_EQ(ring.lost_code(), 0u);
+  CHECK_STATUS(ring.initialize(bytes, 12u), Status::ok);
+  CHECK_EQ(ring.lost_code(), 0u);
+  const std::uint32_t code = 4u;
+  std::memcpy(bytes + av::RingHeader::lost_at, &code, sizeof code);
+  CHECK_EQ(ring.lost_code(), 4u);
+  RingHeader header;
+  CHECK_STATUS(header.decode(bytes, RingHeader::encoded_size), Status::ok); }

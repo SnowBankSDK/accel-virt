@@ -478,7 +478,7 @@ void AvContextTable::in_turn(uint32_t slot, const SubmissionDescriptor &batch)
 void AvContextTable::lose(uint32_t slot)
 {
     AV_SCOPE("AvContextTable::lose");
-    bindings_[slot].object().fail();
+    bindings_[slot].object().fail(FaultCode::batch_order);
     releases_[slot].clear();
     platform_.log("avgpu: a context's batches cannot be released in order: the context is lost");
 }

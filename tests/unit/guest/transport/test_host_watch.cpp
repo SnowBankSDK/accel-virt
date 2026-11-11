@@ -4,9 +4,11 @@
 #include "harness/framework/test_registry.hpp"
 #include "harness/guest/mock_kmt.hpp"
 #include "proto/submission/fence_page.hpp"
+#include "proto/submission/ring_header.hpp"
 #include "proto/wire/wire_writer.hpp"
 
 #include <cstdint>
+#include <cstring>
 
 using av::FencePage;
 using av::HostWatch;
@@ -41,6 +43,7 @@ public:
     MockKmt   &kmt() { return kmt_; }
     const std::uint8_t *page() const { return page_; }
 
+    void lose(std::uint32_t code) { std::memcpy(ring_bytes_ + av::RingHeader::lost_at, &code, sizeof code); }
     void take_to(std::uint64_t head) { WireWriter(ring_bytes_ + 16u, 8u).write_u64(head); }
     void write(const FencePage &page) { CHECK_STATUS(page.encode(page_, sizeof page_), Status::ok); }
     void pass(std::uint64_t seconds)
@@ -91,6 +94,24 @@ TEST(host_watch, each_published_word_alone_is_a_host_at_work)
       CHECK(device.watch().keeps_waiting());
       device.pass(1u);
       CHECK(!device.watch().keeps_waiting());
+  } }
+
+TEST(host_watch, a_context_its_kernel_lost_ends_the_wait_at_once_with_the_kernel_s_reason)
+{ for (int paged = 0; paged < 2; paged++) {
+      Device device;
+      if (paged != 0) device.watch().read_page(device.page());
+      device.watch().start();
+      CHECK(device.watch().keeps_waiting());
+      CHECK(!device.watch().faulted());
+      CHECK_EQ(device.watch().fault_code(), 0u);
+      device.lose(4u);
+      CHECK(device.watch().faulted());
+      CHECK(!device.watch().keeps_waiting());
+      CHECK_EQ(device.watch().fault_code(), 4u);
+      if (paged != 0) {
+          device.write(FencePage(7u, 9u, 6u));
+          CHECK_EQ(device.watch().fault_code(), 6u);
+      }
   } }
 
 TEST(host_watch, reads_the_completion_and_the_fault_from_the_page)
