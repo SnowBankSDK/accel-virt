@@ -5,6 +5,7 @@
 #include "proto/client/client_blob_arena.hpp"
 #include "proto/client/client_transport.hpp"
 #include "proto/client/transfer_room.hpp"
+#include "proto/generated/glmem/glmem_dispatch_client.h"
 
 #include "gl_dispatch_client.h"
 
@@ -65,6 +66,17 @@ void BufferPieces::write_named_ext(uint32_t buffer, intptr_t offset, size_t byte
     while (pieces.next()) {
         glproto::av_glNamedBufferSubDataEXT(wire_, buffer, offset + static_cast<intptr_t>(pieces.offset()),
                                             static_cast<intptr_t>(pieces.count()), from + pieces.offset());
+        commands_++;
+    }
+}
+
+void BufferPieces::write_slice(uint32_t buffer, uint64_t offset, size_t bytes, const uint8_t *from)
+{
+    AV_SCOPE("BufferPieces::write_slice");
+    icd::Pieces pieces(bytes, wire_.room().inline_write(), wire_);
+    while (pieces.next()) {
+        static_cast<void>(glmemproto::av_glmem_WriteBufferSlice(wire_, buffer, offset + pieces.offset(),
+                                                                 from + pieces.offset(), pieces.count()));
         commands_++;
     }
 }

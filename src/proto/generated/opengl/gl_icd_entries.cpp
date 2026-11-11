@@ -557,6 +557,7 @@ void APIENTRY Wrap_glCompileShader(GLuint shader) {
 void APIENTRY Wrap_glCompressedTexImage1D(GLenum target, GLint level, GLenum internalformat, GLsizei width, GLint border, GLsizei imageSize, const void* data) {
     AV_SCOPE("glCompressedTexImage1D");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_data_slice = ::av::glicd::unpack_slice_bound();
     const bool av_data_offset = !av_data_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -571,6 +572,7 @@ void APIENTRY Wrap_glCompressedTexImage1D(GLenum target, GLint level, GLenum int
 void APIENTRY Wrap_glCompressedTexImage2D(GLenum target, GLint level, GLenum internalformat, GLsizei width, GLsizei height, GLint border, GLsizei imageSize, const void* data) {
     AV_SCOPE("glCompressedTexImage2D");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_data_slice = ::av::glicd::unpack_slice_bound();
     const bool av_data_offset = !av_data_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -585,6 +587,7 @@ void APIENTRY Wrap_glCompressedTexImage2D(GLenum target, GLint level, GLenum int
 void APIENTRY Wrap_glCompressedTexImage3D(GLenum target, GLint level, GLenum internalformat, GLsizei width, GLsizei height, GLsizei depth, GLint border, GLsizei imageSize, const void* data) {
     AV_SCOPE("glCompressedTexImage3D");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_data_slice = ::av::glicd::unpack_slice_bound();
     const bool av_data_offset = !av_data_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -599,6 +602,7 @@ void APIENTRY Wrap_glCompressedTexImage3D(GLenum target, GLint level, GLenum int
 void APIENTRY Wrap_glCompressedTexSubImage1D(GLenum target, GLint level, GLint xoffset, GLsizei width, GLenum format, GLsizei imageSize, const void* data) {
     AV_SCOPE("glCompressedTexSubImage1D");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_data_slice = ::av::glicd::unpack_slice_bound();
     const bool av_data_offset = !av_data_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -613,6 +617,7 @@ void APIENTRY Wrap_glCompressedTexSubImage1D(GLenum target, GLint level, GLint x
 void APIENTRY Wrap_glCompressedTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLsizei imageSize, const void* data) {
     AV_SCOPE("glCompressedTexSubImage2D");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_data_slice = ::av::glicd::unpack_slice_bound();
     const bool av_data_offset = !av_data_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -627,6 +632,7 @@ void APIENTRY Wrap_glCompressedTexSubImage2D(GLenum target, GLint level, GLint x
 void APIENTRY Wrap_glCompressedTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLsizei imageSize, const void* data) {
     AV_SCOPE("glCompressedTexSubImage3D");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_data_slice = ::av::glicd::unpack_slice_bound();
     const bool av_data_offset = !av_data_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -641,6 +647,7 @@ void APIENTRY Wrap_glCompressedTexSubImage3D(GLenum target, GLint level, GLint x
 void APIENTRY Wrap_glCompressedTextureSubImage1D(GLuint texture, GLint level, GLint xoffset, GLsizei width, GLenum format, GLsizei imageSize, const void* data) {
     AV_SCOPE("glCompressedTextureSubImage1D");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_data_slice = ::av::glicd::unpack_slice_bound();
     const bool av_data_offset = !av_data_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -655,6 +662,7 @@ void APIENTRY Wrap_glCompressedTextureSubImage1D(GLuint texture, GLint level, GL
 void APIENTRY Wrap_glCompressedTextureSubImage2D(GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLsizei imageSize, const void* data) {
     AV_SCOPE("glCompressedTextureSubImage2D");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_data_slice = ::av::glicd::unpack_slice_bound();
     const bool av_data_offset = !av_data_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -669,6 +677,7 @@ void APIENTRY Wrap_glCompressedTextureSubImage2D(GLuint texture, GLint level, GL
 void APIENTRY Wrap_glCompressedTextureSubImage3D(GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLsizei imageSize, const void* data) {
     AV_SCOPE("glCompressedTextureSubImage3D");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_data_slice = ::av::glicd::unpack_slice_bound();
     const bool av_data_offset = !av_data_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -683,6 +692,7 @@ void APIENTRY Wrap_glCompressedTextureSubImage3D(GLuint texture, GLint level, GL
 void APIENTRY Wrap_glCopyBufferSubData(GLenum readTarget, GLenum writeTarget, GLintptr readOffset, GLintptr writeOffset, GLsizeiptr size) {
     AV_SCOPE("glCopyBufferSubData");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     ::av::glicd::host_writes_target(writeTarget);
     ::av::glproto::av_glCopyBufferSubData(*av_t, readTarget, writeTarget, readOffset, writeOffset, size);
@@ -698,6 +708,7 @@ void APIENTRY Wrap_glCopyImageSubData(GLuint srcName, GLenum srcTarget, GLint sr
 void APIENTRY Wrap_glCopyNamedBufferSubData(GLuint readBuffer, GLuint writeBuffer, GLintptr readOffset, GLintptr writeOffset, GLsizeiptr size) {
     AV_SCOPE("glCopyNamedBufferSubData");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     ::av::glicd::host_writes_buffer(writeBuffer);
     ::av::glproto::av_glCopyNamedBufferSubData(*av_t, readBuffer, writeBuffer, readOffset, writeOffset, size);
@@ -1030,7 +1041,6 @@ void APIENTRY Wrap_glDrawArraysInstancedBaseInstance(GLenum mode, GLint first, G
 void APIENTRY Wrap_glDrawBuffers(GLsizei n, const GLenum* bufs) {
     AV_SCOPE("glDrawBuffers");
     auto* av_t = ::av::glicd::wire();
-    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     ::av::glproto::av_glDrawBuffers(*av_t, n, bufs);
 }
@@ -1175,6 +1185,7 @@ void APIENTRY Wrap_glEndTransformFeedback(void) {
 GLsync APIENTRY Wrap_glFenceSync(GLenum condition, GLbitfield flags) {
     AV_SCOPE("glFenceSync");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return nullptr;
     return reinterpret_cast<GLsync>(static_cast<uintptr_t>(::av::glproto::av_glFenceSync(*av_t, condition, flags)));
 }
@@ -2380,6 +2391,7 @@ void APIENTRY Wrap_glLogicOp(GLenum opcode) {
 void APIENTRY Wrap_glMemoryBarrier(GLbitfield barriers) {
     AV_SCOPE("glMemoryBarrier");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     ::av::glproto::av_glMemoryBarrier(*av_t, barriers);
 }
@@ -2387,6 +2399,7 @@ void APIENTRY Wrap_glMemoryBarrier(GLbitfield barriers) {
 void APIENTRY Wrap_glMemoryBarrierByRegion(GLbitfield barriers) {
     AV_SCOPE("glMemoryBarrierByRegion");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     ::av::glproto::av_glMemoryBarrierByRegion(*av_t, barriers);
 }
@@ -3098,6 +3111,7 @@ void APIENTRY Wrap_glQueryCounter(GLuint id, GLenum target) {
 void APIENTRY Wrap_glReadnPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, GLsizei bufSize, void* data) {
     AV_SCOPE("glReadnPixels");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_data_slice = ::av::glicd::pack_slice_bound();
     const bool av_data_offset = !av_data_slice && ::av::glicd::pixel_buffer_bound(true);
@@ -3381,6 +3395,7 @@ void APIENTRY Wrap_glTexCoordP4uiv(GLenum type, const GLuint* coords) {
 void APIENTRY Wrap_glTexImage1D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLint border, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glTexImage1D");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -3395,6 +3410,7 @@ void APIENTRY Wrap_glTexImage1D(GLenum target, GLint level, GLint internalformat
 void APIENTRY Wrap_glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glTexImage2D");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -3416,6 +3432,7 @@ void APIENTRY Wrap_glTexImage2DMultisample(GLenum target, GLsizei samples, GLenu
 void APIENTRY Wrap_glTexImage3D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLsizei depth, GLint border, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glTexImage3D");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -3514,6 +3531,7 @@ void APIENTRY Wrap_glTexStorage3DMultisample(GLenum target, GLsizei samples, GLe
 void APIENTRY Wrap_glTexSubImage1D(GLenum target, GLint level, GLint xoffset, GLsizei width, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glTexSubImage1D");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -3528,6 +3546,7 @@ void APIENTRY Wrap_glTexSubImage1D(GLenum target, GLint level, GLint xoffset, GL
 void APIENTRY Wrap_glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glTexSubImage2D");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -3542,6 +3561,7 @@ void APIENTRY Wrap_glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GL
 void APIENTRY Wrap_glTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glTexSubImage3D");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -3654,6 +3674,7 @@ void APIENTRY Wrap_glTextureStorage3DMultisample(GLuint texture, GLsizei samples
 void APIENTRY Wrap_glTextureSubImage1D(GLuint texture, GLint level, GLint xoffset, GLsizei width, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glTextureSubImage1D");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -3668,6 +3689,7 @@ void APIENTRY Wrap_glTextureSubImage1D(GLuint texture, GLint level, GLint xoffse
 void APIENTRY Wrap_glTextureSubImage2D(GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glTextureSubImage2D");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -3682,6 +3704,7 @@ void APIENTRY Wrap_glTextureSubImage2D(GLuint texture, GLint level, GLint xoffse
 void APIENTRY Wrap_glTextureSubImage3D(GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glTextureSubImage3D");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -9781,6 +9804,7 @@ void APIENTRY Wrap_glTextureParameterivEXT(GLuint texture, GLenum target, GLenum
 void APIENTRY Wrap_glTextureImage1DEXT(GLuint texture, GLenum target, GLint level, GLint internalformat, GLsizei width, GLint border, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glTextureImage1DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -9795,6 +9819,7 @@ void APIENTRY Wrap_glTextureImage1DEXT(GLuint texture, GLenum target, GLint leve
 void APIENTRY Wrap_glTextureImage2DEXT(GLuint texture, GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glTextureImage2DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -9809,6 +9834,7 @@ void APIENTRY Wrap_glTextureImage2DEXT(GLuint texture, GLenum target, GLint leve
 void APIENTRY Wrap_glTextureSubImage1DEXT(GLuint texture, GLenum target, GLint level, GLint xoffset, GLsizei width, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glTextureSubImage1DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -9823,6 +9849,7 @@ void APIENTRY Wrap_glTextureSubImage1DEXT(GLuint texture, GLenum target, GLint l
 void APIENTRY Wrap_glTextureSubImage2DEXT(GLuint texture, GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glTextureSubImage2DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -9916,6 +9943,7 @@ void APIENTRY Wrap_glGetTextureLevelParameterivEXT(GLuint texture, GLenum target
 void APIENTRY Wrap_glTextureImage3DEXT(GLuint texture, GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLsizei depth, GLint border, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glTextureImage3DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -9930,6 +9958,7 @@ void APIENTRY Wrap_glTextureImage3DEXT(GLuint texture, GLenum target, GLint leve
 void APIENTRY Wrap_glTextureSubImage3DEXT(GLuint texture, GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glTextureSubImage3DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -10101,6 +10130,7 @@ void APIENTRY Wrap_glMultiTexParameterfvEXT(GLenum texunit, GLenum target, GLenu
 void APIENTRY Wrap_glMultiTexImage1DEXT(GLenum texunit, GLenum target, GLint level, GLint internalformat, GLsizei width, GLint border, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glMultiTexImage1DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -10115,6 +10145,7 @@ void APIENTRY Wrap_glMultiTexImage1DEXT(GLenum texunit, GLenum target, GLint lev
 void APIENTRY Wrap_glMultiTexImage2DEXT(GLenum texunit, GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glMultiTexImage2DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -10129,6 +10160,7 @@ void APIENTRY Wrap_glMultiTexImage2DEXT(GLenum texunit, GLenum target, GLint lev
 void APIENTRY Wrap_glMultiTexSubImage1DEXT(GLenum texunit, GLenum target, GLint level, GLint xoffset, GLsizei width, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glMultiTexSubImage1DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -10143,6 +10175,7 @@ void APIENTRY Wrap_glMultiTexSubImage1DEXT(GLenum texunit, GLenum target, GLint 
 void APIENTRY Wrap_glMultiTexSubImage2DEXT(GLenum texunit, GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glMultiTexSubImage2DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -10236,6 +10269,7 @@ void APIENTRY Wrap_glGetMultiTexLevelParameterivEXT(GLenum texunit, GLenum targe
 void APIENTRY Wrap_glMultiTexImage3DEXT(GLenum texunit, GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLsizei depth, GLint border, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glMultiTexImage3DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -10250,6 +10284,7 @@ void APIENTRY Wrap_glMultiTexImage3DEXT(GLenum texunit, GLenum target, GLint lev
 void APIENTRY Wrap_glMultiTexSubImage3DEXT(GLenum texunit, GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glMultiTexSubImage3DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -10336,6 +10371,7 @@ void APIENTRY Wrap_glGetBooleanIndexedvEXT(GLenum target, GLuint index, GLboolea
 void APIENTRY Wrap_glCompressedTextureImage3DEXT(GLuint texture, GLenum target, GLint level, GLenum internalformat, GLsizei width, GLsizei height, GLsizei depth, GLint border, GLsizei imageSize, const void* bits) {
     AV_SCOPE("glCompressedTextureImage3DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     ::av::glproto::av_glCompressedTextureImage3DEXT(*av_t, texture, target, level, internalformat, width, height, depth, border, imageSize, bits);
 }
@@ -10343,6 +10379,7 @@ void APIENTRY Wrap_glCompressedTextureImage3DEXT(GLuint texture, GLenum target, 
 void APIENTRY Wrap_glCompressedTextureImage2DEXT(GLuint texture, GLenum target, GLint level, GLenum internalformat, GLsizei width, GLsizei height, GLint border, GLsizei imageSize, const void* bits) {
     AV_SCOPE("glCompressedTextureImage2DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     ::av::glproto::av_glCompressedTextureImage2DEXT(*av_t, texture, target, level, internalformat, width, height, border, imageSize, bits);
 }
@@ -10350,6 +10387,7 @@ void APIENTRY Wrap_glCompressedTextureImage2DEXT(GLuint texture, GLenum target, 
 void APIENTRY Wrap_glCompressedTextureImage1DEXT(GLuint texture, GLenum target, GLint level, GLenum internalformat, GLsizei width, GLint border, GLsizei imageSize, const void* bits) {
     AV_SCOPE("glCompressedTextureImage1DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     ::av::glproto::av_glCompressedTextureImage1DEXT(*av_t, texture, target, level, internalformat, width, border, imageSize, bits);
 }
@@ -10357,6 +10395,7 @@ void APIENTRY Wrap_glCompressedTextureImage1DEXT(GLuint texture, GLenum target, 
 void APIENTRY Wrap_glCompressedTextureSubImage3DEXT(GLuint texture, GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLsizei imageSize, const void* bits) {
     AV_SCOPE("glCompressedTextureSubImage3DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     ::av::glproto::av_glCompressedTextureSubImage3DEXT(*av_t, texture, target, level, xoffset, yoffset, zoffset, width, height, depth, format, imageSize, bits);
 }
@@ -10364,6 +10403,7 @@ void APIENTRY Wrap_glCompressedTextureSubImage3DEXT(GLuint texture, GLenum targe
 void APIENTRY Wrap_glCompressedTextureSubImage2DEXT(GLuint texture, GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLsizei imageSize, const void* bits) {
     AV_SCOPE("glCompressedTextureSubImage2DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     ::av::glproto::av_glCompressedTextureSubImage2DEXT(*av_t, texture, target, level, xoffset, yoffset, width, height, format, imageSize, bits);
 }
@@ -10371,6 +10411,7 @@ void APIENTRY Wrap_glCompressedTextureSubImage2DEXT(GLuint texture, GLenum targe
 void APIENTRY Wrap_glCompressedTextureSubImage1DEXT(GLuint texture, GLenum target, GLint level, GLint xoffset, GLsizei width, GLenum format, GLsizei imageSize, const void* bits) {
     AV_SCOPE("glCompressedTextureSubImage1DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     ::av::glproto::av_glCompressedTextureSubImage1DEXT(*av_t, texture, target, level, xoffset, width, format, imageSize, bits);
 }
@@ -10393,6 +10434,7 @@ void APIENTRY Wrap_glGetCompressedTextureImageEXT(GLuint texture, GLenum target,
 void APIENTRY Wrap_glCompressedMultiTexImage3DEXT(GLenum texunit, GLenum target, GLint level, GLenum internalformat, GLsizei width, GLsizei height, GLsizei depth, GLint border, GLsizei imageSize, const void* bits) {
     AV_SCOPE("glCompressedMultiTexImage3DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     ::av::glproto::av_glCompressedMultiTexImage3DEXT(*av_t, texunit, target, level, internalformat, width, height, depth, border, imageSize, bits);
 }
@@ -10400,6 +10442,7 @@ void APIENTRY Wrap_glCompressedMultiTexImage3DEXT(GLenum texunit, GLenum target,
 void APIENTRY Wrap_glCompressedMultiTexImage2DEXT(GLenum texunit, GLenum target, GLint level, GLenum internalformat, GLsizei width, GLsizei height, GLint border, GLsizei imageSize, const void* bits) {
     AV_SCOPE("glCompressedMultiTexImage2DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     ::av::glproto::av_glCompressedMultiTexImage2DEXT(*av_t, texunit, target, level, internalformat, width, height, border, imageSize, bits);
 }
@@ -10407,6 +10450,7 @@ void APIENTRY Wrap_glCompressedMultiTexImage2DEXT(GLenum texunit, GLenum target,
 void APIENTRY Wrap_glCompressedMultiTexImage1DEXT(GLenum texunit, GLenum target, GLint level, GLenum internalformat, GLsizei width, GLint border, GLsizei imageSize, const void* bits) {
     AV_SCOPE("glCompressedMultiTexImage1DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     ::av::glproto::av_glCompressedMultiTexImage1DEXT(*av_t, texunit, target, level, internalformat, width, border, imageSize, bits);
 }
@@ -10414,6 +10458,7 @@ void APIENTRY Wrap_glCompressedMultiTexImage1DEXT(GLenum texunit, GLenum target,
 void APIENTRY Wrap_glCompressedMultiTexSubImage3DEXT(GLenum texunit, GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLsizei imageSize, const void* bits) {
     AV_SCOPE("glCompressedMultiTexSubImage3DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     ::av::glproto::av_glCompressedMultiTexSubImage3DEXT(*av_t, texunit, target, level, xoffset, yoffset, zoffset, width, height, depth, format, imageSize, bits);
 }
@@ -10421,6 +10466,7 @@ void APIENTRY Wrap_glCompressedMultiTexSubImage3DEXT(GLenum texunit, GLenum targ
 void APIENTRY Wrap_glCompressedMultiTexSubImage2DEXT(GLenum texunit, GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLsizei imageSize, const void* bits) {
     AV_SCOPE("glCompressedMultiTexSubImage2DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     ::av::glproto::av_glCompressedMultiTexSubImage2DEXT(*av_t, texunit, target, level, xoffset, yoffset, width, height, format, imageSize, bits);
 }
@@ -10428,6 +10474,7 @@ void APIENTRY Wrap_glCompressedMultiTexSubImage2DEXT(GLenum texunit, GLenum targ
 void APIENTRY Wrap_glCompressedMultiTexSubImage1DEXT(GLenum texunit, GLenum target, GLint level, GLint xoffset, GLsizei width, GLenum format, GLsizei imageSize, const void* bits) {
     AV_SCOPE("glCompressedMultiTexSubImage1DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     ::av::glproto::av_glCompressedMultiTexSubImage1DEXT(*av_t, texunit, target, level, xoffset, width, format, imageSize, bits);
 }
@@ -11063,6 +11110,7 @@ void APIENTRY Wrap_glGetFramebufferParameterivEXT(GLuint framebuffer, GLenum pna
 void APIENTRY Wrap_glNamedCopyBufferSubDataEXT(GLuint readBuffer, GLuint writeBuffer, GLintptr readOffset, GLintptr writeOffset, GLsizeiptr size) {
     AV_SCOPE("glNamedCopyBufferSubDataEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     ::av::glicd::host_writes_buffer(writeBuffer);
     ::av::glproto::av_glNamedCopyBufferSubDataEXT(*av_t, readBuffer, writeBuffer, readOffset, writeOffset, size);

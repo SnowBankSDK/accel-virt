@@ -10,6 +10,7 @@
 #include "icd/opengl/sliced_buffers.hpp"
 #include "proto/generated/glmem/glmem_protocol_ids.h"
 #include "proto/submission/command_header.hpp"
+#include "proto/wire/wire_reader.hpp"
 
 #include "gl_dispatch_client.h"
 
@@ -78,7 +79,7 @@ struct Rig {
 
 }
 
-TEST(sliced_buffers, only_a_granted_unstopped_buffer_with_persistent_mappable_storage_is_offered)
+TEST(sliced_buffers, only_a_granted_unstopped_buffer_with_persistent_mappable_storage_is_offered_dynamic_or_not)
 { Rig rig;
   SlicedBuffers &slices = rig.slices();
   CHECK(slices.offers(bytes, storage));
@@ -89,7 +90,7 @@ TEST(sliced_buffers, only_a_granted_unstopped_buffer_with_persistent_mappable_st
   CHECK(slices.offers(static_cast<std::int64_t>(SlicedBuffers::most_bytes), storage));
   CHECK(!slices.offers(bytes, BufferMapping::map_write));
   CHECK(!slices.offers(bytes, BufferMapping::map_persistent));
-  CHECK(!slices.offers(bytes, storage | dynamic_storage));
+  CHECK(slices.offers(bytes, storage | dynamic_storage));
   CHECK(!slices.offers(bytes, storage | 0x4000u));
   CHECK(!slices.offers(bytes, write_only | coherent));
   Rig unsliced(false);
@@ -119,6 +120,50 @@ TEST(sliced_buffers, a_placed_buffer_is_held_owned_and_seeded_with_its_data)
   CHECK(std::memcmp(seen, rig.pattern, bytes) == 0);
   CHECK_EQ(rig.place(5u, storage, false), Status::conflict);
   CHECK_EQ(rig.place(0u, storage, false), Status::conflict);
+  CHECK(rig.slices().invariants_hold()); }
+
+TEST(sliced_buffers, a_dynamic_storage_persistent_buffer_is_sliced_and_buffer_sub_data_writes_it_in_order)
+{ Rig rig;
+  CHECK_EQ(rig.place(6u, storage | coherent | dynamic_storage, true, rig.pattern), Status::ok);
+  CHECK(rig.slices().holds(6u));
+  rig.context.flush();
+  const std::uint32_t before = rig.context_rig.kmt().commands();
+  const std::uint8_t  written[16] = {9u, 8u, 7u, 6u, 5u, 4u, 3u, 2u, 1u, 0u, 1u, 2u, 3u, 4u, 5u, 6u};
+  CHECK_EQ(rig.slices().write(*rig.context.wire(), 6u, 32, sizeof written, written), no_error);
+  rig.context.flush();
+  CHECK_EQ(rig.context_rig.kmt().commands(), before + 1u);
+  CHECK_EQ(rig.context_rig.kmt().command_id(before), av::glmemproto::kCmd_WriteBufferSlice);
+  av::WireReader sent(rig.context_rig.kmt().command_bytes(before) + av::CommandHeader::encoded_size,
+                      MockKmt::journal_bytes - av::CommandHeader::encoded_size);
+  std::uint32_t  buffer = 0u;
+  std::uint64_t  offset = 0u, size = 0u;
+  std::uint8_t   tag = 0xFFu;
+  std::uint8_t   carried[sizeof written] = {};
+  CHECK(sent.read_pod(buffer));
+  CHECK(sent.read_pod(offset));
+  CHECK(sent.read_pod(size));
+  CHECK(sent.read_pod(tag));
+  CHECK(sent.read(carried, sizeof carried));
+  CHECK_EQ(buffer, 6u);
+  CHECK_EQ(offset, 32u);
+  CHECK_EQ(size, sizeof written);
+  CHECK_EQ(tag, 0u);
+  CHECK(std::memcmp(carried, written, sizeof written) == 0);
+  std::uint8_t seen[bytes] = {};
+  CHECK_EQ(rig.slices().read(6u, 0, bytes, seen), no_error);
+  CHECK(std::memcmp(seen, rig.pattern, bytes) == 0);
+  CHECK_EQ(rig.slices().write(*rig.context.wire(), 6u, bytes - 8, 16, written), invalid_value);
+  CHECK_EQ(rig.slices().write(*rig.context.wire(), 6u, -1, 4, written), invalid_value);
+  CHECK_EQ(rig.slices().write(*rig.context.wire(), 6u, 0, 0, written), no_error);
+  rig.context.flush();
+  CHECK_EQ(rig.context_rig.kmt().commands(), before + 1u);
+  CHECK_EQ(rig.place(7u, storage, false), Status::ok);
+  rig.context.flush();
+  const std::uint32_t placed = rig.context_rig.kmt().commands();
+  CHECK_EQ(rig.slices().write(*rig.context.wire(), 7u, 0, 4, written), invalid_operation);
+  CHECK_EQ(rig.slices().write(*rig.context.wire(), 8u, 0, 4, written), invalid_operation);
+  rig.context.flush();
+  CHECK_EQ(rig.context_rig.kmt().commands(), placed);
   CHECK(rig.slices().invariants_hold()); }
 
 TEST(sliced_buffers, an_unpack_source_is_the_slices_own_bytes_at_the_offset_and_only_inside_the_buffer)
@@ -316,6 +361,23 @@ TEST(guest_gl_context_slices, a_sliced_read_copies_the_buffer_and_records_the_er
   rig.context.read_sliced(1u, bytes, 16, seen);
   CHECK_EQ(rig.context.take_error(), invalid_value);
   CHECK_EQ(rig.context.take_error(), 0u); }
+
+TEST(guest_gl_context_slices, a_sliced_write_is_sent_and_records_the_error_of_one_it_cannot)
+{ Rig rig;
+  CHECK_EQ(rig.place(1u, storage | dynamic_storage, true, rig.pattern), Status::ok);
+  CHECK_EQ(rig.place(2u, storage, false), Status::ok);
+  const std::uint8_t written[4] = {1u, 2u, 3u, 4u};
+  rig.context.write_sliced(1u, 8, 4, written);
+  CHECK_EQ(rig.context.take_error(), 0u);
+  rig.context.write_sliced(2u, 8, 4, written);
+  CHECK_EQ(rig.context.take_error(), invalid_operation);
+  rig.context.write_sliced(1u, bytes, 4, written);
+  CHECK_EQ(rig.context.take_error(), invalid_value);
+  rig.context.flush();
+  std::uint32_t sent = 0u;
+  for (std::uint32_t at = 0u; at < rig.context_rig.kmt().commands(); at++)
+    sent += rig.context_rig.kmt().command_id(at) == av::glmemproto::kCmd_WriteBufferSlice ? 1u : 0u;
+  CHECK_EQ(sent, 1u); }
 
 TEST(slice_pin, a_pin_holds_its_owner_until_released_replaced_or_destroyed)
 { Rig rig;

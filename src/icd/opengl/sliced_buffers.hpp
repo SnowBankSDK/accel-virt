@@ -74,6 +74,7 @@ public:
     uint32_t clear_range(uint32_t buffer, uint32_t internal_format, int64_t offset, int64_t size, uint32_t format,
                          uint32_t type, const void *data);
     uint32_t invalidate(uint32_t buffer, int64_t offset, int64_t length);
+    uint32_t write(ClientTransport &wire, uint32_t buffer, int64_t offset, int64_t size, const void *data);
     void    *pointer_of(uint32_t buffer) const;
     bool     mapping(uint32_t buffer, uint32_t &access, uint64_t &offset, uint64_t &bytes) const;
     bool     storage_flags(uint32_t buffer, int64_t &value) const;

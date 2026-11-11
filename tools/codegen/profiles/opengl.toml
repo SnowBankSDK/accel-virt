@@ -254,6 +254,31 @@ synchronous = ["glFinish"]
 
 read_into_blob = ["glGetTextureSubImage"]
 
+reads_buffers = [
+    "glDrawArraysIndirect", "glDrawArraysInstancedBaseInstance", "glDrawElementsBaseVertex", "glDrawElementsIndirect",
+    "glDrawElementsInstancedBaseInstance", "glDrawElementsInstancedBaseVertex",
+    "glDrawElementsInstancedBaseVertexBaseInstance", "glDrawRangeElementsBaseVertex", "glDrawTransformFeedback",
+    "glDrawTransformFeedbackInstanced", "glDrawTransformFeedbackStream", "glDrawTransformFeedbackStreamInstanced",
+    "glMultiDrawArrays", "glMultiDrawArraysIndirect", "glMultiDrawArraysIndirectCount", "glMultiDrawElements",
+    "glMultiDrawElementsBaseVertex", "glMultiDrawElementsIndirect", "glMultiDrawElementsIndirectCount",
+    "glDispatchCompute", "glDispatchComputeIndirect",
+    "glCopyBufferSubData", "glCopyNamedBufferSubData", "glNamedCopyBufferSubDataEXT",
+    "glTexImage1D", "glTexImage2D", "glTexImage3D", "glTexSubImage1D", "glTexSubImage2D", "glTexSubImage3D",
+    "glTextureSubImage1D", "glTextureSubImage2D", "glTextureSubImage3D",
+    "glCompressedTexImage1D", "glCompressedTexImage2D", "glCompressedTexImage3D",
+    "glCompressedTexSubImage1D", "glCompressedTexSubImage2D", "glCompressedTexSubImage3D",
+    "glCompressedTextureSubImage1D", "glCompressedTextureSubImage2D", "glCompressedTextureSubImage3D",
+    "glTextureImage1DEXT", "glTextureImage2DEXT", "glTextureImage3DEXT",
+    "glTextureSubImage1DEXT", "glTextureSubImage2DEXT", "glTextureSubImage3DEXT",
+    "glMultiTexImage1DEXT", "glMultiTexImage2DEXT", "glMultiTexImage3DEXT",
+    "glMultiTexSubImage1DEXT", "glMultiTexSubImage2DEXT", "glMultiTexSubImage3DEXT",
+    "glCompressedTextureImage1DEXT", "glCompressedTextureImage2DEXT", "glCompressedTextureImage3DEXT",
+    "glCompressedTextureSubImage1DEXT", "glCompressedTextureSubImage2DEXT", "glCompressedTextureSubImage3DEXT",
+    "glCompressedMultiTexImage1DEXT", "glCompressedMultiTexImage2DEXT", "glCompressedMultiTexImage3DEXT",
+    "glCompressedMultiTexSubImage1DEXT", "glCompressedMultiTexSubImage2DEXT", "glCompressedMultiTexSubImage3DEXT",
+    "glDrawPixels", "glReadnPixels", "glMemoryBarrier", "glMemoryBarrierByRegion", "glFenceSync",
+]
+
 reads_window = [
     "glReadnPixels", "glCopyPixels",
     "glCopyTexImage1D", "glCopyTexImage2D", "glCopyTexSubImage1D", "glCopyTexSubImage2D", "glCopyTexSubImage3D",

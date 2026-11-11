@@ -110,6 +110,7 @@ public:
     BufferShadows         &shadows();
     SlicedBuffers         &slices();
     void                   read_sliced(uint32_t buffer, intptr_t offset, intptr_t size, void *data);
+    void                   write_sliced(uint32_t buffer, intptr_t offset, intptr_t size, const void *data);
     GlExternalObjects     &externals();
     PixelStagingBuffer    &staging();
 

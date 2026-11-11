@@ -2271,12 +2271,6 @@ def _client_array_staging(name: str) -> tuple[list[str], list[str], str]:
     return ([], [], "")
 
 
-def _reads_buffers(cmd) -> bool:
-    name = cmd.name
-    return (name.startswith("glDraw") or name.startswith("glMultiDraw") or
-            name.startswith("glDispatchCompute"))
-
-
 class GenerationError(Exception):
     pass
 
@@ -2333,6 +2327,10 @@ def emit_icd(reg: Registry, out_dir: Path, proc_table: list[str]) -> None:
         cmd = reg.commands.get(name)
         if cmd is None or _icd_is_handwritten(cmd) or _ret_kind(cmd) != "void":
             raise GenerationError(f"reads_window: {name} is not a generated void entry point")
+    for name in sorted(reg.reads_buffers):
+        cmd = reg.commands.get(name)
+        if cmd is None or _icd_is_handwritten(cmd):
+            raise GenerationError(f"reads_buffers: {name} is not a generated entry point")
     for cmd in reg.commands.values():
         if cmd.api != "gl":
             continue
@@ -2358,7 +2356,7 @@ def emit_icd(reg: Registry, out_dir: Path, proc_table: list[str]) -> None:
             out.append(f"    if (::av::glicd::{SLICED_PBO_REFUSED[cmd.name]}()) return;")
         if cmd.name in SLICED_BUFFER_ANSWERS:
             out.append(f"    if (::av::glicd::{SLICED_BUFFER_ANSWERS[cmd.name]}) return;")
-        if _reads_buffers(cmd):
+        if cmd.name in reg.reads_buffers:
             out.append("    ::av::glicd::flush_persistent_mappings();")
         if cmd.name in BIND_SHADOW_FORGETS:
             out.append("    ::av::glicd::forget_bindings();")

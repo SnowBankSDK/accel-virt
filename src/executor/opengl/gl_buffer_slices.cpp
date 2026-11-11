@@ -13,6 +13,7 @@ namespace av {
 namespace {
 
 constexpr uint32_t gl_invalid_value = 0x0501u;
+constexpr uint32_t gl_invalid_operation = 0x0502u;
 constexpr uint32_t gl_out_of_memory = 0x0505u;
 constexpr GLenum   gl_copy_write_buffer = 0x8F37u;
 constexpr GLenum   gl_buffer_immutable_storage = 0x821Fu;
@@ -108,6 +109,31 @@ bool GlBufferSlices::on_ForgetBufferSlice(uint32_t buffer)
 {
     AV_SCOPE("GlBufferSlices::on_ForgetBufferSlice");
     memories_.leave(buffer);
+    return true;
+}
+
+bool GlBufferSlices::on_WriteBufferSlice(uint32_t buffer, uint64_t offset, const uint8_t *data, uint64_t data_size)
+{
+    AV_SCOPE("GlBufferSlices::on_WriteBufferSlice");
+    if (data_size == 0u) return true;
+    if (offset > static_cast<uint64_t>(INT64_MAX) || data_size > static_cast<uint64_t>(INT64_MAX) - offset) {
+        errors_.record(gl_invalid_value);
+        return true;
+    }
+    if (gl_.glCreateBuffers == nullptr || gl_.glNamedBufferStorage == nullptr ||
+        gl_.glCopyNamedBufferSubData == nullptr || gl_.glDeleteBuffers == nullptr) {
+        errors_.record(gl_invalid_operation);
+        return true;
+    }
+    GLuint staging = 0u;
+    gl_.glCreateBuffers(1, &staging);
+    if (staging == 0u) {
+        errors_.record(gl_out_of_memory);
+        return true;
+    }
+    gl_.glNamedBufferStorage(staging, static_cast<GLsizeiptr>(data_size), data, 0u);
+    gl_.glCopyNamedBufferSubData(staging, buffer, 0, static_cast<GLintptr>(offset), static_cast<GLsizeiptr>(data_size));
+    gl_.glDeleteBuffers(1, &staging);
     return true;
 }
 

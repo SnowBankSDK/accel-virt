@@ -541,6 +541,39 @@ TEST(manual_calls, a_persistent_write_map_is_sent_before_every_draw)
   CHECK_EQ(current.sent_since(10u), ids::kCmd_glDrawArrays);
   CHECK_EQ(current.context().mappings().held(), 0u); }
 
+TEST(manual_calls, a_coherent_persistent_write_reaches_the_host_before_a_following_copy_and_every_buffer_read)
+{ Current current;
+  av::ScriptedHost &host = current.rig().host();
+  answer_size(host, 8u);
+  host.gl_bytes(nullptr, 0u);
+  const GLbitfield coherent_write = 0x0002u | 0x0040u | 0x0080u;
+  auto *const mapped = static_cast<std::uint8_t *>(gen::Wrap_glMapNamedBufferRange(3u, 0, 8, coherent_write));
+  CHECK(mapped != nullptr);
+  mapped[0] = 1u;
+  gen::Wrap_glCopyBufferSubData(0x8F36u, 0x8F37u, 0, 0, 8);
+  mapped[1] = 2u;
+  gen::Wrap_glCopyNamedBufferSubData(3u, 4u, 0, 0, 8);
+  mapped[2] = 3u;
+  gen::Wrap_glMemoryBarrier(0x00004000u);
+  gen::Wrap_glDrawBuffers(0, nullptr);
+  const std::uint32_t expected[] = {ids::kCmd_glGetNamedBufferParameteri64v, ids::kCmd_glGetNamedBufferSubData,
+                                    ids::kCmd_glNamedBufferSubData,          ids::kCmd_glCopyBufferSubData,
+                                    ids::kCmd_glNamedBufferSubData,          ids::kCmd_glCopyNamedBufferSubData,
+                                    ids::kCmd_glNamedBufferSubData,          ids::kCmd_glMemoryBarrier,
+                                    ids::kCmd_glDrawBuffers};
+  CHECK_EQ(current.sent(), 9u);
+  for (std::uint32_t index = 0u; index < 9u; index++) CHECK_EQ(current.sent_since(index), expected[index]);
+  mapped[3] = 4u;
+  std::uint8_t read[8] = {};
+  host.gl_bytes(nullptr, 0u);
+  gen::Wrap_glGetNamedBufferSubData(4u, 0, 8, read);
+  CHECK_EQ(current.sent_since(9u), ids::kCmd_glNamedBufferSubData);
+  CHECK_EQ(current.sent_since(10u), ids::kCmd_glGetNamedBufferSubData);
+  mapped[4] = 5u;
+  current.rig().root().manual().flush();
+  CHECK_EQ(current.sent_since(11u), ids::kCmd_glNamedBufferSubData);
+  CHECK_EQ(current.sent_since(12u), ids::kCmd_glFlush); }
+
 TEST(manual_calls, a_maps_state_is_answered_by_the_guest)
 { Current current;
   av::ScriptedHost &host = current.rig().host();
@@ -1094,16 +1127,15 @@ TEST(manual_calls, the_generated_entries_hooks_follow_the_current_context)
   auto *const mapped = static_cast<std::uint8_t *>(gen::Wrap_glMapNamedBufferRange(3u, 0, 4, 0x0002u | 0x0040u));
   CHECK(mapped != nullptr);
   mapped[0] = 1u;
-  const GLenum buffers[] = {0x8CE0u};
-  gen::Wrap_glDrawBuffers(1, buffers);
+  gen::Wrap_glMemoryBarrier(0x00004000u);
   CHECK_EQ(current.sent(), 5u);
   CHECK_EQ(current.sent_since(3u), ids::kCmd_glNamedBufferSubData);
-  CHECK_EQ(current.sent_since(4u), ids::kCmd_glDrawBuffers);
+  CHECK_EQ(current.sent_since(4u), ids::kCmd_glMemoryBarrier);
   current.rig().kmt().withhold_answer_at(1u);
   GLint value = 0;
   gen::Wrap_glGetIntegerv(0x0BA2u, &value);
   const std::uint32_t lost = current.sent();
-  gen::Wrap_glDrawBuffers(1, buffers);
+  gen::Wrap_glMemoryBarrier(0x00004000u);
   CHECK_EQ(current.sent(), lost); }
 
 TEST(manual_calls, an_imported_objects_name_is_the_hosts_by_the_time_it_crosses)

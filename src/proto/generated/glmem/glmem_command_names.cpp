@@ -12,6 +12,7 @@ const char* command_name(uint32_t id) {
         case kCmd_QueryBufferSlicesGL: return "QueryBufferSlicesGL";
         case kCmd_PlaceBufferSlice: return "PlaceBufferSlice";
         case kCmd_ForgetBufferSlice: return "ForgetBufferSlice";
+        case kCmd_WriteBufferSlice: return "WriteBufferSlice";
         default: return nullptr;
     }
 }

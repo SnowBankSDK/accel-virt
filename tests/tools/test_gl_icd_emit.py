@@ -68,6 +68,7 @@ def registry():
     reg.aliases["glDrawArraysEXT"] = "glDrawArrays"
     reg.driver_entries["glGetPointerv"] = ("void", "GLenum pname, void **params")
     reg.reads_window = {"glReadnPixels"}
+    reg.reads_buffers = {"glTexSubImage2D"}
     return reg
 
 
@@ -180,6 +181,21 @@ class GeneratedGlIcd(unittest.TestCase):
         for name in ("glUnknown", "glGetString", "glIsEnabled"):
             reg = registry()
             reg.reads_window = {name}
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                with self.assertRaisesRegex(emit.GenerationError, name):
+                    emit.emit_icd(reg, pathlib.Path(directory), emit.read_proc_table(ORDER))
+
+    def test_only_a_command_the_profile_lists_as_reading_buffers_sends_persistent_writes_first(self):
+        upload = body_of(self.source, "Wrap_glTexSubImage2D")
+        flush = upload.index("::av::glicd::flush_persistent_mappings();")
+        self.assertLess(flush, upload.index("::av::glproto::av_glTexSubImage2D("))
+        for name in ("Wrap_glCullFace", "Wrap_glUniform1iv", "Wrap_glReadnPixels"):
+            self.assertNotIn("flush_persistent_mappings", body_of(self.source, name), name)
+
+    def test_a_buffer_reader_the_generator_does_not_forward_is_refused(self):
+        for name in ("glUnknown", "glGetString"):
+            reg = registry()
+            reg.reads_buffers = {name}
             with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
                 with self.assertRaisesRegex(emit.GenerationError, name):
                     emit.emit_icd(reg, pathlib.Path(directory), emit.read_proc_table(ORDER))

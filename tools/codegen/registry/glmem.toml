@@ -33,3 +33,11 @@ id = 0x8002
 doc = """The buffer was placed in a slice (PlaceBufferSlice) and is deleted by the commands before this one: the host stops
 counting it among the buffers that keep the block it was placed in."""
 params = ["u32 buffer"]
+
+[[command]]
+name = "WriteBufferSlice"
+id = 0x8003
+doc = """`data` into the buffer `buffer`, placed in a slice (PlaceBufferSlice), at `offset`: the glBufferSubData of a buffer
+the guest maps in place, written by the host GPU after the commands before this one and before the commands after it.
+An `offset` and size the buffer does not hold record GL_INVALID_VALUE."""
+params = ["u32 buffer", "u64 offset", "bytes data"]

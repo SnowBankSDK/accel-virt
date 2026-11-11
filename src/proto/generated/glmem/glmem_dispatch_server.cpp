@@ -14,7 +14,7 @@ constexpr uint64_t inline_reply_bytes = 32768u;
 constexpr uint8_t tag_inline = 0u;
 constexpr uint8_t tag_blob = 1u;
 
-[[maybe_unused]] bool read_bytes(ServerDispatch& s, ::av::WireReader& r, ::av::WireArena& arena, const uint8_t*& data,
+bool read_bytes(ServerDispatch& s, ::av::WireReader& r, ::av::WireArena& arena, const uint8_t*& data,
                 uint64_t& size) {
     uint8_t tag = 0u;
     if (!r.read_pod(size) || !r.read_pod(tag)) return false;
@@ -111,11 +111,29 @@ static bool decode_ForgetBufferSlice(ServerDispatch& s, ::av::WireReader& r, ::a
     return true;
 }
 
+static bool decode_WriteBufferSlice(ServerDispatch& s, ::av::WireReader& r, ::av::WireWriter& reply, ::av::WireArena& arena) {
+    AV_SCOPE("server:glmem:WriteBufferSlice");
+    (void)s;
+    (void)reply;
+    (void)arena;
+    uint32_t buffer{};
+    if (!r.read_pod(buffer)) return false;
+    uint64_t offset{};
+    if (!r.read_pod(offset)) return false;
+    const uint8_t* data = nullptr;
+    uint64_t data_size = 0u;
+    if (!read_bytes(s, r, arena, data, data_size)) return false;
+    if (r.remaining() != 0u) return false;
+    if (!s.on_WriteBufferSlice(buffer, offset, data, data_size)) return false;
+    return true;
+}
+
 bool knows_command(uint32_t cmd_id) {
     switch (cmd_id) {
         case kCmd_QueryBufferSlicesGL:
         case kCmd_PlaceBufferSlice:
         case kCmd_ForgetBufferSlice:
+        case kCmd_WriteBufferSlice:
             return true;
         default: return false;
     }
@@ -127,6 +145,7 @@ bool dispatch_command(ServerDispatch& s, uint32_t cmd_id, ::av::WireReader& r,
         case kCmd_QueryBufferSlicesGL: return decode_QueryBufferSlicesGL(s, r, reply, arena);
         case kCmd_PlaceBufferSlice: return decode_PlaceBufferSlice(s, r, reply, arena);
         case kCmd_ForgetBufferSlice: return decode_ForgetBufferSlice(s, r, reply, arena);
+        case kCmd_WriteBufferSlice: return decode_WriteBufferSlice(s, r, reply, arena);
         default: return false;
     }
 }

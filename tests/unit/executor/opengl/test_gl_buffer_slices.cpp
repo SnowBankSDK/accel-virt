@@ -244,3 +244,83 @@ TEST(gl_buffer_slices, retiring_a_memory_by_name_and_deleting_none_change_what_i
   rig.memories.destroy_all(rig.import);
   CHECK_EQ(rig.memories.count(), 0u);
   CHECK_EQ(rig.memories.placed(), 0u); }
+
+namespace {
+
+GLuint        made_buffer = 0u;
+GLuint        filled_buffer = 0u;
+std::uint8_t  filled[16] = {};
+GLsizeiptr    filled_size = 0;
+GLbitfield    filled_flags = 0xFFu;
+GLuint        copied_from = 0u;
+GLuint        copied_into = 0u;
+GLintptr      copied_at = 0;
+GLsizeiptr    copied_size = 0;
+GLuint        given_back = 0u;
+std::uint32_t write_calls = 0u;
+
+void create_buffers(GLsizei, GLuint *names)
+{
+    write_calls++;
+    names[0] = made_buffer;
+}
+
+void buffer_storage(GLuint buffer, GLsizeiptr size, const void *data, GLbitfield flags)
+{
+    write_calls++;
+    filled_buffer = buffer;
+    filled_size = size;
+    filled_flags = flags;
+    if (size <= static_cast<GLsizeiptr>(sizeof filled)) __builtin_memcpy(filled, data, static_cast<std::size_t>(size));
+}
+
+void copy_buffer(GLuint from, GLuint into, GLintptr, GLintptr at, GLsizeiptr size)
+{
+    write_calls++;
+    copied_from = from;
+    copied_into = into;
+    copied_at = at;
+    copied_size = size;
+}
+
+void delete_buffers(GLsizei, const GLuint *names)
+{
+    write_calls++;
+    given_back = names[0];
+}
+
+}
+
+TEST(gl_buffer_slices, a_slice_write_goes_through_a_staging_copy_the_gpu_runs_in_command_order)
+{ Rig rig;
+  write_calls = 0u;
+  made_buffer = 77u;
+  CHECK(rig.slices.knows(av::glmemproto::kCmd_WriteBufferSlice));
+  const std::uint8_t data[8] = {1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u};
+  CHECK(rig.slices.on_WriteBufferSlice(5u, 16u, data, sizeof data));
+  CHECK_EQ(write_calls, 0u);
+  CHECK_EQ(rig.word.count(invalid_operation - GlErrorWord::first_error), 1u);
+  rig.gl.glCreateBuffers = create_buffers;
+  rig.gl.glNamedBufferStorage = buffer_storage;
+  rig.gl.glCopyNamedBufferSubData = copy_buffer;
+  rig.gl.glDeleteBuffers = delete_buffers;
+  CHECK(rig.slices.on_WriteBufferSlice(5u, 16u, data, sizeof data));
+  CHECK_EQ(write_calls, 4u);
+  CHECK_EQ(filled_buffer, 77u);
+  CHECK_EQ(filled_size, static_cast<GLsizeiptr>(sizeof data));
+  CHECK_EQ(filled_flags, 0u);
+  CHECK(__builtin_memcmp(filled, data, sizeof data) == 0);
+  CHECK_EQ(copied_from, 77u);
+  CHECK_EQ(copied_into, 5u);
+  CHECK_EQ(copied_at, 16);
+  CHECK_EQ(copied_size, static_cast<GLsizeiptr>(sizeof data));
+  CHECK_EQ(given_back, 77u);
+  CHECK(rig.slices.on_WriteBufferSlice(5u, 0u, data, 0u));
+  CHECK_EQ(write_calls, 4u);
+  CHECK(rig.slices.on_WriteBufferSlice(5u, ~std::uint64_t{0}, data, sizeof data));
+  CHECK_EQ(write_calls, 4u);
+  CHECK_EQ(rig.word.count(0x0501u - GlErrorWord::first_error), 1u);
+  made_buffer = 0u;
+  CHECK(rig.slices.on_WriteBufferSlice(5u, 0u, data, sizeof data));
+  CHECK_EQ(write_calls, 5u);
+  CHECK_EQ(rig.word.count(0x0505u - GlErrorWord::first_error), 1u); }

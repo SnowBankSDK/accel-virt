@@ -151,7 +151,8 @@ void ManualCalls::buffer_sub_data(uint32_t target, intptr_t offset, intptr_t siz
     AV_SCOPE("ManualCalls::buffer_sub_data");
     GuestGlContext *const context = sending();
     if (context == nullptr) return;
-    if (sliced_buffer(*context, target) != 0u) return context->record(gl_invalid_operation);
+    const uint32_t sliced = sliced_buffer(*context, target);
+    if (sliced != 0u) return context->write_sliced(sliced, offset, size, data);
     uint32_t bound = 0u;
     if (bound_to(*context, target, bound) && context->mappings().refuses_subdata(bound))
         return context->record(gl_invalid_operation);
@@ -168,7 +169,7 @@ void ManualCalls::named_buffer_sub_data(uint32_t buffer, intptr_t offset, intptr
     GuestGlContext *const context = sending();
     if (context == nullptr) return;
     if (context->mappings().refuses_subdata(buffer)) return context->record(gl_invalid_operation);
-    if (context->slices().holds(buffer)) return context->record(gl_invalid_operation);
+    if (context->slices().holds(buffer)) return context->write_sliced(buffer, offset, size, data);
     if (offset >= 0 && size >= 0)
         context->shadows().wrote(buffer, static_cast<uint64_t>(offset), static_cast<uint64_t>(size), data);
     BufferPieces pieces(*context->wire());
@@ -183,7 +184,7 @@ void ManualCalls::named_buffer_sub_data_ext(uint32_t buffer, intptr_t offset, in
     GuestGlContext *const context = sending();
     if (context == nullptr) return;
     if (context->mappings().refuses_subdata(buffer)) return context->record(gl_invalid_operation);
-    if (context->slices().holds(buffer)) return context->record(gl_invalid_operation);
+    if (context->slices().holds(buffer)) return context->write_sliced(buffer, offset, size, data);
     if (offset >= 0 && size >= 0)
         context->shadows().wrote(buffer, static_cast<uint64_t>(offset), static_cast<uint64_t>(size), data);
     BufferPieces pieces(*context->wire());
@@ -199,6 +200,7 @@ void ManualCalls::get_buffer_sub_data(uint32_t target, intptr_t offset, intptr_t
     if (context == nullptr) return;
     const uint32_t sliced = sliced_buffer(*context, target);
     if (sliced != 0u) return context->read_sliced(sliced, offset, size, data);
+    context->mappings().flush_persistent(*context->wire());
     BufferPieces pieces(*context->wire());
     if (pieces.cuts_read(size, data))
         return pieces.read(target, offset, static_cast<size_t>(size), static_cast<uint8_t *>(data));
@@ -211,6 +213,7 @@ void ManualCalls::get_named_buffer_sub_data(uint32_t buffer, intptr_t offset, in
     GuestGlContext *const context = sending();
     if (context == nullptr) return;
     if (context->slices().holds(buffer)) return context->read_sliced(buffer, offset, size, data);
+    context->mappings().flush_persistent(*context->wire());
     BufferPieces pieces(*context->wire());
     if (pieces.cuts_read(size, data))
         return pieces.read_named(buffer, offset, static_cast<size_t>(size), static_cast<uint8_t *>(data));
@@ -223,6 +226,7 @@ void ManualCalls::get_named_buffer_sub_data_ext(uint32_t buffer, intptr_t offset
     GuestGlContext *const context = sending();
     if (context == nullptr) return;
     if (context->slices().holds(buffer)) return context->read_sliced(buffer, offset, size, data);
+    context->mappings().flush_persistent(*context->wire());
     BufferPieces pieces(*context->wire());
     if (pieces.cuts_read(size, data))
         return pieces.read_named_ext(buffer, offset, static_cast<size_t>(size), static_cast<uint8_t *>(data));
@@ -997,6 +1001,7 @@ void ManualCalls::flush()
     AV_SCOPE("ManualCalls::flush");
     GuestGlContext *const context = sending();
     if (context == nullptr) return;
+    context->mappings().flush_persistent(*context->wire());
     glproto::av_glFlush(*context->wire());
     context->end_frame();
 }
@@ -1022,6 +1027,7 @@ void ManualCalls::finish()
     GuestGlContext *const context = sending();
     if (context == nullptr) return;
     ClientTransport &wire = *context->wire();
+    context->mappings().flush_persistent(wire);
     const uint64_t   fence = glproto::av_glFenceSync(wire, gl_sync_gpu_commands_complete, 0u);
     if (fence == 0u) return glproto::av_glFinish(wire);
     SyncWaitProbe           probe(wire, fence, SyncWaitProbe::gl_sync_flush_commands_bit);
@@ -1275,6 +1281,7 @@ void ManualCalls::read_pixels(int32_t x, int32_t y, int32_t width, int32_t heigh
     const size_t bytes = offset ? 0u : context->arrays().pixel_bytes(format, type, width, height, 1, true);
     if (sliced && !slice_pack_pixels(pixels, bytes)) return;
     ClientTransport &wire = *context->wire();
+    context->mappings().flush_persistent(wire);
     const bool       resolved = context->framebuffers().resolved_read(wire, context->calls_sent());
     const bool       staged = !offset && context->staging().stage_download(wire, pixels, bytes);
     uint64_t         start = 0u, row_bytes = 0u, stride = 0u;

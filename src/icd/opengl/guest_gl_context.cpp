@@ -315,6 +315,15 @@ void GuestGlContext::read_sliced(uint32_t buffer, intptr_t offset, intptr_t size
     if (error != SlicedBuffers::gl_no_error) record(error);
 }
 
+void GuestGlContext::write_sliced(uint32_t buffer, intptr_t offset, intptr_t size, const void *data)
+{
+    AV_SCOPE("GuestGlContext::write_sliced");
+    ClientTransport *const transport = wire();
+    if (transport == nullptr) return;
+    const uint32_t error = slices_.write(*transport, buffer, offset, size, data);
+    if (error != SlicedBuffers::gl_no_error) record(error);
+}
+
 PixelStagingBuffer &GuestGlContext::staging()
 {
     AV_SCOPE("GuestGlContext::staging");
