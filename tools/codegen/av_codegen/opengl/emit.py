@@ -2266,6 +2266,10 @@ def emit_icd(reg: Registry, out_dir: Path, proc_table: list[str]) -> None:
            "namespace av::glicd::generated {", ""]
     forwarded: list[str] = []
     handwritten: list[str] = []
+    for name in sorted(reg.reads_window):
+        cmd = reg.commands.get(name)
+        if cmd is None or _icd_is_handwritten(cmd) or _ret_kind(cmd) != "void":
+            raise GenerationError(f"reads_window: {name} is not a generated void entry point")
     for cmd in reg.commands.values():
         if cmd.api != "gl":
             continue
@@ -2311,10 +2315,14 @@ def emit_icd(reg: Registry, out_dir: Path, proc_table: list[str]) -> None:
                 out.append(f"    if ({ANSWERED_BY_GUEST_NAMES[cmd.name]}) return;")
             out += prologue
             out += _icd_buffer_writes(cmd)
+            if cmd.name in reg.reads_window:
+                out.append("    const bool av_resolved = ::av::glicd::resolve_window_read();")
             out.append(f"    ::av::glproto::av_{cmd.name}({args});")
             if cmd.name in STAGE_ELEMENTS or cmd.name in STAGE_MULTI_ELEMENTS:
                 out.append("    ::av::glicd::finish_client_draw();")
             out += _icd_epilogue(cmd)
+            if cmd.name in reg.reads_window:
+                out.append("    if (av_resolved) ::av::glicd::window_read_done();")
         elif kind == "sync":
             out.append("    if (av_t == nullptr) return nullptr;")
             out += prologue

@@ -113,6 +113,24 @@ void flush_persistent_mappings() noexcept
     if (wire != nullptr) context->mappings().flush_persistent(*wire);
 }
 
+bool resolve_window_read() noexcept
+{
+    AV_SCOPE("resolve_window_read");
+    GuestGlContext *const context = current_context();
+    ClientTransport *const wire = context != nullptr ? context->wire() : nullptr;
+    return wire != nullptr && context->framebuffers().resolved_read(*wire, context->calls_sent());
+}
+
+void window_read_done() noexcept
+{
+    AV_SCOPE("window_read_done");
+    GuestGlContext *const context = current_context();
+    ClientTransport *const wire = context != nullptr ? context->wire() : nullptr;
+    if (wire == nullptr) return;
+    context->framebuffers().resolved_read_done(*wire);
+    context->framebuffers().resolved_through(context->calls_sent());
+}
+
 void forget_bindings() noexcept
 {
     AV_SCOPE("forget_bindings");

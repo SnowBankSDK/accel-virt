@@ -112,6 +112,23 @@ bool     BackBufferPresenter::double_buffered() const
     return format_.double_buffer();
 }
 
+uint32_t BackBufferPresenter::resolved(ClientTransport &wire)
+{
+    AV_SCOPE("BackBufferPresenter::resolved");
+    if (framebuffers_[resolve] == 0u) return 0u;
+    const auto right = static_cast<int32_t>(width_);
+    const auto top = static_cast<int32_t>(height_);
+    glproto::av_glBlitNamedFramebuffer(wire, framebuffers_[draw], framebuffers_[resolve], 0, 0, right, top, 0, 0,
+                                        right, top, gl_color_buffer_bit, gl_nearest);
+    return framebuffers_[resolve];
+}
+
+uint32_t BackBufferPresenter::resolve_framebuffer() const
+{
+    AV_SCOPE("BackBufferPresenter::resolve_framebuffer");
+    return framebuffers_[resolve];
+}
+
 bool BackBufferPresenter::present(ClientTransport &wire, const ClientArrayState &state, void *dc,
                                   icd::WindowSurface &surface, GlPresentQueue *loop, uint64_t luid)
 {
@@ -119,11 +136,7 @@ bool BackBufferPresenter::present(ClientTransport &wire, const ClientArrayState 
     if (framebuffers_[draw] == 0u) return false;
     if (width_ == 0u || height_ == 0u) return true;
     drop_held();
-    const auto right = static_cast<int32_t>(width_);
-    const auto top = static_cast<int32_t>(height_);
-    if (framebuffers_[resolve] != 0u)
-        glproto::av_glBlitNamedFramebuffer(wire, framebuffers_[draw], framebuffers_[resolve], 0, 0, right, top, 0, 0,
-                                            right, top, gl_color_buffer_bit, gl_nearest);
+    static_cast<void>(resolved(wire));
     if (loop != nullptr && draw_chained(wire, *loop, luid)) return true;
     if (loop != nullptr && queue_read(wire, state, *loop)) return true;
     settle();

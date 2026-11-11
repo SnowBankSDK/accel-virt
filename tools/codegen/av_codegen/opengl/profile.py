@@ -16,6 +16,7 @@ class Profile:
     extension_requires: dict[str, str] = field(default_factory=dict)
     synchronous: set[str] = field(default_factory=set)
     read_into_blob: set[str] = field(default_factory=set)
+    reads_window: set[str] = field(default_factory=set)
     aliases: dict[str, str] = field(default_factory=dict)
     params: dict[str, dict] = field(default_factory=dict)
     pname_counts: dict[str, int] = field(default_factory=dict)
@@ -63,6 +64,7 @@ def load(profile_path: Path, ids_path: Path) -> Profile:
         extension_requires=dict(data.get("extension_requires", {})),
         synchronous=set(data.get("synchronous", [])),
         read_into_blob=set(data.get("read_into_blob", [])),
+        reads_window=set(data.get("reads_window", [])),
         aliases={str(k): str(v) for k, v in data.get("aliases", {}).items()},
         params=dict(data.get("params", {})),
         pname_counts={k: int(v) for k, v in data.get("pname_counts", {}).items()},

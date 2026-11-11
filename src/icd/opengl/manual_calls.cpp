@@ -1277,6 +1277,7 @@ void ManualCalls::read_pixels(int32_t x, int32_t y, int32_t width, int32_t heigh
     const size_t bytes = offset ? 0u : context->arrays().pixel_bytes(format, type, width, height, 1, true);
     if (sliced && !slice_pack_pixels(pixels, bytes)) return;
     ClientTransport &wire = *context->wire();
+    const bool       resolved = context->framebuffers().resolved_read(wire, context->calls_sent());
     const bool       staged = !offset && context->staging().stage_download(wire, pixels, bytes);
     uint64_t         start = 0u, row_bytes = 0u, stride = 0u;
     uint8_t         *kept = nullptr;
@@ -1287,6 +1288,7 @@ void ManualCalls::read_pixels(int32_t x, int32_t y, int32_t width, int32_t heigh
     if (kept != nullptr) __builtin_memcpy(kept, pixels, bytes);
     glproto::av_glReadPixels(wire, x, y, width, height, format, type, staged ? nullptr : pixels,
                              staged ? 0u : bytes, offset || staged);
+    if (resolved) context->framebuffers().resolved_read_done(wire);
     if (staged) context->staging().finish_download(wire, pixels, bytes);
     if (kept != nullptr) {
         uint8_t *const into = static_cast<uint8_t *>(pixels);
@@ -1300,6 +1302,7 @@ void ManualCalls::read_pixels(int32_t x, int32_t y, int32_t width, int32_t heigh
         }
     }
     if (sliced) pack_slice_done();
+    if (resolved) context->framebuffers().resolved_through(context->calls_sent());
 }
 
 const uint8_t *ManualCalls::string(uint32_t name)

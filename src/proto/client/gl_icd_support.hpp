@@ -24,6 +24,8 @@ bool             pixel_buffer_bound(bool packing) noexcept;
 bool             query_buffer_bound() noexcept;
 GLuint           framebuffer_name(GLuint name) noexcept;
 void             flush_persistent_mappings() noexcept;
+bool             resolve_window_read() noexcept;
+void             window_read_done() noexcept;
 void             forget_bindings() noexcept;
 bool             skip_active_texture(GLenum texture) noexcept;
 bool             skip_bind_texture(GLenum target, GLuint texture) noexcept;

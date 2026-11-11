@@ -707,56 +707,72 @@ void APIENTRY Wrap_glCopyTexImage1D(GLenum target, GLint level, GLenum internalf
     AV_SCOPE("glCopyTexImage1D");
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glCopyTexImage1D(*av_t, target, level, internalformat, x, y, width, border);
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glCopyTexImage2D(GLenum target, GLint level, GLenum internalformat, GLint x, GLint y, GLsizei width, GLsizei height, GLint border) {
     AV_SCOPE("glCopyTexImage2D");
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glCopyTexImage2D(*av_t, target, level, internalformat, x, y, width, height, border);
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glCopyTexSubImage1D(GLenum target, GLint level, GLint xoffset, GLint x, GLint y, GLsizei width) {
     AV_SCOPE("glCopyTexSubImage1D");
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glCopyTexSubImage1D(*av_t, target, level, xoffset, x, y, width);
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glCopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y, GLsizei width, GLsizei height) {
     AV_SCOPE("glCopyTexSubImage2D");
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glCopyTexSubImage2D(*av_t, target, level, xoffset, yoffset, x, y, width, height);
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glCopyTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLint x, GLint y, GLsizei width, GLsizei height) {
     AV_SCOPE("glCopyTexSubImage3D");
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glCopyTexSubImage3D(*av_t, target, level, xoffset, yoffset, zoffset, x, y, width, height);
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glCopyTextureSubImage1D(GLuint texture, GLint level, GLint xoffset, GLint x, GLint y, GLsizei width) {
     AV_SCOPE("glCopyTextureSubImage1D");
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glCopyTextureSubImage1D(*av_t, texture, level, xoffset, x, y, width);
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glCopyTextureSubImage2D(GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y, GLsizei width, GLsizei height) {
     AV_SCOPE("glCopyTextureSubImage2D");
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glCopyTextureSubImage2D(*av_t, texture, level, xoffset, yoffset, x, y, width, height);
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glCopyTextureSubImage3D(GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLint x, GLint y, GLsizei width, GLsizei height) {
     AV_SCOPE("glCopyTextureSubImage3D");
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glCopyTextureSubImage3D(*av_t, texture, level, xoffset, yoffset, zoffset, x, y, width, height);
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glCreateBuffers(GLsizei n, GLuint* buffers) {
@@ -3089,9 +3105,11 @@ void APIENTRY Wrap_glReadnPixels(GLint x, GLint y, GLsizei width, GLsizei height
     if (av_data_slice && !::av::glicd::slice_pack_pixels(data, av_data_bytes)) return;
     const bool av_data_staged = !av_data_offset && ::av::glicd::stage_download(data, av_data_bytes);
     if (av_data_offset) ::av::glicd::host_writes_target(0x88EBu);
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glReadnPixels(*av_t, x, y, width, height, format, type, bufSize, av_data_staged ? nullptr : data, av_data_offset || av_data_staged);
     if (av_data_staged) ::av::glicd::finish_download(data, av_data_bytes);
     if (av_data_slice) ::av::glicd::pack_slice_done();
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glReleaseShaderCompiler(void) {
@@ -5269,7 +5287,9 @@ void APIENTRY Wrap_glCopyPixels(GLint x, GLint y, GLsizei width, GLsizei height,
     }
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glCopyPixels(*av_t, x, y, width, height, type);
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glDeleteLists(GLuint list, GLsizei range) {
@@ -9818,28 +9838,36 @@ void APIENTRY Wrap_glCopyTextureImage1DEXT(GLuint texture, GLenum target, GLint 
     AV_SCOPE("glCopyTextureImage1DEXT");
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glCopyTextureImage1DEXT(*av_t, texture, target, level, internalformat, x, y, width, border);
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glCopyTextureImage2DEXT(GLuint texture, GLenum target, GLint level, GLenum internalformat, GLint x, GLint y, GLsizei width, GLsizei height, GLint border) {
     AV_SCOPE("glCopyTextureImage2DEXT");
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glCopyTextureImage2DEXT(*av_t, texture, target, level, internalformat, x, y, width, height, border);
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glCopyTextureSubImage1DEXT(GLuint texture, GLenum target, GLint level, GLint xoffset, GLint x, GLint y, GLsizei width) {
     AV_SCOPE("glCopyTextureSubImage1DEXT");
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glCopyTextureSubImage1DEXT(*av_t, texture, target, level, xoffset, x, y, width);
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glCopyTextureSubImage2DEXT(GLuint texture, GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y, GLsizei width, GLsizei height) {
     AV_SCOPE("glCopyTextureSubImage2DEXT");
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glCopyTextureSubImage2DEXT(*av_t, texture, target, level, xoffset, yoffset, x, y, width, height);
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glGetTextureImageEXT(GLuint texture, GLenum target, GLint level, GLenum format, GLenum type, void* pixels) {
@@ -9917,7 +9945,9 @@ void APIENTRY Wrap_glCopyTextureSubImage3DEXT(GLuint texture, GLenum target, GLi
     AV_SCOPE("glCopyTextureSubImage3DEXT");
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glCopyTextureSubImage3DEXT(*av_t, texture, target, level, xoffset, yoffset, zoffset, x, y, width, height);
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glBindMultiTextureEXT(GLenum texunit, GLenum target, GLuint texture) {
@@ -10128,28 +10158,36 @@ void APIENTRY Wrap_glCopyMultiTexImage1DEXT(GLenum texunit, GLenum target, GLint
     AV_SCOPE("glCopyMultiTexImage1DEXT");
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glCopyMultiTexImage1DEXT(*av_t, texunit, target, level, internalformat, x, y, width, border);
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glCopyMultiTexImage2DEXT(GLenum texunit, GLenum target, GLint level, GLenum internalformat, GLint x, GLint y, GLsizei width, GLsizei height, GLint border) {
     AV_SCOPE("glCopyMultiTexImage2DEXT");
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glCopyMultiTexImage2DEXT(*av_t, texunit, target, level, internalformat, x, y, width, height, border);
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glCopyMultiTexSubImage1DEXT(GLenum texunit, GLenum target, GLint level, GLint xoffset, GLint x, GLint y, GLsizei width) {
     AV_SCOPE("glCopyMultiTexSubImage1DEXT");
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glCopyMultiTexSubImage1DEXT(*av_t, texunit, target, level, xoffset, x, y, width);
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glCopyMultiTexSubImage2DEXT(GLenum texunit, GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y, GLsizei width, GLsizei height) {
     AV_SCOPE("glCopyMultiTexSubImage2DEXT");
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glCopyMultiTexSubImage2DEXT(*av_t, texunit, target, level, xoffset, yoffset, x, y, width, height);
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glGetMultiTexImageEXT(GLenum texunit, GLenum target, GLint level, GLenum format, GLenum type, void* pixels) {
@@ -10227,7 +10265,9 @@ void APIENTRY Wrap_glCopyMultiTexSubImage3DEXT(GLenum texunit, GLenum target, GL
     AV_SCOPE("glCopyMultiTexSubImage3DEXT");
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glCopyMultiTexSubImage3DEXT(*av_t, texunit, target, level, xoffset, yoffset, zoffset, x, y, width, height);
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glEnableClientStateIndexedEXT(GLenum array, GLuint index) {

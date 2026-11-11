@@ -72,6 +72,8 @@ public:
     uint32_t width() const;
     uint32_t height() const;
     bool     double_buffered() const;
+    uint32_t resolved(ClientTransport &wire);
+    uint32_t resolve_framebuffer() const;
     bool     present(ClientTransport &wire, const ClientArrayState &state, void *dc, icd::WindowSurface &surface,
                      GlPresentQueue *loop, uint64_t luid);
     void     hand_over(const BatchMark &mark);

@@ -67,6 +67,7 @@ def registry():
     reg.commands["glGetString"].return_type = CType(base="GLubyte", pointer_depth=1, is_const=True)
     reg.aliases["glDrawArraysEXT"] = "glDrawArrays"
     reg.driver_entries["glGetPointerv"] = ("void", "GLenum pname, void **params")
+    reg.reads_window = {"glReadnPixels"}
     return reg
 
 
@@ -161,6 +162,27 @@ class GeneratedGlIcd(unittest.TestCase):
         self.assertIn("::av::glicd::stage_download(data, av_data_bytes);", download)
         self.assertIn("if (av_data_staged) ::av::glicd::finish_download(data, av_data_bytes);", download)
         self.assertNotIn("stage", body_of(self.source, "Wrap_glGetQueryObjectiv"))
+
+    def test_a_read_of_the_window_is_resolved_around_its_command_only(self):
+        read = body_of(self.source, "Wrap_glReadnPixels")
+        resolve = read.index("const bool av_resolved = ::av::glicd::resolve_window_read();")
+        sent = read.index("::av::glproto::av_glReadnPixels(")
+        done = read.index("if (av_resolved) ::av::glicd::window_read_done();")
+        self.assertLess(read.index("if (av_t == nullptr) return;"), resolve)
+        self.assertLess(read.index("if (av_data_slice && !::av::glicd::slice_pack_pixels"), resolve)
+        self.assertLess(resolve, sent)
+        self.assertLess(sent, done)
+        self.assertLess(read.index("if (av_data_staged) ::av::glicd::finish_download(data, av_data_bytes);"), done)
+        for name in ("Wrap_glTexSubImage2D", "Wrap_glCullFace", "Wrap_glGetQueryObjectiv"):
+            self.assertNotIn("resolve_window_read", body_of(self.source, name), name)
+
+    def test_a_window_read_the_generator_does_not_forward_is_refused(self):
+        for name in ("glUnknown", "glGetString", "glIsEnabled"):
+            reg = registry()
+            reg.reads_window = {name}
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                with self.assertRaisesRegex(emit.GenerationError, name):
+                    emit.emit_icd(reg, pathlib.Path(directory), emit.read_proc_table(ORDER))
 
     def test_a_staged_transfer_that_answers_a_value_is_refused(self):
         reg = registry()

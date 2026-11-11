@@ -254,6 +254,16 @@ synchronous = ["glFinish"]
 
 read_into_blob = ["glGetTextureSubImage"]
 
+reads_window = [
+    "glReadnPixels", "glCopyPixels",
+    "glCopyTexImage1D", "glCopyTexImage2D", "glCopyTexSubImage1D", "glCopyTexSubImage2D", "glCopyTexSubImage3D",
+    "glCopyTextureSubImage1D", "glCopyTextureSubImage2D", "glCopyTextureSubImage3D",
+    "glCopyTextureImage1DEXT", "glCopyTextureImage2DEXT", "glCopyTextureSubImage1DEXT",
+    "glCopyTextureSubImage2DEXT", "glCopyTextureSubImage3DEXT",
+    "glCopyMultiTexImage1DEXT", "glCopyMultiTexImage2DEXT", "glCopyMultiTexSubImage1DEXT",
+    "glCopyMultiTexSubImage2DEXT", "glCopyMultiTexSubImage3DEXT",
+]
+
 excluded = [
     "glGetTextureHandleNV", "glGetTextureSamplerHandleNV", "glMakeTextureHandleResidentNV", "glMakeTextureHandleNonResidentNV", "glGetImageHandleNV", "glMakeImageHandleResidentNV", "glMakeImageHandleNonResidentNV", "glUniformHandleui64NV", "glUniformHandleui64vNV", "glProgramUniformHandleui64NV", "glProgramUniformHandleui64vNV", "glIsTextureHandleResidentNV", "glIsImageHandleResidentNV",
     "glGetVertexAttribPointervARB",

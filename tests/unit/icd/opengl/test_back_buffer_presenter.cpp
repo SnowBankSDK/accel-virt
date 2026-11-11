@@ -332,6 +332,26 @@ TEST(back_buffer_presenter, a_multisampled_frame_is_resolved_before_it_is_read)
   CHECK_EQ(rig.id(read + 1u), ids::kCmd_glGetTextureSubImage);
   CHECK_EQ(rig.surface.blits(), 1u); }
 
+TEST(back_buffer_presenter, only_a_multisampled_window_is_resolved_and_names_its_resolve_framebuffer)
+{ Rig plain;
+  plain.host().gl_window(1u, 1u);
+  CHECK_STATUS(plain.presenter.prepare(plain.wire(), &plain.window, plain_d24s8, plain.surface), Status::ok);
+  std::uint32_t before = plain.commands();
+  CHECK_EQ(plain.presenter.resolve_framebuffer(), 0u);
+  CHECK_EQ(plain.presenter.resolved(plain.wire()), 0u);
+  CHECK_EQ(plain.commands(), before);
+  Rig rig;
+  rig.host().gl_window(2u, 2u);
+  CHECK_STATUS(rig.presenter.prepare(rig.wire(), &rig.window, multisampled_d32_srgb, rig.surface), Status::ok);
+  before = rig.commands();
+  CHECK_EQ(rig.presenter.resolve_framebuffer(), 101u);
+  CHECK_EQ(rig.commands(), before);
+  CHECK_EQ(rig.presenter.resolved(rig.wire()), 101u);
+  CHECK_EQ(rig.commands() - before, 1u);
+  CHECK_EQ(rig.id(before), ids::kCmd_glBlitNamedFramebuffer);
+  CHECK_EQ(rig.argument(before, 0u), 100u);
+  CHECK_EQ(rig.argument(before, 1u), 101u); }
+
 TEST(back_buffer_presenter, an_srgb_format_stores_srgb_colour)
 { Rig rig;
   rig.host().gl_window(2u, 2u);

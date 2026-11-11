@@ -57,6 +57,9 @@ public:
     [[nodiscard]] bool read_front(int32_t x, int32_t y, int32_t width, int32_t height, uint32_t format,
                                   uint32_t type, void *pixels) const;
     uint32_t buffer_for(uint32_t buffer, bool drawing) const;
+    bool     resolved_read(ClientTransport &wire, uint64_t sent);
+    void     resolved_read_done(ClientTransport &wire);
+    void     resolved_through(uint64_t sent);
     int32_t  answer(uint32_t pname, int32_t host_value) const;
     bool     front_drawn(uint64_t sent) const;
     void     front_shown(uint64_t sent);
@@ -81,6 +84,7 @@ private:
     BackBufferPresenter *find(void *window) const;
     uint64_t             key_of(void *window) const;
     void                 forget(BackBufferPresenter *presenter);
+    void                 forget_marks();
     void     bind_window(ClientTransport &wire, uint32_t framebuffer);
 
     BlockSource                        &memory_;
@@ -95,6 +99,7 @@ private:
     uint32_t                            viewport_width_;
     uint32_t                            viewport_height_;
     uint64_t                            shown_calls_;
+    uint64_t                            resolved_calls_;
 
     bool                                ever_current_;
 

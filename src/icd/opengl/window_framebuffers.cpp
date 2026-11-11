@@ -15,7 +15,7 @@ WindowFramebuffers::WindowFramebuffers(BlockSource &memory, DriverLog &log)
       presented_(nullptr), draws_window_(false),
       reads_window_(false),
       read_buffer_(gl_back), viewport_width_(0u), viewport_height_(0u), shown_calls_(no_calls),
-      ever_current_(false)
+      resolved_calls_(no_calls),       ever_current_(false)
 {
     AV_SCOPE("WindowFramebuffers::WindowFramebuffers");
 }
@@ -53,7 +53,7 @@ Status WindowFramebuffers::make_current_on(ClientTransport &wire, void *window, 
     if (moved || remade) {
         viewport_width_ = 0u;
         viewport_height_ = 0u;
-        shown_calls_ = no_calls;
+        forget_marks();
     }
     if (!ever_current_) {
         ever_current_ = true;
@@ -113,6 +113,28 @@ bool WindowFramebuffers::reads_window() const
     return reads_window_;
 }
 
+bool WindowFramebuffers::resolved_read(ClientTransport &wire, uint64_t sent)
+{
+    AV_SCOPE("WindowFramebuffers::resolved_read");
+    if (!reads_window_ || current_ == nullptr) return false;
+    const uint32_t resolve = sent == resolved_calls_ ? current_->resolve_framebuffer() : current_->resolved(wire);
+    if (resolve == 0u) return false;
+    glproto::av_glBindFramebuffer(wire, gl_read_framebuffer, resolve);
+    return true;
+}
+
+void WindowFramebuffers::resolved_read_done(ClientTransport &wire)
+{
+    AV_SCOPE("WindowFramebuffers::resolved_read_done");
+    if (current_ != nullptr) glproto::av_glBindFramebuffer(wire, gl_read_framebuffer, current_->framebuffer());
+}
+
+void WindowFramebuffers::resolved_through(uint64_t sent)
+{
+    AV_SCOPE("WindowFramebuffers::resolved_through");
+    resolved_calls_ = current_ != nullptr ? sent : no_calls;
+}
+
 uint32_t WindowFramebuffers::buffer_for(uint32_t buffer, bool drawing) const
 {
     AV_SCOPE("WindowFramebuffers::buffer_for");
@@ -158,6 +180,7 @@ bool WindowFramebuffers::present(ClientTransport &wire, const ClientArrayState &
     BackBufferPresenter *const presenter = find(window);
     if (presenter == nullptr) return false;
     presented_ = presenter;
+    resolved_calls_ = no_calls;
     return presenter->present(wire, state, dc, surface, loop, luid);
 }
 
@@ -198,7 +221,7 @@ void WindowFramebuffers::follow(ClientTransport &wire, void *window, const Pixel
     const uint32_t after = presenter.framebuffer();
     const bool remade = after != before || presenter.width() != width || presenter.height() != height;
     if (!remade || found != current_) return;
-    shown_calls_ = no_calls;
+    forget_marks();
     bind_window(wire, after);
 }
 
@@ -282,12 +305,19 @@ uint64_t WindowFramebuffers::key_of(void *window) const
     return static_cast<uint64_t>(reinterpret_cast<uintptr_t>(window));
 }
 
+void WindowFramebuffers::forget_marks()
+{
+    AV_SCOPE("WindowFramebuffers::forget_marks");
+    shown_calls_ = no_calls;
+    resolved_calls_ = no_calls;
+}
+
 void WindowFramebuffers::forget(BackBufferPresenter *presenter)
 {
     AV_SCOPE("WindowFramebuffers::forget");
     if (presenter == current_) {
         current_ = nullptr;
-        shown_calls_ = no_calls;
+        forget_marks();
     }
     if (presenter == presented_) presented_ = nullptr;
     static_cast<void>(pool_.destroy(presenter));

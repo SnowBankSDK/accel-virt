@@ -196,6 +196,60 @@ TEST(manual_calls, a_front_buffer_read_is_answered_and_every_other_is_sent)
   calls.read_pixels(0, 0, 1, 1, 0x1907u , 0x1401u, pixels);
   CHECK(current.sent() > asked); }
 
+TEST(manual_calls, a_read_of_a_multisampled_window_resolves_it_first)
+{ GlIcdRig rig;
+  CHECK(rig.opengl32().load(av::glicd::GlIcdRoot::icd_version, 1u) == av::FakeOpengl32::Load::loaded);
+  CHECK(rig.opengl32().set_pixel_format(rig.dc(), 13));
+  void *const handle = rig.opengl32().create_context(rig.dc());
+  CHECK(handle != nullptr);
+  rig.host().gl_make("host gpu", "4.6.0 host");
+  rig.host().gl_policy(0);
+  rig.host().gl_window(2u, 2u, 100u);
+  CHECK(rig.opengl32().make_current(rig.dc(), handle));
+  av::glicd::GuestGlContext &context = *rig.root().current();
+  context.flush();
+  std::uint32_t at = rig.kmt().commands();
+  std::uint8_t  pixels[16] = {};
+  rig.host().gl_bytes(nullptr, 0u);
+  rig.root().manual().read_pixels(0, 0, 1, 1, 0x80E1u, 0x1401u, pixels);
+  gen::Wrap_glCopyTexSubImage2D(0x0DE1u, 0, 0, 0, 0, 0, 1, 1);
+  gen::Wrap_glClear(0x4000u);
+  gen::Wrap_glCopyTexSubImage2D(0x0DE1u, 0, 0, 0, 0, 0, 1, 1);
+  context.flush();
+  const auto scalar = [&rig](std::uint32_t index, std::uint32_t nth) {
+    av::WireReader reader(rig.kmt().command_bytes(index) + av::CommandHeader::encoded_size,
+                          av::MockKmt::journal_bytes - av::CommandHeader::encoded_size);
+    std::uint64_t  value = 0u;
+    for (std::uint32_t read = 0u; read <= nth; read++) CHECK(reader.read_varint(value));
+    return value;
+  };
+  const std::uint32_t reads[] = {ids::kCmd_glReadPixels, ids::kCmd_glCopyTexSubImage2D, ids::kCmd_glClear,
+                                 ids::kCmd_glCopyTexSubImage2D};
+  const bool          resolves[] = {true, false, false, true};
+  for (std::uint32_t read = 0u; read < 4u; read++) {
+    while (at < rig.kmt().commands() && rig.kmt().command_id(at) == av::CommandHeader::channel_stats_id) at++;
+    if (reads[read] == ids::kCmd_glClear) {
+      CHECK_EQ(rig.kmt().command_id(at++), ids::kCmd_glClear);
+      continue;
+    }
+    if (resolves[read]) {
+      CHECK_EQ(rig.kmt().command_id(at), ids::kCmd_glBlitNamedFramebuffer);
+      CHECK_EQ(scalar(at, 0u), 100u);
+      CHECK_EQ(scalar(at, 1u), 101u);
+      at++;
+    }
+    CHECK_EQ(rig.kmt().command_id(at), ids::kCmd_glBindFramebuffer);
+    CHECK_EQ(scalar(at, 0u), 0x8CA8u);
+    CHECK_EQ(scalar(at, 1u), 101u);
+    CHECK_EQ(rig.kmt().command_id(at + 1u), reads[read]);
+    CHECK_EQ(rig.kmt().command_id(at + 2u), ids::kCmd_glBindFramebuffer);
+    CHECK_EQ(scalar(at + 2u, 0u), 0x8CA8u);
+    CHECK_EQ(scalar(at + 2u, 1u), 100u);
+    at += 3u;
+  }
+  CHECK(rig.opengl32().make_current(nullptr, nullptr));
+  CHECK(rig.opengl32().delete_context(handle)); }
+
 TEST(manual_calls, a_read_into_a_pack_buffer_is_sent_as_an_offset)
 { Current      current;
   ManualCalls &calls = current.rig().root().manual();
