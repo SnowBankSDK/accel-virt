@@ -7,18 +7,14 @@
 #include "proto/d3d/caps12_layout.hpp"
 #include "proto/generated/d3d/d3d_wire_types.h"
 #include "proto/generated/d3d12/d3d12_dispatch_client.h"
+#include "icd/d3d/feature_level_gate.hpp"
 #include "um/common/guest_setting.hpp"
 
 namespace av::d3d12 {
 
 namespace {
 
-constexpr uint32_t level_11_0 = 0xb000u;
-constexpr uint32_t level_11_1 = 0xb100u;
-constexpr uint32_t level_12_0 = 0xc000u;
-constexpr uint32_t level_12_1 = 0xc100u;
 constexpr uint32_t binding_tier_12_0 = 2u;
-constexpr uint32_t tiled_tier_12_0 = 2u;
 constexpr uint32_t most_tiled_tier = 2u;
 constexpr uint32_t most_view_instancing_tier = 3u;
 constexpr uint32_t most_vrs_tier = 2u;
@@ -92,16 +88,23 @@ UINT D3d12HostCaps::format_support(DXGI_FORMAT format) const
 uint32_t D3d12HostCaps::pipeline_level() const
 {
     AV_SCOPE("D3d12HostCaps::pipeline_level");
-    if (caps_.feature_level >= level_12_1 && caps_.conservative_rasterization_tier >= 1u && caps_.rovs != 0u &&
-        caps_.resource_binding_tier >= binding_tier_12_0 && tiled_tier() >= tiled_tier_12_0 &&
-        caps_.typed_uav_load_additional_formats != 0u && caps_.vp_rt_array_without_gs != 0u)
-        return D3D12DDI_3DPIPELINELEVEL_12_1;
-    if (caps_.feature_level >= level_12_0 && caps_.resource_binding_tier >= binding_tier_12_0 &&
-        tiled_tier() >= tiled_tier_12_0 && caps_.typed_uav_load_additional_formats != 0u)
-        return D3D12DDI_3DPIPELINELEVEL_12_0;
-    if (caps_.feature_level >= level_11_1) return D3D12DDI_3DPIPELINELEVEL_11_1;
-    if (caps_.feature_level >= level_11_0) return D3D12DDI_3DPIPELINELEVEL_11_0;
+    switch (gate().highest()) {
+    case d3d::FeatureLevelGate::level_12_1: return D3D12DDI_3DPIPELINELEVEL_12_1;
+    case d3d::FeatureLevelGate::level_12_0: return D3D12DDI_3DPIPELINELEVEL_12_0;
+    case d3d::FeatureLevelGate::level_11_1: return D3D12DDI_3DPIPELINELEVEL_11_1;
+    case d3d::FeatureLevelGate::level_11_0: return D3D12DDI_3DPIPELINELEVEL_11_0;
+    default: break;
+    }
     return D3D12DDI_3DPIPELINELEVEL_1_0_CORE;
+}
+
+d3d::FeatureLevelGate D3d12HostCaps::gate() const
+{
+    AV_SCOPE("D3d12HostCaps::gate");
+    return d3d::FeatureLevelGate(d3d::FeatureLevelRequirements{
+        caps_.feature_level, tiled_tier(), caps_.typed_uav_load_additional_formats != 0u, caps_.rovs != 0u,
+        caps_.conservative_rasterization_tier, caps_.resource_binding_tier >= binding_tier_12_0,
+        caps_.vp_rt_array_without_gs != 0u});
 }
 
 uint32_t D3d12HostCaps::tiled_tier() const

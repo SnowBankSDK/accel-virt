@@ -390,6 +390,7 @@ HRESULT D3d12Device::heap_and_resource(const D3D12DDIARG_CREATEHEAP_0001 *heap_a
         if (committed && unsized) {
             uint64_t alignment = buffer_alignment;
             sized.ByteSize = allocation_bytes(resource_desc(*args), alignment);
+            if (sized.ByteSize == refused_size) return E_INVALIDARG;
             if (sized.Alignment < alignment) sized.Alignment = alignment;
         }
         const HRESULT made = make_heap(sized, heap, committed);

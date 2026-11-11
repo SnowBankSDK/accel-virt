@@ -1,4 +1,5 @@
 #include "executor/d3d/d3d12_session.hpp"
+#include "proto/d3d/descriptor_heap_rules.hpp"
 
 #include "executor/teardown_budget.hpp"
 
@@ -918,8 +919,9 @@ bool D3d12Session::placed(uint32_t resource, ID3D12Heap *in, uint64_t offset, co
 bool D3d12Session::on_CreateDescriptorHeap12(uint32_t heap, uint32_t type, uint32_t count, uint32_t flags)
 {
     AV_SCOPE("D3d12Session::on_CreateDescriptorHeap12");
-    constexpr uint32_t most_descriptors = 1000000u;
-    if (device_ == nullptr || type >= descriptor_heap_types || count == 0u || count > most_descriptors) return false;
+    if (device_ == nullptr || !DescriptorHeapRules::admits_type(type) || count == 0u ||
+        !DescriptorHeapRules::admits_count(count))
+        return false;
     constexpr uint32_t visible_samplers = 2048u;
     const bool         capped = type == D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER &&
                         (flags & D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE) != 0u && count > visible_samplers;

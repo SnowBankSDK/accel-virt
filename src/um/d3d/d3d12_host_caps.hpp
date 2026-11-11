@@ -2,6 +2,7 @@
 #define AV_UM_D3D12_HOST_CAPS_HPP
 
 #include "icd/d3d/dxgi_format_table.hpp"
+#include "icd/d3d/feature_level_gate.hpp"
 #include "proto/d3d/dxgi_format.hpp"
 #include "proto/generated/d3d12/d3d12_wire_types.h"
 #include "um/d3d/d3d12_ddi.hpp"
@@ -32,6 +33,7 @@ public:
 private:
     uint32_t pipeline_level() const;
     uint32_t tiled_tier() const;
+    d3d::FeatureLevelGate gate() const;
     HRESULT  options(void *data, UINT bytes) const;
     HRESULT  shader(void *data, UINT bytes) const;
     HRESULT  shader_models(void *data, UINT bytes) const;
