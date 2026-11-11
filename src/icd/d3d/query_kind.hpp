@@ -7,6 +7,8 @@ namespace av::d3d {
 
 class QueryKind {
 public:
+    static constexpr uint32_t event_type = 0u;
+
     explicit QueryKind(uint32_t ddi_type);
 
     [[nodiscard]] bool     known() const;

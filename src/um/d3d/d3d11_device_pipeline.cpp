@@ -1,6 +1,7 @@
 #include "core/log/keyed_log.hpp"
 #include "core/trace/function_scope.hpp"
 #include "icd/d3d/list_pieces.hpp"
+#include "icd/d3d/query_kind.hpp"
 #include "proto/generated/d3d/d3d_dispatch_client.h"
 #include "um/d3d/d3d11_device.hpp"
 #include "um/d3d/d3d_session.hpp"
@@ -633,6 +634,7 @@ VOID D3d11Device::query_end(D3D10DDI_HQUERY query)
     QueryRecord &record = *static_cast<QueryRecord *>(query.pDrvPrivate);
     record.last_end = session_.query_results().ended();
     record.first_miss = 0u;
+    if (record.type == d3d::QueryKind::event_type) record.event_order = watermark_.ended();
     static_cast<void>(d3dproto::av_d3d_EndQuery(wire(), record.stamp.id()));
     if (record.waited_on != 0u && wire().flush() != Status::ok) lost(__func__);
 }
@@ -642,8 +644,10 @@ VOID D3d11Device::query_get_data(D3D10DDI_HQUERY handle, void *data, UINT size, 
     AV_SCOPE("D3d11Device::query_get_data");
     QueryRecord &query = *static_cast<QueryRecord *>(handle.pDrvPrivate);
     constexpr uint64_t patience_per_second = 500u;
-    if (session_.query_results().read(query.stamp.id(), query.last_end, data, size < query.data_bytes ? size : query.data_bytes))
+    if (session_.query_results().read(query.stamp.id(), query.last_end, data, size < query.data_bytes ? size : query.data_bytes)) {
+        if (query.type == d3d::QueryKind::event_type) watermark_.seen(query.event_order);
         return;
+    }
     const uint64_t now = clock_.ticks();
     if (query.first_miss == 0u) query.first_miss = now;
     if (query.last_end != 0u && now - query.first_miss < clock_.frequency() / patience_per_second) {
@@ -663,6 +667,7 @@ VOID D3d11Device::query_get_data(D3D10DDI_HQUERY handle, void *data, UINT size, 
         still_drawing();
         return;
     }
+    if (query.type == d3d::QueryKind::event_type) watermark_.seen(query.event_order);
     if (data == nullptr || size == 0u) return;
     if (size > answered && !query_short_noted_) {
         query_short_noted_ = true;

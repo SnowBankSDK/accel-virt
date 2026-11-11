@@ -36,7 +36,7 @@ constexpr uint32_t copy_discard = 0x2u;
 D3d11Device::D3d11Device(d3d::D3dSession &session, BlockSource &memory, KeyedLog &log, const D3d11HostCaps &caps,
                          d3d::D3dCallTrace &trace, const d3d::SharedRowsRequest &rows)
     : session_(session), memory_(memory), shadows_(memory), maps_(memory), lines_(log), refused_(lines_), loss_(lines_), caps_(caps), runtime_{}, core_layer_{}, kernel_(), lender_(session), clock_(), allocations_(kernel_, lines_, clock_),
-      core_(nullptr), dxgi_(nullptr), channel_(), slices_(), parent_(nullptr), recording_lock_(), caller_(), call_mutex_(), calls_(call_mutex_, caller_), recording_(),
+      core_(nullptr), dxgi_(nullptr), channel_(), slices_(), parent_(nullptr), watermark_(), recording_lock_(), caller_(), call_mutex_(), calls_(call_mutex_, caller_), recording_(),
       recorded_(), context_(nullptr), present_order_(), packets_(), feature_level_(0u),
       guest_surfaces_(memory, Pool::paged), guest_lock_refused_(), pages_read_refused_(), pages_read_late_(), present_refused_(), present_flags_(~0u), follow_refused_(), token_refused_(), frame_(1u), geometry_binding_{}, geometry_passthrough_(false), geometry_sent_(0u), topology_(0u), query_short_noted_(false),
       trace_(trace), rows_(rows), context_number_(trace.number_context())
@@ -174,7 +174,7 @@ bool D3d11Device::staging_pending(ResourceRecord &resource)
 {
     AV_SCOPE("D3d11Device::staging_pending");
     if (resource.gpu_wrote == 0u) return false;
-    if (!session_.shared_memory().gpu_pending(resource.gpu_wrote)) {
+    if (watermark_.known_done(resource.write_order) || !session_.shared_memory().gpu_pending(resource.gpu_wrote)) {
         resource.gpu_wrote = 0u;
         return false;
     }
@@ -187,7 +187,9 @@ void D3d11Device::note_gpu_write(D3D10DDI_HRESOURCE handle)
     AV_SCOPE("D3d11Device::note_gpu_write");
     if (parent_ != nullptr) return;
     ResourceRecord &resource = record(handle);
-    if ((resource.cpu_access & D3D10_DDI_CPU_ACCESS_READ) != 0u) resource.gpu_wrote = session_.shared_memory().gpu_fence();
+    if ((resource.cpu_access & D3D10_DDI_CPU_ACCESS_READ) == 0u) return;
+    resource.gpu_wrote = session_.shared_memory().gpu_fence();
+    resource.write_order = watermark_.stamp_write();
 }
 
 HRESULT D3d11Device::initialize_deferred(D3d11Device &parent, const D3D11DDIARG_CREATEDEFERREDCONTEXT &create)

@@ -52,6 +52,7 @@ struct ResourceRecord {
     HostAllocation          *lent;
     ResourceRecord          *immediate;
     uint64_t                 gpu_wrote;
+    uint64_t                 write_order;
     uint32_t                 tiles;
     uint32_t                 packed_mips;
     uint32_t                 packed_tiles;
@@ -84,6 +85,7 @@ struct QueryRecord {
     uint64_t first_miss;
     uint32_t waited_on;
     uint32_t reserved;
+    uint64_t event_order;
 };
 
 struct CommandListRecord {

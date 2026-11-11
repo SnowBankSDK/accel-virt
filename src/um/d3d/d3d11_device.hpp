@@ -11,6 +11,7 @@
 #include "icd/common/staged_mapping.hpp"
 #include "icd/common/written_runs.hpp"
 #include "icd/d3d/command_recording.hpp"
+#include "icd/d3d/completion_watermark.hpp"
 #include "icd/d3d/context_slices.hpp"
 #include "icd/d3d/d3d_command_stream.hpp"
 #include "icd/d3d/d3d_device_channel.hpp"
@@ -214,6 +215,7 @@ private:
     static constexpr size_t recording_bytes = 4u << 20u;
     static constexpr size_t most_recording_bytes = 256u << 20u;
     D3d11Device                          *parent_;
+    d3d::CompletionWatermark              watermark_;
     SrwLock                               recording_lock_;
     WindowsCallingThread                  caller_;
     SrwLock                               call_mutex_;

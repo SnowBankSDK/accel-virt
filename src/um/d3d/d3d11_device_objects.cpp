@@ -934,7 +934,7 @@ VOID D3d11Device::create_query(const D3DWDDM2_0DDIARG_CREATEQUERY *args, D3D10DD
     QueryRecord &query = *static_cast<QueryRecord *>(handle.pDrvPrivate);
     const d3d::QueryKind kind(static_cast<uint32_t>(args->Query));
     const uint32_t type = kind.api_type();
-    query = QueryRecord{d3d::RecordStamp(QueryRecord::tag, next_id()), type, kind.data_bytes(), 0u, 0u, 0u, 0u};
+    query = QueryRecord{d3d::RecordStamp(QueryRecord::tag, next_id()), type, kind.data_bytes(), 0u, 0u, 0u, 0u, 0u};
     if (!kind.known()) {
         set_error(E_INVALIDARG);
         return;
