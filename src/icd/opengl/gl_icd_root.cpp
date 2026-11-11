@@ -427,16 +427,18 @@ void GlIcdRoot::flush_current()
 {
     AV_SCOPE("GlIcdRoot::flush_current");
     GuestGlContext *const context = currents_.current();
-    show_front(context);
+    const bool            shown = show_front(context);
     if (context != nullptr) context->framebuffers().show_held_now();
     manual_.flush();
+    if (shown) context->framebuffers().front_shown(context->calls_sent());
 }
 
-void GlIcdRoot::show_front(GuestGlContext *context)
+bool GlIcdRoot::show_front(GuestGlContext *context)
 {
     AV_SCOPE("GlIcdRoot::show_front");
-    if (context != nullptr && !formats_.format(context->pixel_format()).double_buffer())
-        static_cast<void>(show_frame(context->current_dc()));
+    if (context == nullptr || formats_.format(context->pixel_format()).double_buffer()) return false;
+    if (!context->framebuffers().front_drawn(context->calls_sent())) return true;
+    return show_frame(context->current_dc()) == Shown::handed;
 }
 
 void GlIcdRoot::choose_adapter(void *dc)
@@ -453,9 +455,10 @@ void GlIcdRoot::finish_current()
 {
     AV_SCOPE("GlIcdRoot::finish_current");
     GuestGlContext *const context = currents_.current();
-    show_front(context);
+    const bool            shown = show_front(context);
     if (context != nullptr) context->framebuffers().show_held_now();
     manual_.finish();
+    if (shown) context->framebuffers().front_shown(context->calls_sent());
     if (context != nullptr) context->deliver_debug();
 }
 

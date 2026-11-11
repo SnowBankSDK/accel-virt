@@ -270,9 +270,11 @@ TEST(kmt_transport, an_async_command_lands_a_batch_and_a_submission)
   KmtTransport transport(fixture.connection(), SubApi::vulkan, 12u,
                          reply_bytes, transport_staging, sizeof transport_staging);
   CHECK_STATUS(transport.initialize(), Status::ok);
+  CHECK_EQ(transport.calls_sent(), 0u);
   WireWriter writer = transport.request_writer();
   writer.write_u32(0xCAFEu);
   CHECK(transport.send_async(0x10001u, writer) == TransportResult::ok);
+  CHECK_EQ(transport.calls_sent(), 1u);
   const std::uint8_t *ring = fixture.kmt().ring_of(transport.context());
   CHECK(ring != nullptr);
   BatchHeader batch;
@@ -316,6 +318,7 @@ TEST(kmt_transport, a_sync_command_reads_the_reply_the_device_wrote)
   writer.write_u32(7u);
   WireReader got(nullptr, 0u);
   CHECK(transport.send_sync(0x10002u, writer, got) == TransportResult::ok);
+  CHECK_EQ(transport.calls_sent(), 1u);
   CHECK_EQ(got.read_u32(), 1u);
   transport.end_call();
   CHECK_EQ(got.read_u32(), 2u);

@@ -10,6 +10,7 @@
 #include "proto/escape/av_context_record.hpp"
 #include "proto/submission/fault_code.hpp"
 
+#include "gl_icd_entries.h"
 #include "gl_protocol_ids.h"
 
 #include <cstdint>
@@ -666,6 +667,59 @@ TEST(gl_icd_root, a_single_buffered_format_presents_on_flush)
   const std::uint32_t untouched = doubled.surface().blits();
   doubled.root().flush_current();
   CHECK_EQ(doubled.surface().blits(), untouched); }
+
+TEST(gl_icd_root, a_single_buffered_format_presents_on_finish)
+{ GlIcdRig rig;
+  CHECK(rig.opengl32().load(Root::icd_version, 1u) == av::FakeOpengl32::Load::loaded);
+  CHECK(rig.opengl32().set_pixel_format(rig.dc(), 2));
+  void *const context = rig.opengl32().create_context(rig.dc());
+  CHECK(context != nullptr);
+  rig.host().gl_make("host gpu", "4.6.0 host");
+  rig.host().gl_policy(0);
+  rig.host().gl_window(1u, 1u);
+  CHECK(rig.opengl32().make_current(rig.dc(), context));
+  const std::uint32_t blits = rig.surface().blits();
+  rig.host().gl_bytes(nullptr, 0u);
+  rig.root().finish_current();
+  CHECK_EQ(rig.surface().blits(), blits + 1u);
+  CHECK(rig.opengl32().make_current(nullptr, nullptr));
+  CHECK(rig.opengl32().delete_context(context));
+  GlIcdRig doubled;
+  doubled.load_with_format();
+  CHECK(doubled.current_context() != nullptr);
+  const std::uint32_t untouched = doubled.surface().blits();
+  doubled.root().finish_current();
+  CHECK_EQ(doubled.surface().blits(), untouched); }
+
+TEST(gl_icd_root, a_single_buffered_flush_with_nothing_drawn_since_it_was_shown_shows_nothing_again)
+{ GlIcdRig rig;
+  CHECK(rig.opengl32().load(Root::icd_version, 1u) == av::FakeOpengl32::Load::loaded);
+  CHECK(rig.opengl32().set_pixel_format(rig.dc(), 2));
+  void *const context = rig.opengl32().create_context(rig.dc());
+  CHECK(context != nullptr);
+  rig.host().gl_make("host gpu", "4.6.0 host");
+  rig.host().gl_policy(0);
+  rig.host().gl_window(1u, 1u);
+  CHECK(rig.opengl32().make_current(rig.dc(), context));
+  const auto reads = [&rig] {
+    rig.root().current()->flush();
+    std::uint32_t found = 0u;
+    for (std::uint32_t at = 0u; at < rig.kmt().commands(); at++)
+      found += rig.kmt().command_id(at) == av::glproto::kCmd_glGetTextureSubImage ? 1u : 0u;
+    return found;
+  };
+  rig.host().gl_bytes(nullptr, 0u);
+  rig.root().flush_current();
+  CHECK_EQ(reads(), 1u);
+  rig.root().flush_current();
+  rig.root().flush_current();
+  CHECK_EQ(reads(), 1u);
+  av::glicd::generated::Wrap_glClear(0x4000u);
+  rig.host().gl_bytes(nullptr, 0u);
+  rig.root().flush_current();
+  CHECK_EQ(reads(), 2u);
+  CHECK(rig.opengl32().make_current(nullptr, nullptr));
+  CHECK(rig.opengl32().delete_context(context)); }
 
 TEST(gl_icd_root, a_flush_with_nothing_current_presents_nothing)
 { GlIcdRig rig;

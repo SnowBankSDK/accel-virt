@@ -340,15 +340,41 @@ TEST(window_framebuffers, a_window_resized_while_another_context_was_current_is_
   CHECK_EQ(rig.argument(made + 10u, 1u), 300u);
   CHECK(rig.framebuffers.invariants_hold()); }
 
-TEST(window_framebuffers, a_single_buffered_window_reads_its_front_buffer_until_told_otherwise)
+TEST(window_framebuffers, a_single_buffered_windows_front_buffer_is_read_from_the_host_image)
 { Rig rig;
   CHECK_STATUS(rig.current_on(0, 100u, single), Status::ok);
   std::uint8_t pixels[64] = {};
   rig.context_rig.host().gl_bytes(nullptr, 0u);
-  CHECK(rig.swap(0));
-  CHECK(rig.framebuffers.read_front(0, 0, 1, 1, 0x80E1u, 0x1401u, pixels));
-  rig.framebuffers.reading(0x0405u);
-  CHECK(!rig.framebuffers.read_front(0, 0, 1, 1, 0x80E1u, 0x1401u, pixels)); }
+  CHECK(rig.framebuffers.present(rig.wire(), rig.state, &rig.dcs[0], &rig.windows[0], rig.surface, nullptr, 0u));
+  CHECK(!rig.framebuffers.read_front(0, 0, 1, 1, 0x80E1u, 0x1401u, pixels));
+  CHECK_EQ(rig.framebuffers.buffer_for(Windows::gl_front, false), Windows::gl_color_attachment0);
+  rig.framebuffers.reading(Windows::gl_front_left);
+  CHECK(!rig.framebuffers.read_front(0, 0, 1, 1, 0x80E1u, 0x1401u, pixels));
+  CHECK_EQ(rig.framebuffers.buffer_for(Windows::gl_front_left, false), Windows::gl_color_attachment0);
+  CHECK_EQ(rig.framebuffers.name_of(0u), 100u);
+  CHECK(rig.framebuffers.invariants_hold()); }
+
+TEST(window_framebuffers, a_front_shown_after_some_calls_is_drawn_again_only_after_more_a_move_or_a_resize)
+{ Rig rig;
+  rig.framebuffers.front_shown(5u);
+  CHECK(rig.framebuffers.front_drawn(5u));
+  CHECK_STATUS(rig.current_on(0, 100u, single), Status::ok);
+  CHECK(rig.framebuffers.front_drawn(5u));
+  rig.framebuffers.front_shown(5u);
+  CHECK(!rig.framebuffers.front_drawn(5u));
+  CHECK(rig.framebuffers.front_drawn(6u));
+  CHECK_STATUS(rig.current_on(1, 200u, single), Status::ok);
+  CHECK(rig.framebuffers.front_drawn(5u));
+  rig.framebuffers.front_shown(7u);
+  rig.surface.resize(&rig.windows[1], 16u, 8u);
+  rig.context_rig.host().gl_window(1u, 1u, 300u);
+  rig.framebuffers.follow(rig.wire(), &rig.windows[1], single, rig.surface);
+  CHECK(rig.framebuffers.front_drawn(7u));
+  rig.framebuffers.front_shown(8u);
+  rig.surface.close_window(&rig.windows[1]);
+  rig.framebuffers.drop_gone(rig.wire(), rig.surface);
+  CHECK(rig.framebuffers.front_drawn(8u));
+  CHECK(rig.framebuffers.invariants_hold()); }
 
 TEST(window_framebuffers, a_read_of_the_windows_front_buffer_is_answered_without_the_host)
 { Rig rig;

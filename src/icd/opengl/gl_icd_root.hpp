@@ -113,7 +113,7 @@ private:
     enum class Shown { refused, nothing, handed };
 
     Shown show_frame(void *dc);
-    void  show_front(GuestGlContext *context);
+    bool  show_front(GuestGlContext *context);
     void  choose_adapter(void *dc);
     Shown present_frame(void *dc, bool paced);
     bool  admits(GuestGlContext &context);

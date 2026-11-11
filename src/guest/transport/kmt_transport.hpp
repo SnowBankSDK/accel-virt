@@ -78,6 +78,7 @@ public:
     [[nodiscard]] Status wake_on_raise(uint64_t handle);
     uint64_t             submissions_through_kernel() const;
     uint64_t             submissions() const;
+    uint64_t             calls_sent() const;
     void                 give_back_doorbell();
     uint32_t             context() const;
     uint32_t             ring() const;
@@ -201,6 +202,7 @@ private:
     uint64_t         room_wait_ticks_;
     uint64_t         window_began_;
     bool             windowed_;
+    uint64_t         calls_sent_;
     SpillBlock       spill_;
     SpillBlock       answer_;
     ChannelStats     stats_;

@@ -81,7 +81,9 @@ constexpr std::uint32_t gl_srgb8_alpha8 = 0x8C43u;
 
 const PixelFormat plain_d24s8(24u, 8u, true, false, 0u);
 const PixelFormat multisampled_d32_srgb(32u, 0u, false, true, 4u);
+const PixelFormat doubled_multisampled_d32_srgb(32u, 0u, true, true, 4u);
 const PixelFormat bare(0u, 0u, true, false, 0u);
+const PixelFormat single_d24s8(24u, 8u, false, false, 0u);
 
 struct Rig {
     GlContextRig               context_rig;
@@ -802,12 +804,40 @@ TEST(back_buffer_presenter, with_a_chain_the_first_frame_is_copied_and_later_fra
   CHECK_EQ(presents.chains.closes(), 1u);
   CHECK(presents.chains.last_closed() == &rig.window); }
 
+TEST(back_buffer_presenter, a_single_buffered_window_keeps_drawing_into_its_own_image_across_chained_presents)
+{ Rig      rig;
+  Presents presents(rig);
+  presents.chains.refuse_opens(false);
+  rig.host().gl_window(1u, 1u);
+  CHECK_STATUS(rig.presenter.prepare(rig.wire(), &rig.window, single_d24s8, rig.surface), Status::ok);
+  rig.host().shared_object(av::SharedObjectAnswer::done, 0x700u);
+  rig.host().shared_object(av::SharedObjectAnswer::done, 0x701u);
+  rig.host().shared_object(av::SharedObjectAnswer::done, 0x702u);
+  const std::uint32_t textures[3] = {200u, 201u, 202u};
+  rig.host().gl_bytes(reinterpret_cast<const std::uint8_t *>(textures), sizeof textures);
+  const std::uint32_t made = rig.commands();
+  CHECK(rig.presenter.present(rig.wire(), rig.state, &rig.dc, rig.surface, &presents.loop, 0x1234u));
+  rig.presenter.hand_over(rig.context.mark());
+  CHECK(presents.thread.step());
+  CHECK(rig.presenter.present(rig.wire(), rig.state, &rig.dc, rig.surface, &presents.loop, 0x1234u));
+  rig.presenter.hand_over(rig.context.mark());
+  CHECK(presents.thread.step());
+  CHECK_EQ(presents.chains.presents(), 2u);
+  CHECK_EQ(count_of(rig, ids::kCmd_glCopyImageSubData), 2u);
+  for (std::uint32_t index = made; index < rig.commands(); index++)
+    if (rig.id(index) == ids::kCmd_glNamedFramebufferTexture) {
+      CHECK_EQ(rig.argument(index, 0u), rig.presenter.framebuffer());
+      CHECK_EQ(rig.argument(index, 2u), 101u);
+    }
+  CHECK_EQ(last_attached(rig), 101u);
+  CHECK(rig.presenter.invariants_hold()); }
+
 TEST(back_buffer_presenter, a_multisampled_chain_rotates_the_slots_on_the_resolve_framebuffer)
 { Rig      rig;
   Presents presents(rig);
   presents.chains.refuse_opens(false);
   rig.host().gl_window(2u, 2u);
-  CHECK_STATUS(rig.presenter.prepare(rig.wire(), &rig.window, multisampled_d32_srgb, rig.surface), Status::ok);
+  CHECK_STATUS(rig.presenter.prepare(rig.wire(), &rig.window, doubled_multisampled_d32_srgb, rig.surface), Status::ok);
   rig.host().shared_object(av::SharedObjectAnswer::done, 0x700u);
   rig.host().shared_object(av::SharedObjectAnswer::done, 0x701u);
   rig.host().shared_object(av::SharedObjectAnswer::done, 0x702u);

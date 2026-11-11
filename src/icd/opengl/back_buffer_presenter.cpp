@@ -407,7 +407,7 @@ bool BackBufferPresenter::draw_chained(ClientTransport &wire, GlPresentQueue &lo
         return true;
     }
     copy_chained(wire, loop);
-    if (pending_chained_ && !rotation_refused_) begin_rotation(wire, loop);
+    if (pending_chained_ && !rotation_refused_ && format_.double_buffer()) begin_rotation(wire, loop);
     return true;
 }
 

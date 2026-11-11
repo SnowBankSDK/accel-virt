@@ -185,6 +185,12 @@ BatchMark GuestGlContext::mark() const
     return channel_.opened() ? channel_.transport().newest_mark() : BatchMark();
 }
 
+uint64_t GuestGlContext::calls_sent() const
+{
+    AV_SCOPE("GuestGlContext::calls_sent");
+    return channel_.opened() ? channel_.transport().calls_sent() : 0u;
+}
+
 void GuestGlContext::flush()
 {
     AV_SCOPE("GuestGlContext::flush");

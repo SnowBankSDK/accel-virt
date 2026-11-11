@@ -97,6 +97,7 @@ public:
     [[nodiscard]] Status run_held();
     void                 end_frame();
     BatchMark            mark() const;
+    uint64_t             calls_sent() const;
 
     ClientArrayState &arrays();
     ClientVertexState &vertex();

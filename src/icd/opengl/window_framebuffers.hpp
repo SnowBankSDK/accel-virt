@@ -58,6 +58,8 @@ public:
                                   uint32_t type, void *pixels) const;
     uint32_t buffer_for(uint32_t buffer, bool drawing) const;
     int32_t  answer(uint32_t pname, int32_t host_value) const;
+    bool     front_drawn(uint64_t sent) const;
+    void     front_shown(uint64_t sent);
     bool     present(ClientTransport &wire, const ClientArrayState &state, void *dc, void *window,
                      icd::WindowSurface &surface, GlPresentQueue *loop, uint64_t luid);
     void     hand_over(const BatchMark &mark);
@@ -74,6 +76,8 @@ public:
     bool invariants_hold() const;
 
 private:
+    static constexpr uint64_t no_calls = ~0ull;
+
     BackBufferPresenter *find(void *window) const;
     uint64_t             key_of(void *window) const;
     void                 forget(BackBufferPresenter *presenter);
@@ -90,6 +94,7 @@ private:
     uint32_t                            read_buffer_;
     uint32_t                            viewport_width_;
     uint32_t                            viewport_height_;
+    uint64_t                            shown_calls_;
 
     bool                                ever_current_;
 

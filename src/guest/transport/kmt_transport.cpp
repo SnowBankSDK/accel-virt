@@ -39,7 +39,7 @@ KmtTransport::KmtTransport(GuestConnection &connection, BlockSource &memory, Sub
       room_(staging != nullptr ? staging_bytes : 0u, reply_bytes), allocations_{},
       dma_address_(0u), context_(0u), hardware_scheduled_(false), ring_(), newest_end_(0u), newest_fence_(0u), previous_end_(0u), doorbell_(connection.kmt()),
       path_(connection.kmt(), doorbell_, ring_), reply_(), watch_(connection.kmt(), ring_), fences_(), fence_ends_{}, faulted_(false), held_{}, route_(nullptr), standby_(nullptr), gates_busy_(0u), pending_(nullptr, 0u), unpublished_(0u), answered_(false), answered_fence_(0u),
-      decode_arena_(nullptr, 0u), blobs_(), arena_(nullptr), room_pressure_(0u), room_wait_ticks_(0u), window_began_(0u), windowed_(false), spill_(memory), answer_(memory)
+      decode_arena_(nullptr, 0u), blobs_(), arena_(nullptr), room_pressure_(0u), room_wait_ticks_(0u), window_began_(0u), windowed_(false), calls_sent_(0u), spill_(memory), answer_(memory)
 {
     AV_SCOPE("KmtTransport::KmtTransport");
 }
@@ -51,7 +51,7 @@ KmtTransport::KmtTransport(GuestConnection &connection, SubApi sub_api, uint8_t 
       room_(staging != nullptr ? staging_bytes : 0u, reply_bytes), allocations_{},
       dma_address_(0u), context_(0u), hardware_scheduled_(false), ring_(), newest_end_(0u), newest_fence_(0u), previous_end_(0u), doorbell_(connection.kmt()),
       path_(connection.kmt(), doorbell_, ring_), reply_(), watch_(connection.kmt(), ring_), fences_(), fence_ends_{}, faulted_(false), held_{}, route_(nullptr), standby_(nullptr), gates_busy_(0u), pending_(nullptr, 0u), unpublished_(0u), answered_(false), answered_fence_(0u),
-      decode_arena_(nullptr, 0u), blobs_(), arena_(nullptr), room_pressure_(0u), room_wait_ticks_(0u), window_began_(0u), windowed_(false), spill_(), answer_()
+      decode_arena_(nullptr, 0u), blobs_(), arena_(nullptr), room_pressure_(0u), room_wait_ticks_(0u), window_began_(0u), windowed_(false), calls_sent_(0u), spill_(), answer_()
 {
     AV_SCOPE("KmtTransport::KmtTransport");
 }
@@ -439,6 +439,12 @@ uint64_t KmtTransport::submissions() const
 {
     AV_SCOPE("KmtTransport::submissions");
     return path_.submitted();
+}
+
+uint64_t KmtTransport::calls_sent() const
+{
+    AV_SCOPE("KmtTransport::calls_sent");
+    return calls_sent_;
 }
 
 uint32_t KmtTransport::ring() const
@@ -888,6 +894,7 @@ TransportResult KmtTransport::send_async(uint32_t command_id, WireWriter &writer
 {
     AV_SCOPE("KmtTransport::send_async");
     if (faulted_) return TransportResult::failed;
+    calls_sent_++;
     if (pending_.capacity() != 0u) return hold(command_id, writer, 0u);
     uint64_t fence = 0u;
     return publish(command_id, writer, 0u, fence);
@@ -907,6 +914,7 @@ TransportResult KmtTransport::send_sync(uint32_t command_id, WireWriter &writer,
     AV_SCOPE("KmtTransport::send_sync");
     reply = WireReader(nullptr, 0u);
     if (faulted_) return TransportResult::failed;
+    calls_sent_++;
     if (pending_.capacity() != 0u) {
         if (!established() || hold(command_id, writer, CommandHeader::generate_reply) != TransportResult::ok)
             return TransportResult::failed;
