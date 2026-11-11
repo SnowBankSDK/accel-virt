@@ -55,6 +55,7 @@ public:
 
     HRESULT initialize(uint32_t kmt_adapter, const D3DDDIARG_CREATEDEVICE &create);
     d3d::UmdAdapter &adapter() const;
+    const D3d9HostCaps &caps() const;
     void note_failure(const char *call, uint32_t hresult);
     void lock_calls();
     void unlock_calls();

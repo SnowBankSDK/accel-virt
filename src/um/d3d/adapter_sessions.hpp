@@ -1,7 +1,8 @@
 #ifndef AV_UM_ADAPTER_SESSIONS_HPP
 #define AV_UM_ADAPTER_SESSIONS_HPP
 
-#include "guest/kmt/avgpu_adapters.hpp"
+#include "guest/kmt/adapter_slots.hpp"
+#include "guest/kmt/kmt.hpp"
 #include "core/log/driver_log.hpp"
 #include "core/log/log_line.hpp"
 #include "core/support/object_storage.hpp"
@@ -25,8 +26,8 @@ class Kmt;
 template <typename Caps>
 class AdapterSessions {
 public:
-    static constexpr uint32_t max_adapters = AvgpuAdapters::max_adapters;
-    static constexpr uint32_t none = max_adapters;
+    static constexpr uint32_t max_adapters = AdapterSlots::capacity;
+    static constexpr uint32_t none = AdapterSlots::none;
 
     AdapterSessions(Kmt &kmt, BlockSource &memory, DriverLog &log, const char *refusal, uint64_t arena_bytes,
                     uint32_t select_command, uint32_t flush_command, const d3d::SliceOffer *offer);
@@ -35,6 +36,8 @@ public:
     AdapterSessions &operator=(const AdapterSessions &) = delete;
 
     uint32_t         slot_of(uint32_t kmt_adapter, bool &learned);
+    void             hold(uint32_t slot);
+    void             release(const Caps &held);
     Caps            &caps(uint32_t slot);
     d3d::D3dSession *session(uint32_t slot);
     bool             exhausted() const;
@@ -45,6 +48,8 @@ private:
     static constexpr size_t   probe_staging_bytes = 16u * 1024u;
 
     [[nodiscard]] bool learn(Caps &caps, uint32_t kmt_adapter);
+    void               renew(uint32_t slot);
+    void               refuse(const char *cause, const char *label, uint32_t number);
 
     Kmt                           &kmt_;
     BlockSource                   &memory_;
@@ -54,9 +59,9 @@ private:
     uint32_t                       select_command_;
     uint32_t                       flush_command_;
     const d3d::SliceOffer         *offer_;
-    Caps                           caps_[max_adapters];
+    ObjectStorage<Caps>            caps_[max_adapters];
     ObjectStorage<icd::LinkGenerations<d3d::D3dSession>> sessions_[max_adapters];
-    uint32_t                       adapters_[max_adapters];
+    AdapterSlots                   slots_;
     bool                           exhausted_;
     const char                    *learn_step_;
     Status                         learn_status_;
@@ -68,9 +73,10 @@ AdapterSessions<Caps>::AdapterSessions(Kmt &kmt, BlockSource &memory, DriverLog 
                                        uint32_t flush_command, const d3d::SliceOffer *offer)
     : kmt_(kmt), memory_(memory), lines_(log), refusal_(refusal), arena_bytes_(arena_bytes),
       select_command_(select_command), flush_command_(flush_command), offer_(offer), caps_(),
-      sessions_(), adapters_{}, exhausted_(false), learn_step_(""), learn_status_(Status::ok)
+      sessions_(), slots_(), exhausted_(false), learn_step_(""), learn_status_(Status::ok)
 {
     AV_SCOPE("AdapterSessions::AdapterSessions");
+    for (auto &slot : caps_) static_cast<void>(slot.construct());
     for (auto &slot : sessions_) static_cast<void>(slot.construct(memory));
 }
 
@@ -79,6 +85,7 @@ AdapterSessions<Caps>::~AdapterSessions()
 {
     AV_SCOPE("AdapterSessions::~AdapterSessions");
     for (auto &slot : sessions_) slot.destroy();
+    for (auto &slot : caps_) slot.destroy();
 }
 
 template <typename Caps>
@@ -87,25 +94,62 @@ uint32_t AdapterSessions<Caps>::slot_of(uint32_t kmt_adapter, bool &learned)
     AV_SCOPE("AdapterSessions::slot_of");
     learned = false;
     exhausted_ = false;
-    for (uint32_t slot = 0u; slot < max_adapters; slot++)
-        if (adapters_[slot] == kmt_adapter && caps_[slot].learned()) return slot;
-    for (uint32_t slot = 0u; slot < max_adapters; slot++) {
-        if (caps_[slot].learned()) continue;
-        if (!learn(caps_[slot], kmt_adapter)) {
-            LogLine(lines_)
-                .text(refusal_)
-                .text(": ")
-                .text(learn_step_)
-                .text(", status ")
-                .number(static_cast<uint32_t>(learn_status_))
-                .write();
-            return none;
-        }
-        adapters_[slot] = kmt_adapter;
-        learned = true;
-        return slot;
+    uint64_t     luid = 0u;
+    const Status named = kmt_.adapter_luid(kmt_adapter, luid);
+    if (named != Status::ok || luid == 0u) {
+        refuse("the adapter's LUID is unknown", "status", static_cast<uint32_t>(named));
+        return none;
     }
-    return none;
+    bool           fresh = false;
+    const uint32_t slot = slots_.claim(luid, fresh);
+    if (slot == none) {
+        refuse("every adapter slot holds devices of another adapter", "slots", slots_.used());
+        return none;
+    }
+    if (!fresh) return slot;
+    renew(slot);
+    if (!learn(caps_[slot].object(), kmt_adapter)) {
+        slots_.vacate(slot);
+        refuse(learn_step_, "status", static_cast<uint32_t>(learn_status_));
+        return none;
+    }
+    learned = true;
+    return slot;
+}
+
+template <typename Caps>
+void AdapterSessions<Caps>::hold(uint32_t slot)
+{
+    AV_SCOPE("AdapterSessions::hold");
+    slots_.hold(slot);
+}
+
+template <typename Caps>
+void AdapterSessions<Caps>::release(const Caps &held)
+{
+    AV_SCOPE("AdapterSessions::release");
+    for (uint32_t slot = 0u; slot < max_adapters; slot++) {
+        if (&caps_[slot].object() != &held) continue;
+        if (slots_.release(slot)) renew(slot);
+        return;
+    }
+}
+
+template <typename Caps>
+void AdapterSessions<Caps>::renew(uint32_t slot)
+{
+    AV_SCOPE("AdapterSessions::renew");
+    sessions_[slot].destroy();
+    static_cast<void>(sessions_[slot].construct(memory_));
+    caps_[slot].destroy();
+    static_cast<void>(caps_[slot].construct());
+}
+
+template <typename Caps>
+void AdapterSessions<Caps>::refuse(const char *cause, const char *label, uint32_t number)
+{
+    AV_SCOPE("AdapterSessions::refuse");
+    LogLine(lines_).text(refusal_).text(": ").text(cause).text(", ").text(label).text(" ").number(number).write();
 }
 
 template <typename Caps>
@@ -147,7 +191,7 @@ template <typename Caps>
 Caps &AdapterSessions<Caps>::caps(uint32_t slot)
 {
     AV_SCOPE("AdapterSessions::caps");
-    return caps_[slot];
+    return caps_[slot].object();
 }
 
 template <typename Caps>

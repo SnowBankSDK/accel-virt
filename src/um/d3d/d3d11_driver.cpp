@@ -51,6 +51,7 @@ d3d::Hresult D3d11Driver::build(d3d::UmdDevice &, d3d::D3d10ddiargCreateDeviceRe
         static_cast<void>(devices_.destroy(device));
         return static_cast<d3d::Hresult>(opened);
     }
+    adapters_.hold(slot);
     d3d::DeviceBlock<D3d11Device>(create.hDrvDevice).bind(*device);
     fill_device_funcs(*arguments.pWDDM2_6DeviceFuncs);
     fill_dxgi_funcs(*arguments.DXGIBaseDDI.pDXGIDDIBaseFunctions6_1);
@@ -66,8 +67,10 @@ d3d::SharedRowsRequest &D3d11Driver::rows()
 void D3d11Driver::tear_down(void *block)
 {
     AV_SCOPE("D3d11Driver::tear_down");
-    D3d11Device &device = d3d::DeviceBlock<D3d11Device>(block).device();
+    D3d11Device         &device = d3d::DeviceBlock<D3d11Device>(block).device();
+    const D3d11HostCaps &caps = device.caps();
     static_cast<void>(devices_.destroy(&device));
+    adapters_.release(caps);
 }
 
 }

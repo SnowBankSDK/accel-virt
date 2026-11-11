@@ -56,6 +56,7 @@ public:
 
     HRESULT initialize(uint32_t adapter, const D3D10DDIARG_CREATEDEVICE &create);
     HRESULT initialize_deferred(D3d11Device &parent, const D3D11DDIARG_CREATEDEFERREDCONTEXT &create);
+    const D3d11HostCaps &caps() const;
     void    retire();
     void    lock_calls();
     void    unlock_calls();

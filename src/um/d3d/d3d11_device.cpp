@@ -66,6 +66,12 @@ D3d11Device::~D3d11Device()
     kernel_.destroy_context(context_);
 }
 
+const D3d11HostCaps &D3d11Device::caps() const
+{
+    AV_SCOPE("D3d11Device::caps");
+    return caps_;
+}
+
 HRESULT D3d11Device::initialize(uint32_t adapter, const D3D10DDIARG_CREATEDEVICE &create)
 {
     AV_SCOPE("D3d11Device::initialize");

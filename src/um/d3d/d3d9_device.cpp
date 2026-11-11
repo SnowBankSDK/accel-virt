@@ -127,6 +127,12 @@ d3d::UmdAdapter &D3d9Device::adapter() const
     return adapter_;
 }
 
+const D3d9HostCaps &D3d9Device::caps() const
+{
+    AV_SCOPE("D3d9Device::caps");
+    return caps_;
+}
+
 void D3d9Device::lock_calls()
 {
     AV_SCOPE("D3d9Device::lock_calls");

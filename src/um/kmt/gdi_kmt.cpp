@@ -100,7 +100,7 @@ constexpr uint32_t hardware_queue_node = 1u;
 
 }
 
-GdiKmt::GdiKmt() : clock_(), event_(nullptr), last_code_(0u), known_adapters_{}, known_luids_{}, known_(0u),
+GdiKmt::GdiKmt() : clock_(), event_(nullptr), last_code_(0u), known_(),
                    display_adapter_(0u), display_source_(0u), display_tried_(false)
 {
     AV_SCOPE("GdiKmt::GdiKmt");
@@ -153,48 +153,18 @@ Status GdiKmt::enumerate_adapters(uint32_t *adapters, uint32_t capacity, uint32_
     for (uint32_t index = 0u; index < count && index < max_adapters; index++) {
         const uint64_t luid = static_cast<uint64_t>(static_cast<uint32_t>(infos[index].AdapterLuid.HighPart)) << 32u |
                               infos[index].AdapterLuid.LowPart;
-        remember(infos[index].hAdapter, luid);
+        known_.remember(infos[index].hAdapter, luid);
         if (index < capacity) adapters[index] = infos[index].hAdapter;
     }
     return status;
 }
 
-void GdiKmt::remember(uint32_t adapter, uint64_t luid)
-{
-    AV_SCOPE("GdiKmt::remember");
-    for (uint32_t index = 0u; index < known_; index++) {
-        if (known_adapters_[index] != adapter) continue;
-        known_luids_[index] = luid;
-        return;
-    }
-    if (known_ == known_capacity) return;
-    known_adapters_[known_] = adapter;
-    known_luids_[known_] = luid;
-    known_++;
-}
-
-void GdiKmt::forget(uint32_t adapter)
-{
-    AV_SCOPE("GdiKmt::forget");
-    for (uint32_t index = 0u; index < known_; index++) {
-        if (known_adapters_[index] != adapter) continue;
-        known_--;
-        known_adapters_[index] = known_adapters_[known_];
-        known_luids_[index] = known_luids_[known_];
-        return;
-    }
-}
-
 Status GdiKmt::adapter_luid(uint32_t adapter, uint64_t &luid)
 {
     AV_SCOPE("GdiKmt::adapter_luid");
-    luid = 0u;
-    for (uint32_t index = 0u; index < known_; index++) {
-        if (known_adapters_[index] != adapter) continue;
-        luid = known_luids_[index];
-        return answer(0);
-    }
-    return answer(NtStatus(Status::invalid_parameter).value());
+    const Status found = known_.luid_of(*this, adapter, luid);
+    if (found == Status::ok) return answer(0);
+    return answer(NtStatus(found).value());
 }
 
 Status GdiKmt::primary_display_luid(uint64_t &luid)
@@ -372,7 +342,7 @@ Status GdiKmt::close_adapter(uint32_t adapter)
     D3DKMT_CLOSEADAPTER request = {};
     request.hAdapter = adapter;
     const Status closed = answer(D3DKMTCloseAdapter(&request));
-    if (closed == Status::ok) forget(adapter);
+    if (closed == Status::ok) known_.forget(adapter);
     return closed;
 }
 

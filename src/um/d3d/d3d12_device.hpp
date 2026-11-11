@@ -47,6 +47,7 @@ public:
     D3d12Device &operator=(const D3d12Device &) = delete;
 
     HRESULT initialize(uint32_t adapter, const D3D12DDIARG_CREATEDEVICE_0109 &create);
+    const D3d12HostCaps &caps() const;
 
     void unsupported(const char *slot);
     HRESULT answered(const char *slot, HRESULT hresult);

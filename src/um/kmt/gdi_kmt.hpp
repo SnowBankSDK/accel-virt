@@ -2,6 +2,7 @@
 #define AV_GDI_KMT_HPP
 
 #include "core/support/status.hpp"
+#include "guest/kmt/adapter_luids.hpp"
 #include "guest/kmt/kmt.hpp"
 #include "um/common/performance_clock.hpp"
 
@@ -89,19 +90,14 @@ private:
 
     Status answer(int32_t code);
     Status await_event();
-    void   remember(uint32_t adapter, uint64_t luid);
-    void   forget(uint32_t adapter);
     [[nodiscard]] Status open_display(uint32_t &adapter, uint32_t &source);
 
     static constexpr uint32_t max_adapters = 16u;
-    static constexpr uint32_t known_capacity = 2u * max_adapters;
 
     PerformanceClock clock_;
     void    *event_;
     uint32_t last_code_;
-    uint32_t known_adapters_[known_capacity];
-    uint64_t known_luids_[known_capacity];
-    uint32_t known_;
+    AdapterLuids known_;
     uint32_t display_adapter_;
     uint32_t display_source_;
     bool     display_tried_;

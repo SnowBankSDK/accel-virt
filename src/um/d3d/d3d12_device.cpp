@@ -55,6 +55,12 @@ D3d12Device::~D3d12Device()
     session_.leave();
 }
 
+const D3d12HostCaps &D3d12Device::caps() const
+{
+    AV_SCOPE("D3d12Device::caps");
+    return caps_;
+}
+
 HRESULT D3d12Device::initialize(uint32_t adapter, const D3D12DDIARG_CREATEDEVICE_0109 &create)
 {
     AV_SCOPE("D3d12Device::initialize");

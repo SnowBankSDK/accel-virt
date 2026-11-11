@@ -60,6 +60,7 @@ d3d::Hresult D3d12Driver::build(d3d::D3d12ddiargCreateDeviceRecord &create, uint
         lines_.note("Direct3D 12 device refused, HRESULT", static_cast<uint32_t>(opened));
         return static_cast<d3d::Hresult>(opened);
     }
+    adapters_.hold(slot);
     d3d::DeviceBlock<D3d12Device>(create.hDrvDevice).bind(*device);
     lines_.note("Direct3D 12 device made at interface", arguments.Interface);
     return d3d::hr_ok;
@@ -95,8 +96,10 @@ d3d::Hresult D3d12Driver::fill_table(uint32_t table_type, void *table, size_t by
 void D3d12Driver::tear_down(void *block)
 {
     AV_SCOPE("D3d12Driver::tear_down");
-    D3d12Device &device = d3d::DeviceBlock<D3d12Device>(block).device();
+    D3d12Device         &device = d3d::DeviceBlock<D3d12Device>(block).device();
+    const D3d12HostCaps &caps = device.caps();
     static_cast<void>(devices_.destroy(&device));
+    adapters_.release(caps);
 }
 
 }
