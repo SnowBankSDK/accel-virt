@@ -14,7 +14,7 @@
 #include "executor/d3d/d3d12_pipeline_compiles.hpp"
 #include "executor/d3d/d3d12_query_heaps.hpp"
 #include "executor/d3d/d3d12_raytracing_inputs.hpp"
-#include "executor/d3d/d3d12_refused_creates.hpp"
+#include "executor/d3d/d3d_refused_creates.hpp"
 #include "executor/d3d/d3d12_queue_progress.hpp"
 #include "executor/d3d/d3d12_indirect_table.hpp"
 #include "executor/d3d/d3d12_retain_memo.hpp"
@@ -277,7 +277,7 @@ private:
     D3d12DescriptorHolds   descriptors_;
     D3d12AllocatorMarks    allocators_;
     D3d12QueryHeaps        queries_;
-    D3d12RefusedCreates    refused_creates_;
+    D3dRefusedCreates    refused_creates_;
     D3d12ViewWriter        views_;
     D3d12PipelineBuilder   pipelines_;
     D3d12PipelineCompiles  compiles_;

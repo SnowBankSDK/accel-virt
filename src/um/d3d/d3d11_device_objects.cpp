@@ -11,6 +11,7 @@
 #include "guest/transport/host_allocation.hpp"
 #include "icd/d3d/passthrough_geometry_shader.hpp"
 #include "icd/d3d/query_kind.hpp"
+#include "icd/d3d/resource_size_limit.hpp"
 #include "proto/generated/d3d/d3d_dispatch_client.h"
 #include "proto/d3d/resource_misc.hpp"
 #include "proto/resources/shared_object_kind.hpp"
@@ -81,10 +82,6 @@ VOID D3d11Device::create_resource(const D3D11DDIARG_CREATERESOURCE *args, D3D10D
     }
     ResourceRecord &resource = record(handle);
     resource = ResourceRecord{};
-    if (args->ResourceDimension == D3D10DDIRESOURCE_BUFFER && args->pMipInfoList[0].TexelWidth > caps_.max_buffer_bytes()) {
-        set_error(E_OUTOFMEMORY);
-        return;
-    }
     resource.stamp = d3d::RecordStamp(ResourceRecord::tag, next_id());
     resource.dimension = static_cast<uint32_t>(args->ResourceDimension);
     resource.usage = args->Usage;
@@ -100,6 +97,15 @@ VOID D3d11Device::create_resource(const D3D11DDIARG_CREATERESOURCE *args, D3D10D
     resource.layers = args->ArraySize;
     resource.samples = args->SampleDesc.Count;
     resource.runtime_resource = runtime.handle;
+    const d3d::ResourceShape shape = {resource.dimension == D3D10DDIRESOURCE_BUFFER,
+                                      resource.dimension == D3D10DDIRESOURCE_TEXTURE3D,
+                                      resource.format, resource.width, resource.height, resource.depth,
+                                      resource.mips, resource.layers};
+    if (d3d::ResourceSizeLimit(caps_.max_buffer_bytes()).exceeded_by(shape)) {
+        resource = ResourceRecord{};
+        set_error(E_OUTOFMEMORY);
+        return;
+    }
 
     d3dproto::ResourceDesc desc = {};
     desc.dimension = cube ? static_cast<uint32_t>(D3D10DDIRESOURCE_TEXTURE2D) : resource.dimension;
@@ -208,8 +214,7 @@ void D3d11Device::account(ResourceRecord &resource, D3D10DDI_HRTRESOURCE runtime
     uint64_t bytes = 0u;
     for (uint32_t sub = 0u; sub < subresource_count(resource); sub++) bytes += subresource_bytes(resource, sub);
     if (bytes < accounted_bytes_least) return;
-    d3d::KernelHeap heap(bytes, resource.usage == D3D10_DDI_USAGE_DYNAMIC || resource.usage == D3D10_DDI_USAGE_STAGING,
-                         resource.stamp.id());
+    d3d::KernelHeap heap(bytes, resource.stamp.id());
     if (heap.make() != Status::ok) return;
     D3DKMT_HANDLE allocation = 0u;
     const HRESULT made = allocations_.make_heap(heap, runtime.handle, allocation);

@@ -744,6 +744,12 @@ const D3d11Capabilities &D3d11HostDevice::capabilities() const
     return capabilities_;
 }
 
+void D3d11HostDevice::advertise_video_memory(uint64_t bytes)
+{
+    AV_SCOPE("D3d11HostDevice::advertise_video_memory");
+    capabilities_.advertise_video_memory(bytes);
+}
+
 void D3d11HostDevice::pair(D3d12HostDevice *device12)
 {
     AV_SCOPE("D3d11HostDevice::pair");

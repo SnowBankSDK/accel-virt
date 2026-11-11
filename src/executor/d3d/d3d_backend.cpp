@@ -186,6 +186,7 @@ void D3dBackend::shut_down()
         published_.unbind();
         constants_.close();
         objects_.release_all();
+        refused_creates_.clear();
         if (slices_.count() != 0u && !drained_) device11_->vulkan().idle();
         slices_.destroy_all();
         progress11_.release();
@@ -824,6 +825,7 @@ bool D3dBackend::on_Finish11(uint32_t &hresult)
 bool D3dBackend::on_DestroyObject(uint32_t id)
 {
     AV_SCOPE("D3dBackend::on_DestroyObject");
+    if (refused_creates_.forget(id)) return true;
     D3dObjectKind kind = D3dObjectKind::none;
     IUnknown *const found = objects_.find_any(id, kind);
     if (found == nullptr || kind >= D3dObjectKind::heap12) return false;
@@ -891,7 +893,30 @@ bool D3dBackend::on_CreateResource(uint32_t id, const d3dproto::ResourceDesc &de
     } else {
         return false;
     }
-    if (FAILED(result) || made == nullptr) return true;
+    if (FAILED(result) || made == nullptr) {
+        if (refused_creates_.note(id, static_cast<uint32_t>(result)))
+            LogLine(lines_)
+                .text("the host made no resource ")
+                .number(id)
+                .text(" (")
+                .hex(static_cast<uint32_t>(result), 8u)
+                .text("): dimension ")
+                .number(desc.dimension)
+                .text(" format ")
+                .number(desc.format)
+                .text(" ")
+                .number(desc.width)
+                .text("x")
+                .number(desc.height)
+                .text("x")
+                .number(desc.depth_or_array)
+                .text(" mips ")
+                .number(desc.mip_levels)
+                .text(" bind ")
+                .hex(desc.bind_flags, 8u)
+                .write();
+        return true;
+    }
     if (objects_.keep(id, D3dObjectKind::resource, made) != Status::ok) return false;
     ID3D11DeviceChild *child = nullptr;
     if (shared_key != 0u &&

@@ -8,6 +8,7 @@
 #include "executor/d3d/d3d12_session.hpp"
 #include "executor/d3d/d3d9_session.hpp"
 #include "executor/d3d/d3d_object_table.hpp"
+#include "executor/d3d/d3d_refused_creates.hpp"
 #include "executor/d3d/guest_devices.hpp"
 #include "executor/d3d/queue_drain.hpp"
 #include "executor/d3d/watched_blocks.hpp"
@@ -273,6 +274,7 @@ private:
     CommandRefusal          refusal_;
     WireArena              *arena_;
     D3dObjectTable          objects_;
+    D3dRefusedCreates       refused_creates_;
     GuestBytes              guest_;
     GuestRegion             region_;
     ImportTable            *imports_;

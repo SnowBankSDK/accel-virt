@@ -1058,6 +1058,39 @@ TEST(d3d_backend_device, what_the_host_has_no_memory_for_is_out_of_memory_to_the
     }
 }
 
+TEST(d3d_backend_device, a_resource_the_host_cannot_create_is_destroyed_without_removing_the_device)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice *const device = host_device(apis);
+    if (device == nullptr) return;
+    HeldBackend     held(first_backend, rig.log);
+    av::D3dBackend &backend = held.backend();
+    av::SessionShares unshared;
+    CHECK(backend.initialize(unshared, rig.imports, device));
+    av::D3dLoopback wire(backend, rig.imports, nullptr, 0u);
+    std::uint32_t hresult = 0u, level = 0u, removed = 0u;
+    CHECK(av_d3d_CreateDevice11(wire, 1u, 0u, 0u, &hresult, &level));
+    ResourceDesc target = {};
+    target.dimension = 3u;
+    target.width = size;
+    target.height = size;
+    target.depth_or_array = 1u;
+    target.mip_levels = 1u;
+    target.format = format_b8g8r8a8;
+    target.sample_count = 3u;
+    target.bind_flags = bind_render_target;
+    CHECK(av_d3d_CreateResource(wire, 10u, target, 0u, 0u, 0u));
+    CHECK(av_d3d_DestroyObject(wire, 10u));
+    CHECK(av_d3d_Finish11(wire, &removed));
+    CHECK_EQ(removed, 0u);
+    CHECK_EQ(wire.refused(), 0u);
+    CHECK(av_d3d_DestroyObject(wire, 10u));
+    CHECK_EQ(wire.refused(), 1u);
+    CHECK(backend.invariants_hold());
+    backend.shut_down();
+}
+
 TEST(d3d_backend_device, a_staging_allocation_the_host_refuses_faults_its_session_and_not_the_device_others_share)
 {
     av::ExecutorLogRig rig;

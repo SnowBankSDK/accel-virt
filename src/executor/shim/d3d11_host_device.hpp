@@ -113,6 +113,7 @@ public:
     ID3D11Device5        *device() const;
     ID3D11DeviceContext4 *context() const;
     const D3d11Capabilities &capabilities() const;
+    void                  advertise_video_memory(uint64_t bytes);
     void                  report(StateWriter &writer) const;
 
 private:

@@ -1,17 +1,17 @@
-#ifndef AV_EXECUTOR_D3D12_REFUSED_CREATES_HPP
-#define AV_EXECUTOR_D3D12_REFUSED_CREATES_HPP
+#ifndef AV_EXECUTOR_D3D_REFUSED_CREATES_HPP
+#define AV_EXECUTOR_D3D_REFUSED_CREATES_HPP
 
 #include <stdint.h>
 
 namespace av {
 
-class D3d12RefusedCreates {
+class D3dRefusedCreates {
 public:
     static constexpr uint32_t most = 64u;
 
-    D3d12RefusedCreates();
-    D3d12RefusedCreates(const D3d12RefusedCreates &) = delete;
-    D3d12RefusedCreates &operator=(const D3d12RefusedCreates &) = delete;
+    D3dRefusedCreates();
+    D3dRefusedCreates(const D3dRefusedCreates &) = delete;
+    D3dRefusedCreates &operator=(const D3dRefusedCreates &) = delete;
 
     [[nodiscard]] bool note(uint32_t id, uint32_t hresult);
     bool               forget(uint32_t id);

@@ -134,6 +134,8 @@ uint32_t ExecutorRoot::open_domain(const uint8_t *gpu_uuid, uint32_t vram_reserv
     }
     VramLedger *const ledger = apis_->vram_ledger(gpu->index());
     if (ledger != nullptr) ledger->reserve_vram(vram_reserve_mib);
+    D3d11HostDevice *const device11 = apis_->d3d11_device(gpu->index());
+    if (device11 != nullptr && ledger != nullptr) device11->advertise_video_memory(ledger->advertised());
     if (source != nullptr) source->use_vram_ledger(ledger);
     return domains_.open(gpu->index());
 }
