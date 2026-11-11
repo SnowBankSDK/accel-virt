@@ -92,3 +92,42 @@ TEST(release_queue_next, is_where_the_next_batch_released_begins)
   CHECK_EQ(queue.next(), 96u);
   queue.released(batch(1u, 96u, 160u));
   CHECK_EQ(queue.next(), 160u); }
+
+TEST(release_queue, an_order_left_behind_by_batches_the_process_published_itself_begins_again_where_they_end)
+{ ReleaseQueue queue;
+  CHECK(queue.arrive(batch(1u, 0u, 64u), 0u) == ReleaseQueue::Turn::release_now);
+  queue.released(batch(1u, 0u, 64u));
+  CHECK(queue.arrive(batch(4u, 192u, 256u), 192u) == ReleaseQueue::Turn::release_now);
+  queue.released(batch(4u, 192u, 256u));
+  CHECK(queue.arrive(batch(6u, 320u, 384u), 384u) == ReleaseQueue::Turn::release_now);
+  CHECK_EQ(queue.next(), 320u);
+  queue.released(batch(6u, 320u, 384u));
+  CHECK(queue.arrive(batch(5u, 256u, 320u), 384u) == ReleaseQueue::Turn::released_already);
+  CHECK_EQ(queue.held(), 0u); }
+
+TEST(release_queue, a_batch_past_what_the_process_published_still_waits_and_one_the_publication_passed_is_dropped)
+{ ReleaseQueue queue;
+  CHECK(queue.arrive(batch(1u, 0u, 64u), 0u) == ReleaseQueue::Turn::release_now);
+  queue.released(batch(1u, 0u, 64u));
+  CHECK(queue.arrive(batch(3u, 128u, 192u), 64u) == ReleaseQueue::Turn::held);
+  CHECK(queue.arrive(batch(5u, 256u, 320u), 100u) == ReleaseQueue::Turn::held);
+  CHECK_EQ(queue.next(), 100u);
+  CHECK_EQ(queue.held(), 2u);
+  CHECK(queue.arrive(batch(4u, 192u, 256u), 192u) == ReleaseQueue::Turn::release_now);
+  CHECK_EQ(queue.held(), 1u);
+  queue.released(batch(4u, 192u, 256u));
+  SubmissionDescriptor next;
+  CHECK(queue.next_held(next));
+  CHECK(next.fence_id() == 5u);
+  CHECK_EQ(queue.held(), 0u); }
+
+TEST(release_queue, a_batch_released_while_a_copy_of_it_was_held_leaves_nothing_held)
+{ ReleaseQueue queue;
+  CHECK(queue.arrive(batch(1u, 0u, 64u), 0u) == ReleaseQueue::Turn::release_now);
+  queue.released(batch(1u, 0u, 64u));
+  CHECK(queue.arrive(batch(3u, 128u, 192u), 64u) == ReleaseQueue::Turn::held);
+  CHECK(queue.arrive(batch(3u, 128u, 192u), 128u) == ReleaseQueue::Turn::release_now);
+  queue.released(batch(3u, 128u, 192u));
+  SubmissionDescriptor next;
+  CHECK(!queue.next_held(next));
+  CHECK_EQ(queue.held(), 0u); }

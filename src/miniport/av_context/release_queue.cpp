@@ -9,12 +9,15 @@ ReleaseQueue::ReleaseQueue() : held_{}, count_(0u), next_(0u), active_(false)
     AV_SCOPE("ReleaseQueue::ReleaseQueue");
 }
 
-ReleaseQueue::Turn ReleaseQueue::arrive(const SubmissionDescriptor &batch, uint64_t tail)
+ReleaseQueue::Turn ReleaseQueue::arrive(const SubmissionDescriptor &batch, uint64_t published)
 {
     AV_SCOPE("ReleaseQueue::arrive");
     if (!active_) {
         active_ = true;
-        next_ = tail;
+        next_ = published;
+    } else if (batch.begin() > next_ && published > next_) {
+        next_ = published < batch.begin() ? published : batch.begin();
+        drop_passed();
     }
     if (batch.end() <= next_) return Turn::released_already;
     if (batch.begin() < next_) return Turn::refused;
@@ -30,6 +33,16 @@ void ReleaseQueue::released(const SubmissionDescriptor &batch)
 {
     AV_SCOPE("ReleaseQueue::released");
     next_ = batch.end();
+    drop_passed();
+}
+
+void ReleaseQueue::drop_passed()
+{
+    AV_SCOPE("ReleaseQueue::drop_passed");
+    for (uint32_t index = 0u; index < count_;) {
+        if (held_[index].begin() < next_) held_[index] = held_[--count_];
+        else index++;
+    }
 }
 
 bool ReleaseQueue::next_held(SubmissionDescriptor &batch)

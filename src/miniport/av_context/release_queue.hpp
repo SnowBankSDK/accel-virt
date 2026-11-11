@@ -15,7 +15,7 @@ public:
 
     ReleaseQueue();
 
-    Turn     arrive(const SubmissionDescriptor &batch, uint64_t tail);
+    Turn     arrive(const SubmissionDescriptor &batch, uint64_t published);
     void     released(const SubmissionDescriptor &batch);
     bool     next_held(SubmissionDescriptor &batch);
     bool     active() const;
@@ -24,6 +24,8 @@ public:
     uint64_t next() const;
 
 private:
+    void drop_passed();
+
     SubmissionDescriptor held_[most_held];
     uint32_t             count_;
     uint64_t             next_;
