@@ -1,0 +1,41 @@
+From: accel-virt
+Subject: [PATCH] aliased single-sample lines use the Bresenham line mode in every Direct3D frontend
+
+The choice of Bresenham for a line that asks for no mode was made by the Direct3D 11 rasterizer state only, so Direct3D 9 and 10 lines fell back to the rectangular default of the device and picked other pixels than the diamond-exit rule. The graphics pipeline now takes it when the state asks for no mode, the target has one sample and the device has Bresenham lines, whatever the frontend; multisampled targets keep the default.
+---
+diff --git a/src/d3d11/d3d11_rasterizer.cpp b/src/d3d11/d3d11_rasterizer.cpp
+index 9057542..51922fd 100644
+--- a/src/d3d11/d3d11_rasterizer.cpp
++++ b/src/d3d11/d3d11_rasterizer.cpp
+@@ -53,8 +53,6 @@ namespace dxvk {
+     } else if (desc.AntialiasedLineEnable) {
+       if (features.extLineRasterization.smoothLines)
+         m_state.setLineMode(VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH_EXT);
+-    } else if (features.extLineRasterization.bresenhamLines) {
+-      m_state.setLineMode(VK_LINE_RASTERIZATION_MODE_BRESENHAM_EXT);
+     }
+ 
+     // Target-independent rasterization is emulated at one sample, the
+diff --git a/src/dxvk/dxvk_graphics.cpp b/src/dxvk/dxvk_graphics.cpp
+index bc119dc..185e869 100644
+--- a/src/dxvk/dxvk_graphics.cpp
++++ b/src/dxvk/dxvk_graphics.cpp
+@@ -599,9 +599,16 @@ namespace dxvk {
+     }
+ 
+     // Set up line rasterization mode as requested by the application.
+-    if (state.rs.lineMode() != VK_LINE_RASTERIZATION_MODE_DEFAULT_EXT && isLineRendering(shaders, state)) {
++    VkLineRasterizationModeEXT lineMode = state.rs.lineMode();
++
++    if (lineMode == VK_LINE_RASTERIZATION_MODE_DEFAULT_EXT
++     && state.rs.sampleCount() <= VK_SAMPLE_COUNT_1_BIT
++     && device->features().extLineRasterization.bresenhamLines)
++      lineMode = VK_LINE_RASTERIZATION_MODE_BRESENHAM_EXT;
++
++    if (lineMode != VK_LINE_RASTERIZATION_MODE_DEFAULT_EXT && isLineRendering(shaders, state)) {
+       rsLineInfo.pNext = std::exchange(rsInfo.pNext, &rsLineInfo);
+-      rsLineInfo.lineRasterizationMode = state.rs.lineMode();
++      rsLineInfo.lineRasterizationMode = lineMode;
+ 
+       if (rsLineInfo.lineRasterizationMode != VK_LINE_RASTERIZATION_MODE_BRESENHAM_EXT)
+         rsInfo.lineWidth = 1.4f;
