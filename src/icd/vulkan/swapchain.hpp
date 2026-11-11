@@ -90,6 +90,7 @@ private:
     ChainedImage   chained_;
     DriverLog     &lines_;
     PresentPacing  pacing_;
+    bool           queues_every_image_;
     uint64_t       luid_;
     VkDevice       app_device_;
     void          *window_;

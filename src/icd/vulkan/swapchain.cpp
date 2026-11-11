@@ -24,7 +24,7 @@ Swapchain::Swapchain(WindowSurface &windows, WindowChains &chains, EntryLookup &
                      Connection &connection, VkPresentQueue &presents)
     : windows_(windows), presents_(presents), device_(entries, device, physical),
       chained_(entries, device, host_device, chains, connection.transport()),
-      lines_(log), pacing_(), luid_(connection.luid()),
+      lines_(log), pacing_(), queues_every_image_(false), luid_(connection.luid()),
       app_device_(device), window_(nullptr), extent_{0u, 0u}, format_(static_cast<int32_t>(VK_FORMAT_UNDEFINED)),
       holders_{}, slot_images_{}, count_(0u), next_(0u), held_index_(no_image), held_queue_(VK_NULL_HANDLE),
       flushing_(false),
@@ -60,7 +60,10 @@ VkResult Swapchain::initialize(const VkSwapchainCreateInfoKHR &info, void *windo
     }
     window_ = window;
     extent_ = info.imageExtent;
-    static_cast<void>(pacing_.ask(foreign_enum(info.presentMode) == static_cast<int32_t>(VK_PRESENT_MODE_FIFO_KHR) ? 1 : 0));
+    const int32_t mode = foreign_enum(info.presentMode);
+    static_cast<void>(pacing_.ask(mode == static_cast<int32_t>(VK_PRESENT_MODE_FIFO_KHR) ? 1 : 0));
+    queues_every_image_ = mode == static_cast<int32_t>(VK_PRESENT_MODE_FIFO_KHR) ||
+                          mode == static_cast<int32_t>(VK_PRESENT_MODE_FIFO_RELAXED_KHR);
     count_ = info.minImageCount;
     return VK_SUCCESS;
 }
@@ -200,7 +203,8 @@ VkResult Swapchain::hand_over(VkQueue queue, uint32_t index, uint32_t wait_count
 {
     AV_SCOPE("Swapchain::hand_over");
     const uint32_t slots = PresentDevice::slots;
-    const uint32_t slot = presents_.free_slot(*this, slots, slots);
+    const uint32_t slot = queues_every_image_ ? presents_.wait_slot(*this, slots, slots)
+                                              : presents_.free_slot(*this, slots, slots);
     if (slot == slots) {
         give(index, Holder::none);
         return device_.skip(queue, wait_count, waits);

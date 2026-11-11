@@ -408,3 +408,30 @@ TEST(window_present_queue, a_slot_nobody_can_give_up_is_a_dropped_frame)
   CHECK_EQ(rig.queue.reclaim_slot(rig.owner, 1u, 0u), 1u);
   CHECK_EQ(rig.queue.dropped_frames(), 1u);
   CHECK_EQ(rig.shown.waits(), 0u); }
+
+TEST(window_present_queue, waiting_for_a_slot_never_drops_the_frame_while_the_thread_runs)
+{ Rig rig;
+  CHECK(rig.queue.start());
+  CHECK(rig.queue.hand(rig.frame(0u)));
+  CHECK_EQ(rig.queue.try_slot(rig.owner, 1u, 1u), 1u);
+  struct Late {
+      Rig          &rig;
+      std::uint32_t waits;
+  } late{rig, 0u};
+  rig.shown.on_wait([](void *context) {
+      Late &later = *static_cast<Late *>(context);
+      if (++later.waits == Queue::slot_looks + 10u) static_cast<void>(later.rig.thread.step());
+  }, &late);
+  CHECK_EQ(rig.queue.wait_slot(rig.owner, 1u, 1u), 0u);
+  CHECK_EQ(late.waits, Queue::slot_looks + 10u);
+  CHECK_EQ(rig.queue.dropped_frames(), 0u);
+  CHECK_EQ(rig.queue.shown_frames(), 1u);
+  CHECK(rig.queue.invariants_hold()); }
+
+TEST(window_present_queue, waiting_for_a_slot_of_a_refused_queue_is_a_dropped_frame)
+{ Rig rig;
+  CHECK(rig.queue.start());
+  CHECK(rig.queue.hand(rig.frame(0u)));
+  rig.queue.refuse();
+  CHECK_EQ(rig.queue.wait_slot(rig.owner, 1u, 1u), 1u);
+  CHECK_EQ(rig.queue.dropped_frames(), 1u); }

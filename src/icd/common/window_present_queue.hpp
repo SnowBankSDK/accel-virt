@@ -46,6 +46,7 @@ public:
     bool     start();
     void     refuse();
     uint32_t free_slot(const Source &owner, uint32_t slots, uint32_t reserved);
+    uint32_t wait_slot(const Source &owner, uint32_t slots, uint32_t reserved);
     uint32_t try_slot(const Source &owner, uint32_t slots, uint32_t reserved);
     uint32_t reclaim_slot(const Source &owner, uint32_t slots, uint32_t reserved);
     void     keep(HeldFlusher &owner);
@@ -175,6 +176,24 @@ uint32_t WindowPresentQueue<Source, Readiness>::free_slot(const Source &owner, u
     const ThreadLockHold held(lock_);
     dropped_frames_++;
     return slots;
+}
+
+template <typename Source, typename Readiness>
+uint32_t WindowPresentQueue<Source, Readiness>::wait_slot(const Source &owner, uint32_t slots, uint32_t reserved)
+{
+    AV_SCOPE("WindowPresentQueue::wait_slot");
+    for (;;) {
+        const uint32_t slot = try_slot(owner, slots, reserved);
+        if (slot != slots) return slot;
+        {
+            const ThreadLockHold held(lock_);
+            if (refused_ || !thread_.running()) {
+                dropped_frames_++;
+                return slots;
+            }
+        }
+        static_cast<void>(shown_.wait(slot_milliseconds));
+    }
 }
 
 template <typename Source, typename Readiness>
