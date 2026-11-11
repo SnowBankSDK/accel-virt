@@ -93,6 +93,10 @@ Status GuestGlContext::make_once()
             lines_.write("the host has no session left for the context");
             return Status::no_memory;
         }
+        if (channel_.faulted()) {
+            lines_.write("the context faulted before the host answered it");
+            return Status::no_memory;
+        }
         lines_.write("the host refused the context's options");
         return Status::invalid_parameter;
     }
@@ -522,8 +526,9 @@ Status GuestGlContext::build()
     GuestConnection &device = link_.device();
     const Status     opened = channel_.open(device, options_);
     if (opened != Status::ok) LogLine(lines_).text("the context's host channel did not open, status ").number(static_cast<uint32_t>(opened)).write();
-    if (opened == Status::no_memory || opened == Status::no_space) return opened;
-    if (opened != Status::ok) return Status::invalid_parameter;
+    if (opened == Status::invalid_parameter || opened == Status::invalid_state || opened == Status::no_space)
+        return opened;
+    if (opened != Status::ok) return Status::no_memory;
     if (slices_.enroll() != Status::ok) {
         lines_.write("the context's buffer slices could not be enrolled");
         return Status::no_memory;

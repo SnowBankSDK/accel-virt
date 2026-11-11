@@ -893,19 +893,73 @@ TEST(gl_icd_root, a_create_with_attributes_answers_the_arb_errors)
   const std::int32_t core[] = {0x2091, 4, 0x2092, 6, 0x9126, 1, 0};
   CHECK(create(rig.other_dc(), nullptr, core) == nullptr);
   check_error(rig, Root::error_invalid_pixel_format);
-  rig.host().arena_import(0x77u, 2u);
-  rig.kmt().withhold_answer_at(2u);
+  rig.kmt().fail_at(MockKmt::Call::create_context_virtual, 1u, MockKmt::invalid_parameter);
   CHECK(create(rig.dc(), nullptr, core) == nullptr);
   check_error(rig, Root::error_invalid_version_arb);
   const std::int32_t compatibility[] = {0x2091, 4, 0x2092, 6, 0x9126, 2, 0};
-  rig.host().arena_import(0x77u, 2u);
-  rig.kmt().withhold_answer_at(2u);
+  rig.kmt().fail_at(MockKmt::Call::create_context_virtual, 1u, MockKmt::invalid_parameter);
   CHECK(create(rig.dc(), nullptr, compatibility) == nullptr);
   check_error(rig, Root::error_invalid_profile_arb);
   rig.kmt().fail_at(MockKmt::Call::create_device, 1u, MockKmt::invalid_parameter);
   CHECK(create(rig.dc(), nullptr, core) == nullptr);
   check_error(rig, Root::error_not_supported);
   CHECK_EQ(rig.kmt().open_objects(), 0u); }
+
+TEST(gl_icd_root, a_channel_that_does_not_open_never_answers_an_arb_version_or_profile_error)
+{ const std::int32_t core[] = {0x2091, 4, 0x2092, 6, 0x9126, 1, 0};
+  const std::int32_t compatibility[] = {0x2091, 4, 0x2092, 6, 0x9126, 2, 0};
+  const std::int32_t *const asked[] = {core, compatibility};
+  constexpr std::uint32_t no_memory = 0xC0000017u;
+  constexpr std::uint32_t unsuccessful = 0xC0000001u;
+  constexpr std::uint32_t insufficient_resources = 0xC000009Au;
+  const std::uint32_t codes[] = {no_memory, unsuccessful, insufficient_resources, MockKmt::not_supported,
+                                 MockKmt::not_found, MockKmt::io_timeout};
+  for (const std::int32_t *attributes : asked) {
+      for (const std::uint32_t code : codes) {
+          GlIcdRig rig;
+          rig.load_with_format();
+          const auto create =
+              reinterpret_cast<AttribsFn>(rig.opengl32().driver_proc_address("wglCreateContextAttribsARB"));
+          rig.kmt().fail_first(MockKmt::Call::create_context_virtual, 100u, code);
+          CHECK(create(rig.dc(), nullptr, attributes) == nullptr);
+          const std::uint32_t error = rig.threads().last_error();
+          CHECK(error != Root::error_invalid_version_arb);
+          CHECK(error != Root::error_invalid_profile_arb);
+          CHECK(error == Root::error_not_enough_memory || error == Root::error_invalid_operation);
+          CHECK_EQ(rig.kmt().open_objects(), 0u);
+      }
+  } }
+
+TEST(gl_icd_root, a_channel_that_opens_on_a_later_attempt_makes_the_context)
+{ const std::int32_t core[] = {0x2091, 4, 0x2092, 6, 0x9126, 1, 0};
+  const std::uint32_t codes[] = {0xC0000001u, 0xC000009Au};
+  for (const std::uint32_t code : codes) {
+      GlIcdRig rig;
+      rig.load_with_format();
+      const auto create = reinterpret_cast<AttribsFn>(rig.opengl32().driver_proc_address("wglCreateContextAttribsARB"));
+      rig.host().gl_make("host gpu", "4.6");
+      rig.host().gl_policy(0);
+      rig.kmt().fail_first(MockKmt::Call::create_context_virtual, 2u, code);
+      CHECK(create(rig.dc(), nullptr, core) != nullptr);
+  } }
+
+TEST(gl_icd_root, a_context_the_host_faults_for_another_reason_never_answers_an_arb_version_error)
+{ std::uint32_t refused = 0u;
+  const std::int32_t core[] = {0x2091, 4, 0x2092, 6, 0x9126, 1, 0};
+  for (std::uint32_t after = 0u; after < 6u; after++) {
+      GlIcdRig rig;
+      rig.load_with_format();
+      rig.host().gl_make("host gpu", "4.6");
+      rig.host().gl_policy(0);
+      rig.kmt().time_out_faulted_with(static_cast<std::uint32_t>(av::FaultCode::broken_executor), after);
+      if (rig.root().create_context_attribs(rig.dc(), nullptr, core) != nullptr) continue;
+      refused++;
+      const std::uint32_t error = rig.threads().last_error();
+      CHECK(error != Root::error_invalid_version_arb);
+      CHECK(error == Root::error_not_enough_memory || error == Root::error_invalid_operation);
+      CHECK_EQ(rig.kmt().open_objects(), 0u);
+  }
+  CHECK(refused >= 1u); }
 
 TEST(gl_icd_root, a_create_with_attributes_opengl32_does_not_finish_leaves_nothing)
 { GlIcdRig rig;

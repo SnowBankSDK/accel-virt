@@ -799,7 +799,8 @@ Status GlIcdRoot::make_patiently(GuestGlContext &context)
 {
     AV_SCOPE("GlIcdRoot::make_patiently");
     Status made = context.make();
-    for (uint32_t attempt = 1u; made == Status::no_space && attempt < make_attempts; attempt++) {
+    for (uint32_t attempt = 1u; (made == Status::no_space || made == Status::invalid_state) && attempt < make_attempts;
+         attempt++) {
         clock_.pause(make_pause_nanoseconds);
         made = context.make();
     }

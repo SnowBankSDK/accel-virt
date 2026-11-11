@@ -381,7 +381,7 @@ TEST(guest_gl_context, a_driver_refusal_of_the_transport_is_invalid_parameter_wi
   };
   for (const Step &step : steps) {
       GlContextRig rig;
-      Context context(rig);
+      Context context(rig, GlContextOptions(4u, 6u, GlContextOptions::Profile::core, 0u, 0u));
       if (step.count == 1u) rig.kmt().fail_at(step.call, step.nth, MockKmt::invalid_parameter);
       else rig.kmt().fail_first(step.call, step.count, MockKmt::invalid_parameter);
       CHECK_STATUS(context->make(), Status::invalid_parameter);
@@ -447,27 +447,32 @@ TEST(guest_gl_context, a_host_with_no_session_left_is_no_memory_wherever_in_the_
   CHECK_EQ(seen, 5u);
   CHECK(queried >= 1u); }
 
-TEST(guest_gl_context, a_host_that_faults_the_first_query_for_another_reason_still_refuses_the_options)
+TEST(guest_gl_context, a_host_that_faults_the_context_for_another_reason_is_no_refusal_of_the_options)
 { GlContextRig rig;
   Context context(rig);
   rig.host().blob_import(1u, 0u);
   rig.host().blob_import(1u, 0u);
   rig.kmt().time_out_faulted_with(static_cast<std::uint32_t>(av::FaultCode::device_lost));
-  CHECK_STATUS(context->make(), Status::invalid_parameter);
+  const Status made = context->make();
+  CHECK(made != Status::ok);
+  CHECK(made != Status::invalid_parameter);
+  CHECK_EQ(rig.log().holding("the host refused the context's options"), 0u);
   CHECK(context->state() == State::created); }
 
-TEST(guest_gl_context, a_host_refusal_is_invalid_parameter_with_nothing_held)
+TEST(guest_gl_context, a_host_that_stops_answering_is_no_refusal_of_the_options_and_holds_nothing)
 { for (std::uint32_t wait = 2u; wait <= GlContextRig::link_objects + 5u; wait++) {
       GlContextRig rig;
       const std::uint32_t baseline = warmed(rig);
       Context context(rig);
       rig.host().gl_made(renderer, "4.6");
       rig.kmt().withhold_answer_at(wait);
-      CHECK_STATUS(context->make(), Status::invalid_parameter);
+      const Status made = context->make();
+      CHECK(made == Status::no_memory || made == Status::invalid_state);
       CHECK(context->state() == State::created);
-      CHECK_EQ(rig.log().holding("the host refused the context") +
+      CHECK_EQ(rig.log().holding("the context faulted before the host answered it") +
                    rig.log().holding("faulted opening its blob arena"),
-               3u);
+               1u);
+      CHECK_EQ(rig.log().holding("the host refused the context's options"), 0u);
       CHECK_EQ(rig.kmt().open_objects(), 0u);
       CHECK_EQ(rig.platform().live_allocations(), baseline);
   } }
