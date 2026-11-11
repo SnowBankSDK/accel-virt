@@ -19,8 +19,38 @@ _PROPERTY_LIST_TYPES = {
 }
 
 
-def _element_of(base: str) -> str:
-    return base
+INFO_KINDS = {"size_t": "unsigned_word", "pointer": "unsigned_word", "intptr": "signed_word"}
+
+
+def _info_words(command: str, table: dict, enums: dict[str, str]) -> dict[int, str]:
+    words: dict[int, str] = {}
+    for key, names in table.items():
+        if key not in INFO_KINDS:
+            raise ValueError(f"[info.{command}] {key} is not one of {sorted(INFO_KINDS)}")
+        for name in names:
+            if name not in enums:
+                raise KeyError(f"[info.{command}] {name} is not an enum of cl.xml")
+            value = int(enums[name], 0)
+            kind = INFO_KINDS[key]
+            if words.get(value, kind) != kind:
+                raise ValueError(f"[info.{command}] {name} is listed as two widths")
+            words[value] = kind
+    return words
+
+
+def _attach_info_tables(raw: RawRegistry, reg: Registry, profile) -> None:
+    tables = dict(profile.info)
+    for cmd in reg.commands.values():
+        if not any(p.role == Role.INFO_VALUE for p in cmd.params):
+            continue
+        if cmd.name not in tables:
+            raise ValueError(f"{cmd.name} answers an info value and the profile has no "
+                             f"[info.{cmd.name}] table of its word-sized queries")
+        if not any(p.name == "param_name" for p in cmd.params):
+            raise ValueError(f"{cmd.name} answers an info value and names it with no param_name")
+        cmd.info_words = _info_words(cmd.name, tables.pop(cmd.name), raw.enums)
+    if tables:
+        raise ValueError(f"[info.{sorted(tables)[0]}] is not an info command the profile carries")
 
 
 def _infer(raw: RawCommand, index: int, handles: set[str],
@@ -89,7 +119,8 @@ def _needs_len(param: Param) -> bool:
 
 
 def lower(raw: RawRegistry, profile) -> Registry:
-    reg = Registry(handles=set(raw.handles), structs=dict(raw.structs))
+    reg = Registry(handles=set(raw.handles), structs=dict(raw.structs),
+                   typedefs=dict(raw.typedefs))
 
     for name in profile.commands:
         rc = raw.commands.get(name)
@@ -118,6 +149,8 @@ def lower(raw: RawRegistry, profile) -> Registry:
                     param.element = override["element"]
                 if "lent" in override:
                     param.lent = bool(override["lent"])
+                if "len_bytes" in override:
+                    param.len_bytes = bool(override["len_bytes"])
             if param.lent and param.role not in (Role.BYTES_IN, Role.BYTES_OUT):
                 raise ValueError(f"{name}.{param.name} is lent but is not bytes")
             if _needs_len(param):
@@ -127,6 +160,7 @@ def lower(raw: RawRegistry, profile) -> Registry:
             cmd.params.append(param)
         reg.commands[name] = cmd
 
+    _attach_info_tables(raw, reg, profile)
     _carry_extensions(raw, reg, profile)
     return reg
 

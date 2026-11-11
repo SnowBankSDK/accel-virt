@@ -130,6 +130,22 @@ av::WireReader payload_of(const av::MockKmt &kmt, std::uint32_t index)
                           av::MockKmt::journal_bytes - av::CommandHeader::encoded_size);
 }
 
+bool read_description(av::WireReader &payload, cl_image_desc &crossed, std::uint64_t &buffer)
+{
+    std::uint64_t extents[6] = {};
+    bool          read = payload.read_pod(crossed.image_type);
+    for (std::uint64_t &extent : extents) read = read && payload.read_varint(extent);
+    read = read && payload.read_pod(crossed.num_mip_levels) && payload.read_pod(crossed.num_samples) &&
+           payload.read_pod(buffer);
+    crossed.image_width = static_cast<std::size_t>(extents[0]);
+    crossed.image_height = static_cast<std::size_t>(extents[1]);
+    crossed.image_depth = static_cast<std::size_t>(extents[2]);
+    crossed.image_array_size = static_cast<std::size_t>(extents[3]);
+    crossed.image_row_pitch = static_cast<std::size_t>(extents[4]);
+    crossed.image_slice_pitch = static_cast<std::size_t>(extents[5]);
+    return read;
+}
+
 bool carries(const av::MockKmt &kmt, std::uint32_t index, std::uint64_t handle)
 {
     const std::uint8_t *const frame = kmt.command_bytes(index);
@@ -311,8 +327,9 @@ TEST(cl_image_paths, an_image_is_the_hosts_and_a_buffer_it_is_made_over_crosses_
   CHECK(payload.read_pod(context) && context == host_context);
   CHECK(payload.read_varint(flags) && payload.read_pod(present) && present == 1u);
   CHECK(payload.read(&crossed_format, sizeof crossed_format));
-  CHECK(payload.read_pod(present) && present == 1u && payload.read(&crossed, sizeof crossed));
-  CHECK_EQ(reinterpret_cast<std::uintptr_t>(crossed.buffer), host_buffer);
+  std::uint64_t   crossed_buffer = 0u;
+  CHECK(payload.read_pod(present) && present == 1u && read_description(payload, crossed, crossed_buffer));
+  CHECK_EQ(crossed_buffer, host_buffer);
   CHECK_EQ(crossed.image_width, 64u);
   CHECK(desc.buffer == run.buffer());
   CHECK(rig.root().invariants_hold()); }
@@ -863,10 +880,11 @@ bool crossed_description(const av::MockKmt &kmt, std::uint32_t index, std::uint6
     std::uint64_t   context = 0u;
     std::uint8_t    present = 0u;
     cl_image_format format = {};
+    std::uint64_t   buffer = 0u;
     return kmt.command_id(index) == av::clproto::kCmd_clCreateImage && payload.read_pod(context) &&
            payload.read_varint(flags) && payload.read_pod(present) && present == 1u &&
            payload.read(&format, sizeof format) && payload.read_pod(present) && present == 1u &&
-           payload.read(&crossed, sizeof crossed);
+           read_description(payload, crossed, buffer);
 }
 
 }

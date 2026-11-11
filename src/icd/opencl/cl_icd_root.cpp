@@ -2566,14 +2566,14 @@ cl_mem ClIcdRoot::create_image(cl_context context, cl_mem_flags flags,
         report_error(error, CL_INVALID_HOST_PTR);
         return nullptr;
     }
-    cl_image_desc described = *desc;
+    uint64_t backing_wire = 0u;
     if (desc->buffer != nullptr) {
         ClObject *const buffer = judged(desc->buffer, ClObject::Kind::mem);
         if (buffer == nullptr) {
             report_error(error, CL_INVALID_IMAGE_DESCRIPTOR);
             return nullptr;
         }
-        described.buffer = reinterpret_cast<cl_mem>(static_cast<uintptr_t>(buffer->wire()));
+        backing_wire = buffer->wire();
     }
     ClientTransport *const wire = wire_of(*held);
     if (wire == nullptr) {
@@ -2598,14 +2598,14 @@ cl_mem ClIcdRoot::create_image(cl_context context, cl_mem_flags flags,
     const uint64_t image = av::clproto::av_clCreateImage(
         *wire, held->wire(),
         desc->buffer != nullptr ? 0u : asked_flags.for_host() & ~static_cast<cl_mem_flags>(CL_MEM_COPY_HOST_PTR), format,
-        &described, nullptr, 0u, &host_error);
+        desc, backing_wire, nullptr, 0u, &host_error);
     if (image == 0u) {
         report_error(error, host_error != CL_SUCCESS ? host_error : CL_OUT_OF_RESOURCES);
         return nullptr;
     }
     if (copies) {
         const cl_int filled = fill_image(*wire, context_of(*held)->staging(), held->wire(), host_device_of(*held),
-                                         image, described, host_pointer);
+                                         image, *desc, host_pointer);
         if (filled != CL_SUCCESS) {
             give_back_to_host(*wire, ClObject::Kind::mem, image);
             report_error(error, filled);
@@ -2889,13 +2889,12 @@ cl_int ClIcdRoot::supported_image_formats(cl_context context, cl_mem_flags flags
             desc.image_height = 1u;
             desc.image_depth = 1u;
             desc.image_array_size = 1u;
-            desc.buffer = reinterpret_cast<cl_mem>(static_cast<uintptr_t>(backing));
             cl_int         refused = CL_SUCCESS;
             const uint64_t probe = (type == CL_MEM_OBJECT_IMAGE1D_BUFFER && backing == 0u)
                                        ? 1u
                                        : av::clproto::av_clCreateImage(*wire, held->wire(),
                                                                        type == CL_MEM_OBJECT_IMAGE1D_BUFFER ? cl_mem_flags{0} : key & ~static_cast<cl_mem_flags>(CL_MEM_KERNEL_READ_AND_WRITE),
-                                                                       &all[index], &desc, nullptr, 0u, &refused);
+                                                                       &all[index], &desc, backing, nullptr, 0u, &refused);
             if (probe != 0u && !(type == CL_MEM_OBJECT_IMAGE1D_BUFFER && backing == 0u)) give_back_to_host(*wire, ClObject::Kind::mem, probe);
             if (probe != 0u || refused != CL_IMAGE_FORMAT_NOT_SUPPORTED) usable[kept++] = all[index];
         }

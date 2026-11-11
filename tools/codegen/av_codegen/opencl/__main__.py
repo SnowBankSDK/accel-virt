@@ -30,8 +30,8 @@ def main(argv: list[str] | None = None) -> int:
     if missing_input(args, ("xml", "profile", "ids")):
         return 2
 
-    raw = parse.parse(args.xml)
     prof = profile.load(args.profile, args.ids)
+    raw = parse.parse(args.xml, prof.structs)
     reg = lower.lower(raw, prof)
 
     if args.check:

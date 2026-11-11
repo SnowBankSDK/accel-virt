@@ -93,7 +93,7 @@ class OpenClEmittersOpenOneScopePerCall(unittest.TestCase):
             params=[opencl_model.Param(name="value", type=CType(base="cl_uint"), role=scalar)])
         opencl_emit.emit_client(registry, cls.out)
         opencl_emit.emit_server(registry, cls.out)
-        cls.client = (cls.out / "cl_dispatch_client.cpp").read_text()
+        cls.client = (cls.out / "cl_dispatch_client_words.h").read_text()
         cls.server = (cls.out / "cl_dispatch_server.cpp").read_text()
 
     @classmethod
@@ -128,7 +128,7 @@ class CommittedTreesMarkEveryCall(unittest.TestCase):
         self.scopes_of("opengl/gl_icd_entries.cpp", r"^\S.* APIENTRY Wrap_(gl\w+)\(", "{}")
 
     def test_opencl(self):
-        self.scopes_of("opencl/cl_dispatch_client.cpp", r"^\S.* av_(cl\w+)\(", "av_{}")
+        self.scopes_of("opencl/cl_dispatch_client_words.h", r"^\S.* av_(cl\w+)\(", "av_{}")
         self.scopes_of("opencl/cl_dispatch_server.cpp", r"^static bool decode_(cl\w+)\(", "server:{}")
 
     def test_vulkan(self):

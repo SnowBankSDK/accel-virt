@@ -78,7 +78,7 @@ class OpenClClientEndsSyncCalls(unittest.TestCase):
             name="clFlush", return_type=CType(base="cl_int"), cmd_id=2, is_async=True,
             params=[opencl_model.Param(name="value", type=CType(base="cl_uint"), role=scalar)])
         opencl_emit.emit_client(registry, cls.out)
-        cls.source = (cls.out / "cl_dispatch_client.cpp").read_text()
+        cls.source = (cls.out / "cl_dispatch_client_words.h").read_text()
 
     @classmethod
     def tearDownClass(cls):

@@ -47,7 +47,7 @@ class Emitted(unittest.TestCase):
             registry.commands[name] = transfer(name, cmd_id, role, lent)
         cl_emit.emit_client(registry, cls.out)
         cl_emit.emit_server(registry, cls.out)
-        cls.client = (cls.out / "cl_dispatch_client.cpp").read_text()
+        cls.client = (cls.out / "cl_dispatch_client_words.h").read_text()
         cls.server = (cls.out / "cl_dispatch_server.cpp").read_text()
         cls.server_header = (cls.out / "cl_dispatch_server.h").read_text()
 
@@ -96,10 +96,10 @@ class LoweredFromTheRegistry(unittest.TestCase):
     def setUpClass(cls):
         if not CL_XML.is_file():
             raise unittest.SkipTest("no cl.xml; run tools/fetch_khronos_registries.py")
-        cls.raw = cl_parse.parse(CL_XML)
         cls.profile = cl_profile.load(
             ROOT / "tools" / "codegen" / "profiles" / "opencl.toml",
             ROOT / "tools" / "codegen" / "profiles" / "opencl_ids.toml")
+        cls.raw = cl_parse.parse(CL_XML, cls.profile.structs)
 
     def test_only_the_transfers_host_memory_is_lent(self):
         registry = cl_lower.lower(self.raw, self.profile)
