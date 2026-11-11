@@ -1,6 +1,7 @@
 #include "um/d3d/heap_memories.hpp"
 
 #include "core/log/driver_log.hpp"
+#include "core/log/log_line.hpp"
 #include "core/trace/function_scope.hpp"
 #include "guest/transport/host_allocation.hpp"
 #include "um/d3d/d3d_session.hpp"
@@ -91,7 +92,15 @@ Status HeapMemories::lend_pages(uint64_t bytes, HeapMemory *&made)
     const uint64_t pages = (bytes + page_bytes - 1u) & ~(page_bytes - 1u);
     void *const    own = VirtualAlloc(nullptr, static_cast<SIZE_T>(pages), MEM_RESERVE | MEM_COMMIT | MEM_WRITE_WATCH,
                                       PAGE_READWRITE);
-    if (own == nullptr) return Status::no_memory;
+    if (own == nullptr) {
+        LogLine(lines_)
+            .text("no write-back heap's pages: VirtualAlloc of ")
+            .number(pages)
+            .text(" bytes failed, error ")
+            .number(static_cast<uint32_t>(GetLastError()))
+            .write();
+        return Status::no_memory;
+    }
     HostAllocation *allocation = nullptr;
     const Status    lent =
         session_.adopt_memory(own, pages, HostMemoryRequest(HostMemoryRequest::Kind::readback, 0u), allocation);
