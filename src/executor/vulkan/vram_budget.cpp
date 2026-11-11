@@ -87,9 +87,10 @@ void VramBudget::report(VkPhysicalDeviceMemoryBudgetPropertiesEXT &budget) const
     AV_SCOPE("VramBudget::report");
     const uint64_t cap = account_.cap();
     const uint64_t held = account_.held();
-    const uint64_t room = account_.free_bytes();
-    const uint64_t host_cap = host_account_.cap();
+    const uint64_t room = account_.admissible();
     const uint64_t host_used = host_account_.used();
+    const uint64_t host_room = host_account_.admissible();
+    const uint64_t host_cap = host_room > UINT64_MAX - host_used ? UINT64_MAX : host_used + host_room;
     for (uint32_t heap = 0u; heap < VK_MAX_MEMORY_HEAPS; heap++) {
         if (heap >= host_.memoryHeapCount) {
             budget.heapBudget[heap] = 0u;

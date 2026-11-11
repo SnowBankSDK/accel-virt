@@ -204,6 +204,20 @@ TEST(device_capset_host_ram, a_host_whose_meminfo_cannot_be_read_or_parsed_decla
   broken.describe(0u, static_cast<std::uint32_t>(SubApi::vulkan), decided(garbled));
   CHECK_EQ(broken.info().gpu().shared_memory(), 0u); }
 
+TEST(device_capset_host_ram, an_integrated_gpu_advertises_no_more_local_memory_than_the_host_ram_it_takes)
+{ MockHost host;
+  host.add_gpu(GpuIdentity(0x8086u, 0x9a49u, GpuIdentity::integrated_gpu, first, 12ull << 30, 0u, "iris"));
+  host.add_gpu(GpuIdentity(0x10deu, 0x2482u, GpuIdentity::discrete_gpu, second, 12ull << 30, 0u, "card"));
+  meminfo(host, "MemTotal:       16777216 kB\n");
+  host.set_guest_memory_bytes(8ull << 30);
+  DeviceCapset integrated(host);
+  integrated.describe(0u, static_cast<std::uint32_t>(SubApi::vulkan), decided(host));
+  CHECK_EQ(integrated.info().gpu().local_memory(), integrated.info().gpu().shared_memory());
+  CHECK_EQ(integrated.info().gpu().local_memory(), 4ull << 30);
+  DeviceCapset discrete(host);
+  discrete.describe(1u, static_cast<std::uint32_t>(SubApi::vulkan), decided(host));
+  CHECK(discrete.info().gpu().local_memory() > (4ull << 30)); }
+
 TEST(device_capset_host_ram, a_guest_as_large_as_the_host_still_leaves_the_least_budget)
 { MockHost host;
   host.add_gpu(first);

@@ -27,11 +27,13 @@ void DeviceCapset::describe(uint32_t gpu_index, uint32_t sub_apis, uint64_t feat
     const GpuIdentity gpu = host_.gpu_identity(gpu_index);
     const uint64_t total = host_total();
     const uint32_t type = gpu.device_type() > GpuIdentity::cpu ? GpuIdentity::other_gpu : gpu.device_type();
+    const uint64_t host_ram = HostRamPolicy(host_ram_reserve_mib_).budget_for(total, host_.guest_memory_bytes());
+    const uint64_t vram = VramPolicy(vram_reserve_mib_).cap_for(gpu.local_memory());
+    const uint64_t local = type == GpuIdentity::integrated_gpu && host_ram != 0u && host_ram < vram ? host_ram : vram;
     info_ = CapsetInfo(ProtocolVersion(ProtocolVersion::current_major, ProtocolVersion::current_minor),
                        sub_apis, DeviceContextTable::max_contexts,
                        RingHeader::lowest_order, RingHeader::highest_order, features,
-                       GpuIdentity(gpu.vendor_id(), gpu.device_id(), type, gpu.uuid(), VramPolicy(vram_reserve_mib_).cap_for(gpu.local_memory()),
-                                   HostRamPolicy(host_ram_reserve_mib_).budget_for(total, host_.guest_memory_bytes()), AdapterName(gpu.name()).text()));
+                       GpuIdentity(gpu.vendor_id(), gpu.device_id(), type, gpu.uuid(), local, host_ram, AdapterName(gpu.name()).text()));
     info_.reserve_vram(vram_reserve_mib_);
     info_.floor_host_ram(HostRamPolicy(host_ram_reserve_mib_).floor_for(total));
     described_ = true;

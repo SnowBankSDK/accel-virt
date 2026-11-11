@@ -1,13 +1,14 @@
 #include "executor/vram_ledger.hpp"
 
 #include "core/trace/function_scope.hpp"
+#include "executor/host_ram_ledger.hpp"
 #include "executor/vram_budget_source.hpp"
 
 #include <time.h>
 
 namespace av {
 
-VramLedger::VramLedger() : total_(0u), policy_(), source_(nullptr), stamp_(0u)
+VramLedger::VramLedger() : total_(0u), policy_(), source_(nullptr), host_(nullptr), stamp_(0u)
 {
     AV_SCOPE("VramLedger::VramLedger");
 }
@@ -17,6 +18,28 @@ void VramLedger::learn(uint64_t total)
     AV_SCOPE("VramLedger::learn");
     total_ = total;
     recompute();
+}
+
+void VramLedger::share_host_ram(HostRamLedger *host)
+{
+    AV_SCOPE("VramLedger::share_host_ram");
+    host_ = host;
+    recompute();
+}
+
+bool VramLedger::shares_host_ram() const
+{
+    AV_SCOPE("VramLedger::shares_host_ram");
+    return host_ != nullptr;
+}
+
+uint64_t VramLedger::policy_cap() const
+{
+    AV_SCOPE("VramLedger::policy_cap");
+    if (total_ == 0u) return UINT64_MAX;
+    const uint64_t policy = policy_.cap_for(total_);
+    const uint64_t host = host_ != nullptr ? host_->budget() : 0u;
+    return host != 0u && host < policy ? host : policy;
 }
 
 void VramLedger::reserve_vram(uint32_t mib)
@@ -29,7 +52,7 @@ void VramLedger::reserve_vram(uint32_t mib)
 void VramLedger::recompute()
 {
     AV_SCOPE("VramLedger::recompute");
-    set_cap(total_ == 0u ? UINT64_MAX : policy_.cap_for(total_));
+    set_cap(policy_cap());
     __atomic_store_n(&stamp_, 0u, __ATOMIC_RELAXED);
 }
 
@@ -43,14 +66,39 @@ bool VramLedger::take(uint64_t bytes)
 {
     AV_SCOPE("VramLedger::take");
     refresh();
-    return ByteLedger::take(bytes);
+    return ByteLedger::take(bytes) && charge_host(bytes, false);
 }
 
 bool VramLedger::take_session(uint64_t bytes)
 {
     AV_SCOPE("VramLedger::take_session");
     refresh();
-    return ByteLedger::take_session(bytes);
+    return ByteLedger::take(bytes) && charge_host(bytes, true);
+}
+
+bool VramLedger::charge_host(uint64_t bytes, bool session)
+{
+    AV_SCOPE("VramLedger::charge_host");
+    if (host_ == nullptr || (session ? host_->take_session(bytes) : host_->take(bytes))) return true;
+    ByteLedger::give(bytes);
+    return false;
+}
+
+void VramLedger::give(uint64_t bytes)
+{
+    AV_SCOPE("VramLedger::give");
+    const uint64_t held = used();
+    ByteLedger::give(bytes);
+    if (host_ != nullptr) host_->give(bytes < held ? bytes : held);
+}
+
+uint64_t VramLedger::admissible() const
+{
+    AV_SCOPE("VramLedger::admissible");
+    const uint64_t room = free_bytes();
+    if (host_ == nullptr) return room;
+    const uint64_t host = host_->admissible();
+    return host < room ? host : room;
 }
 
 void VramLedger::refresh()
@@ -66,7 +114,7 @@ void VramLedger::refresh()
     if (!__atomic_compare_exchange_n(&stamp_, &stamp, ms, false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) return;
     uint64_t budget = 0u;
     uint64_t usage = 0u;
-    const uint64_t policy = policy_.cap_for(total_);
+    const uint64_t policy = policy_cap();
     if (!source->device_local(budget, usage)) {
         set_cap(policy);
         return;
@@ -81,7 +129,7 @@ void VramLedger::refresh()
 uint64_t VramLedger::advertised() const
 {
     AV_SCOPE("VramLedger::advertised");
-    return total_ == 0u ? UINT64_MAX : policy_.cap_for(total_);
+    return policy_cap();
 }
 
 uint64_t VramLedger::total() const
@@ -94,7 +142,7 @@ bool VramLedger::invariants_hold() const
 {
     AV_SCOPE("VramLedger::invariants_hold");
     if (source_ != nullptr) return true;
-    return total_ == 0u ? cap() == UINT64_MAX : cap() == policy_.cap_for(total_);
+    return cap() == policy_cap();
 }
 
 }

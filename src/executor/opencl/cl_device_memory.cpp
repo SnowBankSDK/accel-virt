@@ -122,7 +122,7 @@ bool ClDeviceMemory::bound() const
 uint64_t ClDeviceMemory::free_bytes() const
 {
     AV_SCOPE("ClDeviceMemory::free_bytes");
-    return account_.free_bytes();
+    return account_.admissible();
 }
 
 uint32_t ClDeviceMemory::objects() const

@@ -4,6 +4,7 @@
 #include "core/support/object_pool.hpp"
 #include "device/shim/posix_lock.hpp"
 #include "executor/av_vram_gate.h"
+#include "executor/ledger_relief.hpp"
 #include "executor/vram_account.hpp"
 
 #include <stdint.h>
@@ -20,15 +21,23 @@ public:
     GateAccount(const GateAccount &) = delete;
     GateAccount &operator=(const GateAccount &) = delete;
 
+    using Relief = void (*)(void *holder);
+
     VramAccount &vram();
     VramAccount &host();
+    void         relieve_by(Relief relief, void *holder);
+    bool         holds(const VramAccount *account) const;
+    bool         charges(const ByteLedger &ledger) const;
+    void         relieve() const;
 
 private:
     VramAccount vram_;
     VramAccount host_;
+    Relief      relief_;
+    void       *holder_;
 };
 
-class VramGate {
+class VramGate final : public LedgerRelief {
 public:
     VramGate(HostApis &apis, BlockSource &blocks);
     VramGate(const VramGate &) = delete;
@@ -37,6 +46,8 @@ public:
     const AvVramGate &abi() const;
     GateAccount      *open(const uint8_t *gpu_uuid);
     void              close(GateAccount *account);
+    void              relieve_by(GateAccount *account, GateAccount::Relief relief, void *holder);
+    void              relieve(const ByteLedger &ledger, const VramAccount *taker) override;
     uint32_t          live() const;
     uint64_t          leaked() const;
     uint64_t          leaked_host() const;

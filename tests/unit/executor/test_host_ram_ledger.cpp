@@ -154,7 +154,7 @@ TEST(host_ram_ledger_floor, no_floor_no_gauge_or_an_unreadable_host_never_refuse
   ledger.floor(0u);
   CHECK(ledger.take(gib)); }
 
-TEST(host_ram_ledger_floor, going_tight_asks_the_host_to_give_memory_back_once_per_episode)
+TEST(host_ram_ledger_floor, a_refusal_for_the_floor_asks_the_host_to_give_memory_back_at_most_once_per_interval)
 { HostRamLedger ledger;
   FakeMemoryGauge gauge;
   gauge.free_bytes = 10 * gib;
@@ -165,24 +165,77 @@ TEST(host_ram_ledger_floor, going_tight_asks_the_host_to_give_memory_back_once_p
   gauge.set(2 * gib, HostRamLedger::refresh_ms);
   CHECK(!ledger.take(1u));
   CHECK_EQ(gauge.relieved, 1u);
-  gauge.set(2 * gib, HostRamLedger::relieve_ms);
+  gauge.set(2 * gib, HostRamLedger::relieve_ms - 1u);
   CHECK(!ledger.take(1u));
   CHECK_EQ(gauge.relieved, 1u);
-  gauge.set(10 * gib, HostRamLedger::refresh_ms);
-  CHECK(ledger.take(1u));
-  gauge.set(2 * gib, HostRamLedger::refresh_ms);
+  gauge.set(2 * gib, 1u);
   CHECK(!ledger.take(1u));
   CHECK_EQ(gauge.relieved, 2u);
-  gauge.set(10 * gib, HostRamLedger::refresh_ms);
-  CHECK(ledger.take(1u));
-  gauge.set(2 * gib, HostRamLedger::refresh_ms);
+  ledger.budget(1u);
+  gauge.set(10 * gib, HostRamLedger::relieve_ms);
+  CHECK(!ledger.take(2u));
+  CHECK_EQ(gauge.relieved, 2u); }
+
+TEST(host_ram_ledger_floor, memory_given_back_is_admissible_again_before_the_host_shows_it)
+{ HostRamLedger ledger;
+  FakeMemoryGauge gauge;
+  gauge.free_bytes = 10 * gib;
+  ledger.watch(&gauge);
+  ledger.floor(4 * gib);
+  CHECK(ledger.take(6 * gib));
   CHECK(!ledger.take(1u));
-  CHECK_EQ(gauge.relieved, 2u);
-  gauge.set(10 * gib, HostRamLedger::refresh_ms);
-  CHECK(ledger.take(1u));
-  gauge.set(2 * gib, HostRamLedger::relieve_ms);
+  ledger.give(6 * gib);
+  CHECK(ledger.take(6 * gib));
   CHECK(!ledger.take(1u));
-  CHECK_EQ(gauge.relieved, 3u); }
+  ledger.give(6 * gib);
+  gauge.set(4 * gib, HostRamLedger::refresh_ms);
+  CHECK(ledger.take(6 * gib));
+  CHECK_EQ(ledger.credit(), 0u); }
+
+TEST(host_ram_ledger_floor, a_credit_is_spent_by_the_takes_that_reuse_it)
+{ HostRamLedger ledger;
+  FakeMemoryGauge gauge;
+  gauge.free_bytes = 10 * gib;
+  ledger.watch(&gauge);
+  ledger.floor(4 * gib);
+  CHECK(ledger.take(6 * gib));
+  ledger.give(6 * gib);
+  CHECK(ledger.take(6 * gib));
+  gauge.set(4 * gib, HostRamLedger::refresh_ms);
+  CHECK(!ledger.take(1u)); }
+
+TEST(host_ram_ledger_floor, memory_the_host_shows_again_pays_the_credit_back_so_it_is_not_counted_twice)
+{ HostRamLedger ledger;
+  FakeMemoryGauge gauge;
+  gauge.free_bytes = 10 * gib;
+  ledger.watch(&gauge);
+  ledger.floor(4 * gib);
+  CHECK(ledger.take(6 * gib));
+  gauge.set(4 * gib, HostRamLedger::refresh_ms);
+  CHECK(!ledger.take(1u));
+  ledger.give(6 * gib);
+  CHECK_EQ(ledger.credit(), 6 * gib);
+  gauge.set(10 * gib, HostRamLedger::refresh_ms);
+  CHECK(!ledger.take(6 * gib + 1u));
+  CHECK_EQ(ledger.credit(), 0u);
+  CHECK(ledger.take(6 * gib)); }
+
+TEST(host_ram_ledger_floor, the_admissible_room_is_what_the_host_has_above_its_floor_within_the_budget)
+{ HostRamLedger ledger;
+  FakeMemoryGauge gauge;
+  gauge.free_bytes = 10 * gib;
+  ledger.budget(20 * gib);
+  CHECK_EQ(ledger.admissible(), 20 * gib);
+  ledger.watch(&gauge);
+  ledger.floor(4 * gib);
+  CHECK(ledger.take(gib));
+  CHECK_EQ(ledger.admissible(), 5 * gib);
+  CHECK(!ledger.take(5 * gib + 1u));
+  CHECK(ledger.take(5 * gib));
+  CHECK_EQ(ledger.admissible(), 0u);
+  ledger.budget(3 * gib);
+  ledger.give(5 * gib);
+  CHECK_EQ(ledger.admissible(), 2 * gib); }
 
 TEST(host_ram_ledger_floor, racing_takes_never_pass_what_the_host_has_above_its_floor)
 { HostRamLedger ledger;

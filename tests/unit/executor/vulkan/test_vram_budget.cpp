@@ -406,6 +406,55 @@ TEST(vram_budget, memory_in_a_heap_that_is_not_capped_never_touches_the_ledger)
   budget.release(0x10u);
   CHECK_EQ(ledger.used(), std::uint64_t{0}); }
 
+TEST(vram_budget, a_host_heaps_budget_never_exceeds_what_admit_would_accept)
+{ av::FailingBlocks blocks;
+  VramLedger ledger;
+  ledger.learn(8 * gib);
+  HostRamLedger host;
+  av::FakeMemoryGauge gauge;
+  gauge.free_bytes = 6 * gib;
+  host.budget(20 * gib);
+  host.watch(&gauge);
+  host.floor(4 * gib);
+  VramBudget budget(blocks);
+  budget.bind(&ledger, &host);
+  budget.learn(guest_view());
+  CHECK(budget.admit(1u, gib));
+  VkPhysicalDeviceMemoryBudgetPropertiesEXT report = {};
+  budget.report(report);
+  CHECK_EQ(report.heapUsage[1], gib);
+  CHECK_EQ(report.heapBudget[1], 2 * gib);
+  CHECK(!budget.admit(1u, gib + 1u));
+  CHECK(budget.admit(1u, gib));
+  budget.report(report);
+  CHECK_EQ(report.heapBudget[1], report.heapUsage[1]); }
+
+TEST(vram_budget, an_integrated_gpus_heap_budget_is_bounded_by_the_host_ram_it_takes)
+{ av::FailingBlocks blocks;
+  HostRamLedger host;
+  av::FakeMemoryGauge gauge;
+  gauge.free_bytes = 7 * gib;
+  host.budget(3 * gib);
+  host.watch(&gauge);
+  host.floor(4 * gib);
+  VramLedger ledger;
+  ledger.learn(8 * gib);
+  ledger.share_host_ram(&host);
+  VramBudget budget(blocks);
+  budget.bind(&ledger, &host);
+  budget.learn(guest_view());
+  VkPhysicalDeviceMemoryProperties answer = guest_view();
+  budget.clamp(answer);
+  CHECK_EQ(answer.memoryHeaps[0].size, 3 * gib);
+  CHECK(budget.admit(0u, gib));
+  VkPhysicalDeviceMemoryBudgetPropertiesEXT report = {};
+  budget.report(report);
+  CHECK_EQ(report.heapBudget[0], 3 * gib);
+  gauge.set(4 * gib + gib / 2u, HostRamLedger::refresh_ms);
+  CHECK(!budget.admit(0u, gib));
+  budget.report(report);
+  CHECK_EQ(report.heapBudget[0], gib + gib / 2u); }
+
 namespace {
 
 constexpr std::uint32_t vulkan_kill_steps = 10u;

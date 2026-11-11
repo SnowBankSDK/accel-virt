@@ -77,6 +77,9 @@ void LoaderHostApis::enumerate()
             if ((memory.memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0u)
                 local += memory.memoryHeaps[heap].size;
         ledgers_[i].learn(local);
+        VkPhysicalDeviceProperties properties = {};
+        vkGetPhysicalDeviceProperties(devices[i], &properties);
+        if (properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU) ledgers_[i].share_host_ram(&host_ram_);
         budgets_[i].bind(devices[i]);
         ledgers_[i].follow(&budgets_[i]);
         if (opencl_devices_[i].find(uuids_[i].raw())) sub_apis_[i] |= AV_EXECUTOR_SUB_API_OPENCL;

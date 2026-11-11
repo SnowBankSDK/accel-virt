@@ -792,6 +792,7 @@ void ExecutorRoot::report(StateWriter &writer)
         writer.number("host_ram_refusals", host_ram->refusals());
         writer.number("host_ram_floor_bytes", host_ram->floor());
         writer.number("host_ram_tight_refusals", host_ram->tight_refusals());
+        writer.number("host_ram_credit_bytes", host_ram->credit());
     }
     gpus_.report(writer);
     domains_.report(writer);

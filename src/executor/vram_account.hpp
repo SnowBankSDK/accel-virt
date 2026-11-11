@@ -26,9 +26,12 @@ public:
     uint64_t cap() const;
     uint64_t advertised() const;
     uint64_t free_bytes() const;
+    uint64_t admissible() const;
     uint64_t used() const;
 
 private:
+    bool retake(uint64_t bytes, bool session);
+
     ByteLedger *ledger_;
     uint64_t    held_;
 };

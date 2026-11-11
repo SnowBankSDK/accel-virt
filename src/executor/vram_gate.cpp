@@ -11,7 +11,8 @@
 
 namespace av {
 
-GateAccount::GateAccount(ByteLedger &vram_ledger, ByteLedger *host_ledger) : vram_(vram_ledger), host_()
+GateAccount::GateAccount(ByteLedger &vram_ledger, ByteLedger *host_ledger)
+    : vram_(vram_ledger), host_(), relief_(nullptr), holder_(nullptr)
 {
     AV_SCOPE("GateAccount::GateAccount");
     host_.bind(host_ledger);
@@ -27,6 +28,31 @@ VramAccount &GateAccount::host()
 {
     AV_SCOPE("GateAccount::host");
     return host_;
+}
+
+void GateAccount::relieve_by(Relief relief, void *holder)
+{
+    AV_SCOPE("GateAccount::relieve_by");
+    relief_ = relief;
+    holder_ = relief != nullptr ? holder : nullptr;
+}
+
+bool GateAccount::holds(const VramAccount *account) const
+{
+    AV_SCOPE("GateAccount::holds");
+    return account == &vram_ || account == &host_;
+}
+
+bool GateAccount::charges(const ByteLedger &ledger) const
+{
+    AV_SCOPE("GateAccount::charges");
+    return vram_.bound_to(&ledger) || host_.bound_to(&ledger);
+}
+
+void GateAccount::relieve() const
+{
+    AV_SCOPE("GateAccount::relieve");
+    if (relief_ != nullptr) relief_(holder_);
 }
 
 namespace {
@@ -81,6 +107,12 @@ void gate_give_host(void *account, uint64_t bytes)
     if (account != nullptr) static_cast<GateAccount *>(account)->host().give(bytes);
 }
 
+void gate_relieve_by(void *self, void *account, void (*relieve)(void *holder), void *holder)
+{
+    AV_SCOPE("gate_relieve_by");
+    static_cast<VramGate *>(self)->relieve_by(static_cast<GateAccount *>(account), relieve, holder);
+}
+
 }
 
 VramGate::VramGate(HostApis &apis, BlockSource &blocks) : apis_(apis), abi_{}, lock_(), accounts_(blocks), leaked_(0u), leaked_host_(0u)
@@ -96,6 +128,7 @@ VramGate::VramGate(HostApis &apis, BlockSource &blocks) : apis_(apis), abi_{}, l
     abi_.close = gate_close;
     abi_.take_host = gate_take_host;
     abi_.give_host = gate_give_host;
+    abi_.relieve_by = gate_relieve_by;
 }
 
 const AvVramGate &VramGate::abi() const
@@ -115,9 +148,29 @@ GateAccount *VramGate::open(const uint8_t *gpu_uuid)
         if (memcmp(uuid, gpu_uuid, uuid_bytes) == 0) ledger = apis_.vram_ledger(index);
     }
     if (ledger == nullptr) return nullptr;
+    HostRamLedger *const host = apis_.host_ram_ledger();
+    ledger->relieve_by(this);
+    if (host != nullptr) host->relieve_by(this);
     const ThreadLockHold held(lock_);
     GateAccount *account = nullptr;
-    return accounts_.create(account, *ledger, apis_.host_ram_ledger()) == Status::ok ? account : nullptr;
+    return accounts_.create(account, *ledger, host) == Status::ok ? account : nullptr;
+}
+
+void VramGate::relieve_by(GateAccount *account, GateAccount::Relief relief, void *holder)
+{
+    AV_SCOPE("VramGate::relieve_by");
+    if (account == nullptr) return;
+    const ThreadLockHold held(lock_);
+    if (accounts_.find(account) != nullptr) account->relieve_by(relief, holder);
+}
+
+void VramGate::relieve(const ByteLedger &ledger, const VramAccount *taker)
+{
+    AV_SCOPE("VramGate::relieve");
+    const ThreadLockHold held(lock_);
+    accounts_.for_each([&ledger, taker](const GateAccount &account) {
+        if (!account.holds(taker) && account.charges(ledger)) account.relieve();
+    });
 }
 
 void VramGate::close(GateAccount *account)

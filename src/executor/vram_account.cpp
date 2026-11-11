@@ -2,6 +2,7 @@
 
 #include "core/trace/function_scope.hpp"
 #include "executor/byte_ledger.hpp"
+#include "executor/ledger_relief.hpp"
 
 namespace av {
 
@@ -37,7 +38,7 @@ bool VramAccount::bound_to(const ByteLedger *ledger) const
 bool VramAccount::take(uint64_t bytes)
 {
     AV_SCOPE("VramAccount::take");
-    if (ledger_ != nullptr && !ledger_->take(bytes)) return false;
+    if (ledger_ != nullptr && !ledger_->take(bytes) && !retake(bytes, false)) return false;
     __atomic_fetch_add(&held_, bytes, __ATOMIC_RELAXED);
     return true;
 }
@@ -45,9 +46,18 @@ bool VramAccount::take(uint64_t bytes)
 bool VramAccount::take_session(uint64_t bytes)
 {
     AV_SCOPE("VramAccount::take_session");
-    if (ledger_ != nullptr && !ledger_->take_session(bytes)) return false;
+    if (ledger_ != nullptr && !ledger_->take_session(bytes) && !retake(bytes, true)) return false;
     __atomic_fetch_add(&held_, bytes, __ATOMIC_RELAXED);
     return true;
+}
+
+bool VramAccount::retake(uint64_t bytes, bool session)
+{
+    AV_SCOPE("VramAccount::retake");
+    LedgerRelief *const relief = ledger_->relief();
+    if (relief == nullptr) return false;
+    relief->relieve(*ledger_, this);
+    return session ? ledger_->take_session(bytes) : ledger_->take(bytes);
 }
 
 void VramAccount::give(uint64_t bytes)
@@ -91,6 +101,12 @@ uint64_t VramAccount::free_bytes() const
 {
     AV_SCOPE("VramAccount::free_bytes");
     return ledger_ != nullptr ? ledger_->free_bytes() : UINT64_MAX;
+}
+
+uint64_t VramAccount::admissible() const
+{
+    AV_SCOPE("VramAccount::admissible");
+    return ledger_ != nullptr ? ledger_->admissible() : UINT64_MAX;
 }
 
 uint64_t VramAccount::used() const

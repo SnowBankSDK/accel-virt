@@ -4,7 +4,7 @@
 
 namespace av {
 
-ByteLedger::ByteLedger() : cap_(UINT64_MAX), used_(0u), refusals_(0u)
+ByteLedger::ByteLedger() : cap_(UINT64_MAX), used_(0u), refusals_(0u), relief_(nullptr)
 {
     AV_SCOPE("ByteLedger::ByteLedger");
 }
@@ -49,6 +49,24 @@ void ByteLedger::give(uint64_t bytes)
     while (!__atomic_compare_exchange_n(&used_, &used, bytes > used ? 0u : used - bytes, true, __ATOMIC_ACQ_REL,
                                         __ATOMIC_RELAXED)) {
     }
+}
+
+void ByteLedger::relieve_by(LedgerRelief *relief)
+{
+    AV_SCOPE("ByteLedger::relieve_by");
+    __atomic_store_n(&relief_, relief, __ATOMIC_RELEASE);
+}
+
+LedgerRelief *ByteLedger::relief() const
+{
+    AV_SCOPE("ByteLedger::relief");
+    return __atomic_load_n(&relief_, __ATOMIC_ACQUIRE);
+}
+
+uint64_t ByteLedger::admissible() const
+{
+    AV_SCOPE("ByteLedger::admissible");
+    return free_bytes();
 }
 
 uint64_t ByteLedger::advertised() const
