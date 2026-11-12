@@ -164,6 +164,15 @@ void D3dBackend::leave_device()
     admitted_ = false;
 }
 
+void D3dBackend::leave_lost_device()
+{
+    AV_SCOPE("D3dBackend::leave_lost_device");
+    lost_ = true;
+    d3d12_.leave_lost_device();
+    if (admitted_ && device11_ != nullptr) device11_->dismiss(wake_);
+    admitted_ = false;
+}
+
 void D3dBackend::use_host_ram(ByteLedger *ledger, uint64_t limit)
 {
     AV_SCOPE("D3dBackend::use_host_ram");
@@ -252,7 +261,10 @@ bool D3dBackend::drain(TeardownBudget &budget)
 bool D3dBackend::drain_queue(TeardownBudget &budget)
 {
     AV_SCOPE("D3dBackend::drain_queue");
-    if (lost_ || device11_->lost()) return false;
+    if (lost_ || device11_->lost()) {
+        leave_lost_device();
+        return false;
+    }
     device11_->lock(nullptr);
     const bool marked = queue_drain_.mark(device11_->vulkan(), submitted_);
     device11_->unlock();
@@ -816,7 +828,7 @@ bool D3dBackend::on_Finish11(uint32_t &hresult)
     if (!has_device()) return false;
     device11_->context()->Flush();
     const HRESULT removed = device11_->device()->GetDeviceRemovedReason();
-    lost_ = FAILED(removed);
+    lost_ = lost_ || FAILED(removed);
     const uint32_t own = states_.removed_reason(states_.selected_id());
     hresult = own != 0u ? own : memory_refused_ ? static_cast<uint32_t>(E_OUTOFMEMORY) : static_cast<uint32_t>(removed);
     return true;

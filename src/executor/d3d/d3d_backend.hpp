@@ -68,6 +68,7 @@ public:
     void               shut_down() override;
     void               let_go_of_thread() override;
     void               leave_device() override;
+    void               leave_lost_device();
 
     bool knows(uint32_t command_id) const override;
     [[nodiscard]] bool run(uint32_t command_id, WireReader &payload, WireWriter &reply,

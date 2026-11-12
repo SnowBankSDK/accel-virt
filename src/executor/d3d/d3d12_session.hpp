@@ -70,6 +70,7 @@ public:
                                   HostMemorySource *source = nullptr);
     void               shut_down();
     void               leave_device();
+    void               leave_lost_device();
     [[nodiscard]] bool drain_within(TeardownBudget &budget);
 
     bool               knows(uint32_t command_id) const;
@@ -269,6 +270,7 @@ private:
     SessionShares         *shares_;
     WakeSignal            &tenant_;
     bool                   joined_;
+    bool                   left_lost_;
     SharedSurfaces        *surfaces_;
     D3dObjectTable        &objects_;
     WatchedBlocks         &blocks_;

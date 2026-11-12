@@ -146,7 +146,7 @@ StagedFrame *PresentedResource::stage()
 D3d12Session::D3d12Session(const GuestBytes &guest, D3dObjectTable &objects, WakeSignal &tenant,
                            EventfdWake &fence_wake, WatchedBlocks &blocks, DriverLog &lines)
     : d3d12proto::ServerDispatch(guest), imports_(nullptr), source_(nullptr), placing_(false), device_(nullptr), shown_by_(nullptr), shares_(nullptr), tenant_(tenant),
-      joined_(false), surfaces_(nullptr), objects_(objects), blocks_(blocks), addresses_(blocks), indirect_table_(addresses_),
+      joined_(false), left_lost_(false), surfaces_(nullptr), objects_(objects), blocks_(blocks), addresses_(blocks), indirect_table_(addresses_),
       progress_(fence_wake, blocks), block_heaps_(blocks, progress_, lines), holds_(blocks), descriptors_(blocks, holds_), allocators_(blocks), queries_(blocks), refused_creates_(), views_(objects_, addresses_),
       pipelines_(objects_), compiles_(blocks), presentation_(lines), tile_update_(), retained_(), state_builder_(blocks, objects_), inputs_(blocks, addresses_), sizes_(blocks), removed_(0u), lines_(lines), refusal_(lines_), clock_(), hang_ns_(hung_after), commands_(0u), polled_at_(0u), drain_commands_(0u), drain_mark_(0u), drain_marked_(false), oversized_heaps_(), refused_heaps_()
 {
@@ -164,6 +164,7 @@ void D3d12Session::initialize(const ImportTable &imports, D3d12HostDevice *devic
     shown_by_ = shown_by;
     shares_ = shares;
     joined_ = false;
+    left_lost_ = false;
     surfaces_ = surfaces;
     views_.bind(device_ != nullptr ? device_->device() : nullptr);
     pipelines_.bind(device_);
@@ -207,6 +208,7 @@ void D3d12Session::shut_down()
     pipelines_.bind(nullptr);
     if (joined_) device_->dismiss(tenant_);
     joined_ = false;
+    left_lost_ = false;
     device_ = nullptr;
     shown_by_ = nullptr;
     shares_ = nullptr;
@@ -222,10 +224,18 @@ void D3d12Session::leave_device()
     joined_ = false;
 }
 
+void D3d12Session::leave_lost_device()
+{
+    AV_SCOPE("D3d12Session::leave_lost_device");
+    if (!lost()) return;
+    left_lost_ = true;
+    leave_device();
+}
+
 bool D3d12Session::lost() const
 {
     AV_SCOPE("D3d12Session::lost");
-    return joined_ && device_->lost();
+    return left_lost_ || (joined_ && device_->lost());
 }
 
 bool D3d12Session::knows(uint32_t command_id) const
@@ -486,7 +496,10 @@ bool D3d12Session::drain_within(TeardownBudget &budget)
 {
     AV_SCOPE("D3d12Session::drain_within");
     if (device_ == nullptr) return true;
-    if (lost()) return false;
+    if (lost()) {
+        leave_lost_device();
+        return false;
+    }
     if (!compiles_.settle(budget)) return false;
     if (!drain_marked_ || drain_commands_ != commands_ || progress_.marked() != drain_mark_) {
         if (!progress_.mark_all()) return false;
