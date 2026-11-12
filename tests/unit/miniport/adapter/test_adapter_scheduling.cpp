@@ -364,12 +364,7 @@ public:
 
     bool run()
     {
-        function_.add_doorbell_region();
-        platform_.on_stall(&SchedulingModel::stalled, this);
-        std::uint32_t sources = 9u;
-        std::uint32_t children = 9u;
-        if (nt(adapter_.start_device(nullptr, &dxgkrnl_.record(), &sources, &children)) != success)
-            return fail("the adapter did not start");
+        if (!start()) return false;
         const std::uint32_t first = 1u + random_.below(3u);
         for (std::uint32_t index = 0u; index < first && !failed(); index++) create_process();
         for (step_ = 0u; step_ < steps_per_seed && !failed(); step_++) {
@@ -386,11 +381,87 @@ public:
         return !failed();
     }
 
+    bool churn_contexts(std::uint32_t rounds)
+    {
+        if (!start()) return false;
+        const std::uint32_t blocks = platform_.owned_page_blocks();
+        const std::uint32_t allocations = platform_.live_allocations();
+        const std::uint32_t mappings = platform_.process_mappings();
+        for (step_ = 0u; step_ < rounds && !failed(); step_++) {
+            device_.slow_to(1u + step_ % 3u);
+            const std::int32_t process = open_process();
+            if (process < 0) return false;
+            create_ring(static_cast<std::uint32_t>(process), false);
+            if (failed()) return false;
+            Ring &ring = rings_.back();
+            write_batch_on(static_cast<std::int32_t>(rings_.size() - 1u), ring.context);
+            submit(contexts_[static_cast<std::size_t>(ring.context)], take_front(ring.context));
+            host_step();
+            run_dpc();
+            fill_control();
+            if (!tear_down_process(process)) return fail("a process could not be torn down");
+            run_dpc();
+            if (device_.live_contexts() != 0u || device_.bound_doorbells() != 0u || device_.pinned_resources() != 0u)
+                return fail("a torn down context stayed on the device");
+            if (platform_.owned_page_blocks() != blocks || platform_.live_allocations() != allocations ||
+                platform_.process_mappings() != mappings)
+                return fail("a torn down context left pages, allocations or mappings behind");
+        }
+        check_empty();
+        return !failed();
+    }
+
+    bool churn_routes(std::uint32_t rounds)
+    {
+        if (!start()) return false;
+        const std::int32_t process = open_process();
+        if (process < 0) return false;
+        create_ring(static_cast<std::uint32_t>(process), true);
+        if (failed()) return false;
+        const auto ring = static_cast<std::int32_t>(rings_.size() - 1u);
+        for (step_ = 0u; step_ < rounds && !failed(); step_++) {
+            void *const plain = create_kernel_context(processes_[static_cast<std::size_t>(process)], nullptr, 0u);
+            if (plain == nullptr) return fail("a release route was refused");
+            const std::int32_t route = add_context(static_cast<std::uint32_t>(process), plain, Kind::route, ring);
+            rings_[static_cast<std::size_t>(ring)].routes.push_back(route);
+            write_batch_on(ring, route);
+            submit(contexts_[static_cast<std::size_t>(route)], take_front(route));
+            host_step();
+            run_dpc();
+            if (!destroy_context(route)) return false;
+            const Ring &held = rings_[static_cast<std::size_t>(ring)];
+            if (held.lost || held.tail != held.written) return fail("a ring stopped publishing as its routes came and went");
+        }
+        if (!tear_down_process(process)) return fail("a process could not be torn down");
+        run_dpc();
+        check_empty();
+        return !failed();
+    }
+
     const char   *failure() const { return failure_; }
     const char   *detail() const { return detail_; }
     std::uint32_t failed_step() const { return step_; }
 
 private:
+    bool start()
+    {
+        function_.add_doorbell_region();
+        platform_.on_stall(&SchedulingModel::stalled, this);
+        std::uint32_t sources = 9u;
+        std::uint32_t children = 9u;
+        if (nt(adapter_.start_device(nullptr, &dxgkrnl_.record(), &sources, &children)) != success)
+            return fail("the adapter did not start");
+        return true;
+    }
+
+    Packet take_front(std::int32_t context)
+    {
+        KernelContext &held = contexts_[static_cast<std::size_t>(context)];
+        const Packet   packet = held.queue.front();
+        held.queue.pop_front();
+        return packet;
+    }
+
     bool failed() const { return failure_[0] != '\0'; }
 
     bool fail(const char *why)
@@ -633,16 +704,26 @@ private:
         return index;
     }
 
-    void create_process()
+    std::int32_t open_process()
     {
-        if (live_rings() + 5u > most_live_rings) return;
         processes_.push_back(Process{});
         const auto index = static_cast<std::uint32_t>(processes_.size() - 1u);
         Process   &process = processes_.back();
         process.device.hKmdProcess = &process_names_[index % most_processes];
-        if (nt(adapter_.create_device(&process.device)) != success)
-            return static_cast<void>(fail("CreateDevice was refused"));
+        if (nt(adapter_.create_device(&process.device)) != success) {
+            fail("CreateDevice was refused");
+            return -1;
+        }
         process.live = true;
+        return static_cast<std::int32_t>(index);
+    }
+
+    void create_process()
+    {
+        if (live_rings() + 5u > most_live_rings) return;
+        const std::int32_t opened = open_process();
+        if (opened < 0) return;
+        const auto index = static_cast<std::uint32_t>(opened);
         const bool compositor = random_.chance(35u);
         const std::uint32_t count = compositor ? 2u + random_.below(4u) : 1u + random_.below(2u);
         for (std::uint32_t made = 0u; made < count && !failed(); made++)
@@ -715,19 +796,22 @@ private:
     {
         const std::int32_t picked = pick_ring();
         if (picked < 0) return;
-        Ring               &ring = rings_[static_cast<std::size_t>(picked)];
-        const std::uint64_t bytes = 32u * (1u + random_.below(8u));
-        if (ring.written + bytes - ring.head > ring_capacity) return;
+        Ring &ring = rings_[static_cast<std::size_t>(picked)];
         std::uint32_t outstanding = 0u;
         for (const Batch &batch : ring.batches) outstanding += batch.end > ring.head ? 1u : 0u;
         if (outstanding >= most_outstanding_batches) return;
-        std::int32_t context = ring.context;
-        std::uint32_t writer = 0u;
-        if (ring.by_packet) {
-            if (ring.routes.empty()) return;
-            context = ring.routes[random_.below(static_cast<std::uint32_t>(ring.routes.size()))];
-            writer = contexts_[static_cast<std::size_t>(context)].writer;
-        }
+        if (ring.by_packet && ring.routes.empty()) return;
+        const std::int32_t context =
+            ring.by_packet ? ring.routes[random_.below(static_cast<std::uint32_t>(ring.routes.size()))] : ring.context;
+        write_batch_on(picked, context);
+    }
+
+    void write_batch_on(std::int32_t picked, std::int32_t context)
+    {
+        Ring               &ring = rings_[static_cast<std::size_t>(picked)];
+        const std::uint64_t bytes = 32u * (1u + random_.below(8u));
+        if (ring.written + bytes - ring.head > ring_capacity) return;
+        const std::uint32_t writer = ring.by_packet ? contexts_[static_cast<std::size_t>(context)].writer : 0u;
         ring.batches.push_back(Batch{ring.written, ring.written + bytes, ring.next_fence++, writer,
                                      ring.by_packet ? ring.last_writer : 0u, false});
         ring.written += bytes;
@@ -1083,4 +1167,24 @@ TEST(adapter_scheduling, seeded_interleavings_of_processes_contexts_and_a_slow_d
     CHECK(coverage.saturated_teardowns > 0u);
     CHECK(coverage.timer_dpcs > 0u);
     CHECK(coverage.losses > 0u);
+}
+
+TEST(adapter_scheduling, av_contexts_made_and_torn_down_four_times_past_the_doorbells_with_a_slow_device_and_a_full_control_queue_leave_nothing)
+{
+    Coverage    coverage;
+    auto *const model = new SchedulingModel(1u, coverage);
+    if (!model->churn_contexts(4u * doorbells + 8u))
+        ::av::TestRegistry::instance().record_failure(__FILE__, __LINE__, "round %u: %s %s", model->failed_step(),
+                                                      model->failure(), model->detail());
+    delete model;
+}
+
+TEST(adapter_scheduling, release_routes_made_and_destroyed_four_times_past_a_rings_writers_keep_it_publishing_in_order)
+{
+    Coverage    coverage;
+    auto *const model = new SchedulingModel(2u, coverage);
+    if (!model->churn_routes(4u * 32u + 8u))
+        ::av::TestRegistry::instance().record_failure(__FILE__, __LINE__, "round %u: %s %s", model->failed_step(),
+                                                      model->failure(), model->detail());
+    delete model;
 }
