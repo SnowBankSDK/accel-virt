@@ -21,20 +21,17 @@ public:
     GateAccount(const GateAccount &) = delete;
     GateAccount &operator=(const GateAccount &) = delete;
 
-    using Relief = void (*)(void *holder);
-
     VramAccount &vram();
     VramAccount &host();
-    void         relieve_by(Relief relief, void *holder);
     bool         holds(const VramAccount *account) const;
     bool         charges(const ByteLedger &ledger) const;
-    void         relieve() const;
+    void         want_relief() const;
+    bool         relief_wanted();
 
 private:
     VramAccount vram_;
     VramAccount host_;
-    Relief      relief_;
-    void       *holder_;
+    mutable bool wanted_;
 };
 
 class VramGate final : public LedgerRelief {
@@ -46,7 +43,6 @@ public:
     const AvVramGate &abi() const;
     GateAccount      *open(const uint8_t *gpu_uuid);
     void              close(GateAccount *account);
-    void              relieve_by(GateAccount *account, GateAccount::Relief relief, void *holder);
     void              relieve(const ByteLedger &ledger, const VramAccount *taker) override;
     uint32_t          live() const;
     uint64_t          leaked() const;

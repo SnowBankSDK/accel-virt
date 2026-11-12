@@ -1,0 +1,86 @@
+From: accel-virt
+Subject: [PATCH] memory: an allocator the embedder asks for relief returns its empty chunks on its own thread
+
+The gate gains reliefWanted: when any user of the same video memory or
+host RAM budget (another DXVK device, vkd3d, the embedder's Vulkan or
+OpenCL backends) is refused, the embedder marks every other account that
+charges that budget. Each DxvkMemoryAllocator asks its own account at its
+next device allocation and in its periodic task, both on its own threads,
+and then frees the empty chunks of every heap. No thread frees memory of a
+device it does not own, and the refused taker never waits for another.
+---
+diff --git a/src/dxvk/dxvk_memory.cpp b/src/dxvk/dxvk_memory.cpp
+index 37113eb..27ccd49 100644
+--- a/src/dxvk/dxvk_memory.cpp
++++ b/src/dxvk/dxvk_memory.cpp
+@@ -1366,6 +1366,9 @@ namespace dxvk {
+     const bool gated = isGated(type);
+     const bool hostGated = isHostGated(type);
+ 
++    if (m_vramAccount.reliefWanted())
++      freeAllEmptyChunksLocked();
++
+     if (hostGated && !m_vramAccount.takeHost(size)) {
+       freeEmptyChunksInHeap(*type.heap, VkDeviceSize(-1), high_resolution_clock::time_point());
+ 
+@@ -1774,6 +1777,12 @@ namespace dxvk {
+   }
+ 
+ 
++  void DxvkMemoryAllocator::freeAllEmptyChunksLocked() {
++    for (uint32_t i = 0; i < m_memHeapCount; i++)
++      freeEmptyChunksInHeap(m_memHeaps[i], VkDeviceSize(-1), high_resolution_clock::time_point());
++  }
++
++
+   void DxvkMemoryAllocator::freeEmptyChunksInHeap(
+     const DxvkMemoryHeap&       heap,
+           VkDeviceSize          allocationSize,
+@@ -2783,6 +2792,11 @@ namespace dxvk {
+   void DxvkMemoryAllocator::performTimedTasks() {
+     static constexpr auto Interval = std::chrono::milliseconds(500u);
+ 
++    if (m_vramAccount.reliefWanted()) {
++      std::unique_lock lock(m_mutex);
++      freeAllEmptyChunksLocked();
++    }
++
+     // This function shouldn't be called concurrently, so checking and
+     // updating the deadline is fine without taking the global lock
+     auto currentTime = high_resolution_clock::now();
+diff --git a/src/dxvk/dxvk_memory.h b/src/dxvk/dxvk_memory.h
+index a73b2b7..4e12dd0 100644
+--- a/src/dxvk/dxvk_memory.h
++++ b/src/dxvk/dxvk_memory.h
+@@ -1451,6 +1451,8 @@ namespace dxvk {
+     uint32_t countEmptyChunksInPool(
+       const DxvkMemoryPool&       pool) const;
+ 
++    void freeAllEmptyChunksLocked();
++
+     void freeEmptyChunksInHeap(
+       const DxvkMemoryHeap&       heap,
+             VkDeviceSize          allocationSize,
+diff --git a/src/dxvk/dxvk_vram_gate.h b/src/dxvk/dxvk_vram_gate.h
+index c90fafa..10748b2 100644
+--- a/src/dxvk/dxvk_vram_gate.h
++++ b/src/dxvk/dxvk_vram_gate.h
+@@ -26,6 +26,7 @@ namespace dxvk {
+     uint64_t (*cap)(void* account);
+     int      (*takeHost)(void* account, uint64_t bytes);
+     void     (*giveHost)(void* account, uint64_t bytes);
++    int      (*reliefWanted)(void* account);
+   };
+ 
+   inline const DxvkVramGate* g_vramGate = nullptr;
+@@ -84,6 +85,10 @@ namespace dxvk {
+         m_gate->giveHost(m_account, bytes);
+     }
+ 
++    bool reliefWanted() const {
++      return m_account && m_gate->reliefWanted(m_account);
++    }
++
+   private:
+ 
+     const DxvkVramGate* m_gate    = nullptr;
