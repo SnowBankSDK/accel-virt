@@ -362,6 +362,7 @@ foreach(src ${AV_UNIT_TESTS})
   set_tests_properties(${name} PROPERTIES
     ENVIRONMENT "LLVM_PROFILE_FILE=${CMAKE_BINARY_DIR}/coverage/${name}.profraw;MESA_SHADER_CACHE_DISABLE=true")
   if(name STREQUAL "test_d3d_backend_device" OR name STREQUAL "test_d3d_tir_device" OR
+     name STREQUAL "test_d3d_line_coverage_device" OR
      name STREQUAL "test_d3d12_session_device" OR
      name STREQUAL "test_d3d12_session_features_device" OR name STREQUAL "test_d3d12_session_tiles_device" OR
      name STREQUAL "test_d3d_gl_interop_device" OR name STREQUAL "test_d3d_cl_interop_device" OR
@@ -383,6 +384,9 @@ foreach(src ${AV_UNIT_TESTS})
   endif()
   if(name STREQUAL "test_d3d_backend_device")
     target_sources(${name} PRIVATE ${CMAKE_SOURCE_DIR}/src/icd/d3d/passthrough_geometry_shader.cpp)
+  endif()
+  if(name STREQUAL "test_line_coverage_spirv")
+    target_include_directories(${name} SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/tools/line-coverage)
   endif()
   if(name STREQUAL "test_posix_renderer_host" OR name STREQUAL "test_renderer_process")
     target_link_libraries(${name} PRIVATE ${CMAKE_DL_LIBS})
@@ -742,6 +746,9 @@ endif()
 
 add_test(NAME check_spirv
          COMMAND python3 -B ${CMAKE_SOURCE_DIR}/tools/gen_spirv.py --check)
+
+add_test(NAME line_coverage_patches
+         COMMAND python3 -B ${CMAKE_SOURCE_DIR}/tools/line_coverage_patches.py --check)
 
 add_test(NAME extension_policy
          COMMAND python3 -B ${CMAKE_SOURCE_DIR}/tools/check_extension_policy.py ${CMAKE_SOURCE_DIR})

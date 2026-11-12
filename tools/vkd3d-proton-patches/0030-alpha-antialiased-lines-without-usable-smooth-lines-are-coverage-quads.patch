@@ -1,0 +1,367 @@
+From: accel-virt
+Subject: [PATCH] Direct3D 12 alpha antialiased lines on a host without usable smooth lines are quads whose coverage the pixel shader puts in alpha
+
+A pipeline with D3D12_LINE_RASTERIZATION_MODE_ALPHA_ANTIALIASED drawing lines, on a device whose
+smooth lines are absent or unusable (RADV caps their coverage at a quarter, so its smoothLines is
+cleared), gets a geometry stage made by the shared line coverage generator: each line becomes a
+quad 2.4 pixels across carrying its distance from the line, and the pixel shader multiplies the
+alpha of render target 0 by the coverage of a 1.4 pixel wide line at that distance. The stage
+reads the size of viewport 0 from an 8 byte push constant range of its own after the root
+signature's, pushed when such a pipeline is bound, the viewport changes or the root signature
+changes; such pipelines are not loaded from a pipeline cache. Pipelines with a geometry shader,
+or whose last vertex stage writes the layer, the viewport index or stream output, draw the lines
+aliased and log it. AV_TEST_HOST_WITHOUT names smoothLines or deviceGeneratedCommands for a test
+to run the path of a host without them. Other pipelines pay nothing.
+---
+diff --git a/libs/vkd3d/command.c b/libs/vkd3d/command.c
+index 1a07ba2..73a79bc 100644
+--- a/libs/vkd3d/command.c
++++ b/libs/vkd3d/command.c
+@@ -7649,6 +7649,12 @@ static void d3d12_command_list_check_vbo_alignment(struct d3d12_command_list *li
+     }
+ }
+ 
++static bool d3d12_command_list_has_line_coverage(const struct d3d12_command_list *list)
++{
++    return list->state && list->state->pipeline_type == VKD3D_PIPELINE_TYPE_GRAPHICS &&
++            list->state->graphics.line_coverage;
++}
++
+ static bool d3d12_command_list_update_graphics_pipeline(struct d3d12_command_list *list,
+         enum vkd3d_pipeline_type pipeline_type)
+ {
+@@ -7756,6 +7762,9 @@ static bool d3d12_command_list_update_graphics_pipeline(struct d3d12_command_lis
+             list->dynamic_state.dirty_vbos = ~0u;
+         list->dynamic_state.dirty_flags |= new_active_flags & ~list->dynamic_state.active_flags;
+         list->command_buffer_pipeline = vk_pipeline;
++
++        if (d3d12_command_list_has_line_coverage(list))
++            list->dynamic_state.dirty_flags |= VKD3D_DYNAMIC_STATE_VIEWPORT;
+     }
+ 
+     /* If no render targets are bound, we use PSO state to determine the sample count, but we do
+@@ -8306,6 +8315,22 @@ static bool d3d12_command_list_update_raygen_state(struct d3d12_command_list *li
+     return true;
+ }
+ 
++static void d3d12_command_list_push_line_coverage(struct d3d12_command_list *list)
++{
++    const struct d3d12_root_signature *root_signature = list->graphics_bindings.root_signature;
++    const struct vkd3d_vk_device_procs *vk_procs = &list->device->vk_procs;
++    const VkViewport *viewport = &list->dynamic_state.viewports[0];
++    float size[2];
++
++    if (!root_signature || root_signature->line_coverage_offset != list->state->graphics.line_coverage_offset)
++        return;
++
++    size[0] = viewport->width < 0.0f ? -viewport->width : viewport->width;
++    size[1] = viewport->height < 0.0f ? -viewport->height : viewport->height;
++    VK_CALL(vkCmdPushConstants(list->cmd.vk_command_buffer, root_signature->graphics.vk_pipeline_layout,
++            VK_SHADER_STAGE_GEOMETRY_BIT, root_signature->line_coverage_offset, sizeof(size), size));
++}
++
+ static void d3d12_command_list_update_dynamic_state(struct d3d12_command_list *list)
+ {
+     const struct vkd3d_vk_device_procs *vk_procs = &list->device->vk_procs;
+@@ -8327,6 +8352,9 @@ static void d3d12_command_list_update_dynamic_state(struct d3d12_command_list *l
+         {
+             VK_CALL(vkCmdSetViewportWithCount(list->cmd.vk_command_buffer,
+                     dyn_state->viewport_count, dyn_state->viewports));
++
++            if (d3d12_command_list_has_line_coverage(list))
++                d3d12_command_list_push_line_coverage(list);
+         }
+ 
+         if (dyn_state->dirty_flags & VKD3D_DYNAMIC_STATE_SCISSOR)
+@@ -13778,6 +13806,9 @@ static void d3d12_command_list_set_root_signature(struct d3d12_command_list *lis
+     if (root_signature)
+         bindings->static_sampler_set = root_signature->vk_sampler_set;
+ 
++    if (bindings == &list->graphics_bindings && d3d12_command_list_has_line_coverage(list))
++        list->dynamic_state.dirty_flags |= VKD3D_DYNAMIC_STATE_VIEWPORT;
++
+     d3d12_command_list_invalidate_root_parameters(list, bindings, true, NULL);
+ }
+ 
+diff --git a/libs/vkd3d/device.c b/libs/vkd3d/device.c
+index 615ec90..7e71758 100644
+--- a/libs/vkd3d/device.c
++++ b/libs/vkd3d/device.c
+@@ -1711,6 +1711,12 @@ bool d3d12_device_supports_variable_shading_rate_tier_2(struct d3d12_device *dev
+             d3d12_determine_shading_rate_image_tile_size(device) != 0;
+ }
+ 
++bool d3d12_device_emulates_line_coverage(struct d3d12_device *device)
++{
++    return !device->device_info.line_rasterization_features.smoothLines &&
++            device->device_info.features2.features.geometryShader;
++}
++
+ static D3D12_VARIABLE_SHADING_RATE_TIER d3d12_device_determine_variable_shading_rate_tier(struct d3d12_device *device)
+ {
+     if (!d3d12_device_supports_variable_shading_rate_tier_1(device))
+@@ -3139,6 +3145,7 @@ static HRESULT vkd3d_init_device_caps(struct d3d12_device *device,
+     VkPhysicalDevice physical_device = device->vk_physical_device;
+     struct vkd3d_vulkan_info *vulkan_info = &device->vk_info;
+     VkPhysicalDeviceFeatures *features;
++    char withheld[256];
+     bool single_storage_texel;
+     bool single_uniform_texel;
+ 
+@@ -3293,6 +3300,17 @@ static HRESULT vkd3d_init_device_caps(struct d3d12_device *device,
+         }
+     }
+ 
++    if (physical_device_info->vulkan_1_2_properties.driverID == VK_DRIVER_ID_MESA_RADV)
++        line_rasterization->smoothLines = VK_FALSE;
++
++    if (vkd3d_get_env_var("AV_TEST_HOST_WITHOUT", withheld, sizeof(withheld)))
++    {
++        if (strstr(withheld, "smoothLines"))
++            line_rasterization->smoothLines = VK_FALSE;
++        if (strstr(withheld, "deviceGeneratedCommands"))
++            physical_device_info->device_generated_commands_features.deviceGeneratedCommands = VK_FALSE;
++    }
++
+     if (!physical_device_info->vulkan_1_2_properties.robustBufferAccessUpdateAfterBind)
+     {
+         /* Generally, we cannot enable robustness if this is not supported,
+diff --git a/libs/vkd3d/state.c b/libs/vkd3d/state.c
+index ec58ce5..6e6e457 100644
+--- a/libs/vkd3d/state.c
++++ b/libs/vkd3d/state.c
+@@ -20,6 +20,7 @@
+ #define VKD3D_DBG_CHANNEL VKD3D_DBG_CHANNEL_API
+ 
+ #include "vkd3d_private.h"
++#include "av_line_coverage.h"
+ #include "vkd3d_descriptor_debug.h"
+ #include "vkd3d_rw_spinlock.h"
+ #include "vkd3d_timestamp_profiler.h"
+@@ -376,6 +377,37 @@ static HRESULT vkd3d_create_pipeline_layout_for_stage_mask(struct d3d12_device *
+             &bind_point_layout->vk_pipeline_layout);
+ }
+ 
++static HRESULT d3d12_root_signature_create_graphics_layout(struct d3d12_root_signature *root_signature,
++        struct d3d12_device *device)
++{
++    const VkPhysicalDeviceLimits *limits = &device->device_info.properties2.properties.limits;
++    struct d3d12_bind_point_layout *layout = &root_signature->graphics;
++    VkPushConstantRange ranges[2];
++    uint32_t count = 0, offset;
++
++    root_signature->line_coverage_offset = UINT32_MAX;
++
++    ranges[0].stageFlags = layout->push_constant_range.stageFlags & VK_SHADER_STAGE_ALL_GRAPHICS;
++    ranges[0].offset = layout->push_constant_range.offset;
++    ranges[0].size = layout->push_constant_range.size;
++    layout->vk_push_stages = ranges[0].stageFlags;
++    if (ranges[0].stageFlags)
++        count++;
++
++    offset = ranges[0].stageFlags ? align(ranges[0].offset + ranges[0].size, 8) : 0;
++    if (d3d12_device_emulates_line_coverage(device) && offset + 2 * sizeof(float) <= limits->maxPushConstantsSize)
++    {
++        ranges[count].stageFlags = VK_SHADER_STAGE_GEOMETRY_BIT;
++        ranges[count].offset = offset;
++        ranges[count].size = 2 * sizeof(float);
++        root_signature->line_coverage_offset = offset;
++        count++;
++    }
++
++    return vkd3d_create_pipeline_layout(device, layout->num_set_layouts, root_signature->set_layouts,
++            count, ranges, &layout->vk_pipeline_layout);
++}
++
+ struct d3d12_root_signature_info
+ {
+     uint32_t binding_count;
+@@ -1534,10 +1566,7 @@ static HRESULT d3d12_root_signature_init_global(struct d3d12_root_signature *roo
+      * For graphics we can generally rely on visibility mask, but not so for compute and raygen,
+      * since they use ALL visibility. */
+ 
+-    if (FAILED(hr = vkd3d_create_pipeline_layout_for_stage_mask(
+-            device, root_signature->graphics.num_set_layouts, root_signature->set_layouts,
+-            &root_signature->graphics.push_constant_range,
+-            VK_SHADER_STAGE_ALL_GRAPHICS, &root_signature->graphics)))
++    if (FAILED(hr = d3d12_root_signature_create_graphics_layout(root_signature, device)))
+         return hr;
+ 
+     if (device->device_info.mesh_shader_features.meshShader && device->device_info.mesh_shader_features.taskShader)
+@@ -4458,6 +4487,121 @@ static void d3d12_pipeline_state_graphics_load_spirv_from_cached_state(
+     }
+ }
+ 
++static bool d3d12_pipeline_state_wants_line_coverage(struct d3d12_pipeline_state *state,
++        const struct d3d12_pipeline_state_desc *desc)
++{
++    struct d3d12_graphics_pipeline_state *graphics = &state->graphics;
++
++    if (state->pipeline_type != VKD3D_PIPELINE_TYPE_GRAPHICS ||
++            desc->rasterizer_state.LineRasterizationMode != D3D12_LINE_RASTERIZATION_MODE_ALPHA_ANTIALIASED ||
++            !d3d12_device_emulates_line_coverage(state->device) ||
++            graphics->rs_desc.rasterizerDiscardEnable ||
++            !(graphics->stage_flags & VK_SHADER_STAGE_FRAGMENT_BIT) ||
++            (graphics->primitive_topology_type != D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE &&
++             graphics->primitive_topology_type != D3D12_PRIMITIVE_TOPOLOGY_TYPE_PATCH))
++        return false;
++
++    if (graphics->stage_flags & VK_SHADER_STAGE_GEOMETRY_BIT)
++    {
++        FIXME_ONCE("Antialiased lines from a geometry shader are drawn aliased.\n");
++        return false;
++    }
++
++    if (state->root_signature->line_coverage_offset == UINT32_MAX)
++    {
++        FIXME_ONCE("No push constant room for antialiased lines, drawing them aliased.\n");
++        return false;
++    }
++
++    return true;
++}
++
++static void d3d12_pipeline_state_add_line_coverage(struct d3d12_pipeline_state *state)
++{
++    const VkPhysicalDeviceLimits *limits = &state->device->device_info.properties2.properties.limits;
++    struct d3d12_graphics_pipeline_state *graphics = &state->graphics;
++    unsigned int producer = UINT32_MAX, fragment = UINT32_MAX, i;
++    struct av_lc_varying varyings[32], inputs[32];
++    uint32_t found = 0, input_count = 0, location, components;
++    uint32_t *gs_words = NULL, *fs_words = NULL;
++    size_t gs_count = 0, fs_count = 0;
++    struct vkd3d_shader_code *gs;
++    int status;
++
++    for (i = 0; i < graphics->stage_count; i++)
++    {
++        if (graphics->cached_desc.bytecode_stages[i] == VK_SHADER_STAGE_VERTEX_BIT ||
++                graphics->cached_desc.bytecode_stages[i] == VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT)
++            producer = i;
++        if (graphics->cached_desc.bytecode_stages[i] == VK_SHADER_STAGE_FRAGMENT_BIT)
++            fragment = i;
++    }
++
++    if (producer == UINT32_MAX || fragment == UINT32_MAX || graphics->stage_count >= VKD3D_MAX_SHADER_STAGES ||
++            !graphics->code[producer].size || !graphics->code[fragment].size)
++        return;
++
++    if (graphics->cached_desc.bytecode_stages[producer] == VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT &&
++            (!(graphics->code[producer].meta.flags & VKD3D_SHADER_META_FLAG_EMITS_LINES) ||
++             (graphics->code[producer].meta.flags & VKD3D_SHADER_META_FLAG_POINT_MODE_TESSELLATION)))
++        return;
++
++    status = av_lc_reflect(graphics->code[producer].code, graphics->code[producer].size / sizeof(uint32_t),
++            AV_LC_SC_OUTPUT, varyings, ARRAY_SIZE(varyings), &found);
++    if (status == AV_LC_OK)
++        status = av_lc_reflect(graphics->code[fragment].code, graphics->code[fragment].size / sizeof(uint32_t),
++                AV_LC_SC_INPUT, inputs, ARRAY_SIZE(inputs), &input_count);
++
++    location = max(av_lc_next_location(varyings, found), av_lc_next_location(inputs, input_count));
++    components = av_lc_output_components(varyings, found);
++
++    if (status == AV_LC_OK && (location >= min(limits->maxFragmentInputComponents, limits->maxGeometryOutputComponents) / 4 ||
++            components > limits->maxGeometryOutputComponents || 4 * components > limits->maxGeometryTotalOutputComponents))
++        status = AV_LC_TOO_MANY;
++
++    if (status == AV_LC_OK)
++        status = av_lc_patch_fragment_shader(graphics->code[fragment].code,
++                graphics->code[fragment].size / sizeof(uint32_t), location, &fs_words, &fs_count);
++
++    if (status == AV_LC_OK)
++        status = av_lc_build_geometry_shader(varyings, found, 0, location,
++                state->root_signature->line_coverage_offset, &gs_words, &gs_count);
++
++    if (status != AV_LC_OK)
++    {
++        if (status != AV_LC_UNCHANGED)
++            FIXME("Antialiased lines drawn aliased, line coverage not built (%d).\n", status);
++        free(fs_words);
++        free(gs_words);
++        return;
++    }
++
++    vkd3d_shader_free_shader_code(&graphics->code[fragment]);
++    graphics->code[fragment].code = fs_words;
++    graphics->code[fragment].size = fs_count * sizeof(uint32_t);
++
++    i = graphics->stage_count++;
++    graphics->cached_desc.bytecode[i].pShaderBytecode = NULL;
++    graphics->cached_desc.bytecode[i].BytecodeLength = 0;
++    graphics->cached_desc.bytecode_stages[i] = VK_SHADER_STAGE_GEOMETRY_BIT;
++    gs = &graphics->code[i];
++    memset(gs, 0, sizeof(*gs));
++    gs->code = gs_words;
++    gs->size = gs_count * sizeof(uint32_t);
++    gs->meta.gs_input_topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
++    gs->meta.flags = VKD3D_SHADER_META_FLAG_EMITS_TRIANGLES;
++    graphics->stage_flags |= VK_SHADER_STAGE_GEOMETRY_BIT;
++
++    graphics->rs_desc.polygonMode = VK_POLYGON_MODE_FILL;
++    graphics->rs_desc.cullMode = VK_CULL_MODE_NONE;
++    graphics->rs_desc.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
++    if (graphics->rs_conservative_info.sType)
++        vk_remove_struct(&graphics->rs_desc, VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_CONSERVATIVE_STATE_CREATE_INFO_EXT);
++
++    graphics->line_coverage = true;
++    graphics->line_coverage_offset = state->root_signature->line_coverage_offset;
++}
++
+ static HRESULT d3d12_pipeline_state_graphics_create_shader_stages(
+         struct d3d12_pipeline_state *state, struct d3d12_device *device,
+         const struct d3d12_pipeline_state_desc *desc)
+@@ -4493,7 +4637,13 @@ static HRESULT d3d12_pipeline_state_graphics_create_shader_stages(
+                 return hr;
+             }
+         }
++    }
+ 
++    if (d3d12_pipeline_state_wants_line_coverage(state, desc))
++        d3d12_pipeline_state_add_line_coverage(state);
++
++    for (i = 0; i < graphics->stage_count; i++)
++    {
+         if (FAILED(hr = vkd3d_setup_shader_stage(state, device,
+                 &graphics->stages[i],
+                 graphics->cached_desc.bytecode_stages[i],
+@@ -5612,7 +5762,8 @@ static HRESULT d3d12_pipeline_state_init_graphics_spirv(struct d3d12_pipeline_st
+     struct d3d12_device *device = state->device;
+     HRESULT hr;
+ 
+-    d3d12_pipeline_state_graphics_load_spirv_from_cached_state(state, device, desc, cached_pso);
++    if (!d3d12_pipeline_state_wants_line_coverage(state, desc))
++        d3d12_pipeline_state_graphics_load_spirv_from_cached_state(state, device, desc, cached_pso);
+     if (FAILED(hr = d3d12_pipeline_state_graphics_create_shader_stages(state, device, desc)))
+         return hr;
+ 
+diff --git a/libs/vkd3d/vkd3d_private.h b/libs/vkd3d/vkd3d_private.h
+index 73896bd..ae4c3c6 100644
+--- a/libs/vkd3d/vkd3d_private.h
++++ b/libs/vkd3d/vkd3d_private.h
+@@ -1929,6 +1929,8 @@ struct d3d12_root_signature
+     uint64_t root_descriptor_raw_va_mask;
+     uint64_t root_descriptor_push_mask;
+ 
++    uint32_t line_coverage_offset;
++
+     D3D12_ROOT_SIGNATURE_FLAGS d3d12_flags;
+ 
+     unsigned int binding_count;
+@@ -2240,6 +2242,9 @@ struct d3d12_graphics_pipeline_state
+     VkPipelineRasterizationLineStateCreateInfoEXT rs_line_info;
+     VkDepthBiasRepresentationInfoEXT rs_depth_bias_info;
+ 
++    bool line_coverage;
++    uint32_t line_coverage_offset;
++
+     /* vkd3d_dynamic_state_flag */
+     uint32_t explicit_dynamic_states;
+     uint32_t pipeline_dynamic_states;
+@@ -5978,6 +5983,7 @@ static inline bool d3d12_device_use_ssbo_root_descriptors(struct d3d12_device *d
+ 
+ bool d3d12_device_supports_variable_shading_rate_tier_1(struct d3d12_device *device);
+ bool d3d12_device_supports_variable_shading_rate_tier_2(struct d3d12_device *device);
++bool d3d12_device_emulates_line_coverage(struct d3d12_device *device);
+ bool d3d12_device_supports_ray_tracing_tier_1_0(const struct d3d12_device *device);
+ bool d3d12_device_supports_ray_tracing_tier_1_2(const struct d3d12_device *device);
+ UINT d3d12_determine_shading_rate_image_tile_size(struct d3d12_device *device);
