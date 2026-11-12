@@ -39,8 +39,8 @@ private:
     void read_first(uint64_t now);
     void refresh();
     void relieve();
-    void restore(uint64_t bytes);
-    void spend(uint64_t bytes);
+    void     restore(uint64_t bytes);
+    uint64_t spend(uint64_t bytes);
 
     uint64_t         budget_;
     HostMemoryGauge *gauge_;
@@ -49,6 +49,7 @@ private:
     uint64_t         available_;
     uint64_t         seen_;
     uint64_t         credit_;
+    uint64_t         unseen_;
     uint64_t         relieved_;
     uint64_t         tight_refusals_;
 };

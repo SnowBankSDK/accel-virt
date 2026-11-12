@@ -237,6 +237,54 @@ TEST(host_ram_ledger_floor, the_admissible_room_is_what_the_host_has_above_its_f
   ledger.give(5 * gib);
   CHECK_EQ(ledger.admissible(), 2 * gib); }
 
+TEST(host_ram_ledger_floor, a_take_the_host_does_not_show_yet_survives_a_refresh)
+{ HostRamLedger ledger;
+  FakeMemoryGauge gauge;
+  gauge.free_bytes = 10 * gib;
+  ledger.watch(&gauge);
+  ledger.floor(4 * gib);
+  CHECK(ledger.take(256u << 20u));
+  CHECK_EQ(ledger.admissible(), 6 * gib - (256u << 20u));
+  gauge.now += HostRamLedger::refresh_ms;
+  CHECK(ledger.take(1u));
+  CHECK_EQ(gauge.reads, 2u);
+  CHECK_EQ(ledger.admissible(), 6 * gib - (256u << 20u) - 1u);
+  gauge.now += HostRamLedger::refresh_ms;
+  CHECK(!ledger.take(6 * gib - (256u << 20u)));
+  CHECK_EQ(gauge.reads, 3u); }
+
+TEST(host_ram_ledger_floor, a_take_the_host_shows_is_not_counted_twice)
+{ HostRamLedger ledger;
+  FakeMemoryGauge gauge;
+  gauge.free_bytes = 10 * gib;
+  ledger.watch(&gauge);
+  ledger.floor(4 * gib);
+  CHECK(ledger.take(256u << 20u));
+  gauge.set(10 * gib - (128u << 20u), HostRamLedger::refresh_ms);
+  CHECK(ledger.take(1u));
+  CHECK_EQ(ledger.admissible(), 6 * gib - (256u << 20u) - 1u);
+  gauge.set(10 * gib - (256u << 20u), HostRamLedger::refresh_ms);
+  CHECK(ledger.take(1u));
+  CHECK_EQ(ledger.admissible(), 6 * gib - (256u << 20u) - 2u);
+  gauge.set(10 * gib - (256u << 20u), HostRamLedger::refresh_ms);
+  CHECK(ledger.take(6 * gib - (256u << 20u) - 2u));
+  CHECK_EQ(ledger.admissible(), 0u); }
+
+TEST(host_ram_ledger_floor, refreshes_never_grant_more_than_the_host_has_above_its_floor_however_slowly_it_shows_takes)
+{ HostRamLedger ledger;
+  FakeMemoryGauge gauge;
+  gauge.free_bytes = 10 * gib;
+  ledger.watch(&gauge);
+  ledger.floor(4 * gib);
+  std::uint64_t granted = 0u;
+  for (std::uint32_t round = 0u; round < 200u; round++) {
+      gauge.now += HostRamLedger::refresh_ms;
+      if (ledger.take(64u << 20u)) granted += 64u << 20u;
+      if (round % 7u == 0u) gauge.free_bytes = 10 * gib - granted / 2u;
+  }
+  CHECK_EQ(granted, 6 * gib);
+  CHECK_EQ(ledger.admissible(), 0u); }
+
 TEST(host_ram_ledger_floor, racing_takes_never_pass_what_the_host_has_above_its_floor)
 { HostRamLedger ledger;
   FakeMemoryGauge gauge;

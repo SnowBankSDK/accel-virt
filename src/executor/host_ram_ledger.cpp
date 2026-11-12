@@ -7,7 +7,7 @@ namespace av {
 
 HostRamLedger::HostRamLedger()
     : budget_(0u), gauge_(nullptr), floor_(0u), stamp_(never), available_(unread), seen_(never), credit_(0u),
-      relieved_(never), tight_refusals_(0u)
+      unseen_(0u), relieved_(never), tight_refusals_(0u)
 {
     AV_SCOPE("HostRamLedger::HostRamLedger");
 }
@@ -128,7 +128,7 @@ bool HostRamLedger::admit(uint64_t bytes)
         if (left == never) return true;
         if (left < bytes || left - bytes < lowest) return false;
         if (__atomic_compare_exchange_n(&available_, &left, left - bytes, true, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
-            spend(bytes);
+            __atomic_fetch_add(&unseen_, bytes - spend(bytes), __ATOMIC_RELAXED);
             return true;
         }
     }
@@ -159,9 +159,14 @@ void HostRamLedger::refresh()
     uint64_t               found = 0u;
     if (!gauge->available(found)) return;
     const uint64_t last = __atomic_exchange_n(&seen_, found, __ATOMIC_RELAXED);
-    if (last != never && found > last) spend(found - last);
+    if (last != never && found > last) static_cast<void>(spend(found - last));
+    const uint64_t pending = __atomic_load_n(&unseen_, __ATOMIC_RELAXED);
+    const uint64_t dropped = last != never && found < last ? last - found : 0u;
+    const uint64_t shown = dropped < pending ? dropped : pending;
+    if (shown != 0u) __atomic_fetch_sub(&unseen_, shown, __ATOMIC_RELAXED);
     const uint64_t owed = __atomic_load_n(&credit_, __ATOMIC_RELAXED);
-    const uint64_t read = owed > largest - found ? largest : found + owed;
+    const uint64_t held = owed > largest - found ? largest : found + owed;
+    const uint64_t read = pending - shown > held ? 0u : held - (pending - shown);
     uint64_t       left = before;
     for (;;) {
         const bool counted = left != never && before != never;
@@ -194,7 +199,7 @@ void HostRamLedger::restore(uint64_t bytes)
     }
 }
 
-void HostRamLedger::spend(uint64_t bytes)
+uint64_t HostRamLedger::spend(uint64_t bytes)
 {
     AV_SCOPE("HostRamLedger::spend");
     uint64_t owed = __atomic_load_n(&credit_, __ATOMIC_RELAXED);
@@ -202,6 +207,7 @@ void HostRamLedger::spend(uint64_t bytes)
            !__atomic_compare_exchange_n(&credit_, &owed, bytes < owed ? owed - bytes : 0u, true, __ATOMIC_ACQ_REL,
                                         __ATOMIC_RELAXED)) {
     }
+    return bytes < owed ? bytes : owed;
 }
 
 }
