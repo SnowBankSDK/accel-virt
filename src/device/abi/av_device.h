@@ -157,7 +157,7 @@ AvDevice *av_device_create(const AvHostOps *ops, const AvExecutorOps *executor, 
                              char *error, size_t error_size);
 int av_device_control(AvDevice *device, void *request, uint32_t type);
 int av_device_export_image(AvDevice *device, uint64_t key, AvExportedImage *image);
-int av_device_export_head(AvDevice *device, uint32_t head, uint64_t key, AvExportedImage *image);
+int av_device_show_frame(AvDevice *device, uint32_t head, uint64_t key);
 int av_device_read_image(AvDevice *device, uint64_t key, void *pixels, uint32_t stride, uint32_t width,
                           uint32_t height);
 int av_device_post_frame(AvDevice *device, uint32_t head, uint32_t frame, uint64_t key);

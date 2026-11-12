@@ -1138,7 +1138,7 @@ TEST(virtio_gpu_av_display_clock, the_frame_latched_at_a_blank_is_exported_and_s
   CHECK(!rig.device.post_frame(0u, 7u, 0x51u));
   CHECK(rig.device.invariants_hold()); }
 
-TEST(virtio_gpu_av_display_clock, a_latched_frame_is_exported_on_the_main_loop_when_no_thread_can_export_it)
+TEST(virtio_gpu_av_display_clock, a_latched_frame_is_never_exported_on_the_main_loop_even_when_no_thread_can_export_it)
 { ClockedDevice rig;
   CHECK_EQ(rig.register_page(0x401000u), 0x1100u);
   CHECK(rig.device.post_frame(0u, 5u, 0x51u));
@@ -1146,9 +1146,9 @@ TEST(virtio_gpu_av_display_clock, a_latched_frame_is_exported_on_the_main_loop_w
   rig.host.set_clock(1000u + 16666667u);
   CHECK(rig.host.wait_for_main_loop_work(1u, 2000u));
   CHECK_EQ(rig.host.run_main_loop(), 1u);
-  CHECK_EQ(rig.host.images_shown(0u), 1u);
+  CHECK_EQ(rig.host.images_shown(0u), 0u);
   rig.device.show_exported_images();
-  CHECK_EQ(rig.host.images_shown(0u), 1u);
+  CHECK_EQ(rig.host.images_shown(0u), 0u);
   CHECK(rig.device.invariants_hold()); }
 
 TEST(virtio_gpu_av_display_clock, a_host_with_no_lock_for_the_clock_is_not_realized)
@@ -1183,6 +1183,7 @@ TEST(virtio_gpu_av_present_engine, the_engine_is_offered_takes_presents_and_stop
   page.u64(0x402000u);
   MockRequest registered(page.bytes(), page.size());
   CHECK(rig.device.control(&registered, 0x02F6u));
+  CHECK(av::pump_main_loop(rig.host, [&registered] { return registered.answered(); }));
   CHECK_EQ(registered.response_type(), 0x1100u);
   std::uint32_t magic = 0u;
   std::memcpy(&magic, rig.host.guest_ram(0x402000u), sizeof magic);
@@ -1199,7 +1200,7 @@ TEST(virtio_gpu_av_present_engine, the_engine_is_offered_takes_presents_and_stop
   CHECK_EQ(completed, 1u);
   CHECK(rig.device.invariants_hold());
   rig.device.reset();
-  CHECK_EQ(rig.host.live_threads(), threads - 1u);
+  CHECK_EQ(rig.host.live_threads(), threads);
   MockRequest after(present.bytes(), present.size());
   CHECK(rig.device.control(&after, 0x02F7u));
   CHECK_EQ(after.response_type(), 0x1205u);

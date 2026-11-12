@@ -1,10 +1,12 @@
 #include "device/control/control_request.hpp"
+#include "device/control/held_requests.hpp"
 #include "device/control/present_engine_commands.hpp"
 #include "device/fence/fence_interrupts.hpp"
 #include "device/present/present_engine.hpp"
 #include "device/present/present_frames.hpp"
 #include "harness/framework/test_registry.hpp"
 #include "harness/host/gpu_request_builder.hpp"
+#include "harness/host/main_loop_pump.hpp"
 #include "harness/host/mock_host.hpp"
 #include "harness/host/mock_request.hpp"
 #include "harness/host/present_scene.hpp"
@@ -33,10 +35,11 @@ struct Rig {
     MockHost        host;
     FenceInterrupts interrupts;
     PresentScene    scene;
+    av::HeldRequests held;
     PresentEngine   engine;
     av::PresentFrames snapshots;
 
-    Rig() : host(), interrupts(host), scene(host), engine(host, interrupts), snapshots()
+    Rig() : host(), interrupts(host), scene(host), held(host), engine(host, interrupts, held), snapshots()
     {
         static_cast<void>(engine.initialize());
     }
@@ -46,7 +49,9 @@ struct Rig {
     {
         MockRequest    mock(built.bytes(), built.size());
         ControlRequest request(host, &mock);
-        return PresentEngineCommands(host, engine, snapshots).answer(request, type) ? mock.response_type() : 0u;
+        if (!PresentEngineCommands(host, engine, snapshots, held).answer(request, type)) return 0u;
+        CHECK(av::pump_main_loop(host, [&mock] { return mock.answered(); }));
+        return mock.response_type();
     }
     std::uint32_t attach(std::uint64_t address)
     {
@@ -67,7 +72,7 @@ TEST(present_engine_commands, a_page_of_guest_ram_is_taken_and_presents_are_queu
   CHECK_EQ(rig.send(rig.scene.blt(1u, 0u, 1u), queued_present), ok_nodata);
   CHECK_EQ(rig.send(rig.scene.blt(7u, 0u, 1u), queued_present), err_invalid_parameter);
   CHECK_EQ(rig.attach(0u), ok_nodata);
-  CHECK_EQ(rig.host.live_threads(), 0u);
+  CHECK_EQ(rig.host.live_threads(), 1u);
   CHECK_EQ(rig.send(rig.scene.blt(1u, 0u, 1u), queued_present), err_invalid_parameter); }
 
 TEST(present_engine_commands, a_page_that_cannot_be_taken_is_refused_and_said_why)

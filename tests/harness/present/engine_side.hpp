@@ -2,6 +2,7 @@
 #define AV_ENGINE_SIDE_HPP
 
 #include "device/fence/fence_interrupts.hpp"
+#include "device/control/held_requests.hpp"
 #include "device/present/present_engine.hpp"
 #include "device/present/present_frames.hpp"
 #include "harness/context/recording_context_plane.hpp"
@@ -44,6 +45,7 @@ private:
     FakeVirtqueueDevice   queue_;
     MockHost              host_;
     FenceInterrupts       interrupts_;
+    HeldRequests          requests_;
     PresentEngine         engine_;
     RecordingContextPlane plane_;
     PresentFrames         snapshots_;

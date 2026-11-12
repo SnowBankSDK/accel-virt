@@ -24,6 +24,7 @@ void AvDisplayFramesExport(void *device);
 void AvDisplayImagesShow(void *device);
 void AvDisplayFramesShow(void *device);
 void AvPresentEngineRun(void *engine);
+void AvPresentEngineReleased(void *engine);
 void AvExportConnectionServe(void *connection);
 void AvServiceThreadRun(void *service);
 void AvServiceThreadConclude(void *service);

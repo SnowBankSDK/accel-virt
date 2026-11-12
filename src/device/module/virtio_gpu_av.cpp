@@ -28,7 +28,7 @@ namespace av {
 VirtioGpuAv::VirtioGpuAv(Host &host)
     : host_(host), binding_(host), pci_(host), feasibility_(host), capset_(host), recorder_(host), held_(host), blobs_(host),
       host_blobs_(host), window_stats_(host), heads_(host, blobs_), display_modes_(host), interrupts_(host),
-      clock_(host, interrupts_, &AvDisplayFramesShow, this), planes_(host), presents_(host, interrupts_), status_(host, interrupts_), local_(host, blobs_, host_blobs_, interrupts_, recorder_),
+      clock_(host, interrupts_, &AvDisplayFramesShow, this), planes_(host), presents_(host, interrupts_, held_), status_(host, interrupts_), local_(host, blobs_, host_blobs_, interrupts_, recorder_),
       remote_(host, blobs_, interrupts_), contexts_(&local_), exports_(host, clock_), shower_(host, &AvDisplayFramesExport, this),
       service_(host)
       {
@@ -151,7 +151,7 @@ void VirtioGpuAv::reset()
     host_.require_main_loop("VirtioGpuAv::reset");
     held_.drop_all();
     clock_.detach();
-    shower_.stop();
+    shower_.forget();
     window_stats_.release();
     planes_.clear();
     presents_.detach();
@@ -201,7 +201,7 @@ bool VirtioGpuAv::control(void *request, uint32_t type)
            DisplayModeCommands(host_, display_modes_).answer(control, type) ||
            DisplayClockCommands(host_, clock_).answer(control, type) ||
            ScanoutPlaneCommands(host_, planes_).answer(control, type) ||
-           PresentEngineCommands(host_, presents_, snapshots).answer(control, type) ||
+           PresentEngineCommands(host_, presents_, snapshots, held_).answer(control, type) ||
            WindowStatsCommands(host_, window_stats_).answer(control, type);
 }
 
@@ -351,8 +351,8 @@ void VirtioGpuAv::show_latched_frames()
     AV_SCOPE("VirtioGpuAv::show_latched_frames");
     host_.require_main_loop("VirtioGpuAv::show_latched_frames");
     clock_.showing();
-    if (contexts_->exports_off_main_loop() && shower_.start() == Status::ok) {
-        shower_.wake();
+    if (contexts_->exports_off_main_loop()) {
+        if (shower_.start() == Status::ok) shower_.wake();
         return;
     }
     for (uint32_t head = 0u; head < DisplayClock::heads; head++) {
@@ -363,15 +363,32 @@ void VirtioGpuAv::show_latched_frames()
     }
 }
 
+bool VirtioGpuAv::show_frame(uint32_t head, uint64_t key)
+{
+    AV_SCOPE("VirtioGpuAv::show_frame");
+    host_.require_main_loop("VirtioGpuAv::show_frame");
+    if (!realized() || head >= DisplayClock::heads || !host_.display_takes_dmabuf(head)) return false;
+    if (!contexts_->exports_off_main_loop()) {
+        AvExportedImage image = {};
+        return export_head(head, key, image) && host_.show_image(head, image) == Status::ok;
+    }
+    if (shower_.start() != Status::ok) return false;
+    shower_.ask(head, key);
+    shower_.wake();
+    return true;
+}
+
 void VirtioGpuAv::export_latched_frames()
 {
     AV_SCOPE("VirtioGpuAv::export_latched_frames");
-    bool exported = false;
+    const uint32_t generation = shower_.generation();
+    bool           exported = false;
     for (uint32_t head = 0u; head < DisplayClock::heads; head++) {
         uint64_t         key = 0u;
         AvExportedImage image = {};
-        if (!clock_.take_unshown(head, key) || !export_head(head, key, image)) continue;
-        shower_.hold(head, image);
+        if (!shower_.take_asked(head, key) && !clock_.take_unshown(head, key)) continue;
+        if (!export_head(head, key, image)) continue;
+        shower_.hold(head, image, generation);
         exported = true;
     }
     if (exported) host_.run_on_main_loop(&AvDisplayImagesShow, this);

@@ -281,7 +281,6 @@ static void virtio_gpu_av_scanout_image(VirtIOGPU *g, VirtIOGPUAv *r, struct vir
     struct virtio_gpu_av_scanout_image request;
     struct virtio_gpu_simple_resource *resource;
     enum virtio_gpu_ctrl_type answer = VIRTIO_GPU_RESP_OK_NODATA;
-    AvExportedImage exported;
     uint32_t head;
 
     if (iov_to_buf(cmd->elem.out_sg, cmd->elem.out_num, 0, &request, sizeof(request)) != sizeof(request)) {
@@ -294,8 +293,7 @@ static void virtio_gpu_av_scanout_image(VirtIOGPU *g, VirtIOGPUAv *r, struct vir
             head = virtio_gpu_av_head_of(g, le32_to_cpu(request.resource_id));
             if (r->host.display_takes_dmabuf(r->host.opaque, head) &&
                 !av_device_post_frame(r->core, head, le32_to_cpu(request.frame), le64_to_cpu(request.key)) &&
-                !(av_device_export_head(r->core, head, le64_to_cpu(request.key), &exported) &&
-                  virtio_gpu_av_show_image(r, head, &exported))) {
+                !av_device_show_frame(r->core, head, le64_to_cpu(request.key))) {
                 answer = VIRTIO_GPU_RESP_ERR_UNSPEC;
             }
         }

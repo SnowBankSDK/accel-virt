@@ -52,8 +52,8 @@ int av_device_export_image(AvDevice *device, uint64_t key, AvExportedImage *imag
 { return image != nullptr && reinterpret_cast<av::DeviceInstance *>(device)->device().export_image(key, *image) ? 1 : 0; }
 
 __attribute__((visibility("default")))
-int av_device_export_head(AvDevice *device, uint32_t head, uint64_t key, AvExportedImage *image)
-{ return image != nullptr && reinterpret_cast<av::DeviceInstance *>(device)->device().export_head(head, key, *image) ? 1 : 0; }
+int av_device_show_frame(AvDevice *device, uint32_t head, uint64_t key)
+{ return reinterpret_cast<av::DeviceInstance *>(device)->device().show_frame(head, key) ? 1 : 0; }
 
 int av_device_read_image(AvDevice *device, uint64_t key, void *pixels, uint32_t stride, uint32_t width, uint32_t height)
 { return reinterpret_cast<av::DeviceInstance *>(device)->device().read_image(key, pixels, stride, width, height) ? 1 : 0; }
@@ -134,6 +134,9 @@ void AvDisplayFramesShow(void *device)
 
 void AvPresentEngineRun(void *engine)
 { static_cast<av::PresentEngine *>(engine)->run(); }
+
+void AvPresentEngineReleased(void *engine)
+{ static_cast<av::PresentEngine *>(engine)->released(); }
 
 void AvExportConnectionServe(void *connection)
 { static_cast<av::ExportConnection *>(connection)->serve(); }

@@ -23,7 +23,7 @@ void exported(void *context)
     AvExportedImage image = {};
     image.fd = 7;
     image.slot = exports.runs.load();
-    exports.show->hold(1u, image);
+    exports.show->hold(1u, image, exports.show->generation());
     exports.runs++;
 }
 
@@ -64,16 +64,16 @@ TEST(display_show, a_held_image_is_taken_once_per_head_and_only_for_a_head_that_
   AvExportedImage image = {};
   image.fd = 9;
   CHECK(!show.take(1u, image));
-  show.hold(1u, image);
+  show.hold(1u, image, show.generation());
   CHECK_STATUS(show.start(), Status::ok);
-  show.hold(DisplayClock::heads, image);
-  show.hold(1u, image);
+  show.hold(DisplayClock::heads, image, show.generation());
+  show.hold(1u, image, show.generation());
   AvExportedImage taken = {};
   CHECK(show.take(1u, taken));
   CHECK_EQ(taken.fd, 9);
   CHECK(!show.take(1u, taken));
   CHECK(!show.take(DisplayClock::heads, taken));
-  show.hold(1u, image);
+  show.hold(1u, image, show.generation());
   show.stop();
   CHECK(!show.take(1u, taken));
   CHECK(show.invariants_hold()); }

@@ -60,6 +60,7 @@ public:
     bool                 read_image(uint64_t key, void *pixels, uint32_t stride, uint32_t width, uint32_t height);
     bool                 post_frame(uint32_t head, uint32_t frame, uint64_t key);
     void                 show_latched_frames();
+    bool                 show_frame(uint32_t head, uint64_t key);
     void                 export_latched_frames();
     void                 show_exported_images();
     bool                 pci_identity(AvPciIdentity &identity) const;

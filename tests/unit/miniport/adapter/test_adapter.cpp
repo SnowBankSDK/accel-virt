@@ -58,6 +58,8 @@
 #include "miniport/ddi/dxgkarg_present_record.hpp"
 #include "device/control/control_request.hpp"
 #include "device/control/present_commands.hpp"
+#include "device/control/held_requests.hpp"
+#include "harness/host/main_loop_pump.hpp"
 #include "device/control/present_engine_commands.hpp"
 #include "device/fence/fence_interrupts.hpp"
 #include "device/present/present_engine.hpp"
@@ -379,7 +381,12 @@ public:
     void                   serve() { answer_display_info(this); }
     const std::uint8_t    *last_queued() const { return queued_; }
     std::uint32_t          queued_presents() const { return queued_count_; }
-    void                   stop_presents() { present_engine_.detach(); }
+    void                   stop_presents()
+    {
+        present_engine_.detach();
+        for (int round = 0; round < 500 && present_engine_.releasing(); round++)
+            static_cast<void>(host_.wait_for_main_loop_work(1u, 10u)), static_cast<void>(host_.run_main_loop());
+    }
     void                   offer_modes(const av::DisplayModeSet &modes) { offered_modes_ = modes; }
     void                   refuse_the_blob() { refuse_blob_ = true; }
     std::uint32_t          blob_maps() const { return blob_maps_; }
@@ -509,7 +516,9 @@ private:
         }
         av::MockRequest    mock(request, length);
         av::ControlRequest control(fixture->host_, &mock);
-        static_cast<void>(av::PresentEngineCommands(fixture->host_, fixture->present_engine_, av::PresentFrames()).answer(control, type));
+        if (av::PresentEngineCommands(fixture->host_, fixture->present_engine_, av::PresentFrames(), fixture->present_held_)
+                .answer(control, type))
+            static_cast<void>(av::pump_main_loop(fixture->host_, [&mock] { return mock.answered(); }));
         const std::size_t given = mock.response_size() < room ? mock.response_size() : room;
         std::memcpy(answer, mock.response_bytes(), given);
         return static_cast<std::uint32_t>(given);
@@ -519,7 +528,8 @@ private:
     av::MockHost          host_;
     av::PresentCommands   present_commands_{host_};
     av::FenceInterrupts   present_interrupts_{host_};
-    av::PresentEngine     present_engine_{host_, present_interrupts_};
+    av::HeldRequests      present_held_{host_};
+    av::PresentEngine     present_engine_{host_, present_interrupts_, present_held_};
     std::uint8_t          queued_[av::QueuedPresentRequest::encoded_size] = {};
     std::uint32_t         queued_count_ = 0u;
     std::uint8_t          present_request_[0x9000] = {};
