@@ -846,8 +846,9 @@ cl_mem ClIcdRoot::create_buffer_for_host(cl_context context, cl_mem_flags flags,
     static_assert(sizeof allowed / sizeof allowed[0] == ClExternalMemory::handle_property_count + 1u);
     ClPropertyList list;
     const cl_int   judged_list = judge(properties, allowed, ClExternalMemory::handle_property_count + 1u, list);
-    if (judged_list != CL_SUCCESS) {
-        report_error(error, judged_list);
+    uint64_t       first_device = 0u;
+    if (judged_list != CL_SUCCESS || (list.names(ClPropertyList::device_handle_list, first_device) && first_device == 0u)) {
+        report_error(error, judged_list != CL_SUCCESS ? judged_list : CL_INVALID_PROPERTY);
         return nullptr;
     }
     ClObject *const held = judged(context, ClObject::Kind::context);
