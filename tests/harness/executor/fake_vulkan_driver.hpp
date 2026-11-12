@@ -28,6 +28,7 @@ struct FakeVulkanDriver {
 
     VkResult      event_status[most_events] = {};
     std::uint32_t events_set = 0u;
+    std::uint32_t events_destroyed = 0u;
     std::uint32_t event_polls = 0u;
     VkResult      set_result = VK_EVENT_SET;
 
@@ -152,6 +153,11 @@ VKAPI_ATTR VkResult VKAPI_CALL vkSetEvent(VkDevice, VkEvent event)
     av::fake_vulkan.events_set++;
     av::fake_vulkan.event_status[av::fake_event_index(event)] = VK_EVENT_SET;
     return VK_SUCCESS;
+}
+
+VKAPI_ATTR void VKAPI_CALL vkDestroyEvent(VkDevice, VkEvent, const VkAllocationCallbacks *)
+{
+    av::fake_vulkan.events_destroyed++;
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateFence(VkDevice, const VkFenceCreateInfo *, const VkAllocationCallbacks *,
