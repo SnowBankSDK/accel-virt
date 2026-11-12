@@ -162,7 +162,8 @@ def lower(raw: RawRegistry, prof: Profile) -> Registry:
                    synchronous=set(prof.synchronous),
                    read_into_blob=set(prof.read_into_blob),
                    reads_window=set(prof.reads_window),
-                   reads_buffers=set(prof.reads_buffers))
+                   reads_buffers=set(prof.reads_buffers),
+                   orders_mappings=set(prof.orders_mappings))
     wanted: list[tuple[str, str]] = []
     seen: set[str] = set()
     for tier, features in prof.tiers.items():

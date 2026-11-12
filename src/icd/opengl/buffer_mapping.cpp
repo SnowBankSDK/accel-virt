@@ -34,6 +34,12 @@ bool BufferMapping::persistent_writes() const
     return (flags() & (map_persistent | map_write)) == (map_persistent | map_write);
 }
 
+bool BufferMapping::writes_readers_see() const
+{
+    AV_SCOPE("BufferMapping::writes_readers_see");
+    return persistent_writes() && (flags() & (map_coherent | map_flush_explicit)) != 0u;
+}
+
 Status BufferMapping::mark(uint64_t offset, uint64_t length)
 {
     AV_SCOPE("BufferMapping::mark");

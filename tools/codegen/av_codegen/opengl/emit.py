@@ -2331,6 +2331,12 @@ def emit_icd(reg: Registry, out_dir: Path, proc_table: list[str]) -> None:
         cmd = reg.commands.get(name)
         if cmd is None or _icd_is_handwritten(cmd):
             raise GenerationError(f"reads_buffers: {name} is not a generated entry point")
+    for name in sorted(reg.orders_mappings):
+        cmd = reg.commands.get(name)
+        if cmd is None or _icd_is_handwritten(cmd):
+            raise GenerationError(f"orders_mappings: {name} is not a generated entry point")
+        if name in reg.reads_buffers:
+            raise GenerationError(f"orders_mappings: {name} is listed as a buffer reader too")
     for cmd in reg.commands.values():
         if cmd.api != "gl":
             continue
@@ -2358,6 +2364,8 @@ def emit_icd(reg: Registry, out_dir: Path, proc_table: list[str]) -> None:
             out.append(f"    if (::av::glicd::{SLICED_BUFFER_ANSWERS[cmd.name]}) return;")
         if cmd.name in reg.reads_buffers:
             out.append("    ::av::glicd::flush_persistent_mappings();")
+        if cmd.name in reg.orders_mappings:
+            out.append("    ::av::glicd::order_persistent_mappings();")
         if cmd.name in BIND_SHADOW_FORGETS:
             out.append("    ::av::glicd::forget_bindings();")
         kind = _ret_kind(cmd)

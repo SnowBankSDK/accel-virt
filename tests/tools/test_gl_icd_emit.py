@@ -69,6 +69,7 @@ def registry():
     reg.driver_entries["glGetPointerv"] = ("void", "GLenum pname, void **params")
     reg.reads_window = {"glReadnPixels"}
     reg.reads_buffers = {"glTexSubImage2D"}
+    reg.orders_mappings = {"glCullFace"}
     return reg
 
 
@@ -191,6 +192,19 @@ class GeneratedGlIcd(unittest.TestCase):
         self.assertLess(flush, upload.index("::av::glproto::av_glTexSubImage2D("))
         for name in ("Wrap_glCullFace", "Wrap_glUniform1iv", "Wrap_glReadnPixels"):
             self.assertNotIn("flush_persistent_mappings", body_of(self.source, name), name)
+
+    def test_an_ordering_command_sends_every_persistent_write_and_a_reader_only_the_ones_it_must_see(self):
+        ordering = body_of(self.source, "Wrap_glCullFace")
+        self.assertIn("::av::glicd::order_persistent_mappings();", ordering)
+        self.assertNotIn("flush_persistent_mappings", ordering)
+        self.assertNotIn("order_persistent_mappings", body_of(self.source, "Wrap_glTexSubImage2D"))
+
+    def test_an_ordering_command_that_is_also_a_reader_is_refused(self):
+        reg = registry()
+        reg.orders_mappings = {"glTexSubImage2D"}
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(emit.GenerationError, "glTexSubImage2D"):
+                emit.emit_icd(reg, pathlib.Path(directory), emit.read_proc_table(ORDER))
 
     def test_a_buffer_reader_the_generator_does_not_forward_is_refused(self):
         for name in ("glUnknown", "glGetString"):

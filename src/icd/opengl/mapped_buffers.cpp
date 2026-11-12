@@ -37,7 +37,7 @@ uint32_t access_error(uint32_t access)
 }
 
 MappedBuffers::MappedBuffers(BlockSource &memory, BufferShadows &shadows, SlicedBuffers &slices, DriverLog &log)
-    : shadows_(shadows), slices_(slices), kept_flags_(memory, Pool::paged), log_(log), transfer_(shadows), mappings_(memory), persistent_writers_(0u), logged_()
+    : shadows_(shadows), slices_(slices), kept_flags_(memory, Pool::paged), log_(log), transfer_(shadows), mappings_(memory), persistent_writers_(0u), seen_writers_(0u), logged_()
 {
     AV_SCOPE("MappedBuffers::MappedBuffers");
 }
@@ -79,6 +79,7 @@ uint32_t MappedBuffers::map(ClientTransport &wire, uint32_t buffer, int64_t offs
     transfer_.start(wire, *mapping);
     log_once();
     if (mapping->persistent_writes()) persistent_writers_++;
+    if (mapping->writes_readers_see()) seen_writers_++;
     if ((access & BufferMapping::map_persistent) != 0u) wire.note(ChannelCounter::copied_mappings, 1u);
     pointer = mapping->at();
     return gl_no_error;
@@ -179,6 +180,15 @@ bool MappedBuffers::map_state(uint32_t buffer, uint32_t pname, int64_t &value) c
 void MappedBuffers::flush_persistent(ClientTransport &wire)
 {
     AV_SCOPE("MappedBuffers::flush_persistent");
+    if (seen_writers_ == 0u) return;
+    mappings_.for_each([this, &wire](BufferMapping &mapping) {
+        if (mapping.writes_readers_see()) transfer_.write_back(wire, mapping);
+    });
+}
+
+void MappedBuffers::order_persistent(ClientTransport &wire)
+{
+    AV_SCOPE("MappedBuffers::order_persistent");
     if (persistent_writers_ == 0u) return;
     mappings_.for_each([this, &wire](BufferMapping &mapping) {
         if (mapping.persistent_writes()) transfer_.write_back(wire, mapping);
@@ -210,6 +220,7 @@ void MappedBuffers::release()
     AV_SCOPE("MappedBuffers::release");
     mappings_.close_all();
     persistent_writers_ = 0u;
+    seen_writers_ = 0u;
 }
 
 uint32_t MappedBuffers::held() const
@@ -233,8 +244,12 @@ bool MappedBuffers::invariants_hold() const
 {
     AV_SCOPE("MappedBuffers::invariants_hold");
     uint32_t writers = 0u;
-    mappings_.for_each([&writers](const BufferMapping &mapping) { writers += mapping.persistent_writes() ? 1u : 0u; });
-    return writers == persistent_writers_ && mappings_.invariants_hold();
+    uint32_t seen = 0u;
+    mappings_.for_each([&writers, &seen](const BufferMapping &mapping) {
+        writers += mapping.persistent_writes() ? 1u : 0u;
+        seen += mapping.writes_readers_see() ? 1u : 0u;
+    });
+    return writers == persistent_writers_ && seen == seen_writers_ && mappings_.invariants_hold();
 }
 
 BufferMapping *MappedBuffers::find(uint32_t buffer)
@@ -253,6 +268,7 @@ void MappedBuffers::drop(BufferMapping &mapping)
 {
     AV_SCOPE("MappedBuffers::drop");
     if (mapping.persistent_writes()) persistent_writers_--;
+    if (mapping.writes_readers_see()) seen_writers_--;
     mappings_.close(mapping);
 }
 

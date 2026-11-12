@@ -1185,7 +1185,7 @@ void APIENTRY Wrap_glEndTransformFeedback(void) {
 GLsync APIENTRY Wrap_glFenceSync(GLenum condition, GLbitfield flags) {
     AV_SCOPE("glFenceSync");
     auto* av_t = ::av::glicd::wire();
-    ::av::glicd::flush_persistent_mappings();
+    ::av::glicd::order_persistent_mappings();
     if (av_t == nullptr) return nullptr;
     return reinterpret_cast<GLsync>(static_cast<uintptr_t>(::av::glproto::av_glFenceSync(*av_t, condition, flags)));
 }
@@ -2391,7 +2391,7 @@ void APIENTRY Wrap_glLogicOp(GLenum opcode) {
 void APIENTRY Wrap_glMemoryBarrier(GLbitfield barriers) {
     AV_SCOPE("glMemoryBarrier");
     auto* av_t = ::av::glicd::wire();
-    ::av::glicd::flush_persistent_mappings();
+    ::av::glicd::order_persistent_mappings();
     if (av_t == nullptr) return;
     ::av::glproto::av_glMemoryBarrier(*av_t, barriers);
 }
@@ -2399,7 +2399,7 @@ void APIENTRY Wrap_glMemoryBarrier(GLbitfield barriers) {
 void APIENTRY Wrap_glMemoryBarrierByRegion(GLbitfield barriers) {
     AV_SCOPE("glMemoryBarrierByRegion");
     auto* av_t = ::av::glicd::wire();
-    ::av::glicd::flush_persistent_mappings();
+    ::av::glicd::order_persistent_mappings();
     if (av_t == nullptr) return;
     ::av::glproto::av_glMemoryBarrierByRegion(*av_t, barriers);
 }

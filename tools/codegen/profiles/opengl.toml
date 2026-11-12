@@ -276,8 +276,10 @@ reads_buffers = [
     "glCompressedTextureSubImage1DEXT", "glCompressedTextureSubImage2DEXT", "glCompressedTextureSubImage3DEXT",
     "glCompressedMultiTexImage1DEXT", "glCompressedMultiTexImage2DEXT", "glCompressedMultiTexImage3DEXT",
     "glCompressedMultiTexSubImage1DEXT", "glCompressedMultiTexSubImage2DEXT", "glCompressedMultiTexSubImage3DEXT",
-    "glDrawPixels", "glReadnPixels", "glMemoryBarrier", "glMemoryBarrierByRegion", "glFenceSync",
+    "glDrawPixels", "glReadnPixels",
 ]
+
+orders_mappings = ["glMemoryBarrier", "glMemoryBarrierByRegion", "glFenceSync"]
 
 reads_window = [
     "glReadnPixels", "glCopyPixels",

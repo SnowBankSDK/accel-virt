@@ -249,6 +249,7 @@ void OpenGlBackend::shut_down()
         framebuffers_.release();
         pack_.release();
         pack_.abandon_all();
+        slices_.release();
         buffers_.give_back();
         memories_.destroy_all(import_);
         memories_.part();
@@ -262,6 +263,7 @@ void OpenGlBackend::shut_down()
         }
     } else {
         framebuffers_.forget_all();
+        slices_.forget();
         memories_.forget_all();
         memories_.part();
         progress_.forget();

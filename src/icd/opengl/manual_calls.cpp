@@ -1027,7 +1027,7 @@ void ManualCalls::finish()
     GuestGlContext *const context = sending();
     if (context == nullptr) return;
     ClientTransport &wire = *context->wire();
-    context->mappings().flush_persistent(wire);
+    context->mappings().order_persistent(wire);
     const uint64_t   fence = glproto::av_glFenceSync(wire, gl_sync_gpu_commands_complete, 0u);
     if (fence == 0u) return glproto::av_glFinish(wire);
     SyncWaitProbe           probe(wire, fence, SyncWaitProbe::gl_sync_flush_commands_bit);

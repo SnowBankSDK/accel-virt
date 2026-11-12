@@ -3,6 +3,7 @@
 #include "executor/opengl/gl_batch_progress.hpp"
 #include "executor/opengl/gl_buffer_slices.hpp"
 #include "executor/opengl/gl_error_queue.hpp"
+#include "executor/opengl/gl_upload_ring.hpp"
 #include "executor/opengl/gl_memory_objects.hpp"
 #include "executor/shim/gl_host_import.hpp"
 #include "executor/shim/gl_native_fences.hpp"
@@ -324,3 +325,103 @@ TEST(gl_buffer_slices, a_slice_write_goes_through_a_staging_copy_the_gpu_runs_in
   CHECK(rig.slices.on_WriteBufferSlice(5u, 0u, data, sizeof data));
   CHECK_EQ(write_calls, 5u);
   CHECK_EQ(rig.word.count(0x0505u - GlErrorWord::first_error), 1u); }
+
+namespace {
+
+struct RingCalls {
+    std::uint32_t made = 0u;
+    std::uint32_t deleted = 0u;
+    GLuint        deleted_name = 0u;
+    GLsizeiptr    ring_size = 0;
+    GLbitfield    ring_flags = 0u;
+    std::uint32_t filled = 0u;
+    GLintptr      filled_at = -1;
+    std::uint32_t copies = 0u;
+    GLuint        copy_from = 0u;
+    GLintptr      copy_read = -1;
+    GLuint        copy_into = 0u;
+    GLintptr      copy_at = -1;
+    GLuint        next_name = 90u;
+};
+
+RingCalls ring_calls;
+
+void ring_create(GLsizei, GLuint *names)
+{
+    ring_calls.made++;
+    names[0] = ++ring_calls.next_name;
+}
+
+void ring_storage(GLuint, GLsizeiptr size, const void *, GLbitfield flags)
+{
+    ring_calls.ring_size = size;
+    ring_calls.ring_flags = flags;
+}
+
+void ring_fill(GLuint, GLintptr at, GLsizeiptr, const void *)
+{
+    ring_calls.filled++;
+    ring_calls.filled_at = at;
+}
+
+void ring_copy(GLuint from, GLuint into, GLintptr read, GLintptr at, GLsizeiptr)
+{
+    ring_calls.copies++;
+    ring_calls.copy_from = from;
+    ring_calls.copy_read = read;
+    ring_calls.copy_into = into;
+    ring_calls.copy_at = at;
+}
+
+void ring_delete(GLsizei, const GLuint *names)
+{
+    ring_calls.deleted++;
+    ring_calls.deleted_name = names[0];
+}
+
+}
+
+TEST(gl_buffer_slices, slice_writes_share_one_staging_ring_and_a_region_comes_back_only_after_its_fence_passes)
+{ Rig rig;
+  ring_calls = RingCalls{};
+  rig.gl.glCreateBuffers = ring_create;
+  rig.gl.glNamedBufferStorage = ring_storage;
+  rig.gl.glNamedBufferSubData = ring_fill;
+  rig.gl.glCopyNamedBufferSubData = ring_copy;
+  rig.gl.glDeleteBuffers = ring_delete;
+  static std::uint8_t data[av::GlUploadRing::largest] = {};
+  CHECK(rig.slices.on_WriteBufferSlice(5u, 16u, data, 8u));
+  CHECK_EQ(ring_calls.made, 1u);
+  const GLuint ring = ring_calls.next_name;
+  CHECK_EQ(ring_calls.ring_size, static_cast<GLsizeiptr>(av::GlUploadRing::ring_bytes));
+  CHECK_EQ(ring_calls.ring_flags, 0x0100u);
+  CHECK_EQ(ring_calls.filled_at, 0);
+  CHECK_EQ(ring_calls.copy_from, ring);
+  CHECK_EQ(ring_calls.copy_read, 0);
+  CHECK_EQ(ring_calls.copy_into, 5u);
+  CHECK_EQ(ring_calls.copy_at, 16);
+  CHECK(rig.slices.on_WriteBufferSlice(6u, 0u, data, 300u));
+  CHECK_EQ(ring_calls.made, 1u);
+  CHECK_EQ(ring_calls.filled_at, static_cast<GLintptr>(av::GlUploadRing::alignment));
+  for (std::uint32_t piece = 0u; piece < 3u; piece++)
+      CHECK(rig.slices.on_WriteBufferSlice(5u, 0u, data, sizeof data));
+  CHECK_EQ(ring_calls.made, 1u);
+  CHECK_EQ(ring_calls.copies, 5u);
+  CHECK_EQ(ring_calls.deleted, 0u);
+  CHECK(rig.slices.on_WriteBufferSlice(5u, 0u, data, sizeof data));
+  CHECK_EQ(ring_calls.made, 2u);
+  CHECK_EQ(ring_calls.deleted, 1u);
+  CHECK(ring_calls.deleted_name != ring);
+  rig.progress.fence();
+  CHECK(rig.slices.on_WriteBufferSlice(5u, 0u, data, sizeof data));
+  CHECK_EQ(ring_calls.made, 3u);
+  signalled_through = 1u;
+  CHECK(!rig.progress.settle());
+  CHECK(rig.slices.on_WriteBufferSlice(7u, 32u, data, 8u));
+  CHECK_EQ(ring_calls.made, 3u);
+  CHECK_EQ(ring_calls.copy_from, ring);
+  CHECK_EQ(ring_calls.filled_at, 0);
+  CHECK_EQ(ring_calls.copy_into, 7u);
+  rig.slices.release();
+  CHECK_EQ(ring_calls.deleted, 3u);
+  CHECK_EQ(ring_calls.deleted_name, ring); }

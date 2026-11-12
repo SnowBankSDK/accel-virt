@@ -52,6 +52,7 @@ public:
     void     refresh_persistent(ClientTransport &wire);
     bool     refuses_subdata(uint32_t buffer) const;
     void     flush_persistent(ClientTransport &wire);
+    void     order_persistent(ClientTransport &wire);
     void     forget(int32_t count, const uint32_t *buffers);
     void     release();
     uint32_t held() const;
@@ -73,6 +74,7 @@ private:
     BufferMapTransfer                  transfer_;
     icd::OpenMappings<BufferMapping>   mappings_;
     uint32_t                           persistent_writers_;
+    uint32_t                           seen_writers_;
     icd::OnceLatch                 logged_;
 
     friend struct MappedBuffersProbe;

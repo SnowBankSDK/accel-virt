@@ -18,6 +18,7 @@ class Profile:
     read_into_blob: set[str] = field(default_factory=set)
     reads_window: set[str] = field(default_factory=set)
     reads_buffers: set[str] = field(default_factory=set)
+    orders_mappings: set[str] = field(default_factory=set)
     aliases: dict[str, str] = field(default_factory=dict)
     params: dict[str, dict] = field(default_factory=dict)
     pname_counts: dict[str, int] = field(default_factory=dict)
@@ -67,6 +68,7 @@ def load(profile_path: Path, ids_path: Path) -> Profile:
         read_into_blob=set(data.get("read_into_blob", [])),
         reads_window=set(data.get("reads_window", [])),
         reads_buffers=set(data.get("reads_buffers", [])),
+        orders_mappings=set(data.get("orders_mappings", [])),
         aliases={str(k): str(v) for k, v in data.get("aliases", {}).items()},
         params=dict(data.get("params", {})),
         pname_counts={k: int(v) for k, v in data.get("pname_counts", {}).items()},

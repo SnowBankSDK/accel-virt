@@ -113,6 +113,14 @@ void flush_persistent_mappings() noexcept
     if (wire != nullptr) context->mappings().flush_persistent(*wire);
 }
 
+void order_persistent_mappings() noexcept
+{
+    AV_SCOPE("order_persistent_mappings");
+    GuestGlContext *const context = current_context();
+    ClientTransport *const wire = context != nullptr ? context->wire() : nullptr;
+    if (wire != nullptr) context->mappings().order_persistent(*wire);
+}
+
 bool resolve_window_read() noexcept
 {
     AV_SCOPE("resolve_window_read");

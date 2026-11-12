@@ -512,12 +512,12 @@ TEST(manual_calls, an_explicit_range_writes_back_only_what_was_flushed)
   CHECK_EQ(current.argument_since(2u, 2u), 6u);
   CHECK_EQ(current.error(), 0u); }
 
-TEST(manual_calls, a_persistent_write_map_is_sent_before_every_draw)
+TEST(manual_calls, a_coherent_persistent_write_map_is_sent_before_every_draw)
 { Current current;
   av::ScriptedHost &host = current.rig().host();
   answer_size(host, 8u);
   host.gl_bytes(nullptr, 0u);
-  const GLbitfield persistent_write = 0x0002u | 0x0040u;
+  const GLbitfield persistent_write = 0x0002u | 0x0040u | 0x0080u;
   auto *const mapped = static_cast<std::uint8_t *>(gen::Wrap_glMapNamedBufferRange(3u, 0, 8, persistent_write));
   CHECK(mapped != nullptr);
   mapped[0] = 1u;
@@ -539,6 +539,31 @@ TEST(manual_calls, a_persistent_write_map_is_sent_before_every_draw)
   gen::Wrap_glDrawArrays(gl_triangles, 0, 3);
   CHECK_EQ(current.sent(), 11u);
   CHECK_EQ(current.sent_since(10u), ids::kCmd_glDrawArrays);
+  CHECK_EQ(current.context().mappings().held(), 0u); }
+
+TEST(manual_calls, a_non_coherent_persistent_write_map_is_sent_at_a_memory_barrier_and_not_before_each_draw)
+{ Current current;
+  av::ScriptedHost &host = current.rig().host();
+  answer_size(host, 8u);
+  host.gl_bytes(nullptr, 0u);
+  constexpr GLbitfield persistent_write = 0x0002u | 0x0040u;
+  constexpr GLbitfield client_mapped_buffer_barrier = 0x4000u;
+  auto *const mapped = static_cast<std::uint8_t *>(gen::Wrap_glMapNamedBufferRange(3u, 0, 8, persistent_write));
+  CHECK(mapped != nullptr);
+  mapped[0] = 1u;
+  gen::Wrap_glDrawArrays(gl_triangles, 0, 3);
+  gen::Wrap_glMemoryBarrier(client_mapped_buffer_barrier);
+  gen::Wrap_glDrawArrays(gl_triangles, 0, 3);
+  mapped[1] = 2u;
+  gen::Wrap_glDrawArrays(gl_triangles, 0, 3);
+  const std::uint32_t expected[] = {ids::kCmd_glGetNamedBufferParameteri64v, ids::kCmd_glGetNamedBufferSubData,
+                                    ids::kCmd_glDrawArrays,                  ids::kCmd_glNamedBufferSubData,
+                                    ids::kCmd_glMemoryBarrier,               ids::kCmd_glDrawArrays,
+                                    ids::kCmd_glDrawArrays};
+  CHECK_EQ(current.sent(), 7u);
+  for (std::uint32_t index = 0u; index < 7u; index++) CHECK_EQ(current.sent_since(index), expected[index]);
+  const GLuint deleted[] = {3u};
+  gen::Wrap_glDeleteBuffers(1, deleted);
   CHECK_EQ(current.context().mappings().held(), 0u); }
 
 TEST(manual_calls, a_coherent_persistent_write_reaches_the_host_before_a_following_copy_and_every_buffer_read)

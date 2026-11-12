@@ -48,9 +48,21 @@ GlBufferSlices::GlBufferSlices(GlMemoryObjects &memories, glproto::RealGl &gl, G
                                const GlBatchProgress &progress, GlErrorQueue &errors, const GuestBytes &guest,
                                DriverLog &lines)
     : glmemproto::ServerDispatch(guest), gl_(gl), import_(import), progress_(progress), errors_(errors),
-      lines_(lines), memories_(memories)
+      lines_(lines), memories_(memories), ring_(gl, progress, errors)
 {
     AV_SCOPE("GlBufferSlices::GlBufferSlices");
+}
+
+void GlBufferSlices::release()
+{
+    AV_SCOPE("GlBufferSlices::release");
+    ring_.release();
+}
+
+void GlBufferSlices::forget()
+{
+    AV_SCOPE("GlBufferSlices::forget");
+    ring_.forget();
 }
 
 void GlBufferSlices::install()
@@ -125,6 +137,7 @@ bool GlBufferSlices::on_WriteBufferSlice(uint32_t buffer, uint64_t offset, const
         errors_.record(gl_invalid_operation);
         return true;
     }
+    if (ring_.write(buffer, offset, data, data_size)) return true;
     GLuint staging = 0u;
     gl_.glCreateBuffers(1, &staging);
     if (staging == 0u) {
