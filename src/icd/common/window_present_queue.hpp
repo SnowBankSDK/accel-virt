@@ -185,9 +185,10 @@ uint32_t WindowPresentQueue<Source, Readiness>::wait_slot(const Source &owner, u
     for (;;) {
         const uint32_t slot = try_slot(owner, slots, reserved);
         if (slot != slots) return slot;
+        const bool lost = owner.lost();
         {
             const ThreadLockHold held(lock_);
-            if (refused_ || !thread_.running()) {
+            if (lost || refused_ || !thread_.running()) {
                 dropped_frames_++;
                 return slots;
             }

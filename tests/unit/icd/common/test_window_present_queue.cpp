@@ -11,6 +11,7 @@
 #include "icd/common/frame_wait.hpp"
 #include "icd/common/window_present_queue.hpp"
 
+#include <atomic>
 #include <cstdint>
 
 using av::icd::FrameWait;
@@ -56,8 +57,11 @@ public:
     std::uint32_t finished() const { return finished_; }
     std::uint32_t last_slot() const { return last_slot_; }
     bool          last_drawn() const { return last_drawn_; }
+    bool          lost() const { return lost_.load(); }
+    void          lose() { lost_ = true; }
 
 private:
+    std::atomic<bool> lost_{false};
     std::uint32_t finished_ = 0u;
     std::uint32_t last_slot_ = 0u;
     bool          last_drawn_ = false;
@@ -426,6 +430,24 @@ TEST(window_present_queue, waiting_for_a_slot_never_drops_the_frame_while_the_th
   CHECK_EQ(late.waits, Queue::slot_looks + 10u);
   CHECK_EQ(rig.queue.dropped_frames(), 0u);
   CHECK_EQ(rig.queue.shown_frames(), 1u);
+  CHECK(rig.queue.invariants_hold()); }
+
+TEST(window_present_queue, waiting_for_a_slot_ends_when_the_owner_s_transport_is_lost_while_the_thread_runs)
+{ Rig rig;
+  CHECK(rig.queue.start());
+  CHECK(rig.queue.hand(rig.frame(0u)));
+  struct Lost {
+      Owner        &owner;
+      std::uint32_t waits;
+  } lost{rig.owner, 0u};
+  rig.shown.on_wait([](void *context) {
+      Lost &later = *static_cast<Lost *>(context);
+      if (++later.waits == 3u) later.owner.lose();
+  }, &lost);
+  CHECK_EQ(rig.queue.wait_slot(rig.owner, 1u, 1u), 1u);
+  CHECK_EQ(lost.waits, 3u);
+  CHECK_EQ(rig.queue.dropped_frames(), 1u);
+  CHECK_EQ(rig.queue.shown_frames(), 0u);
   CHECK(rig.queue.invariants_hold()); }
 
 TEST(window_present_queue, waiting_for_a_slot_of_a_refused_queue_is_a_dropped_frame)

@@ -22,7 +22,7 @@ constexpr uint64_t nanoseconds_per_millisecond = 1000000u;
 Swapchain::Swapchain(WindowSurface &windows, WindowChains &chains, EntryLookup &entries, VkDevice device,
                      uint64_t host_device, VkPhysicalDevice physical, Kmt &kmt, DriverLog &log,
                      Connection &connection, VkPresentQueue &presents)
-    : windows_(windows), presents_(presents), device_(entries, device, physical),
+    : windows_(windows), connection_(connection), presents_(presents), device_(entries, device, physical),
       chained_(entries, device, host_device, chains, connection.transport()),
       lines_(log), pacing_(), queues_every_image_(false), luid_(connection.luid()),
       app_device_(device), window_(nullptr), extent_{0u, 0u}, format_(static_cast<int32_t>(VK_FORMAT_UNDEFINED)),
@@ -207,9 +207,16 @@ VkResult Swapchain::hand_over(VkQueue queue, uint32_t index, uint32_t wait_count
                                               : presents_.free_slot(*this, slots, slots);
     if (slot == slots) {
         give(index, Holder::none);
+        if (lost()) return VK_ERROR_DEVICE_LOST;
         return device_.skip(queue, wait_count, waits);
     }
     return send(queue, index, wait_count, waits, slot);
+}
+
+bool Swapchain::lost() const
+{
+    AV_SCOPE("Swapchain::lost");
+    return connection_.lost();
 }
 
 VkResult Swapchain::send(VkQueue queue, uint32_t index, uint32_t wait_count, const VkSemaphore *waits,

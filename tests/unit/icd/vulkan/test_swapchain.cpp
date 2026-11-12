@@ -948,3 +948,28 @@ TEST(swapchain, replacing_and_dropping_the_held_present_tell_the_waiters)
   const std::uint32_t before_retire = rig.shown_raises();
   chain.retire();
   CHECK(rig.shown_raises() > before_retire); }
+
+TEST(swapchain, a_fifo_present_waiting_for_a_slot_of_a_lost_transport_answers_device_lost)
+{ SwapchainRig rig(true);
+  Swapchain &chain = rig.chain();
+  VkSwapchainCreateInfoKHR info = create_info();
+  info.minImageCount = 3u;
+  CHECK_EQ(rig.initialize(chain, info), VK_SUCCESS);
+  std::uint32_t first = 9u, second = 9u, third = 9u;
+  CHECK_EQ(chain.acquire(0u, first), VK_SUCCESS);
+  CHECK_EQ(chain.acquire(0u, second), VK_SUCCESS);
+  CHECK_EQ(chain.present(rig.host().queue(), first, 0u, nullptr), VK_SUCCESS);
+  CHECK_EQ(chain.present(rig.host().queue(), second, 0u, nullptr), VK_SUCCESS);
+  CHECK_EQ(rig.presents().queued(), 2u);
+  CHECK(!chain.lost());
+  rig.kmt().fail_first(MockKmt::Call::submit, 64u, 0xC0000001u);
+  av::ClientTransport &wire = rig.connection().transport();
+  av::WireWriter       writer = wire.request_writer();
+  av::WireReader       reply(nullptr, 0u);
+  CHECK(wire.send_sync(1u, writer, reply) == av::TransportResult::failed);
+  wire.end_call();
+  CHECK(chain.lost());
+  CHECK_EQ(chain.acquire(0u, third), VK_SUCCESS);
+  CHECK_EQ(chain.present(rig.host().queue(), third, 0u, nullptr), VK_ERROR_DEVICE_LOST);
+  CHECK_EQ(chain.presented(), 2u);
+  CHECK(chain.invariants_hold()); }
