@@ -44,9 +44,7 @@ VkResult DeviceMemory::allocate(VkPhysicalDevice physical, VkDevice device, cons
         if (link->sType == VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT)
             return lend(info, *reinterpret_cast<const VkImportMemoryHostPointerInfoEXT *>(link), memory);
     if (placing_ && types_.placed(info.memoryTypeIndex)) return place(device, info, allocator, memory);
-    if (!types_.host_visible(info.memoryTypeIndex)) {
-        return vkproto::av_vkAllocateMemory(connection_.transport(), handles_, device, &info, allocator, &memory);
-    }
+    if (!types_.host_visible(info.memoryTypeIndex)) return allocate_leased(device, info, allocator, memory);
     if (info.allocationSize == 0u) return refusal();
     HostAllocation *made = nullptr;
     const Status    opened = connection_.channel().open_memory(
@@ -57,6 +55,19 @@ VkResult DeviceMemory::allocate(VkPhysicalDevice physical, VkDevice device, cons
     }
     memory = HandleBits(made->handle()).as<VkDeviceMemory>();
     return VK_SUCCESS;
+}
+
+VkResult DeviceMemory::allocate_leased(VkDevice device, const VkMemoryAllocateInfo &info,
+                                       const VkAllocationCallbacks *allocator, VkDeviceMemory &memory)
+{
+    AV_SCOPE("DeviceMemory::allocate_leased");
+    LeasedHandles &leased = connection_.leased();
+    if (!leased.take(connection_.transport(), LeaseRecord::Kind::device, info.allocationSize))
+        return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    const VkResult made = vkproto::av_vkAllocateMemory(connection_.transport(), handles_, device, &info, allocator, &memory);
+    if (made == VK_SUCCESS) leased.keep(HandleBits(memory).value(), LeaseRecord::Kind::device, info.allocationSize);
+    else leased.refund(connection_.transport(), LeaseRecord::Kind::device, info.allocationSize);
+    return made;
 }
 
 VkResult DeviceMemory::place(VkDevice device, const VkMemoryAllocateInfo &info, const VkAllocationCallbacks *allocator,
@@ -150,6 +161,7 @@ void DeviceMemory::free(VkDevice device, VkDeviceMemory memory, const VkAllocati
     HostAllocation *const held = find(memory);
     if (held == nullptr) {
         vkproto::av_vkFreeMemory(connection_.transport(), handles_, device, memory, allocator);
+        connection_.leased().release(connection_.transport(), HandleBits(memory).value());
         return;
     }
     const bool    placed = held->placed();

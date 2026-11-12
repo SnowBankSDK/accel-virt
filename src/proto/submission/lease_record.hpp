@@ -15,7 +15,7 @@ public:
     static constexpr uint32_t kinds = 2u;
     static constexpr size_t   encoded_size = 24u;
     static constexpr size_t   answer_size = 8u;
-    static constexpr uint64_t initial_bytes = uint64_t{4} << 20u;
+    static constexpr uint64_t initial_bytes[kinds] = {uint64_t{2} << 20u, 0u};
 
     LeaseRecord();
     LeaseRecord(Kind kind, uint64_t bytes, uint64_t least);

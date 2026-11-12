@@ -16,7 +16,8 @@ MemoryLease::MemoryLease() : pools_{}, extensions_(0u)
 void MemoryLease::reset()
 {
     AV_SCOPE("MemoryLease::reset");
-    for (Pool &each : pools_) each = Pool{LeaseRecord::initial_bytes, first_chunk};
+    for (uint32_t kind = 0u; kind < LeaseRecord::kinds; kind++)
+        pools_[kind] = Pool{LeaseRecord::initial_bytes[kind], first_chunk};
 }
 
 bool MemoryLease::take(ClientTransport &transport, LeaseRecord::Kind kind, uint64_t bytes)

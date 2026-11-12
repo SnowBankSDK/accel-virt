@@ -55,8 +55,8 @@ struct Rig {
 
 TEST(memory_lease, the_initial_lease_admits_small_creates_without_asking_the_host)
 { Rig rig(8 * gib);
-  CHECK(rig.create(LeaseRecord::initial_bytes / 2u));
-  CHECK(rig.create(LeaseRecord::initial_bytes / 2u));
+  CHECK(rig.create(LeaseRecord::initial_bytes[0] / 2u));
+  CHECK(rig.create(LeaseRecord::initial_bytes[0] / 2u));
   CHECK_EQ(rig.transport.extensions(), 0u);
   CHECK_EQ(rig.guest.left(device), 0u);
   CHECK(rig.guest.invariants_hold()); }
@@ -73,7 +73,7 @@ TEST(memory_lease, a_create_the_host_cannot_cover_is_refused_and_takes_nothing)
 { Rig rig(gib);
   VramAccount other(rig.ledger);
   CHECK(other.take(rig.ledger.cap() - rig.ledger.used() - 32 * mib));
-  CHECK(rig.create(LeaseRecord::initial_bytes));
+  CHECK(rig.create(LeaseRecord::initial_bytes[0]));
   CHECK(!rig.guest.take(rig.transport, device, 64 * mib));
   CHECK_EQ(rig.transport.extensions(), 1u);
   CHECK_EQ(rig.transport.returns(), 0u);
@@ -85,7 +85,7 @@ TEST(memory_lease, a_refused_extension_answers_out_of_memory_without_a_return)
 { Rig rig(8 * gib);
   rig.transport.refuse_all(true);
   CHECK(!rig.guest.take(rig.transport, device, 64 * mib));
-  CHECK_EQ(rig.guest.left(device), LeaseRecord::initial_bytes);
+  CHECK_EQ(rig.guest.left(device), LeaseRecord::initial_bytes[0]);
   rig.transport.refuse_all(false);
   CHECK(rig.guest.take(rig.transport, device, 64 * mib)); }
 

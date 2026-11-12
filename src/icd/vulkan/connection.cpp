@@ -15,7 +15,7 @@ Connection::Connection(Kmt &kmt, BlockSource &memory, ThreadLock &lock, KeyedLog
     : kmt_(kmt), search_(kmt), connection_(kmt),
       channel_(memory, lines, ChannelShape(SubApi::vulkan, ring_order, reply_bytes, command_bytes, 0u, 0u),
                lock),
-      loss_(lines), opened_(false), adapter_(), host_dma_buf_(false), wakes_(false), opened_objects_(handles, memory, lines)
+      loss_(lines), opened_(false), adapter_(), host_dma_buf_(false), wakes_(false), opened_objects_(handles, memory, lines), leased_(memory)
 {
     AV_SCOPE("Connection::Connection");
 }
@@ -37,6 +37,7 @@ Status Connection::open(uint64_t luid)
     if (connection_.open(search_.adapter()) != Status::ok) return Status::not_supported;
     const Status opened = channel_.open(connection_);
     if (opened != Status::ok) return opened == Status::no_memory ? Status::no_memory : Status::not_supported;
+    leased_.reset();
     opened_ = true;
     undo.dismiss();
     return Status::ok;
@@ -122,6 +123,12 @@ uint64_t Connection::submissions() const
 {
     AV_SCOPE("Connection::submissions");
     return channel_.opened() ? channel_.transport().submissions() : 0u;
+}
+
+LeasedHandles &Connection::leased()
+{
+    AV_SCOPE("Connection::leased");
+    return leased_;
 }
 
 ClientTransport &Connection::transport()

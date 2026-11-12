@@ -236,10 +236,9 @@ void OpenGlBackend::use_host_ram(ByteLedger *ledger, uint64_t limit)
     heap_.bind(ledger, limit);
 }
 
-void OpenGlBackend::lease_from(SessionLease *lease)
+void OpenGlBackend::lease_from(SessionLease *)
 {
     AV_SCOPE("OpenGlBackend::lease_from");
-    vram_guard_.reserve_from(lease);
 }
 
 void OpenGlBackend::shut_down()

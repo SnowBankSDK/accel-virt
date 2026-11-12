@@ -78,10 +78,10 @@ TEST(session_lease, opening_grants_the_initial_lease_of_every_kind)
   SessionLease lease;
   lease.bind(&vram, &ram);
   lease.open();
-  CHECK_EQ(lease.idle(LeaseRecord::Kind::device), LeaseRecord::initial_bytes);
-  CHECK_EQ(lease.idle(LeaseRecord::Kind::host), LeaseRecord::initial_bytes);
-  CHECK_EQ(vram.used(), LeaseRecord::initial_bytes);
-  CHECK_EQ(ram.used(), LeaseRecord::initial_bytes); }
+  CHECK_EQ(lease.idle(LeaseRecord::Kind::device), LeaseRecord::initial_bytes[device]);
+  CHECK_EQ(lease.idle(LeaseRecord::Kind::host), LeaseRecord::initial_bytes[host]);
+  CHECK_EQ(vram.used(), LeaseRecord::initial_bytes[device]);
+  CHECK_EQ(ram.used(), LeaseRecord::initial_bytes[host]); }
 
 TEST(session_lease, a_gate_take_draws_on_the_reservation_first_and_the_ledger_only_for_the_rest)
 { VramLedger ledger;

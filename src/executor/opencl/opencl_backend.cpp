@@ -664,10 +664,9 @@ void OpenClBackend::use_host_ram(ByteLedger *ledger, uint64_t limit)
     copied_.use_host_ram(ledger);
 }
 
-void OpenClBackend::lease_from(SessionLease *lease)
+void OpenClBackend::lease_from(SessionLease *)
 {
     AV_SCOPE("OpenClBackend::lease_from");
-    device_memory_.reserve_from(lease);
 }
 
 void OpenClBackend::shut_down()

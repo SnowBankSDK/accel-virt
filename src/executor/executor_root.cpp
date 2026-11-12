@@ -478,7 +478,7 @@ bool ExecutorRoot::bind(uint32_t slot, uint32_t sub_api, const HostGpu &gpu, con
         SessionLease &lease = sessions_[slot].object().lease();
         lease.bind(apis_->vram_ledger(gpu.index()), apis_->host_ram_ledger());
         backend_in(slot, sub_api)->lease_from(&lease);
-        lease.open();
+        if (sub_api == AV_EXECUTOR_SUB_API_D3D || sub_api == AV_EXECUTOR_SUB_API_VULKAN) lease.open();
     }
     if (!started) {
         const HostRamLedger *const ram = apis_->host_ram_ledger();

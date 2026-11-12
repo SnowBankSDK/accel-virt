@@ -52,6 +52,8 @@ private:
                             VkDeviceMemory &memory);
     VkResult           place(VkDevice device, const VkMemoryAllocateInfo &info, const VkAllocationCallbacks *allocator,
                              VkDeviceMemory &memory);
+    VkResult           allocate_leased(VkDevice device, const VkMemoryAllocateInfo &info,
+                                       const VkAllocationCallbacks *allocator, VkDeviceMemory &memory);
     VkResult           refusal(Status refused) const;
     [[nodiscard]] bool learn(VkPhysicalDevice physical);
     VkResult           refusal() const;

@@ -8,6 +8,7 @@
 #include "guest/transport/kmt_transport.hpp"
 #include "icd/common/adapter_facts.hpp"
 #include "icd/common/host_channel.hpp"
+#include "icd/common/leased_handles.hpp"
 #include "icd/common/loss_latch.hpp"
 #include "icd/common/opened_objects.hpp"
 
@@ -59,6 +60,7 @@ public:
 
     HostChannel         &channel();
     OpenedObjects       &opened_objects();
+    LeasedHandles       &leased();
 
     void report(StateWriter &writer) const;
 
@@ -75,6 +77,7 @@ private:
     bool                           host_dma_buf_;
     bool                           wakes_;
     OpenedObjects                  opened_objects_;
+    LeasedHandles                  leased_;
 
     friend struct ConnectionProbe;
 };
