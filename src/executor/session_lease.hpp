@@ -17,7 +17,7 @@ public:
     SessionLease &operator=(const SessionLease &) = delete;
 
     void                bind(ByteLedger *device, ByteLedger *host);
-    void                open();
+    void                open(const uint64_t *initial = LeaseRecord::initial_bytes);
     uint64_t            extend(uint32_t kind, uint64_t bytes, uint64_t least);
     void                surrender(uint32_t kind, uint64_t bytes);
     SessionReservation &of(LeaseRecord::Kind kind);

@@ -13,11 +13,11 @@ MemoryLease::MemoryLease() : pools_{}, extensions_(0u)
     reset();
 }
 
-void MemoryLease::reset()
+void MemoryLease::reset(const uint64_t *initial)
 {
     AV_SCOPE("MemoryLease::reset");
     for (uint32_t kind = 0u; kind < LeaseRecord::kinds; kind++)
-        pools_[kind] = Pool{LeaseRecord::initial_bytes[kind], first_chunk};
+        pools_[kind] = Pool{initial[kind], first_chunk};
 }
 
 bool MemoryLease::take(ClientTransport &transport, LeaseRecord::Kind kind, uint64_t bytes)
@@ -27,13 +27,15 @@ bool MemoryLease::take(ClientTransport &transport, LeaseRecord::Kind kind, uint6
     Pool &taken = pool(kind);
     if (draw(taken, bytes)) return true;
     const uint64_t chunk = __atomic_load_n(&taken.chunk_, __ATOMIC_RELAXED);
-    const uint64_t granted = extend(transport, kind, bytes > chunk ? bytes : chunk, bytes);
+    const uint64_t held = __atomic_load_n(&taken.left_, __ATOMIC_ACQUIRE);
+    const uint64_t short_by = bytes > held ? bytes - held : bytes;
+    const uint64_t granted = extend(transport, kind, short_by > chunk ? short_by : chunk, short_by);
     __atomic_fetch_add(&taken.left_, granted, __ATOMIC_ACQ_REL);
     const uint64_t doubled = chunk < largest_chunk / 2u ? chunk * 2u : largest_chunk;
     const uint64_t asked = bytes < largest_chunk ? bytes : largest_chunk;
     const uint64_t grown = asked > doubled ? asked : doubled;
-    if (granted >= bytes) __atomic_store_n(&taken.chunk_, grown, __ATOMIC_RELAXED);
-    return granted >= bytes && draw(taken, bytes);
+    if (granted >= short_by) __atomic_store_n(&taken.chunk_, grown, __ATOMIC_RELAXED);
+    return granted >= short_by && draw(taken, bytes);
 }
 
 bool MemoryLease::draw(Pool &taken, uint64_t bytes)

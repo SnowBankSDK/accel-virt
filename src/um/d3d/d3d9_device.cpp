@@ -11,6 +11,7 @@
 #include "proto/generated/d3d9/d3d9_dispatch_client.h"
 #include "um/d3d/d3d9_host_caps.hpp"
 #include "proto/d3d/buffer_slice_support.hpp"
+#include "proto/d3d/resource_footprint.hpp"
 #include "um/d3d/d3d_session.hpp"
 
 #include <string.h>
@@ -23,6 +24,7 @@ using Kind = d3d::D3d9StateEntry::Kind;
 namespace {
 
 constexpr uint32_t stage_vertex = 0u;
+constexpr HRESULT  out_of_video_memory = static_cast<HRESULT>(0x8876017cu);
 constexpr uint32_t stage_pixel = 1u;
 constexpr uint32_t components = 4u;
 constexpr UINT stateset_begin = 0u;
@@ -57,7 +59,8 @@ D3d9Device::D3d9Device(d3d::D3dSession &session, BlockSource &memory, KeyedLog &
       scissor_set_(false), streams_{}, bound_{}, indices_(nullptr), index_stride_(0u), user_indices_(nullptr),
       user_index_bytes_(0u), bound_indices_(0u), vertex_ring_{}, index16_ring_{}, index32_ring_{},
       readback_(nullptr), readback_bytes_(0u), trace_(trace), context_number_(trace.number_context()),
-      call_began_(0u), busy_(0u), calls_(0u), draws_{}, rebased_(0u), null_shaders_(0u), written_(0u), slices_()
+      call_began_(0u), busy_(0u), calls_(0u), draws_{}, rebased_(0u), null_shaders_(0u), written_(0u), slices_(),
+      device_leased_(0u)
 {
     AV_SCOPE("D3d9Device::D3d9Device");
 }
@@ -73,9 +76,14 @@ D3d9Device::~D3d9Device()
     const bool joined = channel_.constructed();
     if (joined) {
         const Ring *const rings[] = {&vertex_ring_, &index16_ring_, &index32_ring_};
-        for (const Ring *ring : rings)
-            if (ring->id != 0u) static_cast<void>(d3d9proto::av_d3d9_Destroy9(wire(), ring->id));
+        for (const Ring *ring : rings) {
+            if (ring->id == 0u) continue;
+            static_cast<void>(d3d9proto::av_d3d9_Destroy9(wire(), ring->id));
+            uint64_t leased = ResourceFootprint(ring->bytes, 0u).bytes();
+            give_lease(leased);
+        }
         static_cast<void>(channel_.object().close9());
+        give_lease(device_leased_);
         static_cast<void>(channel_.object().flush());
         channel_.destroy();
     }
@@ -104,14 +112,17 @@ HRESULT D3d9Device::initialize(uint32_t kmt_adapter, const D3DDDIARG_CREATEDEVIC
     static_cast<void>(channel_.construct(session_.stream(), session_.lock(), session_.next_id(),
                                          packets_.constructed() ? &packets_.object() : nullptr));
     uint32_t hresult = 1u;
-    if (!channel_.object().open9(hresult) || hresult != 0u) {
-        lines_.write("the host made no Direct3D 9 device");
+    const bool leased = lease(ResourceFootprint::direct3d9_device_bytes);
+    if (leased) device_leased_ = ResourceFootprint::direct3d9_device_bytes;
+    if (!leased || !channel_.object().open9(hresult) || hresult != 0u) {
+        lines_.write(leased ? "the host made no Direct3D 9 device" : "a Direct3D 9 device is past what the host can lease");
+        give_lease(device_leased_);
         channel_.destroy();
         packets_.destroy();
         present_order_.destroy();
         const bool exhausted = session_.exhausted();
         session_.leave();
-        return d3d::SessionRefusal(exhausted).for_d3d();
+        return leased ? d3d::SessionRefusal(exhausted).for_d3d() : out_of_video_memory;
     }
     uint32_t sliced = 0u;
     const bool asked = d3d9proto::av_d3d9_QueryDeviceSlices9(wire(), &sliced);

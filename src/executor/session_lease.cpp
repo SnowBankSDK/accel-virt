@@ -16,11 +16,11 @@ void SessionLease::bind(ByteLedger *device, ByteLedger *host)
     reservations_[static_cast<uint32_t>(LeaseRecord::Kind::host)].bind(host);
 }
 
-void SessionLease::open()
+void SessionLease::open(const uint64_t *initial)
 {
     AV_SCOPE("SessionLease::open");
     for (uint32_t kind = 0u; kind < LeaseRecord::kinds; kind++)
-        static_cast<void>(reservations_[kind].grant(LeaseRecord::initial_bytes[kind], 0u));
+        static_cast<void>(reservations_[kind].grant(initial[kind], 0u));
 }
 
 uint64_t SessionLease::extend(uint32_t kind, uint64_t bytes, uint64_t least)

@@ -25,6 +25,7 @@ namespace av {
 
 class DriverLog;
 class D3d9HostDevice;
+class LeasedObjects;
 class SharedSurfaces;
 class SessionShares;
 class D3d11HostDevice;
@@ -44,8 +45,8 @@ class D3d9Session final : public d3d9proto::ServerDispatch {
 public:
     static constexpr uint32_t max_dimension = 16384u;
 
-    D3d9Session(const GuestBytes &guest, D3dObjectTable &objects, WatchedBlocks &blocks, SliceStorages &storages,
-                EventfdWake &wake, DriverLog &lines);
+    D3d9Session(const GuestBytes &guest, D3dObjectTable &objects, LeasedObjects &leased, WatchedBlocks &blocks,
+                SliceStorages &storages, EventfdWake &wake, DriverLog &lines);
     ~D3d9Session();
     D3d9Session(const D3d9Session &) = delete;
     D3d9Session &operator=(const D3d9Session &) = delete;
@@ -169,6 +170,7 @@ private:
     D3d9LentCopies  lent_;
     ImportTable    *imports_;
     D3dObjectTable &objects_;
+    LeasedObjects  &leased_;
     WatchedBlocks  &blocks_;
     GuestDevices<IDirect3DDevice9> devices_;
     DriverLog      &lines_;

@@ -124,6 +124,8 @@ private:
     HRESULT create_host_object(D3d9Resource &resource, const D3DDDIARG_CREATERESOURCE &create);
     HRESULT create_surfaces(D3d9Resource &resource, const D3DDDIARG_CREATERESOURCE &create);
     void    release_resource(D3d9Resource &resource);
+    [[nodiscard]] bool lease(uint64_t bytes);
+    void               give_lease(uint64_t &bytes);
     [[nodiscard]] bool refuses_opened(const D3d9Resource &resource, const char *call);
     HRESULT            refuse_open(const D3DDDIARG_OPENRESOURCE &args, uint32_t kind);
     uint32_t row_pitch(const D3d9Resource &resource, const D3d9Subresource &subresource) const;
@@ -226,6 +228,7 @@ private:
     uint32_t                             null_shaders_;
     uint64_t                             written_;
     d3d::ContextSlices                   slices_;
+    uint64_t                             device_leased_;
 };
 
 template <typename... Arguments>

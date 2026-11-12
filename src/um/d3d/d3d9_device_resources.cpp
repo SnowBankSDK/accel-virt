@@ -12,6 +12,8 @@
 #include "proto/resources/pitched_rows.hpp"
 #include "proto/d3d/d3d9_format_layout.hpp"
 #include "proto/d3d/d3d9_present_format.hpp"
+#include "proto/d3d/resource_footprint.hpp"
+#include "proto/submission/lease_record.hpp"
 #include "proto/resources/allocation_descriptor.hpp"
 #include "proto/resources/shared_allocation_data.hpp"
 #include "proto/generated/d3d9/d3d9_dispatch_client.h"
@@ -134,6 +136,24 @@ HRESULT D3d9Device::create_host_object(D3d9Resource &resource, const D3DDDIARG_C
                            (flags.RtPatches ? usage_rt_patches : 0u) | (flags.NPatches ? usage_n_patches : 0u) |
                            (flags.DMap ? usage_dmap : 0u);
     const D3d9Subresource &top = resource.subresources[0];
+    const uint32_t         faces = flags.CubeMap ? cube_faces : 1u;
+    const uint32_t         levels = flags.AutogenMipmap ? 0u : create.SurfCount / faces;
+    uint64_t               leased = 0u;
+    if (flags.VertexBuffer || flags.IndexBuffer)
+        leased = ResourceFootprint(top.width, 0u).bytes();
+    else if (flags.Texture || flags.CubeMap || flags.Volume)
+        leased = ResourceFootprint(static_cast<uint32_t>(create.Format), top.width, top.height,
+                                                    flags.Volume ? top.depth : 1u, faces, levels, 1u)
+                     .bytes();
+    else
+        for (uint32_t index = 0u; index < resource.count; index++)
+            leased += ResourceFootprint(static_cast<uint32_t>(create.Format),
+                                                         resource.subresources[index].width,
+                                                         resource.subresources[index].height, 1u, 1u, 1u,
+                                                         static_cast<uint32_t>(create.MultisampleType))
+                          .bytes();
+    if (!lease(leased)) return E_OUTOFMEMORY;
+    resource.leased = leased;
     resource.id = next_id();
     bool sent = false;
     if (flags.VertexBuffer) {
@@ -144,13 +164,11 @@ HRESULT D3d9Device::create_host_object(D3d9Resource &resource, const D3DDDIARG_C
         sent = d3d9proto::av_d3d9_CreateIndexBuffer9(wire(), resource.id, top.width, usage,
                                                      static_cast<uint32_t>(create.Format), pool_default);
     } else if (flags.Texture || flags.CubeMap || flags.Volume) {
-        const uint32_t faces = flags.CubeMap ? cube_faces : 1u;
         resource.kind = flags.CubeMap  ? D3d9Resource::Kind::cube
                         : flags.Volume ? D3d9Resource::Kind::volume
                                        : D3d9Resource::Kind::texture;
         resource.levels = create.SurfCount / faces;
         const uint32_t type = flags.CubeMap ? texture_cube : flags.Volume ? texture_volume : texture_2d;
-        const uint32_t levels = flags.AutogenMipmap ? 0u : resource.levels;
         sent = d3d9proto::av_d3d9_CreateTexture9(wire(), resource.id, type, top.width, top.height, top.depth, levels,
                                                  usage, static_cast<uint32_t>(create.Format), pool_default);
     } else {
@@ -211,6 +229,20 @@ void D3d9Device::release_resource(D3d9Resource &resource)
     if (resource.lent != nullptr) lender_.retire(*resource.lent);
     resource.lent = nullptr;
     if (resource.allocation != 0u) allocations_.give_back(resource.allocation, resource.allocation_resource);
+    give_lease(resource.leased);
+}
+
+bool D3d9Device::lease(uint64_t bytes)
+{
+    AV_SCOPE("D3d9Device::lease");
+    return session_.lease().take(wire(), LeaseRecord::Kind::device, bytes);
+}
+
+void D3d9Device::give_lease(uint64_t &bytes)
+{
+    AV_SCOPE("D3d9Device::give_lease");
+    if (bytes != 0u) session_.lease().give(wire(), LeaseRecord::Kind::device, bytes);
+    bytes = 0u;
 }
 
 HRESULT D3d9Device::open_resource(D3DDDIARG_OPENRESOURCE *args)

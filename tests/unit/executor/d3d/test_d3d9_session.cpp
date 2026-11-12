@@ -1,5 +1,6 @@
 #include "core/support/object_storage.hpp"
 #include "executor/d3d/d3d9_session.hpp"
+#include "executor/d3d/leased_objects.hpp"
 #include "executor/d3d/d3d_object_table.hpp"
 #include "executor/shim/d3d_headers.hpp"
 #include "core/log/driver_log.hpp"
@@ -66,11 +67,11 @@ public:
 
 class FreshSession {
 public:
-    FreshSession() : sink_(), lines_(sink_, "d3d9: "), slices_(blocks, lines_), wake_()
+    FreshSession() : sink_(), lines_(sink_, "d3d9: "), slices_(blocks, lines_), wake_(), leased_(blocks)
     {
         CHECK_STATUS(bytes_.bind(0u, guest, sizeof guest), av::Status::ok);
         CHECK_STATUS(table_storage.construct(blocks), av::Status::ok);
-        CHECK_STATUS(session_storage.construct(bytes_, table_storage.object(), blocks, slices_, wake_, lines_),
+        CHECK_STATUS(session_storage.construct(bytes_, table_storage.object(), leased_, blocks, slices_, wake_, lines_),
                      av::Status::ok);
         session_storage.object().initialize(nullptr, nullptr, nullptr, nullptr, nullptr);
     }
@@ -91,6 +92,7 @@ private:
     av::DriverLog    lines_;
     av::SliceStorages slices_;
     av::EventfdWake  wake_;
+    av::LeasedObjects leased_;
     av::GuestBytes   bytes_;
 };
 

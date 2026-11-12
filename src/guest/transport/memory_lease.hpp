@@ -21,7 +21,7 @@ public:
 
     [[nodiscard]] bool take(ClientTransport &transport, LeaseRecord::Kind kind, uint64_t bytes);
     void               give(ClientTransport &transport, LeaseRecord::Kind kind, uint64_t bytes);
-    void               reset();
+    void               reset(const uint64_t *initial = LeaseRecord::initial_bytes);
     uint64_t           left(LeaseRecord::Kind kind) const;
     uint64_t           extensions() const;
 

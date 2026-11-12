@@ -2,6 +2,7 @@
 #include "core/log/keyed_log.hpp"
 #include "icd/d3d/list_pieces.hpp"
 #include "icd/d3d/d3d_device_channel.hpp"
+#include "proto/d3d/resource_footprint.hpp"
 #include "proto/generated/d3d9/d3d9_dispatch_client.h"
 #include "um/d3d/d3d9_device.hpp"
 
@@ -46,11 +47,16 @@ bool D3d9Device::ring_write(Ring &ring, bool index_buffer, uint32_t format, cons
     const uint32_t capacity = index_buffer ? index_ring_bytes : vertex_ring_bytes;
     if (bytes == 0u || bytes > capacity) return false;
     if (ring.id == 0u) {
+        uint64_t leased = ResourceFootprint(capacity, 0u).bytes();
+        if (!lease(leased)) return false;
         const uint32_t id = next_id();
         const bool     made = index_buffer
                                   ? d3d9proto::av_d3d9_CreateIndexBuffer9(wire(), id, capacity, ring_usage, format, 0u)
                                   : d3d9proto::av_d3d9_CreateVertexBuffer9(wire(), id, capacity, ring_usage, 0u, 0u);
-        if (!made) return false;
+        if (!made) {
+            give_lease(leased);
+            return false;
+        }
         ring = Ring{id, capacity, capacity};
     }
     uint32_t at = (ring.at + alignment - 1u) / alignment * alignment;

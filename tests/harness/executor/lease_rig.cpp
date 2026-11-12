@@ -4,7 +4,7 @@
 
 namespace av {
 
-LeaseRig::LeaseRig(ByteLedger *vram, ByteLedger *host, std::uint64_t room)
+LeaseRig::LeaseRig(ByteLedger *vram, ByteLedger *host, std::uint64_t room, const std::uint64_t *initial)
     : vram_(vram), lease_(), transport_(lease_), guest_(), filler_()
 {
     filler_.bind(vram);
@@ -13,7 +13,8 @@ LeaseRig::LeaseRig(ByteLedger *vram, ByteLedger *host, std::uint64_t room)
         if (free > room) static_cast<void>(filler_.take_session(free - room));
     }
     lease_.bind(vram, host);
-    lease_.open();
+    lease_.open(initial);
+    guest_.reset(initial);
 }
 
 LeaseRig::~LeaseRig()

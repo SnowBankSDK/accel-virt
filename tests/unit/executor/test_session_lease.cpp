@@ -1,5 +1,6 @@
 #include "executor/host_ram_ledger.hpp"
 #include "executor/session_lease.hpp"
+#include "proto/d3d/resource_footprint.hpp"
 #include "executor/session_reservation.hpp"
 #include "executor/vram_account.hpp"
 #include "executor/vram_ledger.hpp"
@@ -82,6 +83,16 @@ TEST(session_lease, opening_grants_the_initial_lease_of_every_kind)
   CHECK_EQ(lease.idle(LeaseRecord::Kind::host), LeaseRecord::initial_bytes[host]);
   CHECK_EQ(vram.used(), LeaseRecord::initial_bytes[device]);
   CHECK_EQ(ram.used(), LeaseRecord::initial_bytes[host]); }
+
+TEST(session_lease, a_direct3d_session_opens_with_room_for_a_direct3d9_device)
+{ VramLedger vram;
+  vram.learn(8 * gib);
+  SessionLease lease;
+  lease.bind(&vram, nullptr);
+  lease.open(LeaseRecord::direct3d_initial_bytes);
+  CHECK_EQ(lease.idle(LeaseRecord::Kind::device), LeaseRecord::direct3d_initial_bytes[device]);
+  CHECK(LeaseRecord::direct3d_initial_bytes[device] >= av::ResourceFootprint::direct3d9_device_bytes);
+  CHECK_EQ(vram.used(), LeaseRecord::direct3d_initial_bytes[device]); }
 
 TEST(session_lease, a_gate_take_draws_on_the_reservation_first_and_the_ledger_only_for_the_rest)
 { VramLedger ledger;

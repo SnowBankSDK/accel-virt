@@ -3,6 +3,7 @@
 #include "core/trace/function_scope.hpp"
 #include "executor/d3d/d3d9_session.hpp"
 #include "executor/d3d/d3d9_texture_write.hpp"
+#include "executor/d3d/leased_objects.hpp"
 #include "executor/shim/d3d9_host_device.hpp"
 #include "executor/shim/d3d_headers.hpp"
 #include "executor/d3d/shared_surfaces.hpp"
@@ -14,6 +15,7 @@
 #include "proto/resources/surface_point.hpp"
 #include "proto/resources/subresource_layout.hpp"
 #include "proto/d3d/d3d9_format_layout.hpp"
+#include "proto/d3d/resource_footprint.hpp"
 
 #include <string.h>
 
@@ -90,6 +92,8 @@ bool D3d9Session::on_CreateSurface9(uint32_t surface, uint32_t kind, uint32_t wi
         multisample > max_multisample)
         return false;
     IDirect3DDevice9 *const host = device();
+    leased_.charge(surface, ResourceFootprint(format, width, height, 1u, 1u, 1u, multisample).bytes());
+    const ScopeExit         settled([this] { leased_.settle(); });
     const D3DFORMAT         as = static_cast<D3DFORMAT>(format);
     const auto              samples = static_cast<D3DMULTISAMPLE_TYPE>(multisample);
     const BOOL              flag = (flags & flag_lockable_or_discard) != 0u ? TRUE : FALSE;
@@ -120,6 +124,10 @@ bool D3d9Session::on_CreateTexture9(uint32_t texture, uint32_t type, uint32_t wi
         !host_pool(pool, usage, placed))
         return false;
     IDirect3DDevice9 *const host = device();
+    const uint32_t          faces = type == type_cube ? cube_faces : 1u;
+    leased_.charge(texture, ResourceFootprint(format, width, height, type == type_volume ? depth : 1u,
+                                                               faces, levels, 1u).bytes());
+    const ScopeExit         settled([this] { leased_.settle(); });
     const D3DFORMAT         as = static_cast<D3DFORMAT>(format);
     IUnknown               *made = nullptr;
     HRESULT                 result = D3DERR_INVALIDCALL;
@@ -150,6 +158,8 @@ bool D3d9Session::on_CreateVertexBuffer9(uint32_t buffer, uint32_t length, uint3
     if (device() == nullptr || length == 0u || length > max_buffer_bytes || (usage & ~usage_kept) != 0u ||
         !host_pool(pool, usage, placed))
         return false;
+    leased_.charge(buffer, ResourceFootprint(length, 0u).bytes());
+    const ScopeExit         settled([this] { leased_.settle(); });
     IDirect3DVertexBuffer9 *made = nullptr;
     const HRESULT result = device()->CreateVertexBuffer(length, usage, fvf, placed, &made, nullptr);
     return SUCCEEDED(result) && keep(buffer, D3dObjectKind::vertex_buffer9, made);
@@ -163,6 +173,8 @@ bool D3d9Session::on_CreateIndexBuffer9(uint32_t buffer, uint32_t length, uint32
     if (device() == nullptr || length == 0u || length > max_buffer_bytes || (usage & ~usage_kept) != 0u ||
         (format != D3DFMT_INDEX16 && format != D3DFMT_INDEX32) || !host_pool(pool, usage, placed))
         return false;
+    leased_.charge(buffer, ResourceFootprint(length, 0u).bytes());
+    const ScopeExit        settled([this] { leased_.settle(); });
     IDirect3DIndexBuffer9 *made = nullptr;
     const HRESULT          result = device()->CreateIndexBuffer(
         length, usage, static_cast<D3DFORMAT>(format), placed, &made, nullptr);

@@ -128,7 +128,7 @@ D3dBackend::D3dBackend(ExecutorLog &log)
       blocks_(heap_), remade_(blocks_, Pool::paged), states_(blocks_),
       lines_(log.d3d11()), refusal_(lines_), arena_(nullptr), objects_(blocks_), refused_creates_(blocks_), leased_(blocks_), guest_(),
       region_(guest_, lines_), imports_(nullptr), slices_(blocks_, lines_), d3d12_(guest_, objects_, leased_, wake_, fence_wake_, blocks_, log.d3d12()),
-      d3d9_(guest_, objects_, blocks_, slices_, fence_wake_, log.d3d9()), tiles_(objects_),
+      d3d9_(guest_, objects_, leased_, blocks_, slices_, fence_wake_, log.d3d9()), tiles_(objects_),
       published_(blocks_, guest_), progress11_(fence_wake_), constants_(blocks_),
       missed_key_(0u), batches_(), queue_drain_(), submitted_(0u), drained_(false), predication_refusal_noted_(false), mark_refused_(false), show_refused_(false), lost_(false), memory_refused_(false)
 {

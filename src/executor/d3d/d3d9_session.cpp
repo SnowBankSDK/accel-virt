@@ -3,11 +3,13 @@
 #include "core/log/driver_log.hpp"
 #include "core/platform/poll_budget.hpp"
 #include "core/trace/function_scope.hpp"
+#include "executor/d3d/leased_objects.hpp"
 #include "executor/d3d/watched_blocks.hpp"
 #include "executor/eventfd_wake.hpp"
 #include "executor/shim/d3d9_host_device.hpp"
 #include "executor/teardown_budget.hpp"
 #include "executor/shim/d3d_headers.hpp"
+#include "proto/d3d/resource_footprint.hpp"
 #include "proto/generated/d3d9/d3d9_command_names.h"
 #include "proto/generated/d3d9/d3d9_protocol_ids.h"
 
@@ -15,9 +17,9 @@
 
 namespace av {
 
-D3d9Session::D3d9Session(const GuestBytes &guest, D3dObjectTable &objects, WatchedBlocks &blocks,
+D3d9Session::D3d9Session(const GuestBytes &guest, D3dObjectTable &objects, LeasedObjects &leased, WatchedBlocks &blocks,
                          SliceStorages &storages, EventfdWake &wake, DriverLog &lines)
-    : d3d9proto::ServerDispatch(guest), host_(nullptr), surfaces_(nullptr), flips_(blocks), lent_(blocks), imports_(nullptr), objects_(objects), blocks_(blocks),
+    : d3d9proto::ServerDispatch(guest), host_(nullptr), surfaces_(nullptr), flips_(blocks), lent_(blocks), imports_(nullptr), objects_(objects), leased_(leased), blocks_(blocks),
       devices_(blocks), lines_(lines), refusal_(lines_), arena_(nullptr), lanes_(blocks, wake, lines_), slices_(blocks, storages, lanes_, lines_), line_ends_(),
       refused_(blocks), clock_(), lost_(false)
 {
@@ -96,8 +98,13 @@ bool D3d9Session::on_CreateDevice9(uint32_t device, uint32_t, uint32_t &hresult)
     hresult = static_cast<uint32_t>(D3DERR_NOTAVAILABLE);
     if (host_ == nullptr) return true;
     IDirect3DDevice9 *made = nullptr;
+    leased_.charge(device, ResourceFootprint::direct3d9_device_bytes);
     hresult = static_cast<uint32_t>(host_->make_device(made));
-    if (made == nullptr) return true;
+    leased_.settle();
+    if (made == nullptr) {
+        leased_.release(device);
+        return true;
+    }
     made->BeginScene();
     static_cast<void>(devices_.add(device, made));
     static_cast<void>(devices_.select(device));
@@ -155,6 +162,7 @@ bool D3d9Session::on_Finish9(uint32_t &hresult)
 bool D3d9Session::on_Destroy9(uint32_t object)
 {
     AV_SCOPE("D3d9Session::on_Destroy9");
+    leased_.release(object);
     IDirect3DDevice9 *const device = devices_.remove(object);
     if (device != nullptr) {
         flips_.forget_device(device);

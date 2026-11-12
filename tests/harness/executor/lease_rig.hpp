@@ -14,7 +14,8 @@ class ByteLedger;
 
 class LeaseRig {
 public:
-    LeaseRig(ByteLedger *vram, ByteLedger *host, std::uint64_t room);
+    LeaseRig(ByteLedger *vram, ByteLedger *host, std::uint64_t room,
+             const std::uint64_t *initial = LeaseRecord::initial_bytes);
     ~LeaseRig();
     LeaseRig(const LeaseRig &) = delete;
     LeaseRig &operator=(const LeaseRig &) = delete;

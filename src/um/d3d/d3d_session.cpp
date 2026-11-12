@@ -91,7 +91,7 @@ HRESULT D3dSession::open(uint32_t adapter)
     const Status opened = channel_.open(connection_);
     if (opened != Status::ok) return opened == Status::no_memory ? E_OUTOFMEMORY : E_FAIL;
     static_cast<void>(stream_.construct(channel_.transport()));
-    lease_.reset();
+    lease_.reset(LeaseRecord::direct3d_initial_bytes);
     stream_.object().speak_with(select_command_, flush_command_);
     uint8_t *slots = nullptr;
     uint64_t slots_at = 0u;

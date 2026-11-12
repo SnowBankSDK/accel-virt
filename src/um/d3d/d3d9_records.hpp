@@ -53,6 +53,7 @@ struct D3d9Resource {
     bool                 cross_adapter;
     HostAllocation      *lent;
     uint64_t             shared_key;
+    uint64_t             leased;
     d3d::PresentCount    presents;
     uint32_t             named_point;
 };

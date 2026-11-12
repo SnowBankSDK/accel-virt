@@ -17,6 +17,8 @@
 #include "proto/resources/surface_point.hpp"
 #include "harness/executor/d3d_loopback.hpp"
 #include "harness/executor/executor_log_rig.hpp"
+#include "harness/executor/lease_rig.hpp"
+#include "proto/d3d/resource_footprint.hpp"
 #include "executor/shim/host_heap.hpp"
 #include "harness/framework/test_registry.hpp"
 #include "proto/resources/host_memory_request.hpp"
@@ -1113,4 +1115,174 @@ TEST(d3d9_session_device, a_host_without_fragment_shader_barycentrics_wraps_the_
     check_wrap({true, false, render_state_wrap0, 0u, false}, WrapPath::list_point, without);
     check_wrap({true, false, render_state_wrap0, wrap_coord_0, true}, WrapPath::strip_linear_at_offset, without);
     check_wrap({false, false, render_state_wrap0, wrap_coord_1, true}, WrapPath::strip_linear_at_offset, without);
+}
+
+namespace {
+
+std::uint32_t gpu_of(av::LoaderHostApis &apis, const av::D3d9HostDevice *device9)
+{
+    std::uint32_t index = 0u;
+    while (index < apis.gpu_count() && apis.d3d9_device(index) != device9) index++;
+    return index;
+}
+
+}
+
+TEST(d3d9_session_device, a_device_made_from_the_initial_lease_alone_draws)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice *device11 = nullptr;
+    av::D3d9HostDevice  *device9 = nullptr;
+    if (!host_devices(apis, device11, device9)) return;
+    const std::uint32_t index = gpu_of(apis, device9);
+    if (apis.vram_ledger(index) == nullptr) return;
+    av::D3dBackend    backend(rig.log);
+    av::SessionShares unshared;
+    CHECK(backend.initialize(unshared, rig.imports, device11, nullptr, nullptr, device9));
+    av::D3dLoopback wire(backend, rig.imports);
+    const std::uint64_t target_bytes =
+        av::ResourceFootprint(format_a8r8g8b8, size, size, 1u, 1u, 1u, 0u).bytes();
+    av::LeaseRig lease(apis.vram_ledger(index), apis.host_ram_ledger(),
+                       av::ResourceFootprint::direct3d9_device_bytes + target_bytes,
+                       av::LeaseRecord::direct3d_initial_bytes);
+    backend.lease_from(&lease.host());
+    const std::uint64_t before = lease.in_use();
+    CHECK_EQ(lease.room(), target_bytes);
+    CHECK(lease.admit(av::ResourceFootprint::direct3d9_device_bytes));
+    CHECK_EQ(lease.guest().extensions(), 0u);
+    std::uint32_t hresult = 1u;
+    CHECK(av_d3d9_CreateDevice9(wire, device, 0u, &hresult));
+    CHECK_EQ(hresult, 0u);
+    std::fprintf(stderr, "d3d9 lease: the device took %llu bytes of video memory\n",
+                 static_cast<unsigned long long>(lease.in_use() - before));
+    CHECK(lease.admit(target_bytes));
+    CHECK(av_d3d9_CreateSurface9(wire, target, kind_render_target, size, size, format_a8r8g8b8, 0u, 0u, 0u));
+    CHECK(av_d3d9_SetRenderTarget9(wire, 0u, target, 0u));
+    CHECK(av_d3d9_Clear9(wire, 0u, nullptr, clear_target, red, 1.0f, 0u));
+    Pixels pixels;
+    CHECK(read(wire, target, pixels));
+    CHECK_EQ(pixels.hresult, 0u);
+    CHECK_EQ(pixels.at(size / 2u, size / 2u), red);
+    CHECK(av_d3d9_Finish9(wire, &hresult));
+    CHECK_EQ(hresult, 0u);
+    CHECK_EQ(wire.refused(), 0u);
+    CHECK(av_d3d9_Destroy9(wire, target));
+    lease.credit(target_bytes);
+    CHECK(av_d3d9_Destroy9(wire, device));
+    lease.credit(av::ResourceFootprint::direct3d9_device_bytes);
+    CHECK_EQ(lease.guest().left(av::LeaseRecord::Kind::device), lease.host().idle(av::LeaseRecord::Kind::device));
+    backend.shut_down();
+}
+
+TEST(d3d9_session_device, textures_past_the_leased_room_are_refused_up_front_and_the_device_keeps_drawing)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice *device11 = nullptr;
+    av::D3d9HostDevice  *device9 = nullptr;
+    if (!host_devices(apis, device11, device9)) return;
+    const std::uint32_t index = gpu_of(apis, device9);
+    if (apis.vram_ledger(index) == nullptr) return;
+    av::D3dBackend    backend(rig.log);
+    av::SessionShares unshared;
+    CHECK(backend.initialize(unshared, rig.imports, device11, nullptr, nullptr, device9));
+    av::D3dLoopback wire(backend, rig.imports);
+    constexpr std::uint64_t room = std::uint64_t{96} << 20u;
+    av::LeaseRig lease(apis.vram_ledger(index), apis.host_ram_ledger(), room);
+    backend.lease_from(&lease.host());
+    std::uint32_t hresult = 1u;
+    CHECK(lease.admit(av::ResourceFootprint::direct3d9_device_bytes));
+    CHECK(av_d3d9_CreateDevice9(wire, device, 0u, &hresult));
+    CHECK_EQ(hresult, 0u);
+    const std::uint64_t target_bytes =
+        av::ResourceFootprint(format_a8r8g8b8, size, size, 1u, 1u, 1u, 0u).bytes();
+    CHECK(lease.admit(target_bytes));
+    CHECK(av_d3d9_CreateSurface9(wire, target, kind_render_target, size, size, format_a8r8g8b8, 0u, 0u, 0u));
+    CHECK(av_d3d9_SetRenderTarget9(wire, 0u, target, 0u));
+
+    constexpr std::uint32_t edge = 1024u;
+    constexpr std::uint32_t usage_render_target = 0x1u;
+    const std::uint64_t each = av::ResourceFootprint(format_a8r8g8b8, edge, edge, 1u, 1u, 1u, 0u).bytes();
+    CHECK_EQ(each, std::uint64_t{4} << 20u);
+    CHECK_EQ(av::ResourceFootprint(format_a8r8g8b8, edge, edge, 1u, 1u, 0u, 0u).bytes(),
+             std::uint64_t{86} << 16u);
+    CHECK_EQ(av::ResourceFootprint(100u, 0u).bytes(), std::uint64_t{64} << 10u);
+    const std::uint64_t before = lease.in_use();
+    constexpr std::uint32_t first = 100u;
+    std::uint32_t made = 0u, refused = 0u;
+    while (refused < 4u && made < 64u) {
+        if (!lease.admit(each)) {
+            refused++;
+            continue;
+        }
+        CHECK(av_d3d9_CreateTexture9(wire, first + made, 1u, edge, edge, 1u, 1u, usage_render_target, format_a8r8g8b8, 0u));
+        made++;
+    }
+    CHECK_EQ(refused, 4u);
+    CHECK(made >= 8u);
+    CHECK(av_d3d9_Finish9(wire, &hresult));
+    CHECK_EQ(hresult, 0u);
+    std::fprintf(stderr, "d3d9 lease: %u textures, %llu bytes estimated, %llu bytes the host runtime took\n", made,
+                 static_cast<unsigned long long>(each * made),
+                 static_cast<unsigned long long>(lease.in_use() - before));
+    CHECK(av_d3d9_Clear9(wire, 0u, nullptr, clear_target, red, 1.0f, 0u));
+    Pixels pixels;
+    CHECK(read(wire, target, pixels));
+    CHECK_EQ(pixels.hresult, 0u);
+    CHECK_EQ(pixels.at(size / 2u, size / 2u), red);
+
+    const std::uint32_t freed = made / 2u;
+    for (std::uint32_t at = 0u; at < freed; at++) {
+        CHECK(av_d3d9_Destroy9(wire, first + at));
+        lease.credit(each);
+    }
+    for (std::uint32_t at = 0u; at < freed; at++) {
+        CHECK(lease.admit(each));
+        CHECK(av_d3d9_CreateTexture9(wire, first + made + at, 1u, edge, edge, 1u, 1u, usage_render_target,
+                                     format_a8r8g8b8, 0u));
+    }
+    CHECK(av_d3d9_Clear9(wire, 0u, nullptr, clear_target, blue, 1.0f, 0u));
+    Pixels again;
+    CHECK(read(wire, target, again));
+    CHECK_EQ(again.hresult, 0u);
+    CHECK_EQ(again.at(size / 2u, size / 2u), blue);
+    CHECK(av_d3d9_Finish9(wire, &hresult));
+    CHECK_EQ(hresult, 0u);
+    CHECK_EQ(wire.refused(), 0u);
+    CHECK_EQ(lease.guest().left(av::LeaseRecord::Kind::device), lease.host().idle(av::LeaseRecord::Kind::device));
+    backend.shut_down();
+}
+
+TEST(d3d9_session_device, a_device_the_host_has_no_room_for_is_refused_and_the_session_runs_on)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice *device11 = nullptr;
+    av::D3d9HostDevice  *device9 = nullptr;
+    if (!host_devices(apis, device11, device9)) return;
+    const std::uint32_t index = gpu_of(apis, device9);
+    if (apis.vram_ledger(index) == nullptr) return;
+    av::D3dBackend    backend(rig.log);
+    av::SessionShares unshared;
+    CHECK(backend.initialize(unshared, rig.imports, device11, nullptr, nullptr, device9));
+    av::D3dLoopback wire(backend, rig.imports);
+    std::uint32_t hresult = 0u;
+    {
+        av::LeaseRig lease(apis.vram_ledger(index), apis.host_ram_ledger(), 0u);
+        backend.lease_from(&lease.host());
+        CHECK(av_d3d9_CreateDevice9(wire, device, 0u, &hresult));
+        CHECK(hresult != 0u);
+        backend.lease_from(nullptr);
+    }
+    hresult = 1u;
+    CHECK(av_d3d9_CreateDevice9(wire, other_device, 0u, &hresult));
+    CHECK_EQ(hresult, 0u);
+    CHECK(av_d3d9_CreateSurface9(wire, other_target, kind_render_target, size, size, format_a8r8g8b8, 0u, 0u, 0u));
+    CHECK(av_d3d9_SetRenderTarget9(wire, 0u, other_target, 0u));
+    CHECK(av_d3d9_Clear9(wire, 0u, nullptr, clear_target, blue, 1.0f, 0u));
+    Pixels pixels;
+    CHECK(read(wire, other_target, pixels));
+    CHECK_EQ(pixels.at(size / 2u, size / 2u), blue);
+    backend.shut_down();
 }
