@@ -1,0 +1,2290 @@
+From: accel-virt
+Subject: [PATCH] ExecuteIndirect with root arguments or vertex and index buffer views in its command signature draws on a host without device generated commands
+
+Without VK_EXT_device_generated_commands, or when the DGC template refuses a signature, a graphics
+command signature whose state arguments are root constants, incrementing constants, root CBV, SRV
+and UAV addresses (raw VA root descriptors), vertex buffer views or an index buffer view is
+emulated. A compute pass writes, for every command, its draw arguments and a state block: the
+whole root parameter block bound at the call overridden by the command's arguments, and with buffer
+views also the vertex buffer table, the index buffer and the draw's first index, base vertex and
+first instance, with addresses translated through the indirect address table and sizes cut to what
+the range leaves; draws past the count buffer are zeroed. The draws are recorded in command order
+with a variant of the bound pipeline whose shaders read the root parameter block through the
+address pushed for each command instead of from push constants; with buffer views the vertex
+shader pulls its inputs from the vertex buffer table, bounds-checked, and with an index buffer view
+indexed draws become plain draws whose vertex shader reads the index. Variants are compiled the
+first time and cached with the pipeline's others. Graphics push constant ranges on such hosts are
+at least 8 bytes and include the vertex stage. Dispatches, push-descriptor root descriptors, push UBO
+root signatures, strip topologies with a cut value and an index buffer view, vertex formats the
+pull does not decode, and pipelines whose SPIR-V is not kept are logged and draw nothing. The cost
+is one compute dispatch and one push and indirect draw per command, only on these calls; other
+ExecuteIndirect calls and draws pay nothing.
+---
+diff --git a/libs/vkd3d/command.c b/libs/vkd3d/command.c
+index 73a79bc..df94418 100644
+--- a/libs/vkd3d/command.c
++++ b/libs/vkd3d/command.c
+@@ -6878,6 +6878,13 @@ static HRESULT d3d12_command_list_build_init_commands(struct d3d12_command_list
+                 barrier.dstStageMask |= VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+             }
+ 
++            if (iteration->indirect_meta.need_compute_to_graphics_barrier)
++            {
++                barrier.dstAccessMask |= VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
++                barrier.dstStageMask |= VK_PIPELINE_STAGE_2_PRE_RASTERIZATION_SHADERS_BIT |
++                        VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
++            }
++
+             memset(&dep_info, 0, sizeof(dep_info));
+             dep_info.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+             dep_info.memoryBarrierCount = 1;
+@@ -17398,6 +17405,207 @@ void d3d12_command_list_flush_dgc_batch(struct d3d12_command_list *list)
+             state ? &state->ID3D12PipelineState_iface : NULL);
+ }
+ 
++static void d3d12_command_list_fill_indirect_state_template(struct d3d12_command_list *list,
++        const struct d3d12_command_signature *signature, uint32_t *words, uint32_t vertex_table_word)
++{
++    const struct vkd3d_dynamic_state *dyn_state = &list->dynamic_state;
++    VkDeviceAddress va;
++    unsigned int i;
++
++    if (signature->emulated.mode == VKD3D_INDIRECT_STATE_ROOT)
++        return;
++
++    for (i = 0; i < D3D12_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT; i++)
++    {
++        va = dyn_state->vertex_buffers[i] ?
++                vkd3d_get_buffer_device_address(list->device, dyn_state->vertex_buffers[i]) + dyn_state->vertex_offsets[i] : 0;
++        words[vertex_table_word + 4 * i + 0] = (uint32_t)va;
++        words[vertex_table_word + 4 * i + 1] = (uint32_t)(va >> 32);
++        words[vertex_table_word + 4 * i + 2] = dyn_state->vertex_buffers[i] ? (uint32_t)dyn_state->vertex_sizes[i] : 0;
++        words[vertex_table_word + 4 * i + 3] = dyn_state->vertex_strides[i];
++    }
++
++    va = list->index_buffer.buffer ?
++            vkd3d_get_buffer_device_address(list->device, list->index_buffer.buffer) + list->index_buffer.offset : 0;
++    words[vertex_table_word + VKD3D_INDIRECT_STATE_INDEX_WORD + 0] = (uint32_t)va;
++    words[vertex_table_word + VKD3D_INDIRECT_STATE_INDEX_WORD + 1] = (uint32_t)(va >> 32);
++    words[vertex_table_word + VKD3D_INDIRECT_STATE_INDEX_WORD + 2] = list->index_buffer.buffer ? (uint32_t)list->index_buffer.size : 0;
++    words[vertex_table_word + VKD3D_INDIRECT_STATE_INDEX_WORD + 3] =
++            list->index_buffer.dxgi_format == DXGI_FORMAT_R16_UINT ? 2 : 4;
++}
++
++static void d3d12_command_list_execute_indirect_emulated(struct d3d12_command_list *list,
++        struct d3d12_command_signature *signature, uint32_t max_command_count,
++        struct d3d12_resource *arg_buffer, uint64_t arg_buffer_offset,
++        struct d3d12_resource *count_buffer, uint64_t count_buffer_offset)
++{
++    const struct vkd3d_vk_device_procs *vk_procs = &list->device->vk_procs;
++    struct vkd3d_pipeline_bindings *bindings = &list->graphics_bindings;
++    const struct d3d12_root_signature *root_signature = bindings->root_signature;
++    const uint32_t draw_stride = 5 * sizeof(uint32_t);
++    uint32_t block_stride, vertex_table_word, dynamic_state_flags, i, op;
++    struct vkd3d_execute_indirect_state_args args;
++    struct vkd3d_execute_indirect_info pipeline_info;
++    struct vkd3d_scratch_allocation setup, draws, blocks;
++    union vkd3d_root_parameter_data template_data;
++    VkCommandBuffer vk_patch_cmd_buffer;
++    VkMemoryBarrier2 vk_barrier;
++    VkDependencyInfo dep_info;
++    VkDeviceAddress address;
++    bool pulled_indices;
++    VkPipeline vk_pipeline;
++    uint32_t *words;
++
++    pulled_indices = signature->emulated.mode == VKD3D_INDIRECT_STATE_PULL_INDICES;
++
++    if (list->predication.fallback_enabled || !root_signature || !list->state ||
++            list->state->pipeline_type != VKD3D_PIPELINE_TYPE_GRAPHICS ||
++            !root_signature->graphics.vk_push_stages ||
++            root_signature->graphics.push_constant_range.size < sizeof(VkDeviceAddress) ||
++            (signature->emulated.root_bytes && root_signature->graphics.push_constant_range.size != signature->emulated.root_bytes) ||
++            (pulled_indices && list->state->graphics.index_buffer_strip_cut_value &&
++             list->dynamic_state.vk_primitive_topology != VK_PRIMITIVE_TOPOLOGY_POINT_LIST &&
++             list->dynamic_state.vk_primitive_topology != VK_PRIMITIVE_TOPOLOGY_LINE_LIST &&
++             list->dynamic_state.vk_primitive_topology != VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST &&
++             list->dynamic_state.vk_primitive_topology != VK_PRIMITIVE_TOPOLOGY_LINE_LIST_WITH_ADJACENCY &&
++             list->dynamic_state.vk_primitive_topology != VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_WITH_ADJACENCY &&
++             list->dynamic_state.vk_primitive_topology != VK_PRIMITIVE_TOPOLOGY_PATCH_LIST))
++    {
++        FIXME_ONCE("ExecuteIndirect with per-command state draws nothing in this state.\n");
++        return;
++    }
++
++    if (FAILED(vkd3d_meta_get_execute_indirect_state_pipeline(&list->device->meta_ops, &pipeline_info)))
++        return;
++
++    vertex_table_word = align(root_signature->graphics.push_constant_range.size, 16) / sizeof(uint32_t);
++    block_stride = vertex_table_word * sizeof(uint32_t);
++    if (signature->emulated.mode != VKD3D_INDIRECT_STATE_ROOT)
++        block_stride += VKD3D_INDIRECT_STATE_PULL_BYTES;
++
++    if (!d3d12_command_allocator_allocate_scratch_memory(list->allocator, VKD3D_SCRATCH_POOL_KIND_UNIFORM_UPLOAD,
++            block_stride + signature->emulated.op_count * 4 * sizeof(uint32_t), 16, ~0u, &setup) ||
++        !d3d12_command_allocator_allocate_scratch_memory(list->allocator, VKD3D_SCRATCH_POOL_KIND_DEVICE_STORAGE,
++            (VkDeviceSize)draw_stride * max_command_count, sizeof(uint32_t), ~0u, &draws) ||
++        !d3d12_command_allocator_allocate_scratch_memory(list->allocator, VKD3D_SCRATCH_POOL_KIND_DEVICE_STORAGE,
++            (VkDeviceSize)block_stride * max_command_count, 16, ~0u, &blocks))
++        return;
++
++    words = setup.host_ptr;
++    memset(words, 0, block_stride);
++    memset(&template_data, 0, sizeof(template_data));
++    d3d12_command_list_fetch_root_parameter_data(list, bindings, &template_data);
++    memcpy(words, template_data.root_constants, root_signature->graphics.push_constant_range.size);
++    d3d12_command_list_fill_indirect_state_template(list, signature, words, vertex_table_word);
++
++    words += block_stride / sizeof(uint32_t);
++    memcpy(words, signature->emulated.ops, signature->emulated.op_count * 4 * sizeof(uint32_t));
++    for (i = 0; i < signature->emulated.op_count; i++)
++    {
++        op = words[4 * i];
++        if ((op >= 3 && words[4 * i + 2] != UINT32_MAX) || op == 4 || op == 5)
++            words[4 * i + 2] += vertex_table_word;
++    }
++
++    d3d12_command_list_end_current_render_pass(list, false);
++    d3d12_command_list_end_transfer_batch(list);
++
++    d3d12_command_allocator_allocate_init_post_indirect_command_buffer(list->allocator, list);
++    vk_patch_cmd_buffer = list->cmd.vk_post_indirect_barrier_commands;
++
++    if (vk_patch_cmd_buffer == list->cmd.vk_command_buffer)
++    {
++        d3d12_command_list_invalidate_current_pipeline(list, true);
++        d3d12_command_list_invalidate_root_parameters(list, &list->compute_bindings, true, &list->graphics_bindings);
++    }
++    else
++    {
++        list->cmd.indirect_meta->need_compute_to_indirect_barrier = true;
++        list->cmd.indirect_meta->need_compute_to_graphics_barrier = true;
++    }
++
++    memset(&args, 0, sizeof(args));
++    args.setup_va = setup.va;
++    args.args_va = arg_buffer->res.va + arg_buffer_offset;
++    args.count_va = count_buffer ? count_buffer->res.va + count_buffer_offset : 0;
++    args.draws_va = draws.va;
++    args.blocks_va = blocks.va;
++    args.translation_va = list->indirect_va_table;
++    args.arg_stride_words = signature->desc.ByteStride / sizeof(uint32_t);
++    args.block_words = block_stride / sizeof(uint32_t);
++    args.op_count = signature->emulated.op_count;
++    args.max_commands = max_command_count;
++    args.draw_words = draw_stride / sizeof(uint32_t);
++
++    VK_CALL(vkCmdBindPipeline(vk_patch_cmd_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_info.vk_pipeline));
++    VK_CALL(vkCmdPushConstants(vk_patch_cmd_buffer, pipeline_info.vk_pipeline_layout,
++            VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(args), &args));
++    VK_CALL(vkCmdDispatch(vk_patch_cmd_buffer, vkd3d_compute_workgroup_count(max_command_count, 64), 1, 1));
++
++    if (vk_patch_cmd_buffer == list->cmd.vk_command_buffer)
++    {
++        memset(&vk_barrier, 0, sizeof(vk_barrier));
++        vk_barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
++        vk_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
++        vk_barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
++        vk_barrier.dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT |
++                VK_PIPELINE_STAGE_2_PRE_RASTERIZATION_SHADERS_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
++        vk_barrier.dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
++
++        memset(&dep_info, 0, sizeof(dep_info));
++        dep_info.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
++        dep_info.memoryBarrierCount = 1;
++        dep_info.pMemoryBarriers = &vk_barrier;
++        VK_CALL(vkCmdPipelineBarrier2(vk_patch_cmd_buffer, &dep_info));
++    }
++
++    if (signature->emulated.indexed && !pulled_indices && !d3d12_command_list_update_index_buffer(list))
++        return;
++
++    if (!d3d12_command_list_begin_render_pass(list, VKD3D_PIPELINE_TYPE_GRAPHICS))
++    {
++        WARN("Failed to begin render pass, ignoring draw.\n");
++        return;
++    }
++
++    if (signature->emulated.indexed && !pulled_indices)
++        d3d12_command_list_check_index_buffer_strip_cut_value(list);
++
++    if (!(vk_pipeline = d3d12_pipeline_state_get_indirect_state_pipeline(list->state, signature->emulated.mode,
++            &list->dynamic_state, list->dsv.format, &dynamic_state_flags)))
++        return;
++
++    VK_CALL(vkCmdBindPipeline(list->cmd.vk_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk_pipeline));
++    list->command_buffer_pipeline = vk_pipeline;
++    list->current_pipeline = VK_NULL_HANDLE;
++
++    if (dynamic_state_flags & ~list->dynamic_state.active_flags)
++    {
++        if (dynamic_state_flags & ~list->dynamic_state.active_flags & VKD3D_DYNAMIC_STATE_VERTEX_BUFFER_STRIDE)
++            list->dynamic_state.dirty_vbos = ~0u;
++        list->dynamic_state.dirty_flags |= dynamic_state_flags & ~list->dynamic_state.active_flags;
++        list->dynamic_state.active_flags = dynamic_state_flags;
++        d3d12_command_list_update_dynamic_state(list);
++    }
++
++    for (i = 0; i < max_command_count; i++)
++    {
++        address = blocks.va + (VkDeviceAddress)block_stride * i;
++        VK_CALL(vkCmdPushConstants(list->cmd.vk_command_buffer, root_signature->graphics.vk_pipeline_layout,
++                root_signature->graphics.vk_push_stages, 0, sizeof(address), &address));
++
++        if (signature->emulated.indexed && !pulled_indices)
++            VK_CALL(vkCmdDrawIndexedIndirect(list->cmd.vk_command_buffer, draws.buffer,
++                    draws.offset + (VkDeviceSize)draw_stride * i, 1, draw_stride));
++        else
++            VK_CALL(vkCmdDrawIndirect(list->cmd.vk_command_buffer, draws.buffer,
++                    draws.offset + (VkDeviceSize)draw_stride * i, 1, draw_stride));
++    }
++
++    d3d12_command_list_invalidate_push_constants(bindings);
++    VKD3D_BREADCRUMB_COMMAND(EXECUTE_INDIRECT);
++}
++
+ static void STDMETHODCALLTYPE d3d12_command_list_ExecuteIndirect(d3d12_command_list_iface *iface,
+         ID3D12CommandSignature *command_signature, UINT max_command_count, ID3D12Resource *arg_buffer,
+         UINT64 arg_buffer_offset, ID3D12Resource *count_buffer, UINT64 count_buffer_offset)
+@@ -17452,6 +17660,13 @@ static void STDMETHODCALLTYPE d3d12_command_list_ExecuteIndirect(d3d12_command_l
+ 
+     d3d12_command_list_flush_dgc_batch(list);
+ 
++    if (sig_impl->emulated.active)
++    {
++        d3d12_command_list_execute_indirect_emulated(list, sig_impl, max_command_count,
++                arg_impl, arg_buffer_offset, count_impl, count_buffer_offset);
++        return;
++    }
++
+     /* Temporary workaround, since we cannot parse non-draw arguments yet. Point directly
+      * to the first argument. Should avoid hard crashes for now. */
+     arg_buffer_offset += sig_impl->argument_buffer_offset_for_command;
+@@ -25866,6 +26081,101 @@ end:
+     return hr;
+ }
+ 
++static bool d3d12_command_signature_init_emulated_state(struct d3d12_command_signature *signature,
++        const D3D12_COMMAND_SIGNATURE_DESC *desc, struct d3d12_root_signature *root_signature)
++{
++    const struct vkd3d_shader_root_parameter *root_parameter;
++    const struct vkd3d_shader_root_constant *root_constant;
++    bool vertex_views = false, index_view = false;
++    uint32_t src_word = 0, op, i;
++    uint32_t *ops;
++
++    if (signature->pipeline_type != VKD3D_PIPELINE_TYPE_GRAPHICS)
++        return false;
++
++    if (root_signature && ((root_signature->graphics.flags & VKD3D_ROOT_SIGNATURE_USE_PUSH_CONSTANT_UNIFORM_BLOCK) ||
++            root_signature->graphics.push_constant_range.size < sizeof(VkDeviceAddress)))
++        return false;
++
++    signature->emulated.root_bytes = root_signature ? root_signature->graphics.push_constant_range.size : 0;
++    signature->emulated.op_count = 0;
++    ops = signature->emulated.ops;
++
++    for (i = 0; i < desc->NumArgumentDescs; i++)
++    {
++        const D3D12_INDIRECT_ARGUMENT_DESC *argument = &desc->pArgumentDescs[i];
++
++        op = 4 * signature->emulated.op_count;
++        switch (argument->Type)
++        {
++            case D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT:
++            case D3D12_INDIRECT_ARGUMENT_TYPE_INCREMENTING_CONSTANT:
++                root_constant = root_signature_get_32bit_constants(root_signature, argument->Constant.RootParameterIndex);
++                ops[op + 0] = argument->Type == D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT ? 0 : 1;
++                ops[op + 1] = src_word;
++                ops[op + 2] = root_constant->constant_index + argument->Constant.DestOffsetIn32BitValues;
++                ops[op + 3] = argument->Type == D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT ?
++                        argument->Constant.Num32BitValuesToSet : 1;
++                if (argument->Type == D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT)
++                    src_word += argument->Constant.Num32BitValuesToSet;
++                break;
++
++            case D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT_BUFFER_VIEW:
++            case D3D12_INDIRECT_ARGUMENT_TYPE_SHADER_RESOURCE_VIEW:
++            case D3D12_INDIRECT_ARGUMENT_TYPE_UNORDERED_ACCESS_VIEW:
++                if (!(root_signature->root_descriptor_raw_va_mask & (1ull << argument->ConstantBufferView.RootParameterIndex)))
++                    return false;
++                root_parameter = root_signature_get_parameter(root_signature, argument->ConstantBufferView.RootParameterIndex);
++                ops[op + 0] = 2;
++                ops[op + 1] = src_word;
++                ops[op + 2] = 2 * root_parameter->descriptor.raw_va_root_descriptor_index;
++                ops[op + 3] = 2;
++                src_word += 2;
++                break;
++
++            case D3D12_INDIRECT_ARGUMENT_TYPE_VERTEX_BUFFER_VIEW:
++                if (argument->VertexBuffer.Slot >= D3D12_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT)
++                    return false;
++                ops[op + 0] = 4;
++                ops[op + 1] = src_word;
++                ops[op + 2] = 4 * argument->VertexBuffer.Slot;
++                ops[op + 3] = 4;
++                src_word += 4;
++                vertex_views = true;
++                break;
++
++            case D3D12_INDIRECT_ARGUMENT_TYPE_INDEX_BUFFER_VIEW:
++                ops[op + 0] = 5;
++                ops[op + 1] = src_word;
++                ops[op + 2] = VKD3D_INDIRECT_STATE_INDEX_WORD;
++                ops[op + 3] = 4;
++                src_word += 4;
++                index_view = true;
++                break;
++
++            case D3D12_INDIRECT_ARGUMENT_TYPE_DRAW:
++            case D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED:
++                signature->emulated.indexed = argument->Type == D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED;
++                signature->emulated.mode = !vertex_views && !index_view ? VKD3D_INDIRECT_STATE_ROOT :
++                        index_view && signature->emulated.indexed ? VKD3D_INDIRECT_STATE_PULL_INDICES :
++                        VKD3D_INDIRECT_STATE_PULL_VERTICES;
++                ops[op + 0] = signature->emulated.mode == VKD3D_INDIRECT_STATE_PULL_INDICES ? 6 : 3;
++                ops[op + 1] = src_word;
++                ops[op + 2] = signature->emulated.mode == VKD3D_INDIRECT_STATE_ROOT ? UINT32_MAX :
++                        VKD3D_INDIRECT_STATE_DRAW_WORD;
++                ops[op + 3] = signature->emulated.indexed ? 5 : 4;
++                break;
++
++            default:
++                return false;
++        }
++        signature->emulated.op_count++;
++    }
++
++    signature->emulated.active = true;
++    return true;
++}
++
+ HRESULT d3d12_command_signature_create(struct d3d12_device *device, struct d3d12_root_signature *root_signature,
+         const D3D12_COMMAND_SIGNATURE_DESC *desc,
+         struct d3d12_command_signature **signature)
+@@ -26028,8 +26338,10 @@ HRESULT d3d12_command_signature_create(struct d3d12_device *device, struct d3d12
+     {
+         if (!device->device_info.device_generated_commands_features.deviceGeneratedCommands)
+         {
+-            FIXME("Device generated commands is not supported by implementation.\n");
+             object->requires_state_template = false;
++            if (!d3d12_command_signature_init_emulated_state(object, desc, root_signature))
++                ERR("Command signature %p changes state in a way not emulated without device generated commands, "
++                        "ExecuteIndirect with it draws nothing.\n", object);
+             goto out;
+         }
+ 
+@@ -26042,8 +26354,16 @@ HRESULT d3d12_command_signature_create(struct d3d12_device *device, struct d3d12
+         }
+ 
+         if (device->device_info.device_generated_commands_features.deviceGeneratedCommands)
++        {
+             if (FAILED(hr = d3d12_command_signature_init_state_template_dgc(object, desc, root_signature, device)))
+-                goto err;
++            {
++                if (hr != E_NOTIMPL || !d3d12_command_signature_init_emulated_state(object, desc, root_signature))
++                    goto err;
++                object->requires_state_template = false;
++                hr = S_OK;
++                goto out;
++            }
++        }
+ 
+         /* Heuristic. If game uses fancy execute indirect we're more inclined to split command buffers
+          * for optimal reordering. */
+diff --git a/libs/vkd3d/indirect_state.c b/libs/vkd3d/indirect_state.c
+new file mode 100644
+index 0000000..ebfbff2
+--- /dev/null
++++ b/libs/vkd3d/indirect_state.c
+@@ -0,0 +1,1170 @@
++#define VKD3D_DBG_CHANNEL VKD3D_DBG_CHANNEL_API
++
++#include "vkd3d_private.h"
++#include "av_line_coverage.h"
++
++enum
++{
++    SPV_OP_EXTENSION = 10,
++    SPV_OP_LINE = 8,
++    SPV_OP_NO_LINE = 317,
++    SPV_OP_IN_BOUNDS_ACCESS_CHAIN = 66,
++    SPV_OP_PTR_ACCESS_CHAIN = 67,
++    SPV_OP_BITCAST = 124,
++    SPV_OP_NAME = 5,
++    SPV_SC_PRIVATE = 6,
++    SPV_SC_PHYSICAL_STORAGE_BUFFER = 5349,
++    SPV_CAP_PHYSICAL_STORAGE_BUFFER_ADDRESSES = 5347,
++    SPV_ADDRESSING_PHYSICAL_STORAGE_BUFFER_64 = 5348,
++    SPV_MEMORY_ACCESS_ALIGNED = 2,
++};
++
++struct push_block_rewrite
++{
++    const uint32_t *words;
++    size_t count;
++    uint32_t bound;
++    uint32_t *twin;
++    uint8_t *redirected;
++    uint32_t pc_var;
++    uint32_t pc_struct;
++    uint32_t uint_type;
++    uint32_t uvec2_type;
++    uint32_t entry_function;
++    bool has_capability;
++    bool has_extension;
++};
++
++static bool push_block_find_globals(struct push_block_rewrite *rw)
++{
++    const uint32_t *words = rw->words;
++    size_t at, length;
++    uint32_t opcode;
++
++    for (at = 5; at < rw->count; at += length)
++    {
++        opcode = words[at] & 0xffffu;
++        length = words[at] >> 16;
++        if (!length || at + length > rw->count)
++            return false;
++
++        if (opcode == AV_LC_OP_CAPABILITY && length == 2 && words[at + 1] == SPV_CAP_PHYSICAL_STORAGE_BUFFER_ADDRESSES)
++            rw->has_capability = true;
++        else if (opcode == SPV_OP_EXTENSION && length == 9 &&
++                !memcmp(&words[at + 1], "SPV_KHR_physical_storage_buffer", 32))
++            rw->has_extension = true;
++        else if (opcode == AV_LC_OP_ENTRY_POINT && length >= 3 && !rw->entry_function)
++            rw->entry_function = words[at + 2];
++        else if (opcode == AV_LC_OP_TYPE_INT && length == 4 && words[at + 2] == 32 && words[at + 3] == 0)
++            rw->uint_type = words[at + 1];
++        else if (opcode == AV_LC_OP_TYPE_POINTER && length == 4 && words[at + 2] == AV_LC_SC_PUSH_CONSTANT &&
++                words[at + 1] < rw->bound)
++            rw->twin[words[at + 1]] = UINT32_MAX;
++        else if (opcode == AV_LC_OP_VARIABLE && length >= 4 && words[at + 3] == AV_LC_SC_PUSH_CONSTANT)
++        {
++            if (rw->pc_var)
++                return false;
++            rw->pc_var = words[at + 2];
++            rw->pc_struct = words[at + 1];
++        }
++    }
++
++    if (rw->uint_type)
++    {
++        for (at = 5; at < rw->count; at += length)
++        {
++            length = words[at] >> 16;
++            if ((words[at] & 0xffffu) == AV_LC_OP_TYPE_VECTOR && length == 4 &&
++                    words[at + 2] == rw->uint_type && words[at + 3] == 2)
++                rw->uvec2_type = words[at + 1];
++        }
++    }
++
++    for (at = 5; at < rw->count; at += length)
++    {
++        length = words[at] >> 16;
++        if ((words[at] & 0xffffu) == AV_LC_OP_TYPE_POINTER && length == 4 && words[at + 1] == rw->pc_struct)
++        {
++            rw->pc_struct = words[at + 3];
++            return true;
++        }
++    }
++    return false;
++}
++
++static bool push_block_mentions(const struct push_block_rewrite *rw, const uint32_t *ins, size_t length)
++{
++    size_t i;
++
++    for (i = 1; i < length; i++)
++    {
++        if (ins[i] == rw->pc_var || (ins[i] < rw->bound && rw->redirected[ins[i]]))
++            return true;
++    }
++    return false;
++}
++
++int vkd3d_rewrite_push_block_to_address(const uint32_t *words, size_t count, uint32_t **out_words, size_t *out_count)
++{
++    uint32_t c_zero, block_type, block_pointer, block_var, uvec2_pointer, address_pointer, private_pointer, address_var;
++    struct av_lc_words out = {NULL, 0, 0, 0}, types = {NULL, 0, 0, 0};
++    uint32_t bound, opcode, base, loaded, id, i;
++    struct push_block_rewrite rw;
++    bool caps_done = false, annotations_done = false, globals_done = false;
++    bool in_entry = false, pending_init = false;
++    size_t at, length, j;
++    int status = AV_LC_OK;
++
++    memset(&rw, 0, sizeof(rw));
++    if (count < 5 || words[0] != 0x07230203u || !words[3] || words[3] > (1u << 22))
++        return AV_LC_MALFORMED;
++    rw.words = words;
++    rw.count = count;
++    rw.bound = words[3];
++    rw.twin = vkd3d_calloc(rw.bound, sizeof(*rw.twin));
++    rw.redirected = vkd3d_calloc(rw.bound, 1);
++    if (!rw.twin || !rw.redirected)
++    {
++        vkd3d_free(rw.twin);
++        vkd3d_free(rw.redirected);
++        return AV_LC_NO_MEMORY;
++    }
++
++    if (!push_block_find_globals(&rw))
++    {
++        status = rw.pc_var ? AV_LC_MALFORMED : AV_LC_UNCHANGED;
++        goto done;
++    }
++
++    bound = rw.bound;
++    if (!rw.uint_type)
++    {
++        rw.uint_type = bound++;
++        av_lc_emit(&types, AV_LC_OP_TYPE_INT, 3, rw.uint_type, 32u, 0u);
++    }
++    if (!rw.uvec2_type)
++    {
++        rw.uvec2_type = bound++;
++        av_lc_emit(&types, AV_LC_OP_TYPE_VECTOR, 3, rw.uvec2_type, rw.uint_type, 2u);
++    }
++    c_zero = bound++;
++    av_lc_emit(&types, AV_LC_OP_CONSTANT, 3, rw.uint_type, c_zero, 0u);
++    block_type = bound++;
++    av_lc_emit(&types, AV_LC_OP_TYPE_STRUCT, 2, block_type, rw.uvec2_type);
++    block_pointer = bound++;
++    av_lc_emit(&types, AV_LC_OP_TYPE_POINTER, 3, block_pointer, AV_LC_SC_PUSH_CONSTANT, block_type);
++    block_var = bound++;
++    av_lc_emit(&types, AV_LC_OP_VARIABLE, 3, block_pointer, block_var, AV_LC_SC_PUSH_CONSTANT);
++    uvec2_pointer = bound++;
++    av_lc_emit(&types, AV_LC_OP_TYPE_POINTER, 3, uvec2_pointer, AV_LC_SC_PUSH_CONSTANT, rw.uvec2_type);
++    address_pointer = bound++;
++    av_lc_emit(&types, AV_LC_OP_TYPE_POINTER, 3, address_pointer, SPV_SC_PHYSICAL_STORAGE_BUFFER, rw.pc_struct);
++    private_pointer = bound++;
++    av_lc_emit(&types, AV_LC_OP_TYPE_POINTER, 3, private_pointer, SPV_SC_PRIVATE, address_pointer);
++    address_var = bound++;
++    av_lc_emit(&types, AV_LC_OP_VARIABLE, 3, private_pointer, address_var, SPV_SC_PRIVATE);
++
++    for (at = 5; at < count; at += length)
++    {
++        length = words[at] >> 16;
++        if ((words[at] & 0xffffu) == AV_LC_OP_TYPE_POINTER && length == 4 && words[at + 2] == AV_LC_SC_PUSH_CONSTANT)
++        {
++            id = words[at + 1];
++            rw.twin[id] = bound++;
++            av_lc_emit(&types, AV_LC_OP_TYPE_POINTER, 3, rw.twin[id], SPV_SC_PHYSICAL_STORAGE_BUFFER, words[at + 3]);
++        }
++    }
++
++    av_lc_words_append(&out, words, 5);
++    for (at = 5; at < count && status == AV_LC_OK; at += length)
++    {
++        opcode = words[at] & 0xffffu;
++        length = words[at] >> 16;
++
++        if (!caps_done && opcode != AV_LC_OP_CAPABILITY)
++        {
++            caps_done = true;
++            if (!rw.has_capability)
++                av_lc_emit(&out, AV_LC_OP_CAPABILITY, 1, SPV_CAP_PHYSICAL_STORAGE_BUFFER_ADDRESSES);
++            if (!rw.has_extension && words[1] < 0x00010500u)
++            {
++                av_lc_words_push(&out, (9u << 16) | SPV_OP_EXTENSION);
++                av_lc_emit_string(&out, "SPV_KHR_physical_storage_buffer");
++            }
++        }
++
++        if (!annotations_done && !av_lc_is_preamble(opcode))
++        {
++            annotations_done = true;
++            av_lc_emit(&out, AV_LC_OP_DECORATE, 2, block_type, AV_LC_DEC_BLOCK);
++            av_lc_emit(&out, AV_LC_OP_MEMBER_DECORATE, 4, block_type, 0u, AV_LC_DEC_OFFSET, 0u);
++        }
++
++        if (!globals_done && opcode == AV_LC_OP_FUNCTION)
++        {
++            globals_done = true;
++            av_lc_words_append(&out, types.data, types.count);
++        }
++
++        if (pending_init && opcode != AV_LC_OP_VARIABLE && opcode != SPV_OP_LINE && opcode != SPV_OP_NO_LINE)
++        {
++            uint32_t chain = bound++, value = bound++, pointer = bound++;
++
++            pending_init = false;
++            av_lc_emit(&out, AV_LC_OP_ACCESS_CHAIN, 4, uvec2_pointer, chain, block_var, c_zero);
++            av_lc_emit(&out, AV_LC_OP_LOAD, 3, rw.uvec2_type, value, chain);
++            av_lc_emit(&out, SPV_OP_BITCAST, 3, address_pointer, pointer, value);
++            av_lc_emit(&out, AV_LC_OP_STORE, 2, address_var, pointer);
++        }
++
++        switch (opcode)
++        {
++            case AV_LC_OP_MEMORY_MODEL:
++                if (words[at + 1] != 0 && words[at + 1] != SPV_ADDRESSING_PHYSICAL_STORAGE_BUFFER_64)
++                    status = AV_LC_REFUSED_TYPE;
++                av_lc_emit(&out, opcode, 2, SPV_ADDRESSING_PHYSICAL_STORAGE_BUFFER_64, words[at + 2]);
++                continue;
++
++            case AV_LC_OP_ENTRY_POINT:
++                if (words[1] < 0x00010400u || words[at + 2] != rw.entry_function)
++                    break;
++                av_lc_words_push(&out, ((uint32_t)(length + 1) << 16) | opcode);
++                for (j = 1; j < length; j++)
++                    av_lc_words_push(&out, words[at + j] == rw.pc_var ? block_var : words[at + j]);
++                av_lc_words_push(&out, address_var);
++                continue;
++
++            case SPV_OP_NAME:
++            case AV_LC_OP_DECORATE:
++                if (length >= 2 && words[at + 1] == rw.pc_var)
++                    continue;
++                break;
++
++            case AV_LC_OP_VARIABLE:
++                if (length >= 3 && words[at + 2] == rw.pc_var)
++                    continue;
++                break;
++
++            case AV_LC_OP_FUNCTION:
++                in_entry = length >= 3 && words[at + 2] == rw.entry_function;
++                break;
++
++            case AV_LC_OP_LABEL:
++                if (in_entry)
++                {
++                    in_entry = false;
++                    av_lc_words_append(&out, &words[at], length);
++                    pending_init = true;
++                    continue;
++                }
++                break;
++
++            case AV_LC_OP_ACCESS_CHAIN:
++            case SPV_OP_IN_BOUNDS_ACCESS_CHAIN:
++                base = words[at + 3];
++                if (base != rw.pc_var && !(base < rw.bound && rw.redirected[base]))
++                    break;
++                if (words[at + 1] >= rw.bound || !rw.twin[words[at + 1]] || rw.twin[words[at + 1]] == UINT32_MAX)
++                {
++                    status = AV_LC_REFUSED_TYPE;
++                    continue;
++                }
++                if (base == rw.pc_var)
++                {
++                    base = bound++;
++                    av_lc_emit(&out, AV_LC_OP_LOAD, 3, address_pointer, base, address_var);
++                }
++                if (words[at + 2] < rw.bound)
++                    rw.redirected[words[at + 2]] = 1;
++                av_lc_words_push(&out, words[at]);
++                av_lc_words_push(&out, rw.twin[words[at + 1]]);
++                av_lc_words_push(&out, words[at + 2]);
++                av_lc_words_push(&out, base);
++                av_lc_words_append(&out, &words[at + 4], length - 4);
++                continue;
++
++            case AV_LC_OP_LOAD:
++                if (length < 4 || (words[at + 3] != rw.pc_var && !(words[at + 3] < rw.bound && rw.redirected[words[at + 3]])))
++                    break;
++                if (length != 4)
++                {
++                    status = AV_LC_REFUSED_TYPE;
++                    continue;
++                }
++                loaded = words[at + 3];
++                if (loaded == rw.pc_var)
++                {
++                    loaded = bound++;
++                    av_lc_emit(&out, AV_LC_OP_LOAD, 3, address_pointer, loaded, address_var);
++                }
++                av_lc_emit(&out, AV_LC_OP_LOAD, 5, words[at + 1], words[at + 2], loaded,
++                        SPV_MEMORY_ACCESS_ALIGNED, 4u);
++                continue;
++
++            default:
++                if (globals_done && push_block_mentions(&rw, &words[at], length))
++                    status = AV_LC_REFUSED_TYPE;
++                break;
++        }
++
++        for (i = 0; i < length; i++)
++            av_lc_words_push(&out, words[at + i]);
++    }
++
++    if (status == AV_LC_OK && (out.failed || types.failed || !globals_done))
++        status = out.failed || types.failed ? AV_LC_NO_MEMORY : AV_LC_MALFORMED;
++
++    if (status == AV_LC_OK)
++    {
++        out.data[3] = bound;
++        *out_words = out.data;
++        *out_count = out.count;
++        out.data = NULL;
++    }
++
++done:
++    free(out.data);
++    free(types.data);
++    vkd3d_free(rw.twin);
++    vkd3d_free(rw.redirected);
++    return status;
++}
++
++enum
++{
++    SPV_OP_CONVERT_S_TO_F = 111,
++    SPV_OP_CONVERT_U_TO_F = 112,
++    SPV_OP_IADD = 128,
++    SPV_OP_ISUB = 130,
++    SPV_OP_IMUL = 132,
++    SPV_OP_UDIV = 134,
++    SPV_OP_IEQUAL = 170,
++    SPV_OP_ULESS_THAN = 176,
++    SPV_OP_ULESS_THAN_EQUAL = 178,
++    SPV_OP_SHIFT_RIGHT_LOGICAL = 194,
++    SPV_OP_SHIFT_RIGHT_ARITHMETIC = 195,
++    SPV_OP_SHIFT_LEFT_LOGICAL = 196,
++    SPV_OP_BITWISE_OR = 197,
++    SPV_OP_BITWISE_AND = 199,
++    SPV_BUILTIN_VERTEX_INDEX = 42,
++    SPV_BUILTIN_INSTANCE_INDEX = 43,
++    SPV_BUILTIN_BASE_VERTEX = 4424,
++    SPV_GLSL_FMAX = 40,
++    SPV_GLSL_UNPACK_HALF_2X16 = 62,
++};
++
++enum vertex_pull_kind
++{
++    PULL_UNORM,
++    PULL_SNORM,
++    PULL_UINT,
++    PULL_SINT,
++    PULL_FLOAT,
++    PULL_HALF,
++};
++
++struct vertex_pull_format
++{
++    VkFormat format;
++    uint8_t components;
++    uint8_t bits[4];
++    uint8_t kind;
++    bool bgra;
++};
++
++static const struct vertex_pull_format vertex_pull_formats[] =
++{
++    {VK_FORMAT_R8_UNORM, 1, {8}, PULL_UNORM},
++    {VK_FORMAT_R8_SNORM, 1, {8}, PULL_SNORM},
++    {VK_FORMAT_R8_UINT, 1, {8}, PULL_UINT},
++    {VK_FORMAT_R8_SINT, 1, {8}, PULL_SINT},
++    {VK_FORMAT_R8G8_UNORM, 2, {8, 8}, PULL_UNORM},
++    {VK_FORMAT_R8G8_SNORM, 2, {8, 8}, PULL_SNORM},
++    {VK_FORMAT_R8G8_UINT, 2, {8, 8}, PULL_UINT},
++    {VK_FORMAT_R8G8_SINT, 2, {8, 8}, PULL_SINT},
++    {VK_FORMAT_R8G8B8A8_UNORM, 4, {8, 8, 8, 8}, PULL_UNORM},
++    {VK_FORMAT_R8G8B8A8_SNORM, 4, {8, 8, 8, 8}, PULL_SNORM},
++    {VK_FORMAT_R8G8B8A8_UINT, 4, {8, 8, 8, 8}, PULL_UINT},
++    {VK_FORMAT_R8G8B8A8_SINT, 4, {8, 8, 8, 8}, PULL_SINT},
++    {VK_FORMAT_B8G8R8A8_UNORM, 4, {8, 8, 8, 8}, PULL_UNORM, true},
++    {VK_FORMAT_A2B10G10R10_UNORM_PACK32, 4, {10, 10, 10, 2}, PULL_UNORM},
++    {VK_FORMAT_A2B10G10R10_UINT_PACK32, 4, {10, 10, 10, 2}, PULL_UINT},
++    {VK_FORMAT_R16_UNORM, 1, {16}, PULL_UNORM},
++    {VK_FORMAT_R16_SNORM, 1, {16}, PULL_SNORM},
++    {VK_FORMAT_R16_UINT, 1, {16}, PULL_UINT},
++    {VK_FORMAT_R16_SINT, 1, {16}, PULL_SINT},
++    {VK_FORMAT_R16_SFLOAT, 1, {16}, PULL_HALF},
++    {VK_FORMAT_R16G16_UNORM, 2, {16, 16}, PULL_UNORM},
++    {VK_FORMAT_R16G16_SNORM, 2, {16, 16}, PULL_SNORM},
++    {VK_FORMAT_R16G16_UINT, 2, {16, 16}, PULL_UINT},
++    {VK_FORMAT_R16G16_SINT, 2, {16, 16}, PULL_SINT},
++    {VK_FORMAT_R16G16_SFLOAT, 2, {16, 16}, PULL_HALF},
++    {VK_FORMAT_R16G16B16A16_UNORM, 4, {16, 16, 16, 16}, PULL_UNORM},
++    {VK_FORMAT_R16G16B16A16_SNORM, 4, {16, 16, 16, 16}, PULL_SNORM},
++    {VK_FORMAT_R16G16B16A16_UINT, 4, {16, 16, 16, 16}, PULL_UINT},
++    {VK_FORMAT_R16G16B16A16_SINT, 4, {16, 16, 16, 16}, PULL_SINT},
++    {VK_FORMAT_R16G16B16A16_SFLOAT, 4, {16, 16, 16, 16}, PULL_HALF},
++    {VK_FORMAT_R32_UINT, 1, {32}, PULL_UINT},
++    {VK_FORMAT_R32_SINT, 1, {32}, PULL_SINT},
++    {VK_FORMAT_R32_SFLOAT, 1, {32}, PULL_FLOAT},
++    {VK_FORMAT_R32G32_UINT, 2, {32, 32}, PULL_UINT},
++    {VK_FORMAT_R32G32_SINT, 2, {32, 32}, PULL_SINT},
++    {VK_FORMAT_R32G32_SFLOAT, 2, {32, 32}, PULL_FLOAT},
++    {VK_FORMAT_R32G32B32_UINT, 3, {32, 32, 32}, PULL_UINT},
++    {VK_FORMAT_R32G32B32_SINT, 3, {32, 32, 32}, PULL_SINT},
++    {VK_FORMAT_R32G32B32_SFLOAT, 3, {32, 32, 32}, PULL_FLOAT},
++    {VK_FORMAT_R32G32B32A32_UINT, 4, {32, 32, 32, 32}, PULL_UINT},
++    {VK_FORMAT_R32G32B32A32_SINT, 4, {32, 32, 32, 32}, PULL_SINT},
++    {VK_FORMAT_R32G32B32A32_SFLOAT, 4, {32, 32, 32, 32}, PULL_FLOAT},
++};
++
++static const struct vertex_pull_format *vertex_pull_format_find(VkFormat format)
++{
++    unsigned int i;
++
++    for (i = 0; i < ARRAY_SIZE(vertex_pull_formats); i++)
++        if (vertex_pull_formats[i].format == format)
++            return &vertex_pull_formats[i];
++    return NULL;
++}
++
++bool vkd3d_vertex_pull_supports_format(VkFormat format)
++{
++    return !!vertex_pull_format_find(format);
++}
++
++struct pull_key
++{
++    uint32_t opcode, a, b, id;
++};
++
++struct pull
++{
++    const uint32_t *words;
++    size_t count;
++    uint32_t module_bound;
++    uint32_t bound;
++    struct av_lc_words types;
++    struct av_lc_words decorations;
++    struct av_lc_words init;
++    struct pull_key keys[192];
++    uint32_t key_count;
++    uint32_t glsl;
++    bool failed;
++};
++
++static uint32_t pull_id(struct pull *p)
++{
++    return p->bound++;
++}
++
++static uint32_t pull_type(struct pull *p, uint32_t opcode, uint32_t count, uint32_t a, uint32_t b)
++{
++    struct pull_key *key;
++    uint32_t i;
++
++    for (i = 0; i < p->key_count; i++)
++    {
++        key = &p->keys[i];
++        if (key->opcode == opcode && key->a == a && key->b == b)
++            return key->id;
++    }
++    if (p->key_count == ARRAY_SIZE(p->keys))
++    {
++        p->failed = true;
++        return 0;
++    }
++    key = &p->keys[p->key_count++];
++    key->opcode = opcode;
++    key->a = a;
++    key->b = b;
++    key->id = pull_id(p);
++    if (opcode == AV_LC_OP_CONSTANT)
++        av_lc_emit(&p->types, opcode, 3, a, key->id, b);
++    else if (count == 0)
++        av_lc_emit(&p->types, opcode, 1, key->id);
++    else if (count == 1)
++        av_lc_emit(&p->types, opcode, 2, key->id, a);
++    else
++        av_lc_emit(&p->types, opcode, 3, key->id, a, b);
++    return key->id;
++}
++
++static void pull_know(struct pull *p, uint32_t opcode, uint32_t a, uint32_t b, uint32_t id)
++{
++    struct pull_key *key;
++
++    if (p->key_count == ARRAY_SIZE(p->keys))
++        return;
++    key = &p->keys[p->key_count++];
++    key->opcode = opcode;
++    key->a = a;
++    key->b = b;
++    key->id = id;
++}
++
++static uint32_t pull_uint(struct pull *p) { return pull_type(p, AV_LC_OP_TYPE_INT, 2, 32, 0); }
++static uint32_t pull_sint(struct pull *p) { return pull_type(p, AV_LC_OP_TYPE_INT, 2, 32, 1); }
++static uint32_t pull_float(struct pull *p) { return pull_type(p, AV_LC_OP_TYPE_FLOAT, 1, 32, 0); }
++static uint32_t pull_bool(struct pull *p) { return pull_type(p, AV_LC_OP_TYPE_BOOL, 0, 0, 0); }
++static uint32_t pull_vector(struct pull *p, uint32_t scalar, uint32_t n) { return pull_type(p, AV_LC_OP_TYPE_VECTOR, 2, scalar, n); }
++static uint32_t pull_u32(struct pull *p, uint32_t v) { return pull_type(p, AV_LC_OP_CONSTANT, 2, pull_uint(p), v); }
++static uint32_t pull_f32(struct pull *p, float v) { return pull_type(p, AV_LC_OP_CONSTANT, 2, pull_float(p), av_lc_float_bits(v)); }
++static uint32_t pull_s32(struct pull *p, int32_t v) { return pull_type(p, AV_LC_OP_CONSTANT, 2, pull_sint(p), (uint32_t)v); }
++
++static uint32_t pull_op(struct pull *p, uint32_t opcode, uint32_t type, uint32_t n, uint32_t x, uint32_t y, uint32_t z)
++{
++    uint32_t id = pull_id(p);
++
++    if (n == 1)
++        av_lc_emit(&p->init, opcode, 3, type, id, x);
++    else if (n == 2)
++        av_lc_emit(&p->init, opcode, 4, type, id, x, y);
++    else
++        av_lc_emit(&p->init, opcode, 5, type, id, x, y, z);
++    return id;
++}
++
++static uint32_t pull_bin(struct pull *p, uint32_t opcode, uint32_t type, uint32_t x, uint32_t y)
++{
++    return pull_op(p, opcode, type, 2, x, y, 0);
++}
++
++static uint32_t pull_select(struct pull *p, uint32_t type, uint32_t condition, uint32_t x, uint32_t y)
++{
++    return pull_op(p, AV_LC_OP_SELECT, type, 3, condition, x, y);
++}
++
++static uint32_t pull_address_add(struct pull *p, uint32_t address, uint32_t offset)
++{
++    uint32_t u = pull_uint(p), v2 = pull_vector(p, u, 2);
++    uint32_t lo = pull_bin(p, AV_LC_OP_COMPOSITE_EXTRACT, u, address, 0);
++    uint32_t hi = pull_bin(p, AV_LC_OP_COMPOSITE_EXTRACT, u, address, 1);
++    uint32_t sum = pull_bin(p, SPV_OP_IADD, u, lo, offset);
++    uint32_t carry = pull_select(p, u, pull_bin(p, SPV_OP_ULESS_THAN, pull_bool(p), sum, lo), pull_u32(p, 1), pull_u32(p, 0));
++
++    return pull_bin(p, AV_LC_OP_COMPOSITE_CONSTRUCT, v2, sum, pull_bin(p, SPV_OP_IADD, u, hi, carry));
++}
++
++static uint32_t pull_load_word(struct pull *p, uint32_t address)
++{
++    uint32_t u = pull_uint(p);
++    uint32_t pointer_type = pull_type(p, AV_LC_OP_TYPE_POINTER, 2, SPV_SC_PHYSICAL_STORAGE_BUFFER, u);
++    uint32_t pointer = pull_op(p, SPV_OP_BITCAST, pointer_type, 1, address, 0, 0);
++    uint32_t id = pull_id(p);
++
++    av_lc_emit(&p->init, AV_LC_OP_LOAD, 5, u, id, pointer, SPV_MEMORY_ACCESS_ALIGNED, 4u);
++    return id;
++}
++
++static uint32_t pull_guarded_word(struct pull *p, uint32_t address, uint32_t offset, uint32_t limit)
++{
++    uint32_t u = pull_uint(p), label_read = pull_id(p), label_merge = pull_id(p), label_entry = pull_id(p);
++    uint32_t inside = pull_bin(p, SPV_OP_ULESS_THAN, pull_bool(p), offset, limit), word, result;
++
++    av_lc_emit(&p->init, AV_LC_OP_BRANCH, 1, label_entry);
++    av_lc_emit(&p->init, AV_LC_OP_LABEL, 1, label_entry);
++    av_lc_emit(&p->init, AV_LC_OP_SELECTION_MERGE, 2, label_merge, 0u);
++    av_lc_emit(&p->init, AV_LC_OP_BRANCH_CONDITIONAL, 3, inside, label_read, label_merge);
++    av_lc_emit(&p->init, AV_LC_OP_LABEL, 1, label_read);
++    word = pull_load_word(p, pull_address_add(p, address, offset));
++    av_lc_emit(&p->init, AV_LC_OP_BRANCH, 1, label_merge);
++    av_lc_emit(&p->init, AV_LC_OP_LABEL, 1, label_merge);
++    result = pull_id(p);
++    av_lc_emit(&p->init, 245, 6, u, result, word, label_read, pull_u32(p, 0), label_entry);
++    return result;
++}
++
++struct pull_block
++{
++    uint32_t address;
++};
++
++static uint32_t pull_block_word(struct pull *p, const struct pull_block *block, uint32_t byte_offset)
++{
++    return pull_load_word(p, pull_address_add(p, block->address, pull_u32(p, byte_offset)));
++}
++
++static uint32_t pull_attribute(struct pull *p, const struct pull_block *block,
++        const struct vkd3d_vertex_pull_layout *layout, const struct vkd3d_vertex_pull_attribute *attribute,
++        uint32_t vertex, uint32_t instance, uint32_t first_instance, uint32_t *scalar_kind)
++{
++    const struct vertex_pull_format *format = vertex_pull_format_find(attribute->format);
++    uint32_t u = pull_uint(p), b = pull_bool(p), s = pull_sint(p), f = pull_float(p);
++    uint32_t entry = layout->vertex_table_offset + 16 * attribute->slot;
++    uint32_t va, size, stride, element, offset, bytes = 0, end, inside, aligned, shift, words[6], dwords[5];
++    uint32_t start, i, components[4], value, bit, scalar, result, word_count;
++
++    for (i = 0; i < format->components; i++)
++        bytes += format->bits[i];
++    bytes /= 8;
++
++    va = pull_bin(p, AV_LC_OP_COMPOSITE_CONSTRUCT, pull_vector(p, u, 2),
++            pull_block_word(p, block, entry), pull_block_word(p, block, entry + 4));
++    size = pull_block_word(p, block, entry + 8);
++    stride = pull_block_word(p, block, entry + 12);
++
++    if (attribute->per_instance)
++    {
++        element = attribute->divisor ? pull_bin(p, SPV_OP_IADD, u, first_instance,
++                pull_bin(p, SPV_OP_UDIV, u, pull_bin(p, SPV_OP_ISUB, u, instance, first_instance),
++                pull_u32(p, attribute->divisor))) : first_instance;
++    }
++    else
++        element = vertex;
++
++    offset = pull_bin(p, SPV_OP_IADD, u, pull_bin(p, SPV_OP_IMUL, u, element, stride), pull_u32(p, attribute->offset));
++    end = pull_bin(p, SPV_OP_IADD, u, offset, pull_u32(p, bytes));
++    inside = pull_bin(p, SPV_OP_ULESS_THAN_EQUAL, b, end, size);
++    aligned = pull_bin(p, SPV_OP_BITWISE_AND, u, offset, pull_u32(p, ~3u));
++    shift = pull_bin(p, SPV_OP_SHIFT_LEFT_LOGICAL, u, pull_bin(p, SPV_OP_BITWISE_AND, u, offset, pull_u32(p, 3)),
++            pull_u32(p, 3));
++    size = pull_select(p, u, inside, size, pull_u32(p, 0));
++
++    word_count = (bytes + 3) / 4;
++    for (i = 0; i <= word_count; i++)
++        words[i] = pull_guarded_word(p, va, pull_bin(p, SPV_OP_IADD, u, aligned, pull_u32(p, 4 * i)), size);
++    for (i = 0; i < word_count; i++)
++    {
++        uint32_t low = pull_bin(p, SPV_OP_SHIFT_RIGHT_LOGICAL, u, words[i], shift);
++        uint32_t high = pull_bin(p, SPV_OP_SHIFT_LEFT_LOGICAL, u, words[i + 1],
++                pull_bin(p, SPV_OP_ISUB, u, pull_u32(p, 32), shift));
++        dwords[i] = pull_select(p, u, pull_bin(p, SPV_OP_IEQUAL, b, shift, pull_u32(p, 0)), words[i],
++                pull_bin(p, SPV_OP_BITWISE_OR, u, low, high));
++    }
++
++    scalar = format->kind == PULL_UINT ? u : format->kind == PULL_SINT ? s : f;
++    *scalar_kind = format->kind == PULL_UINT ? AV_LC_UINT : format->kind == PULL_SINT ? AV_LC_SINT : AV_LC_FLOAT;
++
++    for (i = 0, start = 0; i < 4; i++)
++    {
++        if (i >= format->components)
++        {
++            if (scalar == f)
++                components[i] = pull_f32(p, i == 3 ? 1.0f : 0.0f);
++            else
++                components[i] = scalar == u ? pull_u32(p, i == 3 ? 1 : 0) : pull_s32(p, i == 3 ? 1 : 0);
++            continue;
++        }
++        bit = start % 32;
++        value = dwords[start / 32];
++        if (bit)
++            value = pull_bin(p, SPV_OP_SHIFT_RIGHT_LOGICAL, u, value, pull_u32(p, bit));
++        if (format->bits[i] < 32)
++            value = pull_bin(p, SPV_OP_BITWISE_AND, u, value, pull_u32(p, (1u << format->bits[i]) - 1));
++        switch (format->kind)
++        {
++            case PULL_UNORM:
++                value = pull_bin(p, AV_LC_OP_FMUL, f, pull_op(p, SPV_OP_CONVERT_U_TO_F, f, 1, value, 0, 0),
++                        pull_f32(p, 1.0f / (float)((1u << format->bits[i]) - 1)));
++                break;
++            case PULL_SNORM:
++            case PULL_SINT:
++                if (format->bits[i] < 32)
++                    value = pull_bin(p, SPV_OP_SHIFT_RIGHT_ARITHMETIC, s,
++                            pull_op(p, SPV_OP_BITCAST, s, 1, pull_bin(p, SPV_OP_SHIFT_LEFT_LOGICAL, u, value,
++                            pull_u32(p, 32 - format->bits[i])), 0, 0), pull_u32(p, 32 - format->bits[i]));
++                else
++                    value = pull_op(p, SPV_OP_BITCAST, s, 1, value, 0, 0);
++                if (format->kind == PULL_SNORM)
++                {
++                    uint32_t operands[5];
++
++                    value = pull_bin(p, AV_LC_OP_FMUL, f, pull_op(p, SPV_OP_CONVERT_S_TO_F, f, 1, value, 0, 0),
++                            pull_f32(p, 1.0f / (float)((1u << (format->bits[i] - 1)) - 1)));
++                    operands[0] = f;
++                    operands[1] = pull_id(p);
++                    operands[2] = p->glsl;
++                    operands[3] = SPV_GLSL_FMAX;
++                    operands[4] = value;
++                    av_lc_emit(&p->init, AV_LC_OP_EXT_INST, 6, operands[0], operands[1], operands[2], operands[3],
++                            operands[4], pull_f32(p, -1.0f));
++                    value = operands[1];
++                }
++                break;
++            case PULL_FLOAT:
++                value = pull_op(p, SPV_OP_BITCAST, f, 1, value, 0, 0);
++                break;
++            case PULL_HALF:
++                result = pull_id(p);
++                av_lc_emit(&p->init, AV_LC_OP_EXT_INST, 5, pull_vector(p, f, 2), result, p->glsl,
++                        SPV_GLSL_UNPACK_HALF_2X16, value);
++                value = pull_bin(p, AV_LC_OP_COMPOSITE_EXTRACT, f, result, 0);
++                break;
++            default:
++                break;
++        }
++        components[i] = value;
++        start += format->bits[i];
++    }
++
++    if (format->bgra)
++    {
++        value = components[0];
++        components[0] = components[2];
++        components[2] = value;
++    }
++
++    result = pull_id(p);
++    av_lc_emit(&p->init, AV_LC_OP_COMPOSITE_CONSTRUCT, 6, pull_vector(p, scalar, 4), result,
++            components[0], components[1], components[2], components[3]);
++    return result;
++}
++
++struct pull_input
++{
++    uint32_t var;
++    uint32_t pointee;
++    uint32_t replacement;
++    uint32_t location;
++    uint32_t component;
++    uint32_t builtin;
++    bool is_builtin;
++};
++
++static const struct vkd3d_vertex_pull_attribute *pull_find_attribute(const struct vkd3d_vertex_pull_layout *layout,
++        uint32_t location)
++{
++    uint32_t i;
++
++    for (i = 0; i < layout->attribute_count; i++)
++        if (layout->attributes[i].location == location)
++            return &layout->attributes[i];
++    return NULL;
++}
++
++static uint32_t pull_builtin_input(struct pull *p, uint32_t builtin, const struct pull_input *inputs,
++        uint32_t input_count, uint32_t *listed, uint32_t *listed_count)
++{
++    uint32_t s = pull_sint(p), pointer, var, i;
++
++    for (i = 0; i < input_count; i++)
++    {
++        if (inputs[i].is_builtin && inputs[i].builtin == builtin && !inputs[i].replacement)
++            return pull_op(p, SPV_OP_BITCAST, pull_uint(p), 1,
++                    pull_op(p, AV_LC_OP_LOAD, inputs[i].pointee, 1, inputs[i].var, 0, 0), 0, 0);
++    }
++
++    pointer = pull_type(p, AV_LC_OP_TYPE_POINTER, 2, AV_LC_SC_INPUT, s);
++    var = pull_id(p);
++    av_lc_emit(&p->types, AV_LC_OP_VARIABLE, 3, pointer, var, AV_LC_SC_INPUT);
++    av_lc_emit(&p->decorations, AV_LC_OP_DECORATE, 3, var, AV_LC_DEC_BUILTIN, builtin);
++    listed[(*listed_count)++] = var;
++    return pull_op(p, SPV_OP_BITCAST, pull_uint(p), 1, pull_op(p, AV_LC_OP_LOAD, s, 1, var, 0, 0), 0, 0);
++}
++
++int vkd3d_rewrite_vertex_pull(const uint32_t *words, size_t count, const struct vkd3d_vertex_pull_layout *layout,
++        uint32_t **out_words, size_t *out_count)
++{
++    uint32_t interface_extra[48], interface_extra_count = 0, *twin = NULL;
++    struct pull_input inputs[40];
++    uint32_t input_count = 0, i, j, id, opcode, entry_function = 0;
++    uint32_t pc_var = 0, pc_block = 0, vertex, instance, first_instance, base_vertex = 0, u, b;
++    struct av_lc_words out = {NULL, 0, 0, 0};
++    bool caps_done = false, annotations_done = false, globals_done = false, in_entry = false;
++    bool has_capability = false, has_extension = false, pending_init = false;
++    struct pull_block block;
++    uint8_t *replaced = NULL;
++    size_t at, length, k;
++    struct pull *p;
++    int status = AV_LC_OK;
++
++    if (count < 5 || words[0] != 0x07230203u || !words[3] || words[3] > (1u << 22))
++        return AV_LC_MALFORMED;
++    if (!(p = vkd3d_calloc(1, sizeof(*p))))
++        return AV_LC_NO_MEMORY;
++    p->words = words;
++    p->count = count;
++    p->module_bound = words[3];
++    p->bound = words[3];
++    twin = vkd3d_calloc(p->module_bound, sizeof(*twin));
++    replaced = vkd3d_calloc(p->module_bound, 1);
++    if (!twin || !replaced)
++    {
++        status = AV_LC_NO_MEMORY;
++        goto done;
++    }
++
++    for (at = 5; at < count; at += length)
++    {
++        opcode = words[at] & 0xffffu;
++        length = words[at] >> 16;
++        if (!length || at + length > count)
++        {
++            status = AV_LC_MALFORMED;
++            goto done;
++        }
++        switch (opcode)
++        {
++            case AV_LC_OP_CAPABILITY:
++                if (length == 2 && words[at + 1] == SPV_CAP_PHYSICAL_STORAGE_BUFFER_ADDRESSES)
++                    has_capability = true;
++                break;
++            case SPV_OP_EXTENSION:
++                if (length == 9 && !memcmp(&words[at + 1], "SPV_KHR_physical_storage_buffer", 32))
++                    has_extension = true;
++                break;
++            case AV_LC_OP_EXT_INST_IMPORT:
++                if (length == 6 && !memcmp(&words[at + 2], "GLSL.std.450", 13))
++                    p->glsl = words[at + 1];
++                break;
++            case AV_LC_OP_ENTRY_POINT:
++                if (!entry_function && length >= 3)
++                    entry_function = words[at + 2];
++                break;
++            case AV_LC_OP_TYPE_BOOL:
++                pull_know(p, opcode, 0, 0, words[at + 1]);
++                break;
++            case AV_LC_OP_TYPE_INT:
++                if (length == 4)
++                    pull_know(p, opcode, words[at + 2], words[at + 3], words[at + 1]);
++                break;
++            case AV_LC_OP_TYPE_FLOAT:
++                if (length == 3)
++                    pull_know(p, opcode, words[at + 2], 0, words[at + 1]);
++                break;
++            case AV_LC_OP_TYPE_VECTOR:
++            case AV_LC_OP_TYPE_POINTER:
++                if (length == 4)
++                    pull_know(p, opcode, words[at + 2], words[at + 3], words[at + 1]);
++                break;
++            case AV_LC_OP_VARIABLE:
++                if (length >= 4 && words[at + 3] == AV_LC_SC_PUSH_CONSTANT)
++                {
++                    pc_var = words[at + 2];
++                    pc_block = words[at + 1];
++                }
++                break;
++            default:
++                break;
++        }
++    }
++
++    {
++        struct av_lc_module module;
++
++        if ((status = av_lc_module_open(&module, words, count)))
++            goto done;
++        for (at = module.globals; at < module.functions; at += length)
++        {
++            length = words[at] >> 16;
++            if ((words[at] & 0xffffu) != AV_LC_OP_VARIABLE || length < 4 || words[at + 3] != AV_LC_SC_INPUT)
++                continue;
++            id = words[at + 2];
++            if (input_count == ARRAY_SIZE(inputs))
++            {
++                status = AV_LC_TOO_MANY;
++                break;
++            }
++            inputs[input_count].var = id;
++            inputs[input_count].pointee = av_lc_module_def(&module, words[at + 1]) ?
++                    av_lc_module_def(&module, words[at + 1])[3] : 0;
++            inputs[input_count].is_builtin = !!(module.flags[id] & AV_LC_HAS_BUILTIN);
++            inputs[input_count].builtin = module.builtin[id];
++            inputs[input_count].location = module.location[id];
++            inputs[input_count].component = module.component[id];
++            inputs[input_count].replacement = 0;
++            if (inputs[input_count].is_builtin ? (layout->pull_indices &&
++                    (module.builtin[id] == SPV_BUILTIN_VERTEX_INDEX || module.builtin[id] == SPV_BUILTIN_BASE_VERTEX))
++                    : !!(module.flags[id] & AV_LC_HAS_LOCATION))
++            {
++                inputs[input_count].replacement = UINT32_MAX;
++                replaced[id] = 1;
++            }
++            input_count++;
++        }
++        av_lc_module_free(&module);
++        if (status)
++            goto done;
++    }
++
++    if (!p->glsl)
++        p->glsl = pull_id(p);
++
++    u = pull_uint(p);
++    b = pull_bool(p);
++
++    for (at = 5; at < count; at += length)
++    {
++        length = words[at] >> 16;
++        if ((words[at] & 0xffffu) == AV_LC_OP_TYPE_POINTER && length == 4 && words[at + 2] == AV_LC_SC_INPUT)
++            twin[words[at + 1]] = pull_type(p, AV_LC_OP_TYPE_POINTER, 2, SPV_SC_PRIVATE, words[at + 3]);
++    }
++
++    for (i = 0; i < input_count; i++)
++    {
++        if (!inputs[i].replacement)
++            continue;
++        inputs[i].replacement = pull_id(p);
++        av_lc_emit(&p->types, AV_LC_OP_VARIABLE, 3, pull_type(p, AV_LC_OP_TYPE_POINTER, 2, SPV_SC_PRIVATE,
++                inputs[i].pointee), inputs[i].replacement, SPV_SC_PRIVATE);
++        if (words[1] >= 0x00010400u)
++            interface_extra[interface_extra_count++] = inputs[i].replacement;
++    }
++
++    if (!pc_var)
++    {
++        pc_block = pull_id(p);
++        av_lc_emit(&p->types, AV_LC_OP_TYPE_STRUCT, 2, pc_block, pull_vector(p, u, 2));
++        av_lc_emit(&p->decorations, AV_LC_OP_DECORATE, 2, pc_block, AV_LC_DEC_BLOCK);
++        av_lc_emit(&p->decorations, AV_LC_OP_MEMBER_DECORATE, 4, pc_block, 0u, AV_LC_DEC_OFFSET, 0u);
++        pc_var = pull_id(p);
++        pc_block = pull_type(p, AV_LC_OP_TYPE_POINTER, 2, AV_LC_SC_PUSH_CONSTANT, pc_block);
++        av_lc_emit(&p->types, AV_LC_OP_VARIABLE, 3, pc_block, pc_var, AV_LC_SC_PUSH_CONSTANT);
++        if (words[1] >= 0x00010400u)
++            interface_extra[interface_extra_count++] = pc_var;
++    }
++
++    block.address = pull_op(p, AV_LC_OP_LOAD, pull_vector(p, u, 2), 1,
++            pull_bin(p, AV_LC_OP_ACCESS_CHAIN, pull_type(p, AV_LC_OP_TYPE_POINTER, 2, AV_LC_SC_PUSH_CONSTANT,
++            pull_vector(p, u, 2)), pc_var, pull_u32(p, 0)), 0, 0);
++
++    first_instance = pull_block_word(p, &block, layout->draw_offset + 8);
++    instance = pull_builtin_input(p, SPV_BUILTIN_INSTANCE_INDEX, inputs, input_count, interface_extra, &interface_extra_count);
++    vertex = pull_builtin_input(p, SPV_BUILTIN_VERTEX_INDEX, inputs, input_count, interface_extra, &interface_extra_count);
++
++    if (layout->pull_indices)
++    {
++        uint32_t ib_va, ib_size, ib_bytes, position, index_offset, word, shift, index;
++
++        ib_va = pull_bin(p, AV_LC_OP_COMPOSITE_CONSTRUCT, pull_vector(p, u, 2),
++                pull_block_word(p, &block, layout->index_offset), pull_block_word(p, &block, layout->index_offset + 4));
++        ib_size = pull_block_word(p, &block, layout->index_offset + 8);
++        ib_bytes = pull_block_word(p, &block, layout->index_offset + 12);
++        position = pull_bin(p, SPV_OP_IADD, u, pull_block_word(p, &block, layout->draw_offset), vertex);
++        index_offset = pull_bin(p, SPV_OP_IMUL, u, position, ib_bytes);
++        ib_size = pull_select(p, u, pull_bin(p, SPV_OP_ULESS_THAN_EQUAL, b,
++                pull_bin(p, SPV_OP_IADD, u, index_offset, ib_bytes), ib_size), ib_size, pull_u32(p, 0));
++        word = pull_guarded_word(p, ib_va, pull_bin(p, SPV_OP_BITWISE_AND, u, index_offset, pull_u32(p, ~3u)), ib_size);
++        shift = pull_bin(p, SPV_OP_SHIFT_LEFT_LOGICAL, u, pull_bin(p, SPV_OP_BITWISE_AND, u, index_offset, pull_u32(p, 2)),
++                pull_u32(p, 3));
++        index = pull_select(p, u, pull_bin(p, SPV_OP_IEQUAL, b, ib_bytes, pull_u32(p, 2)),
++                pull_bin(p, SPV_OP_BITWISE_AND, u, pull_bin(p, SPV_OP_SHIFT_RIGHT_LOGICAL, u, word, shift),
++                pull_u32(p, 0xffff)), word);
++        base_vertex = pull_block_word(p, &block, layout->draw_offset + 4);
++        vertex = pull_bin(p, SPV_OP_IADD, u, index, base_vertex);
++    }
++
++    for (i = 0; i < input_count && status == AV_LC_OK; i++)
++    {
++        const struct vkd3d_vertex_pull_attribute *attribute;
++        struct av_lc_varying varying;
++        struct av_lc_module module;
++        uint32_t value, kind, wanted, type, scalar_type, extracted[4];
++
++        if (!inputs[i].replacement)
++            continue;
++        if (inputs[i].is_builtin)
++        {
++            value = inputs[i].builtin == SPV_BUILTIN_VERTEX_INDEX ? vertex : base_vertex;
++            av_lc_emit(&p->init, AV_LC_OP_STORE, 2, inputs[i].replacement,
++                    pull_op(p, SPV_OP_BITCAST, pull_sint(p), 1, value, 0, 0));
++            continue;
++        }
++
++        if ((status = av_lc_module_open(&module, words, count)))
++            break;
++        memset(&varying, 0, sizeof(varying));
++        status = av_lc_describe_type(&module, inputs[i].pointee, &varying);
++        av_lc_module_free(&module);
++        if (status || varying.elements)
++        {
++            status = AV_LC_REFUSED_TYPE;
++            break;
++        }
++
++        wanted = varying.scalar == AV_LC_FLOAT ? pull_float(p) : varying.scalar == AV_LC_SINT ? pull_sint(p) : u;
++        if (!(attribute = pull_find_attribute(layout, inputs[i].location)))
++        {
++            for (j = 0; j < varying.columns; j++)
++                extracted[j] = varying.scalar == AV_LC_FLOAT ? pull_f32(p, 0.0f) : varying.scalar == AV_LC_SINT ?
++                        pull_s32(p, 0) : pull_u32(p, 0);
++        }
++        else
++        {
++            value = pull_attribute(p, &block, layout, attribute, vertex, instance, first_instance, &kind);
++            scalar_type = kind == AV_LC_FLOAT ? pull_float(p) : kind == AV_LC_SINT ? pull_sint(p) : u;
++            for (j = 0; j < varying.columns; j++)
++            {
++                extracted[j] = pull_bin(p, AV_LC_OP_COMPOSITE_EXTRACT, scalar_type, value, inputs[i].component + j);
++                if (scalar_type != wanted)
++                    extracted[j] = pull_op(p, SPV_OP_BITCAST, wanted, 1, extracted[j], 0, 0);
++            }
++        }
++
++        type = inputs[i].pointee;
++        if (varying.columns == 1)
++            value = extracted[0];
++        else
++        {
++            value = pull_id(p);
++            av_lc_words_push(&p->init, ((3u + varying.columns) << 16) | AV_LC_OP_COMPOSITE_CONSTRUCT);
++            av_lc_words_push(&p->init, type);
++            av_lc_words_push(&p->init, value);
++            av_lc_words_append(&p->init, extracted, varying.columns);
++        }
++        av_lc_emit(&p->init, AV_LC_OP_STORE, 2, inputs[i].replacement, value);
++    }
++
++    if (status || p->failed)
++    {
++        if (!status)
++            status = AV_LC_TOO_MANY;
++        goto done;
++    }
++
++    av_lc_words_append(&out, words, 5);
++    for (at = 5; at < count && status == AV_LC_OK; at += length)
++    {
++        opcode = words[at] & 0xffffu;
++        length = words[at] >> 16;
++
++        if (!caps_done && opcode != AV_LC_OP_CAPABILITY)
++        {
++            caps_done = true;
++            if (!has_capability)
++                av_lc_emit(&out, AV_LC_OP_CAPABILITY, 1, SPV_CAP_PHYSICAL_STORAGE_BUFFER_ADDRESSES);
++            if (!has_extension && words[1] < 0x00010500u)
++            {
++                av_lc_words_push(&out, (9u << 16) | SPV_OP_EXTENSION);
++                av_lc_emit_string(&out, "SPV_KHR_physical_storage_buffer");
++            }
++        }
++        if (opcode == AV_LC_OP_MEMORY_MODEL && p->glsl >= p->module_bound)
++        {
++            av_lc_words_push(&out, (6u << 16) | AV_LC_OP_EXT_INST_IMPORT);
++            av_lc_words_push(&out, p->glsl);
++            av_lc_emit_string(&out, "GLSL.std.450");
++        }
++        if (!annotations_done && !av_lc_is_preamble(opcode))
++        {
++            annotations_done = true;
++            av_lc_words_append(&out, p->decorations.data, p->decorations.count);
++        }
++        if (!globals_done && opcode == AV_LC_OP_FUNCTION)
++        {
++            globals_done = true;
++            av_lc_words_append(&out, p->types.data, p->types.count);
++        }
++        if (pending_init && opcode != AV_LC_OP_VARIABLE && opcode != SPV_OP_LINE && opcode != SPV_OP_NO_LINE)
++        {
++            pending_init = false;
++            av_lc_words_append(&out, p->init.data, p->init.count);
++        }
++
++        switch (opcode)
++        {
++            case AV_LC_OP_MEMORY_MODEL:
++                if (words[at + 1] != 0 && words[at + 1] != SPV_ADDRESSING_PHYSICAL_STORAGE_BUFFER_64)
++                    status = AV_LC_REFUSED_TYPE;
++                av_lc_emit(&out, opcode, 2, SPV_ADDRESSING_PHYSICAL_STORAGE_BUFFER_64, words[at + 2]);
++                continue;
++
++            case AV_LC_OP_ENTRY_POINT:
++                if (words[at + 2] != entry_function)
++                    break;
++            {
++                size_t interface_start = 3 + av_lc_string_words(&words[at + 3], (uint32_t)length - 3), kept = 0;
++
++                for (k = interface_start; k < length; k++)
++                    if (!(words[at + k] < p->module_bound && replaced[words[at + k]]))
++                        kept++;
++                av_lc_words_push(&out, ((uint32_t)(interface_start + kept + interface_extra_count) << 16) | opcode);
++                for (k = 1; k < length; k++)
++                    if (k < interface_start || !(words[at + k] < p->module_bound && replaced[words[at + k]]))
++                        av_lc_words_push(&out, words[at + k]);
++                av_lc_words_append(&out, interface_extra, interface_extra_count);
++                continue;
++            }
++
++            case SPV_OP_NAME:
++            case AV_LC_OP_DECORATE:
++                if (length >= 2 && words[at + 1] < p->module_bound && replaced[words[at + 1]])
++                    continue;
++                break;
++
++            case AV_LC_OP_VARIABLE:
++                if (length >= 3 && words[at + 2] < p->module_bound && replaced[words[at + 2]])
++                    continue;
++                break;
++
++            case AV_LC_OP_FUNCTION:
++                in_entry = length >= 3 && words[at + 2] == entry_function;
++                break;
++
++            case AV_LC_OP_LABEL:
++                if (in_entry)
++                {
++                    in_entry = false;
++                    av_lc_words_append(&out, &words[at], length);
++                    pending_init = true;
++                    continue;
++                }
++                break;
++
++            case AV_LC_OP_ACCESS_CHAIN:
++            case SPV_OP_IN_BOUNDS_ACCESS_CHAIN:
++                if (words[at + 3] >= p->module_bound || !replaced[words[at + 3]])
++                    break;
++                if (!twin[words[at + 1]])
++                {
++                    status = AV_LC_REFUSED_TYPE;
++                    continue;
++                }
++                for (i = 0; i < input_count; i++)
++                    if (inputs[i].var == words[at + 3])
++                        break;
++                replaced[words[at + 2]] = 1;
++                av_lc_words_push(&out, words[at]);
++                av_lc_words_push(&out, twin[words[at + 1]]);
++                av_lc_words_push(&out, words[at + 2]);
++                av_lc_words_push(&out, i < input_count ? inputs[i].replacement : words[at + 3]);
++                av_lc_words_append(&out, &words[at + 4], length - 4);
++                continue;
++
++            case AV_LC_OP_LOAD:
++                if (length < 4 || words[at + 3] >= p->module_bound || !replaced[words[at + 3]])
++                    break;
++                for (i = 0; i < input_count; i++)
++                    if (inputs[i].var == words[at + 3])
++                        break;
++                av_lc_words_push(&out, words[at]);
++                av_lc_words_push(&out, words[at + 1]);
++                av_lc_words_push(&out, words[at + 2]);
++                av_lc_words_push(&out, i < input_count ? inputs[i].replacement : words[at + 3]);
++                av_lc_words_append(&out, &words[at + 4], length - 4);
++                continue;
++
++            default:
++                if (globals_done)
++                {
++                    for (k = 1; k < length; k++)
++                        if (words[at + k] < p->module_bound && replaced[words[at + k]])
++                            status = AV_LC_REFUSED_TYPE;
++                }
++                break;
++        }
++
++        av_lc_words_append(&out, &words[at], length);
++    }
++
++    if (status == AV_LC_OK && (out.failed || p->types.failed || p->init.failed || p->decorations.failed))
++        status = AV_LC_NO_MEMORY;
++    if (status == AV_LC_OK)
++    {
++        out.data[3] = p->bound;
++        *out_words = out.data;
++        *out_count = out.count;
++        out.data = NULL;
++    }
++
++done:
++    free(out.data);
++    free(p->types.data);
++    free(p->decorations.data);
++    free(p->init.data);
++    vkd3d_free(p);
++    vkd3d_free(twin);
++    vkd3d_free(replaced);
++    return status;
++}
+diff --git a/libs/vkd3d/meson.build b/libs/vkd3d/meson.build
+index bd0c7b2..d8898d3 100644
+--- a/libs/vkd3d/meson.build
++++ b/libs/vkd3d/meson.build
+@@ -36,6 +36,7 @@ vkd3d_shaders =[
+   'shaders/cs_execute_indirect_patch.comp',
+   'shaders/cs_execute_indirect_patch_debug_ring.comp',
+   'shaders/cs_execute_indirect_multi_dispatch.comp',
++  'shaders/cs_execute_indirect_state.comp',
+   'shaders/cs_rtas_instance_translate.comp',
+ 
+   'shaders/cs_sampler_feedback_decode_buffer_min_mip.comp',
+@@ -75,6 +76,7 @@ vkd3d_src = [
+   'device.c',
+   'device_vkd3d_ext.c',
+   'heap.c',
++  'indirect_state.c',
+   'memory.c',
+   'meta.c',
+   'meta_commands.c',
+diff --git a/libs/vkd3d/meta.c b/libs/vkd3d/meta.c
+index 1c92610..368fe85 100644
+--- a/libs/vkd3d/meta.c
++++ b/libs/vkd3d/meta.c
+@@ -1743,9 +1743,46 @@ static HRESULT vkd3d_execute_indirect_ops_init(struct vkd3d_execute_indirect_ops
+     meta_indirect_ops->pipelines_count = 0;
+     meta_indirect_ops->pipelines_size = 0;
+     meta_indirect_ops->pipelines = NULL;
++    meta_indirect_ops->vk_state_pipeline_layout = VK_NULL_HANDLE;
++    meta_indirect_ops->vk_state_pipeline = VK_NULL_HANDLE;
+     return S_OK;
+ }
+ 
++HRESULT vkd3d_meta_get_execute_indirect_state_pipeline(struct vkd3d_meta_ops *meta_ops,
++        struct vkd3d_execute_indirect_info *info)
++{
++    struct vkd3d_execute_indirect_ops *meta_indirect_ops = &meta_ops->execute_indirect;
++    VkPushConstantRange push_constant_range;
++    HRESULT hr = S_OK;
++    VkResult vr;
++    int rc;
++
++    if ((rc = pthread_mutex_lock(&meta_indirect_ops->mutex)))
++        return hresult_from_errno(rc);
++
++    if (!meta_indirect_ops->vk_state_pipeline)
++    {
++        push_constant_range.offset = 0;
++        push_constant_range.size = sizeof(struct vkd3d_execute_indirect_state_args);
++        push_constant_range.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
++
++        if (!meta_indirect_ops->vk_state_pipeline_layout &&
++                (vr = vkd3d_meta_create_pipeline_layout(meta_ops->device, 0, NULL, 1,
++                        &push_constant_range, &meta_indirect_ops->vk_state_pipeline_layout)) < 0)
++            hr = hresult_from_vk_result(vr);
++        else if ((vr = vkd3d_meta_create_compute_pipeline(meta_ops->device,
++                sizeof(cs_execute_indirect_state), cs_execute_indirect_state,
++                meta_indirect_ops->vk_state_pipeline_layout, NULL, true, NULL,
++                &meta_indirect_ops->vk_state_pipeline)))
++            hr = hresult_from_vk_result(vr);
++    }
++
++    info->vk_pipeline_layout = meta_indirect_ops->vk_state_pipeline_layout;
++    info->vk_pipeline = meta_indirect_ops->vk_state_pipeline;
++    pthread_mutex_unlock(&meta_indirect_ops->mutex);
++    return hr;
++}
++
+ struct vkd3d_meta_execute_indirect_spec_constant_data
+ {
+     struct vkd3d_shader_debug_ring_spec_constants constants;
+@@ -1853,6 +1890,8 @@ static void vkd3d_execute_indirect_ops_cleanup(struct vkd3d_execute_indirect_ops
+ 
+     for (i = 0; i < meta_indirect_ops->pipelines_count; i++)
+         VK_CALL(vkDestroyPipeline(device->vk_device, meta_indirect_ops->pipelines[i].vk_pipeline, NULL));
++    VK_CALL(vkDestroyPipeline(device->vk_device, meta_indirect_ops->vk_state_pipeline, NULL));
++    VK_CALL(vkDestroyPipelineLayout(device->vk_device, meta_indirect_ops->vk_state_pipeline_layout, NULL));
+     VK_CALL(vkDestroyPipelineLayout(device->vk_device, meta_indirect_ops->vk_pipeline_layout, NULL));
+     pthread_mutex_destroy(&meta_indirect_ops->mutex);
+     vkd3d_free(meta_indirect_ops->pipelines);
+diff --git a/libs/vkd3d/shaders/cs_execute_indirect_state.comp b/libs/vkd3d/shaders/cs_execute_indirect_state.comp
+new file mode 100644
+index 0000000..1fcbcd4
+--- /dev/null
++++ b/libs/vkd3d/shaders/cs_execute_indirect_state.comp
+@@ -0,0 +1,175 @@
++#version 450
++#extension GL_EXT_buffer_reference : require
++#extension GL_EXT_buffer_reference_uvec2 : require
++#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
++
++layout(local_size_x = 64) in;
++
++layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer Words {
++	uint values[];
++};
++
++layout(buffer_reference, std430, buffer_reference_align = 4) writeonly buffer OutWords {
++	uint values[];
++};
++
++layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer Count {
++	uint value;
++};
++
++struct TranslationRange
++{
++	uint64_t guest;
++	uint64_t bytes;
++	uint64_t host;
++};
++
++layout(buffer_reference, std430, buffer_reference_align = 8) readonly buffer Translation {
++	uint count;
++	uint pad;
++	uint64_t unmapped;
++	TranslationRange ranges[];
++};
++
++layout(push_constant) uniform Registers
++{
++	Words setup_va;
++	Words args_va;
++	Count count_va;
++	OutWords draws_va;
++	OutWords blocks_va;
++	Translation translation_va;
++	uint arg_stride_words;
++	uint block_words;
++	uint op_count;
++	uint max_commands;
++	uint draw_words;
++};
++
++const uint OP_COPY = 0u;
++const uint OP_INDEX = 1u;
++const uint OP_ADDRESS = 2u;
++const uint OP_DRAW = 3u;
++const uint OP_VERTEX_VIEW = 4u;
++const uint OP_INDEX_VIEW = 5u;
++const uint OP_DRAW_PULLED = 6u;
++const uint NO_DESTINATION = 0xffffffffu;
++
++uint64_t translate(uint64_t va, out uint64_t room)
++{
++	room = ~0ul;
++	if (uvec2(translation_va) == uvec2(0))
++		return va;
++
++	uint lo_index = 0u;
++	uint hi_index = translation_va.count;
++	while (lo_index < hi_index)
++	{
++		uint mid = (lo_index + hi_index) >> 1u;
++		if (translation_va.ranges[mid].guest <= va)
++			lo_index = mid + 1u;
++		else
++			hi_index = mid;
++	}
++
++	if (lo_index != 0u)
++	{
++		TranslationRange range = translation_va.ranges[lo_index - 1u];
++		uint64_t into = va - range.guest;
++		if (into < range.bytes)
++		{
++			room = range.bytes - into;
++			return range.host + into;
++		}
++	}
++
++	room = 0ul;
++	return translation_va.unmapped;
++}
++
++void main()
++{
++	uint command = gl_GlobalInvocationID.x;
++	if (command >= max_commands)
++		return;
++
++	uint count = max_commands;
++	if (uvec2(count_va) != uvec2(0))
++		count = min(count_va.value, max_commands);
++
++	uint draw_base = command * draw_words;
++	if (command >= count)
++	{
++		for (uint i = 0u; i < draw_words; i++)
++			draws_va.values[draw_base + i] = 0u;
++		return;
++	}
++
++	uint src_base = command * arg_stride_words;
++	uint dst_base = command * block_words;
++
++	for (uint i = 0u; i < block_words; i++)
++		blocks_va.values[dst_base + i] = setup_va.values[i];
++
++	for (uint op = 0u; op < op_count; op++)
++	{
++		uint at = block_words + 4u * op;
++		uint type = setup_va.values[at];
++		uint src = setup_va.values[at + 1u];
++		uint dst = setup_va.values[at + 2u];
++		uint words = setup_va.values[at + 3u];
++
++		if (type == OP_COPY)
++		{
++			for (uint i = 0u; i < words; i++)
++				blocks_va.values[dst_base + dst + i] = args_va.values[src_base + src + i];
++		}
++		else if (type == OP_INDEX)
++		{
++			blocks_va.values[dst_base + dst] = command;
++		}
++		else if (type == OP_ADDRESS)
++		{
++			uint64_t va = uint64_t(args_va.values[src_base + src]) | (uint64_t(args_va.values[src_base + src + 1u]) << 32);
++			uint64_t room;
++			uint64_t host = translate(va, room);
++			blocks_va.values[dst_base + dst] = uint(host & 0xfffffffful);
++			blocks_va.values[dst_base + dst + 1u] = uint(host >> 32);
++		}
++		else if (type == OP_VERTEX_VIEW || type == OP_INDEX_VIEW)
++		{
++			uint64_t va = uint64_t(args_va.values[src_base + src]) | (uint64_t(args_va.values[src_base + src + 1u]) << 32);
++			uint64_t room;
++			uint64_t host = translate(va, room);
++			uint bytes = uint(min(uint64_t(args_va.values[src_base + src + 2u]), room));
++			uint last = args_va.values[src_base + src + 3u];
++			if (va == 0ul)
++				bytes = 0u;
++			if (type == OP_INDEX_VIEW)
++				last = last == 57u ? 2u : 4u;
++			blocks_va.values[dst_base + dst] = uint(host & 0xfffffffful);
++			blocks_va.values[dst_base + dst + 1u] = uint(host >> 32);
++			blocks_va.values[dst_base + dst + 2u] = bytes;
++			blocks_va.values[dst_base + dst + 3u] = last;
++		}
++		else if (type == OP_DRAW)
++		{
++			for (uint i = 0u; i < draw_words; i++)
++				draws_va.values[draw_base + i] = i < words ? args_va.values[src_base + src + i] : 0u;
++			if (dst != NO_DESTINATION)
++				blocks_va.values[dst_base + dst + 2u] = args_va.values[src_base + src + words - 1u];
++		}
++		else if (type == OP_DRAW_PULLED)
++		{
++			draws_va.values[draw_base + 0u] = args_va.values[src_base + src + 0u];
++			draws_va.values[draw_base + 1u] = args_va.values[src_base + src + 1u];
++			draws_va.values[draw_base + 2u] = 0u;
++			draws_va.values[draw_base + 3u] = args_va.values[src_base + src + 4u];
++			for (uint i = 4u; i < draw_words; i++)
++				draws_va.values[draw_base + i] = 0u;
++			blocks_va.values[dst_base + dst + 0u] = args_va.values[src_base + src + 2u];
++			blocks_va.values[dst_base + dst + 1u] = args_va.values[src_base + src + 3u];
++			blocks_va.values[dst_base + dst + 2u] = args_va.values[src_base + src + 4u];
++		}
++	}
++}
+diff --git a/libs/vkd3d/state.c b/libs/vkd3d/state.c
+index 6e6e457..18473c7 100644
+--- a/libs/vkd3d/state.c
++++ b/libs/vkd3d/state.c
+@@ -390,9 +390,19 @@ static HRESULT d3d12_root_signature_create_graphics_layout(struct d3d12_root_sig
+     ranges[0].stageFlags = layout->push_constant_range.stageFlags & VK_SHADER_STAGE_ALL_GRAPHICS;
+     ranges[0].offset = layout->push_constant_range.offset;
+     ranges[0].size = layout->push_constant_range.size;
++    if (!device->device_info.device_generated_commands_features.deviceGeneratedCommands &&
++            !(layout->flags & VKD3D_ROOT_SIGNATURE_USE_PUSH_CONSTANT_UNIFORM_BLOCK))
++    {
++        ranges[0].stageFlags |= VK_SHADER_STAGE_VERTEX_BIT;
++        layout->push_constant_range.stageFlags |= VK_SHADER_STAGE_VERTEX_BIT;
++    }
+     layout->vk_push_stages = ranges[0].stageFlags;
+     if (ranges[0].stageFlags)
++    {
++        if (ranges[0].size < sizeof(VkDeviceAddress))
++            ranges[0].size = layout->push_constant_range.size = sizeof(VkDeviceAddress);
+         count++;
++    }
+ 
+     offset = ranges[0].stageFlags ? align(ranges[0].offset + ranges[0].size, 8) : 0;
+     if (d3d12_device_emulates_line_coverage(device) && offset + 2 * sizeof(float) <= limits->maxPushConstantsSize)
+@@ -2326,11 +2336,16 @@ static void d3d12_pipeline_state_free_spirv_code_debug(struct d3d12_pipeline_sta
+ 
+ static void d3d12_pipeline_state_free_spirv_code(struct d3d12_pipeline_state *state)
+ {
+-    unsigned int i;
++    unsigned int i, j;
+     if (d3d12_pipeline_state_is_graphics(state))
+     {
+         for (i = 0; i < state->graphics.stage_count; i++)
+         {
++            for (j = 0; j < VKD3D_INDIRECT_STATE_MODE_COUNT; j++)
++            {
++                vkd3d_shader_free_shader_code(&state->graphics.indirect_code[j][i]);
++                memset(&state->graphics.indirect_code[j][i], 0, sizeof(state->graphics.indirect_code[j][i]));
++            }
+             vkd3d_shader_free_shader_code(&state->graphics.code[i]);
+             /* Keep meta. */
+             state->graphics.code[i].code = NULL;
+@@ -3002,6 +3017,9 @@ static HRESULT vkd3d_late_compile_shader_stages(struct d3d12_pipeline_state *sta
+         /* We'll keep the module around here, no need to keep code/size pairs around for this.
+          * If we're in a situation where late compile is relevant, we're using PSO cached blobs,
+          * so we never expect to serialize out SPIR-V either way. */
++        if (!state->device->device_info.device_generated_commands_features.deviceGeneratedCommands)
++            continue;
++
+         vkd3d_shader_free_shader_code(&graphics->code[i]);
+         graphics->code[i].code = NULL;
+         graphics->code[i].size = 0;
+@@ -5888,7 +5906,9 @@ static HRESULT d3d12_pipeline_state_finish_graphics(struct d3d12_pipeline_state
+     if (graphics->multiview.dynamic_mask)
+         state->pso_is_fully_dynamic = false;
+ 
+-    if (!state->pso_is_fully_dynamic)
++    if (!state->pso_is_fully_dynamic ||
++            (state->pipeline_type == VKD3D_PIPELINE_TYPE_GRAPHICS &&
++             !state->device->device_info.device_generated_commands_features.deviceGeneratedCommands))
+     {
+         /* If we got here successfully without SPIR-V code,
+          * it means we'll need to defer compilation from DXBC -> SPIR-V.
+@@ -6180,9 +6200,11 @@ HRESULT d3d12_pipeline_state_create(struct d3d12_device *device, VkPipelineBindP
+      * For graphics pipelines, we have to keep VkShaderModules around in case we need fallback pipelines.
+      * If we keep the SPIR-V around in memory, we can always create shader modules on-demand in case we
+      * need to actually create fallback pipelines. This avoids unnecessary memory bloat. */
+-    if (desc_cached_pso->blob.CachedBlobSizeInBytes ||
++    if (!(object->pipeline_type == VKD3D_PIPELINE_TYPE_GRAPHICS &&
++            !device->device_info.device_generated_commands_features.deviceGeneratedCommands) &&
++            (desc_cached_pso->blob.CachedBlobSizeInBytes ||
+             (device->disk_cache.library && (device->disk_cache.library->flags & VKD3D_PIPELINE_LIBRARY_FLAG_SHADER_IDENTIFIER)) ||
+-            (vkd3d_config_flags & VKD3D_CONFIG_FLAG_PIPELINE_LIBRARY_NO_SERIALIZE_SPIRV))
++            (vkd3d_config_flags & VKD3D_CONFIG_FLAG_PIPELINE_LIBRARY_NO_SERIALIZE_SPIRV)))
+         d3d12_pipeline_state_free_spirv_code(object);
+     else
+         d3d12_pipeline_state_destroy_shader_modules(object, device);
+@@ -6482,7 +6504,7 @@ VkPipeline d3d12_pipeline_state_create_pipeline_variant(struct d3d12_pipeline_st
+     *dynamic_state_flags = d3d12_graphics_pipeline_state_init_dynamic_state(state, &dynamic_create_info,
+             dynamic_state_buffer, key);
+ 
+-    if (!library_flags && graphics->library)
++    if (!library_flags && graphics->library && !(key && key->indirect_state))
+     {
+         if (d3d12_pipeline_state_link_pipeline_variant(state, key, dsv_format,
+                 vk_cache, *dynamic_state_flags, &vk_pipeline) == VK_SUCCESS)
+@@ -6497,6 +6519,12 @@ VkPipeline d3d12_pipeline_state_create_pipeline_variant(struct d3d12_pipeline_st
+     if (!(graphics->stage_flags & VK_SHADER_STAGE_MESH_BIT_EXT))
+     {
+         vkd3d_vertex_input_pipeline_desc_init(&vertex_input_desc, state, key, *dynamic_state_flags);
++        if (key && key->indirect_state >= VKD3D_INDIRECT_STATE_PULL_VERTICES)
++        {
++            vertex_input_desc.vi_info.vertexAttributeDescriptionCount = 0;
++            vertex_input_desc.vi_info.vertexBindingDescriptionCount = 0;
++            vertex_input_desc.vi_divisor_info.vertexBindingDivisorCount = 0;
++        }
+         vkd3d_vertex_input_pipeline_desc_prepare(&vertex_input_desc);
+ 
+         tessellation_info.sType = VK_STRUCTURE_TYPE_PIPELINE_TESSELLATION_STATE_CREATE_INFO;
+@@ -6590,10 +6618,19 @@ VkPipeline d3d12_pipeline_state_create_pipeline_variant(struct d3d12_pipeline_st
+ 
+         for (i = 0; i < graphics->stage_count; i++)
+         {
+-            if (stages[i].module == VK_NULL_HANDLE && graphics->code[i].code)
++            if (key->indirect_state && graphics->indirect_code[key->indirect_state][i].code)
+             {
+-                if (FAILED(hr = d3d12_pipeline_state_create_shader_module(device,
+-                        &stages[i].module, &graphics->code[i])))
++                stages[i].module = VK_NULL_HANDLE;
++                if (stages[i].pNext == &graphics->identifier_create_infos[i])
++                    stages[i].pNext = graphics->identifier_create_infos[i].pNext;
++            }
++
++            if (stages[i].module == VK_NULL_HANDLE && (graphics->code[i].code ||
++                    (key->indirect_state && graphics->indirect_code[key->indirect_state][i].code)))
++            {
++                if (FAILED(hr = d3d12_pipeline_state_create_shader_module(device, &stages[i].module,
++                        key->indirect_state && graphics->indirect_code[key->indirect_state][i].code ?
++                        &graphics->indirect_code[key->indirect_state][i] : &graphics->code[i])))
+                 {
+                     /* This is kind of fatal and should only happen for out-of-memory. */
+                     ERR("Unexpected failure (hr %x) in creating fallback SPIR-V module.\n", hr);
+@@ -6786,6 +6823,181 @@ VkPipeline d3d12_pipeline_state_get_pipeline(struct d3d12_pipeline_state *state,
+     return state->graphics.pipeline;
+ }
+ 
++static int d3d12_pipeline_state_rewrite_indirect_code(struct d3d12_pipeline_state *state, uint32_t mode,
++        const struct vkd3d_shader_code *compiled);
++
++static int d3d12_pipeline_state_build_indirect_code(struct d3d12_pipeline_state *state, uint32_t mode)
++{
++    struct d3d12_graphics_pipeline_state *graphics = &state->graphics;
++    struct vkd3d_shader_code compiled[VKD3D_MAX_SHADER_STAGES];
++    unsigned int i, j;
++    int status;
++
++    memset(compiled, 0, sizeof(compiled));
++    for (i = 0; i < graphics->stage_count; i++)
++    {
++        if (graphics->code[i].code)
++            continue;
++        if (!graphics->cached_desc.bytecode[i].BytecodeLength ||
++                !(graphics->cached_desc.bytecode_duped_mask & (1u << i)) ||
++                FAILED(vkd3d_compile_shader_stage(state, state->device, graphics->cached_desc.bytecode_stages[i],
++                        &graphics->cached_desc.bytecode[i], &compiled[i], NULL)))
++        {
++            for (j = 0; j < i; j++)
++                vkd3d_shader_free_shader_code(&compiled[j]);
++            return AV_LC_MALFORMED;
++        }
++    }
++
++    status = d3d12_pipeline_state_rewrite_indirect_code(state, mode, compiled);
++    for (i = 0; i < graphics->stage_count; i++)
++        vkd3d_shader_free_shader_code(&compiled[i]);
++    return status;
++}
++
++static int d3d12_pipeline_state_rewrite_indirect_code(struct d3d12_pipeline_state *state, uint32_t mode,
++        const struct vkd3d_shader_code *compiled)
++{
++    struct vkd3d_vertex_pull_attribute attributes[D3D12_VS_INPUT_REGISTER_COUNT];
++    struct d3d12_graphics_pipeline_state *graphics = &state->graphics;
++    struct vkd3d_shader_code *code = graphics->indirect_code[mode];
++    const struct vkd3d_shader_code *spirv;
++    struct vkd3d_vertex_pull_layout layout;
++    const uint32_t *source;
++    size_t source_count;
++    unsigned int i, j;
++    uint32_t *words;
++    size_t count;
++    int status;
++
++    memset(&layout, 0, sizeof(layout));
++    if (mode != VKD3D_INDIRECT_STATE_ROOT)
++    {
++        if (graphics->attribute_count > ARRAY_SIZE(attributes))
++            return AV_LC_TOO_MANY;
++        for (i = 0; i < graphics->attribute_count; i++)
++        {
++            attributes[i].location = graphics->attributes[i].location;
++            attributes[i].slot = graphics->attributes[i].binding;
++            attributes[i].format = graphics->attributes[i].format;
++            attributes[i].offset = graphics->attributes[i].offset;
++            attributes[i].per_instance = graphics->input_rates[attributes[i].slot] == VK_VERTEX_INPUT_RATE_INSTANCE;
++            attributes[i].divisor = 1;
++            for (j = 0; j < graphics->instance_divisor_count; j++)
++                if (graphics->instance_divisors[j].binding == attributes[i].slot)
++                    attributes[i].divisor = graphics->instance_divisors[j].divisor;
++            if (!vkd3d_vertex_pull_supports_format(attributes[i].format))
++                return AV_LC_REFUSED_TYPE;
++        }
++        layout.vertex_table_offset = align(state->root_signature->graphics.push_constant_range.size, 16);
++        layout.index_offset = layout.vertex_table_offset + VKD3D_INDIRECT_STATE_INDEX_WORD * sizeof(uint32_t);
++        layout.draw_offset = layout.vertex_table_offset + VKD3D_INDIRECT_STATE_DRAW_WORD * sizeof(uint32_t);
++        layout.pull_indices = mode == VKD3D_INDIRECT_STATE_PULL_INDICES;
++        layout.attribute_count = graphics->attribute_count;
++        layout.attributes = attributes;
++    }
++
++    for (i = 0; i < graphics->stage_count; i++)
++    {
++        spirv = graphics->code[i].code ? &graphics->code[i] : &compiled[i];
++        words = NULL;
++        count = 0;
++        status = vkd3d_rewrite_push_block_to_address(spirv->code, spirv->size / sizeof(uint32_t), &words, &count);
++        if (status != AV_LC_OK && status != AV_LC_UNCHANGED)
++            return status;
++        if (status == AV_LC_OK)
++        {
++            code[i].code = words;
++            code[i].size = count * sizeof(uint32_t);
++            code[i].meta = graphics->code[i].meta;
++        }
++        else if (!graphics->code[i].code)
++        {
++            if (!(words = vkd3d_malloc(spirv->size)))
++                return AV_LC_NO_MEMORY;
++            memcpy(words, spirv->code, spirv->size);
++            code[i].code = words;
++            code[i].size = spirv->size;
++            code[i].meta = graphics->code[i].meta;
++        }
++
++        if (mode == VKD3D_INDIRECT_STATE_ROOT || graphics->cached_desc.bytecode_stages[i] != VK_SHADER_STAGE_VERTEX_BIT)
++            continue;
++
++        source = code[i].code ? code[i].code : graphics->code[i].code;
++        source_count = (code[i].code ? code[i].size : graphics->code[i].size) / sizeof(uint32_t);
++        words = NULL;
++        count = 0;
++        if ((status = vkd3d_rewrite_vertex_pull(source, source_count, &layout, &words, &count)) != AV_LC_OK)
++            return status;
++        vkd3d_shader_free_shader_code(&code[i]);
++        code[i].code = words;
++        code[i].size = count * sizeof(uint32_t);
++        code[i].meta = graphics->code[i].meta;
++    }
++
++    return AV_LC_OK;
++}
++
++VkPipeline d3d12_pipeline_state_get_indirect_state_pipeline(struct d3d12_pipeline_state *state, uint32_t mode,
++        const struct vkd3d_dynamic_state *dyn_state, const struct vkd3d_format *dsv_format,
++        uint32_t *dynamic_state_flags)
++{
++    const struct vkd3d_vk_device_procs *vk_procs = &state->device->vk_procs;
++    struct d3d12_graphics_pipeline_state *graphics = &state->graphics;
++    struct vkd3d_pipeline_key pipeline_key;
++    VkPipeline vk_pipeline;
++
++    if (state->pipeline_type != VKD3D_PIPELINE_TYPE_GRAPHICS || !mode || mode >= VKD3D_INDIRECT_STATE_MODE_COUNT)
++        return VK_NULL_HANDLE;
++
++    rwlock_lock_write(&state->lock);
++    if (!graphics->indirect_code_ready[mode])
++    {
++        graphics->indirect_code_status[mode] = d3d12_pipeline_state_build_indirect_code(state, mode);
++        graphics->indirect_code_ready[mode] = true;
++    }
++    rwlock_unlock_write(&state->lock);
++
++    if (graphics->indirect_code_status[mode] != AV_LC_OK)
++    {
++        FIXME("Pipeline %p cannot take per-command state of mode %u (%d), ExecuteIndirect draws nothing.\n",
++                state, mode, graphics->indirect_code_status[mode]);
++        return VK_NULL_HANDLE;
++    }
++
++    memset(&pipeline_key, 0, sizeof(pipeline_key));
++    if (graphics->primitive_topology_type != D3D12_PRIMITIVE_TOPOLOGY_TYPE_PATCH &&
++            graphics->primitive_topology_type != D3D12_PRIMITIVE_TOPOLOGY_TYPE_UNDEFINED)
++        pipeline_key.dynamic_topology = true;
++    else
++        pipeline_key.topology = dyn_state->primitive_topology;
++    pipeline_key.dsv_format = dsv_format ? dsv_format->vk_format : VK_FORMAT_UNDEFINED;
++    pipeline_key.view_mask = graphics->multiview.dynamic_mask ? dyn_state->view_mask : 0;
++    if (!(graphics->pipeline_dynamic_states & VKD3D_DYNAMIC_STATE_RASTERIZATION_SAMPLES))
++    {
++        pipeline_key.rasterization_samples = dyn_state->rasterization_samples
++              ? dyn_state->rasterization_samples : graphics->ms_desc.rasterizationSamples;
++    }
++    pipeline_key.indirect_state = mode;
++
++    if ((vk_pipeline = d3d12_pipeline_state_find_compiled_pipeline(state, &pipeline_key, dynamic_state_flags)))
++        return vk_pipeline;
++
++    if (!(vk_pipeline = d3d12_pipeline_state_create_pipeline_variant(state,
++            &pipeline_key, dsv_format, VK_NULL_HANDLE, 0, dynamic_state_flags)))
++    {
++        ERR("Failed to create the per-command state pipeline.\n");
++        return VK_NULL_HANDLE;
++    }
++
++    if (d3d12_pipeline_state_put_pipeline_to_cache(state, &pipeline_key, vk_pipeline, *dynamic_state_flags))
++        return vk_pipeline;
++
++    VK_CALL(vkDestroyPipeline(state->device->vk_device, vk_pipeline, NULL));
++    return d3d12_pipeline_state_find_compiled_pipeline(state, &pipeline_key, dynamic_state_flags);
++}
++
+ VkPipeline d3d12_pipeline_state_get_or_create_pipeline(struct d3d12_pipeline_state *state,
+         const struct vkd3d_dynamic_state *dyn_state, const struct vkd3d_format *dsv_format,
+         uint32_t *dynamic_state_flags)
+diff --git a/libs/vkd3d/vkd3d_private.h b/libs/vkd3d/vkd3d_private.h
+index ae4c3c6..0cb10ee 100644
+--- a/libs/vkd3d/vkd3d_private.h
++++ b/libs/vkd3d/vkd3d_private.h
+@@ -2195,6 +2195,19 @@ struct d3d12_graphics_pipeline_state_cached_desc
+     uint32_t patch_location_offset;
+ };
+ 
++enum vkd3d_indirect_state_mode
++{
++    VKD3D_INDIRECT_STATE_NONE = 0,
++    VKD3D_INDIRECT_STATE_ROOT,
++    VKD3D_INDIRECT_STATE_PULL_VERTICES,
++    VKD3D_INDIRECT_STATE_PULL_INDICES,
++    VKD3D_INDIRECT_STATE_MODE_COUNT,
++};
++
++#define VKD3D_INDIRECT_STATE_INDEX_WORD (4 * D3D12_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT)
++#define VKD3D_INDIRECT_STATE_DRAW_WORD (VKD3D_INDIRECT_STATE_INDEX_WORD + 4)
++#define VKD3D_INDIRECT_STATE_PULL_BYTES ((VKD3D_INDIRECT_STATE_DRAW_WORD + 4) * 4)
++
+ struct d3d12_graphics_pipeline_state
+ {
+     struct vkd3d_shader_spec_info spec_info[VKD3D_MAX_SHADER_STAGES];
+@@ -2245,6 +2258,10 @@ struct d3d12_graphics_pipeline_state
+     bool line_coverage;
+     uint32_t line_coverage_offset;
+ 
++    struct vkd3d_shader_code indirect_code[VKD3D_INDIRECT_STATE_MODE_COUNT][VKD3D_MAX_SHADER_STAGES];
++    int indirect_code_status[VKD3D_INDIRECT_STATE_MODE_COUNT];
++    bool indirect_code_ready[VKD3D_INDIRECT_STATE_MODE_COUNT];
++
+     /* vkd3d_dynamic_state_flag */
+     uint32_t explicit_dynamic_states;
+     uint32_t pipeline_dynamic_states;
+@@ -2420,6 +2437,7 @@ struct vkd3d_pipeline_key
+     uint32_t view_mask;
+ 
+     bool dynamic_topology;
++    uint32_t indirect_state;
+ };
+ 
+ bool d3d12_pipeline_state_has_replaced_shaders(struct d3d12_pipeline_state *state);
+@@ -2431,6 +2449,9 @@ VkPipeline d3d12_pipeline_state_get_or_create_pipeline(struct d3d12_pipeline_sta
+ VkPipeline d3d12_pipeline_state_get_pipeline(struct d3d12_pipeline_state *state,
+         const struct vkd3d_dynamic_state *dyn_state, const struct vkd3d_format *dsv_format,
+         uint32_t *dynamic_state_flags);
++VkPipeline d3d12_pipeline_state_get_indirect_state_pipeline(struct d3d12_pipeline_state *state, uint32_t mode,
++        const struct vkd3d_dynamic_state *dyn_state, const struct vkd3d_format *dsv_format,
++        uint32_t *dynamic_state_flags);
+ VkPipeline d3d12_pipeline_state_create_pipeline_variant(struct d3d12_pipeline_state *state,
+         const struct vkd3d_pipeline_key *key, const struct vkd3d_format *dsv_format,
+         VkPipelineCache vk_cache, VkGraphicsPipelineLibraryFlagsEXT library_flags, uint32_t *dynamic_state_flags);
+@@ -3076,6 +3097,7 @@ struct d3d12_command_list_iteration_indirect_meta
+ {
+     bool need_compute_to_indirect_barrier;
+     bool need_compute_to_cbv_barrier;
++    bool need_compute_to_graphics_barrier;
+     bool need_preprocess_barrier;
+ };
+ 
+@@ -3848,6 +3870,16 @@ struct d3d12_command_signature
+     bool requires_state_template;
+     enum vkd3d_pipeline_type pipeline_type;
+ 
++    struct
++    {
++        uint32_t ops[4 * (D3D12_MAX_ROOT_COST + D3D12_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT + 2)];
++        uint32_t op_count;
++        uint32_t root_bytes;
++        uint32_t mode;
++        bool indexed;
++        bool active;
++    } emulated;
++
+     struct d3d12_device *device;
+ 
+     struct vkd3d_private_store private_store;
+@@ -4871,6 +4903,21 @@ struct vkd3d_execute_indirect_args
+     VkDeviceAddress translation_va;
+ };
+ 
++struct vkd3d_execute_indirect_state_args
++{
++    VkDeviceAddress setup_va;
++    VkDeviceAddress args_va;
++    VkDeviceAddress count_va;
++    VkDeviceAddress draws_va;
++    VkDeviceAddress blocks_va;
++    VkDeviceAddress translation_va;
++    uint32_t arg_stride_words;
++    uint32_t block_words;
++    uint32_t op_count;
++    uint32_t max_commands;
++    uint32_t draw_words;
++};
++
+ struct vkd3d_execute_indirect_pipeline
+ {
+     VkPipeline vk_pipeline;
+@@ -4883,6 +4930,8 @@ struct vkd3d_execute_indirect_ops
+     struct vkd3d_execute_indirect_pipeline *pipelines;
+     size_t pipelines_count;
+     size_t pipelines_size;
++    VkPipelineLayout vk_state_pipeline_layout;
++    VkPipeline vk_state_pipeline;
+     pthread_mutex_t mutex;
+ };
+ 
+@@ -5078,6 +5127,33 @@ static inline uint32_t vkd3d_meta_get_multi_dispatch_indirect_workgroup_size(voi
+ 
+ HRESULT vkd3d_meta_get_execute_indirect_pipeline(struct vkd3d_meta_ops *meta_ops,
+         uint32_t patch_command_count, struct vkd3d_execute_indirect_info *info);
++HRESULT vkd3d_meta_get_execute_indirect_state_pipeline(struct vkd3d_meta_ops *meta_ops,
++        struct vkd3d_execute_indirect_info *info);
++int vkd3d_rewrite_push_block_to_address(const uint32_t *words, size_t count, uint32_t **out_words, size_t *out_count);
++
++struct vkd3d_vertex_pull_attribute
++{
++    uint32_t location;
++    uint32_t slot;
++    VkFormat format;
++    uint32_t offset;
++    uint32_t divisor;
++    bool per_instance;
++};
++
++struct vkd3d_vertex_pull_layout
++{
++    uint32_t vertex_table_offset;
++    uint32_t index_offset;
++    uint32_t draw_offset;
++    bool pull_indices;
++    uint32_t attribute_count;
++    const struct vkd3d_vertex_pull_attribute *attributes;
++};
++
++bool vkd3d_vertex_pull_supports_format(VkFormat format);
++int vkd3d_rewrite_vertex_pull(const uint32_t *words, size_t count, const struct vkd3d_vertex_pull_layout *layout,
++        uint32_t **out_words, size_t *out_count);
+ 
+ void vkd3d_meta_get_sampler_feedback_resolve_pipeline(struct vkd3d_meta_ops *meta_ops,
+         enum vkd3d_sampler_feedback_resolve_type type, struct vkd3d_sampler_feedback_resolve_info *info);
+diff --git a/libs/vkd3d/vkd3d_shaders.h b/libs/vkd3d/vkd3d_shaders.h
+index 4e812ce..e4cfb3b 100644
+--- a/libs/vkd3d/vkd3d_shaders.h
++++ b/libs/vkd3d/vkd3d_shaders.h
+@@ -51,6 +51,7 @@ enum vkd3d_meta_copy_mode
+ #include <cs_execute_indirect_patch.h>
+ #include <cs_execute_indirect_patch_debug_ring.h>
+ #include <cs_execute_indirect_multi_dispatch.h>
++#include <cs_execute_indirect_state.h>
+ #include <cs_rtas_instance_translate.h>
+ #include <vs_fullscreen_layer.h>
+ #include <vs_fullscreen.h>
