@@ -246,3 +246,100 @@ TEST(main_loop_handoff, a_reset_while_a_blob_create_is_inside_the_driver_drops_i
   CHECK_EQ(rig.guard().inner().live_memory(), 0u);
   CHECK_EQ(rig.host().dropped_requests(), 1u);
   CHECK(rig.device().invariants_hold()); }
+
+namespace {
+
+class Seeded {
+public:
+    explicit Seeded(std::uint64_t seed) : state_(seed) {}
+    std::uint32_t below(std::uint32_t bound)
+    {
+        state_ = state_ * 6364136223846793005ull + 1442695040888963407ull;
+        return static_cast<std::uint32_t>(state_ >> 33u) % bound;
+    }
+
+private:
+    std::uint64_t state_;
+};
+
+class Model {
+public:
+    static constexpr std::uint32_t most = 400u;
+
+    explicit Model(Rig &rig) : rig_(rig), requests_{}, count_(0u) {}
+    ~Model()
+    {
+        for (std::uint32_t index = 0u; index < count_; index++) delete requests_[index];
+    }
+
+    void post(const GpuRequestBuilder &builder)
+    {
+        if (count_ == most) return;
+        MockRequest *const request = new MockRequest(builder.bytes(), builder.size());
+        requests_[count_++] = request;
+        if (!rig_.post(*request, builder)) request->drop();
+    }
+
+    std::uint32_t unanswered() const
+    {
+        std::uint32_t left = 0u;
+        for (std::uint32_t index = 0u; index < count_; index++)
+            left += requests_[index]->answered() || requests_[index]->dropped() ? 0u : 1u;
+        return left;
+    }
+
+private:
+    Rig         &rig_;
+    MockRequest *requests_[most];
+    std::uint32_t count_;
+};
+
+}
+
+TEST(main_loop_handoff, random_commands_over_a_slow_executor_with_resets_answer_everything_once_and_free_everything)
+{ for (std::uint64_t seed = 1u; seed <= 6u; seed++) {
+      Rig    rig;
+      Model  model(rig);
+      Seeded random(seed);
+      bool   blocked = false;
+      for (std::uint32_t step = 0u; step < 60u; step++) {
+          const std::uint32_t context = 7u + random.below(2u);
+          const std::uint32_t blob = host_blob + random.below(6u);
+          switch (random.below(9u)) {
+          case 0: model.post(context_create(context)); break;
+          case 1: model.post(context_destroy(context)); break;
+          case 2:
+          case 3: model.post(host_blob_of(context, blob, 2u, upload, 1u, 0x1000u * (1u + random.below(3u)))); break;
+          case 4: model.post(named(0x0102u, blob)); break;
+          case 5: model.post(shared_release(1u + random.below(4u))); break;
+          case 6:
+              if (blocked) rig.guard().unblock();
+              else rig.guard().block();
+              blocked = !blocked;
+              break;
+          case 7:
+              rig.device().reset();
+              rig.device().status(av::DriverStatus::driver_ok);
+              break;
+          default: {
+              GpuRequestBuilder map(0x0208u);
+              map.u32(blob).u32(0u).u64(0x1000u * random.below(8u));
+              model.post(map);
+              break;
+          }
+          }
+          static_cast<void>(rig.host().run_main_loop());
+          CHECK_EQ(rig.guard().on_main_loop(), 0u);
+          CHECK(rig.device().invariants_hold());
+      }
+      rig.guard().unblock();
+      CHECK(rig.settle());
+      CHECK_EQ(model.unanswered(), 0u);
+      rig.device().reset();
+      CHECK(rig.settle());
+      CHECK_EQ(rig.guard().inner().held_memory(), 0u);
+      CHECK_EQ(rig.guard().inner().live_memory(), 0u);
+      CHECK_EQ(rig.host().kept_requests(), 0u);
+      CHECK_EQ(rig.host().claim(av::HostViolation::second_response), false);
+      CHECK_EQ(rig.guard().on_main_loop(), 0u);
+  } }
