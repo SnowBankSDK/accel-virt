@@ -33,6 +33,7 @@ public:
     std::uint32_t waiting();
     void              hold_creates();
     void              release_creates();
+    void              hold_creates_of(std::uint32_t sub_api);
     std::uint32_t     creates_waiting();
     std::uint32_t     option_creates();
     std::uint32_t     signals_set();
@@ -215,6 +216,7 @@ private:
     AvExecutor               *last_share_;
     bool                       last_share_live_;
     bool                       creates_held_;
+    std::uint32_t              held_sub_apis_;
     std::uint32_t              creates_waiting_;
     std::uint32_t              refuse_domain_ = 0u;
     std::uint32_t              domains_opened_ = 0u;

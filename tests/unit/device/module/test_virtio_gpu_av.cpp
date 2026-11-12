@@ -283,7 +283,7 @@ TEST(virtio_gpu_av_report, an_unrealized_device_says_so_and_has_no_contexts)
   device.report(writer);
   CHECK(std::strcmp(writer.dump(), "device/0 realized=false\ndevice/0/host_blobs/0 live=0\n"
                                   "device/0/window_stats/0 attached=false stable=false\n"
-                                  "device/0/contexts/0 live=0 reaping=0\n"
+                                  "device/0/contexts/0 live=0 reaping=0 refused_attaches=0\n"
                                   "device/0/service/0 running=false outstanding=0 held=0") == 0); }
 
 TEST(virtio_gpu_av_control, an_unrealized_device_answers_nothing_and_offers_no_capset)
@@ -446,13 +446,13 @@ TEST(virtio_gpu_av_control, answers_context_requests_and_reset_destroys_contexts
   CHECK(std::strncmp(writer.dump(), "device/3 realized=true gpu=0 capsets=1 blobs=2 scanouts=0 host_window_bytes=65536 contexts=1 driver_ok=true\n"
                                     "device/3/host_blobs/0 live=0\n"
                                     "device/3/window_stats/0 attached=false stable=false\n"
-                                    "device/3/contexts/0 live=1 reaping=0\n"
+                                    "device/3/contexts/0 live=1 reaping=0 refused_attaches=0\n"
                                     "device/3/contexts/0/context/7 name= bound=true sub_api=1 version=2.0 ring=1 "
                                     "ring_order=12 fence=2 doorbell=0 reply=0 attached=",
                      std::strlen("device/3 realized=true gpu=0 capsets=1 blobs=2 scanouts=0 host_window_bytes=65536 contexts=1 driver_ok=true\n"
                                  "device/3/host_blobs/0 live=0\n"
                                  "device/3/window_stats/0 attached=false stable=false\n"
-                                 "device/3/contexts/0 live=1 reaping=0\n"
+                                 "device/3/contexts/0 live=1 reaping=0 refused_attaches=0\n"
                                  "device/3/contexts/0/context/7 name= bound=true sub_api=1 version=2.0 ring=1 "
                                  "ring_order=12 fence=2 doorbell=0 reply=0 attached=")) == 0);
   CHECK(std::strstr(writer.dump(), "\ndevice/3/contexts/0/context/7/worker/0 running=true ") != nullptr);

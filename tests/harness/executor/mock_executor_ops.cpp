@@ -30,7 +30,7 @@ MockExecutorOps::MockExecutorOps(std::uint32_t sub_apis)
       held_(false), waiting_(0u), executors_{}, fail_create_(0u), created_(0u), destroyed_(0u), executed_(0u), kept_(nullptr), kept_length_(0u), ids_{},
       sizes_{}, last_sub_api_(0u), misuses_(0u), imports_{}, refuse_import_(0u), withhold_handle_(0u),
       answered_handle_(0u), option_creates_(0u), signals_set_(0u), signal_(nullptr), signal_context_(nullptr),
-      last_options_{}, last_share_(nullptr), last_share_live_(false), creates_held_(false), creates_waiting_(0u)
+      last_options_{}, last_share_(nullptr), last_share_live_(false), creates_held_(false), held_sub_apis_(0u), creates_waiting_(0u)
 {
     pthread_mutex_init(&lock_, nullptr);
     pthread_cond_init(&released_, nullptr);
@@ -297,7 +297,8 @@ MockExecutorOps::MockExecutorOps(std::uint32_t sub_apis)
             mock.last_options_ = options != nullptr ? *options : AvContextOptions{};
             mock.last_share_ = share;
             mock.creates_waiting_++;
-            while (mock.creates_held_) pthread_cond_wait(&mock.released_, &mock.lock_);
+            while (mock.creates_held_ || (mock.held_sub_apis_ & sub_api) != 0u)
+                pthread_cond_wait(&mock.released_, &mock.lock_);
             mock.creates_waiting_--;
         }
         const bool live = mock.alive(share);
@@ -423,10 +424,16 @@ void MockExecutorOps::hold_creates()
     Lock lock(lock_);
     creates_held_ = true;
 }
+void MockExecutorOps::hold_creates_of(std::uint32_t sub_api)
+{
+    Lock lock(lock_);
+    held_sub_apis_ |= sub_api;
+}
 void MockExecutorOps::release_creates()
 {
     Lock lock(lock_);
     creates_held_ = false;
+    held_sub_apis_ = 0u;
     pthread_cond_broadcast(&released_);
 }
 std::uint32_t     MockExecutorOps::creates_waiting() { Lock lock(lock_); return creates_waiting_; }

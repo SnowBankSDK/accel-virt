@@ -12,6 +12,7 @@
 #include "device/fence/device_pulse.hpp"
 #include "device/fence/fence_window.hpp"
 #include "device/memory/host_blob_errand.hpp"
+#include "device/host/env_setting.hpp"
 #include "device/host/stdio_log.hpp"
 #include "device/recording/wire_recorder.hpp"
 #include "device/context/ring_window.hpp"
@@ -24,6 +25,18 @@
 #include <stdio.h>
 
 namespace av {
+
+namespace {
+
+uint64_t attach_limit()
+{
+    AV_SCOPE("attach_limit");
+    uint64_t milliseconds = 0u;
+    if (!EnvSetting("AV_ATTACH_LIMIT_MS").number(milliseconds)) return FenceReporter::attach_limit_ns;
+    return milliseconds * 1000000u;
+}
+
+}
 
 DeviceContext::DeviceContext(Host &host, BlobTable &blobs, HostBlobOwners &owners, FenceInterrupts &interrupts,
                              const ExecutorLibrary &library,
@@ -117,6 +130,7 @@ Status DeviceContext::bind(const ContextSetup &setup, const CapsetInfo &capset)
     status = pulse_.carry(fences_);
     if (status != Status::ok) return refused("pulse", status);
     ScopeExit uncarry([this] { pulse_.drop(fences_); });
+    fences_.refuse_attach_after(attach_limit());
     status = worker_.post(WorkItem(&AvRingAttach, nullptr, &ring_));
     if (status != Status::ok) return refused("attach", status);
     uncarry.dismiss();

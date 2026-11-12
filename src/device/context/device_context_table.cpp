@@ -223,6 +223,7 @@ void DeviceContextTable::report(StateWriter &writer)
     writer.open("contexts", 0u);
     writer.number("live", live());
     writer.number("reaping", reaping());
+    writer.number("refused_attaches", pulse_.refused_attaches());
     for (uint32_t index = 0u; index < max_contexts; index++)
         if (live_at(index)) slots_[index].object().report(writer);
     writer.close();

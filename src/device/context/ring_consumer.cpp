@@ -68,7 +68,14 @@ void RingConsumer::attach()
     AV_SCOPE("RingConsumer::attach");
     host_.require_worker("RingConsumer::attach");
     attached_ = prepared_;
-    if (!attached_ || executor_.start() == Status::ok) return;
+    if (!attached_) return;
+    const Status started = executor_.start();
+    if (!fences_.attach_settled()) {
+        faulted_ = true;
+        executor_.stop();
+        return;
+    }
+    if (started == Status::ok) return;
     fault(FaultCode::no_executor, "the context's executor could not be created", 0u);
     fences_.signal();
 }

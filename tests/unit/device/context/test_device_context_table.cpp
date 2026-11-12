@@ -81,13 +81,13 @@ TEST(device_context_table_report, writes_each_context_and_its_worker)
   av::StateWriter empty(bytes, sizeof bytes);
   empty.open("device", 0u);
   table.report(empty);
-  CHECK(std::strcmp(empty.dump(), "device/0\ndevice/0/contexts/0 live=0 reaping=0") == 0);
+  CHECK(std::strcmp(empty.dump(), "device/0\ndevice/0/contexts/0 live=0 reaping=0 refused_attaches=0") == 0);
   CHECK_STATUS(table.create(1u, "test"), Status::ok);
   CHECK_STATUS(table.create(7u, "test"), Status::ok);
   av::StateWriter two(bytes, sizeof bytes);
   table.report(two);
   const char *const expected =
-      "contexts/0 live=2 reaping=0\n"
+      "contexts/0 live=2 reaping=0 refused_attaches=0\n"
       "contexts/0/context/1 name=test bound=false attached=false faulted=false head=0 last_fence=0 batches=0 executor=false\n"
       "contexts/0/context/1/worker/0 running=true pending=0 stopping=false\n"
       "contexts/0/context/7 name=test bound=false attached=false faulted=false head=0 last_fence=0 batches=0 executor=false\n"
