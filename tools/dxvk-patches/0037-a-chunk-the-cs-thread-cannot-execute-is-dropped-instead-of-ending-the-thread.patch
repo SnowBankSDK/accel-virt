@@ -1,0 +1,68 @@
+From: accel-virt
+Subject: [PATCH] A command chunk the CS thread cannot execute is dropped instead of ending the thread
+
+An exception on the CS thread, such as a buffer allocation the embedder's memory gate refuses
+while a Direct3D 9 device initializes, ended the thread, and the next synchronize waited for it
+forever: the host thread creating the device hung. The thread now drops the chunk that threw,
+counts an out-of-memory error as the device running out of memory, records that a chunk failed
+and goes on, so every wait returns. A Direct3D 9 device whose initialization chunk failed is not
+created and CreateDevice returns D3DERR_NOTAVAILABLE.
+---
+diff --git a/src/dxvk/dxvk_cs.cpp b/src/dxvk/dxvk_cs.cpp
+--- a/src/dxvk/dxvk_cs.cpp
++++ b/src/dxvk/dxvk_cs.cpp
+@@ -247,7 +247,18 @@
+ 
+           m_context->addStatCtr(DxvkStatCounter::CsChunkCount, 1);
+ 
+-          entry.chunk->executeAll(m_context.ptr());
++          try {
++            entry.chunk->executeAll(m_context.ptr());
++          } catch (const DxvkOutOfMemoryError& e) {
++            Logger::err("CS chunk dropped:");
++            Logger::err(e.message());
++            m_failed.store(true);
++            m_device->markOutOfMemory();
++          } catch (const DxvkError& e) {
++            Logger::err("CS chunk dropped:");
++            Logger::err(e.message());
++            m_failed.store(true);
++          }
+ 
+           if (entry.seq) {
+             // Use a separate mutex for the chunk counter, this will only
+diff --git a/src/dxvk/dxvk_cs.h b/src/dxvk/dxvk_cs.h
+--- a/src/dxvk/dxvk_cs.h
++++ b/src/dxvk/dxvk_cs.h
+@@ -569,6 +569,10 @@
+       return m_seqOrdered.load();
+     }
+ 
++    bool failed() const {
++      return m_failed.load();
++    }
++
+   private:
+ 
+     Rc<DxvkDevice>              m_device;
+@@ -581,6 +585,7 @@
+     std::atomic<uint64_t>       m_seqOrdered  = { 0u };
+ 
+     std::atomic<bool>           m_stopped     = { false };
++    std::atomic<bool>           m_failed      = { false };
+     std::atomic<bool>           m_hasHighPrio = { false };
+ 
+     alignas(CACHE_LINE_SIZE)
+diff --git a/src/d3d9/d3d9_device.cpp b/src/d3d9/d3d9_device.cpp
+--- a/src/d3d9/d3d9_device.cpp
++++ b/src/d3d9/d3d9_device.cpp
+@@ -92,6 +92,9 @@
+ 
+     SynchronizeCsThread(DxvkCsThread::SynchronizeAll);
+ 
++    if (m_csThread.failed())
++      throw DxvkError("D3D9DeviceEx: Device initialization failed");
++
+     if (!(BehaviorFlags & D3DCREATE_FPU_PRESERVE))
+       SetupFPU();
+ 
