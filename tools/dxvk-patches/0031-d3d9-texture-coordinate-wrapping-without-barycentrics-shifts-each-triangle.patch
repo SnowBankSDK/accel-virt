@@ -1,0 +1,297 @@
+From: accel-virt
+Subject: [PATCH] Direct3D 9 texture coordinate wrapping without fragment shader barycentrics shifts each triangle in a geometry stage
+
+On a host without VK_KHR_fragment_shader_barycentric, a fixed-function draw of triangles
+while a WRAPn state is set goes through a geometry stage that moves the wrapped components
+of the second and third vertex of each triangle by whole units to within half a unit of
+the first, the same shift the barycentric path makes, and the rasterizer interpolates
+those. The stage is bound only while a wrap is set on such a host.
+---
+diff --git a/src/d3d9/d3d9_device.cpp b/src/d3d9/d3d9_device.cpp
+index 669750a..6042dfd 100644
+--- a/src/d3d9/d3d9_device.cpp
++++ b/src/d3d9/d3d9_device.cpp
+@@ -3415,6 +3415,8 @@ namespace dxvk {
+       ctx->bindShader<VK_SHADER_STAGE_GEOMETRY_BIT>(nullptr);
+     });
+ 
++    m_ffGsWrapBound = false;
++
+     // We unbound the pixel shader before,
+     // let's make sure that gets rebound.
+     if (m_state.pixelShader != nullptr) {
+@@ -4783,10 +4785,20 @@ namespace dxvk {
+ 
+ 
+   bool D3D9DeviceEx::SupportsTexCoordWrap() {
++    return InterpolatesTexCoordWrap() || ShiftsTexCoordWrap();
++  }
++
++
++  bool D3D9DeviceEx::InterpolatesTexCoordWrap() {
+     return m_dxvkDevice->features().khrFragmentShaderBarycentric.fragmentShaderBarycentric;
+   }
+ 
+ 
++  bool D3D9DeviceEx::ShiftsTexCoordWrap() {
++    return !InterpolatesTexCoordWrap() && m_dxvkDevice->features().core.features.geometryShader;
++  }
++
++
+   bool D3D9DeviceEx::SupportsSWVP() {
+     return m_dxvkDevice->features().core.features.vertexPipelineStoresAndAtomics;
+   }
+@@ -7647,6 +7659,9 @@ namespace dxvk {
+                     D3D9DeviceDirtyFlag::PushDataFfps))
+       UpdatePushData();
+ 
++    if (unlikely(m_ffGsWrapsTexCoords || m_ffGsWrapBound))
++      BindWrapGeometryShader(PrimitiveType);
++
+     ApplyPrimitiveType(PrimitiveType);
+   }
+ 
+@@ -8590,11 +8605,15 @@ namespace dxvk {
+ 
+     dirty |= m_specData.setTexCoordWrap(texCoordWrap);
+ 
+-    if (m_ffPsWrapsTexCoords != (texCoordWrap != 0u)) {
+-      m_ffPsWrapsTexCoords = texCoordWrap != 0u;
++    const bool interpolated = texCoordWrap != 0u && InterpolatesTexCoordWrap();
++
++    if (m_ffPsWrapsTexCoords != interpolated) {
++      m_ffPsWrapsTexCoords = interpolated;
+       BindFFUbershader<D3D9ShaderType::PixelShader>();
+     }
+ 
++    m_ffGsWrapsTexCoords = texCoordWrap != 0u && !interpolated;
++
+     if (dirty)
+       m_dirty.set(D3D9DeviceDirtyFlag::SpecializationEntries);
+ 
+@@ -8622,6 +8641,27 @@ namespace dxvk {
+   }
+ 
+ 
++  void D3D9DeviceEx::BindWrapGeometryShader(D3DPRIMITIVETYPE PrimType) {
++    const bool triangles = PrimType == D3DPT_TRIANGLELIST
++                        || PrimType == D3DPT_TRIANGLESTRIP
++                        || PrimType == D3DPT_TRIANGLEFAN;
++
++    const bool wanted = m_ffGsWrapsTexCoords && triangles
++                     && !UseProgrammableVS() && !UseProgrammablePS();
++
++    if (wanted == m_ffGsWrapBound)
++      return;
++
++    m_ffGsWrapBound = wanted;
++
++    EmitCs([
++      cShader = wanted ? m_ffModules.GetWrapGeometryShader() : nullptr
++    ] (DxvkContext* ctx) mutable {
++      ctx->bindShader<VK_SHADER_STAGE_GEOMETRY_BIT>(std::move(cShader));
++    });
++  }
++
++
+   void D3D9DeviceEx::ApplyPrimitiveType(D3DPRIMITIVETYPE PrimType) {
+     // Special handling for ProcessVertices
+     if (unlikely(PrimType == D3DPT_FORCE_DWORD))
+diff --git a/src/d3d9/d3d9_device.h b/src/d3d9/d3d9_device.h
+index ff4a796..a311bec 100644
+--- a/src/d3d9/d3d9_device.h
++++ b/src/d3d9/d3d9_device.h
+@@ -806,6 +806,12 @@ namespace dxvk {
+ 
+     bool SupportsTexCoordWrap();
+ 
++    bool InterpolatesTexCoordWrap();
++
++    bool ShiftsTexCoordWrap();
++
++    void BindWrapGeometryShader(D3DPRIMITIVETYPE PrimType);
++
+     bool SupportsVCacheQuery() const;
+ 
+     HWND GetWindow();
+@@ -1627,6 +1633,8 @@ namespace dxvk {
+ 
+     bool                            m_isSWVP;
+     bool                            m_ffPsWrapsTexCoords = false;
++    bool                            m_ffGsWrapsTexCoords = false;
++    bool                            m_ffGsWrapBound      = false;
+     bool                            m_ffZTest          = false;
+ 
+     // the enablement of below features is tracked independently
+diff --git a/src/d3d9/d3d9_fixed_function.cpp b/src/d3d9/d3d9_fixed_function.cpp
+index bae8916..6b8b496 100644
+--- a/src/d3d9/d3d9_fixed_function.cpp
++++ b/src/d3d9/d3d9_fixed_function.cpp
+@@ -16,13 +16,30 @@
+ #include <d3d9_fixed_function_frag.h>
+ #include <d3d9_fixed_function_frag_sample.h>
+ #include <d3d9_fixed_function_frag_wrap.h>
++#include <d3d9_fixed_function_geom_wrap.h>
+ 
+ namespace dxvk {
+ 
+   D3D9FFShaderModuleSet::D3D9FFShaderModuleSet(D3D9DeviceEx* pDevice)
+     : m_vs(buildVs())
+     , m_fs(buildFs(pDevice, false))
+-    , m_fsWrap(pDevice->SupportsTexCoordWrap() ? buildFs(pDevice, true) : nullptr) {}
++    , m_fsWrap(pDevice->InterpolatesTexCoordWrap() ? buildFs(pDevice, true) : nullptr)
++    , m_gsWrap(pDevice->ShiftsTexCoordWrap() ? buildGs() : nullptr) {}
++
++
++  Rc<DxvkShader> D3D9FFShaderModuleSet::buildGs() {
++    DxvkSpirvShaderCreateInfo info;
++    info.bindingCount = 0u;
++    info.bindings = nullptr;
++    info.flatShadingInputs = 0;
++    info.sharedPushData = DxvkPushDataBlock();
++    info.localPushData = DxvkPushDataBlock();
++    info.samplerHeap = DxvkShaderBinding();
++    info.specDataBuffer = DxvkShaderBinding(VK_SHADER_STAGE_GEOMETRY_BIT, SpecDataSet, 0u);
++    info.debugName = "FF GS wrap";
++
++    return new DxvkSpirvShader(info, d3d9_fixed_function_geom_wrap);
++  }
+ 
+ 
+   Rc<DxvkShader> D3D9FFShaderModuleSet::buildVs() {
+diff --git a/src/d3d9/d3d9_fixed_function.h b/src/d3d9/d3d9_fixed_function.h
+index 77168b2..8614613 100644
+--- a/src/d3d9/d3d9_fixed_function.h
++++ b/src/d3d9/d3d9_fixed_function.h
+@@ -57,14 +57,20 @@ namespace dxvk {
+       return wrapTexCoords ? m_fsWrap : m_fs;
+     }
+ 
++    Rc<DxvkShader> GetWrapGeometryShader() const {
++      return m_gsWrap;
++    }
++
+   private:
+ 
+     Rc<DxvkShader> m_vs;
+     Rc<DxvkShader> m_fs;
+     Rc<DxvkShader> m_fsWrap;
++    Rc<DxvkShader> m_gsWrap;
+ 
+     static Rc<DxvkShader> buildVs();
+     static Rc<DxvkShader> buildFs(D3D9DeviceEx* pDevice, bool wrapTexCoords);
++    static Rc<DxvkShader> buildGs();
+ 
+     constexpr static uint32_t GetPushSamplerOffset(uint32_t samplerIndex) {
+       // Located directly after the PS push data block.
+diff --git a/src/d3d9/meson.build b/src/d3d9/meson.build
+index cd77f0e..a47470f 100644
+--- a/src/d3d9/meson.build
++++ b/src/d3d9/meson.build
+@@ -12,6 +12,7 @@ d3d9_shaders = files([
+   'shaders/d3d9_fixed_function_frag.frag',
+   'shaders/d3d9_fixed_function_frag_sample.frag',
+   'shaders/d3d9_fixed_function_frag_wrap.frag',
++  'shaders/d3d9_fixed_function_geom_wrap.geom',
+ ])
+ 
+ d3d9_src = [
+diff --git a/src/d3d9/shaders/d3d9_fixed_function_geom_wrap.geom b/src/d3d9/shaders/d3d9_fixed_function_geom_wrap.geom
+new file mode 100644
+index 0000000..b5a1789
+--- /dev/null
++++ b/src/d3d9/shaders/d3d9_fixed_function_geom_wrap.geom
+@@ -0,0 +1,93 @@
++#version 450
++#extension GL_GOOGLE_include_directive : enable
++#extension GL_EXT_scalar_block_layout : require
++#extension GL_EXT_spirv_intrinsics : require
++
++#include "d3d9_fixed_function_common.glsl"
++
++layout(triangles) in;
++layout(triangle_strip, max_vertices = 3) out;
++
++const uint MaxClipPlaneCount = 6;
++
++in gl_PerVertex {
++    vec4 gl_Position;
++    float gl_ClipDistance[MaxClipPlaneCount];
++} gl_in[];
++
++out gl_PerVertex {
++    vec4 gl_Position;
++    float gl_ClipDistance[MaxClipPlaneCount];
++};
++
++layout(location = 0) in vec4 in_Normal[];
++layout(location = 1) in vec4 in_Texcoord0[];
++layout(location = 2) in vec4 in_Texcoord1[];
++layout(location = 3) in vec4 in_Texcoord2[];
++layout(location = 4) in vec4 in_Texcoord3[];
++layout(location = 5) in vec4 in_Texcoord4[];
++layout(location = 6) in vec4 in_Texcoord5[];
++layout(location = 7) in vec4 in_Texcoord6[];
++layout(location = 8) in vec4 in_Texcoord7[];
++layout(location = 9) in vec4 in_Color0[];
++layout(location = 10) in vec4 in_Color1[];
++layout(location = 11) in float in_Fog[];
++
++layout(location = 0) out vec4 out_Normal;
++layout(location = 1) out vec4 out_Texcoord[8];
++layout(location = 9) out vec4 out_Color0;
++layout(location = 10) out vec4 out_Color1;
++layout(location = 11) out float out_Fog;
++
++vec4 texCoord(uint stage, uint vertex) {
++    switch (stage) {
++        case 0: return in_Texcoord0[vertex];
++        case 1: return in_Texcoord1[vertex];
++        case 2: return in_Texcoord2[vertex];
++        case 3: return in_Texcoord3[vertex];
++        case 4: return in_Texcoord4[vertex];
++        case 5: return in_Texcoord5[vertex];
++        case 6: return in_Texcoord6[vertex];
++        case 7: return in_Texcoord7[vertex];
++    }
++
++    return vec4(0.0f);
++}
++
++void main() {
++    vec4 shifted[8][3];
++
++    for (uint stage = 0; stage < TextureStageCount; stage++) {
++        uint mask = bitfieldExtract(texCoordWrap, int(stage) * 4, 4);
++        vec4 weights = vec4(0.0f);
++
++        for (uint i = 0; i < 4; i++)
++            weights[i] = (mask & (1u << i)) != 0u ? 1.0f : 0.0f;
++
++        vec4 v0 = texCoord(stage, 0);
++        vec4 v1 = texCoord(stage, 1);
++        vec4 v2 = texCoord(stage, 2);
++        shifted[stage][0] = v0;
++        shifted[stage][1] = v1 - weights * floor(v1 - v0 + 0.5f);
++        shifted[stage][2] = v2 - weights * floor(v2 - v0 + 0.5f);
++    }
++
++    for (uint vertex = 0; vertex < 3; vertex++) {
++        gl_Position = gl_in[vertex].gl_Position;
++
++        for (uint plane = 0; plane < MaxClipPlaneCount; plane++)
++            gl_ClipDistance[plane] = gl_in[vertex].gl_ClipDistance[plane];
++
++        out_Normal = in_Normal[vertex];
++
++        for (uint stage = 0; stage < TextureStageCount; stage++)
++            out_Texcoord[stage] = shifted[stage][vertex];
++
++        out_Color0 = in_Color0[vertex];
++        out_Color1 = in_Color1[vertex];
++        out_Fog = in_Fog[vertex];
++        EmitVertex();
++    }
++
++    EndPrimitive();
++}
