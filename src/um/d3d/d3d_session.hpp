@@ -7,6 +7,7 @@
 #include "um/d3d/query_results.hpp"
 #include "guest/transport/guest_connection.hpp"
 #include "guest/transport/kmt_transport.hpp"
+#include "guest/transport/memory_lease.hpp"
 #include "icd/common/host_channel.hpp"
 #include "icd/common/id_mint.hpp"
 #include "icd/d3d/d3d_command_stream.hpp"
@@ -63,6 +64,7 @@ public:
     Kmt                   &kmt() const;
     ObjectPool<d3d11::D3d11Device> &contexts();
     SessionMemory                  &shared_memory();
+    MemoryLease                    &lease();
     [[nodiscard]] Status            open_memory(uint64_t bytes, HostMemoryRequest memory, HostAllocation *&made);
     [[nodiscard]] Status            adopt_memory(void *address, uint64_t bytes, HostMemoryRequest memory,
                                                  HostAllocation *&made);
@@ -87,6 +89,7 @@ private:
     icd::HostChannel                     channel_;
     ObjectStorage<d3d::D3dCommandStream> stream_;
     SessionMemory                        shared_memory_;
+    MemoryLease                          lease_;
     d3d11::QueryResults                  query_results_;
     ObjectPool<d3d11::D3d11Device>       contexts_;
     uint32_t                             members_;

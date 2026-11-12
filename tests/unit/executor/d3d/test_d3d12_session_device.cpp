@@ -22,6 +22,7 @@
 #include "executor/shim/loader_host_apis.hpp"
 #include "harness/executor/d3d12_answers.hpp"
 #include "harness/executor/d3d_loopback.hpp"
+#include "harness/executor/lease_rig.hpp"
 #include "harness/executor/local_import.hpp"
 #include "executor/shim/host_heap.hpp"
 #include "harness/executor/executor_log_rig.hpp"
@@ -1990,5 +1991,82 @@ TEST(d3d12_session_device, a_heap_past_what_the_host_makes_is_answered_out_of_me
                                 &hresult));
     CHECK_EQ(hresult, 0x8007000Eu);
     judge_healthy(wire);
+    backend.shut_down();
+}
+
+TEST(d3d12_session_device, committed_buffers_past_the_leased_room_are_refused_up_front_and_the_device_keeps_rendering)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice *device11 = nullptr;
+    av::D3d12HostDevice *device12 = nullptr;
+    av::HostShares      *shares = nullptr;
+    av::HostMemorySource *source = nullptr;
+    if (!host_devices(apis, device11, device12, shares, source)) return;
+    std::uint32_t index = 0u;
+    while (index < apis.gpu_count() && apis.d3d12_device(index) != device12) index++;
+    av::D3dBackend backend(rig.log);
+    av::SessionShares session;
+    CHECK(backend.initialize(*shared_as(session, shares, backend), rig.imports, device11, device12));
+    av::D3dLoopback wire(backend, rig.imports, source, region_bytes, lent_bytes);
+    if (!imports(*device12, wire)) {
+        backend.shut_down();
+        return;
+    }
+    make_frame(wire);
+
+    constexpr std::uint64_t room = std::uint64_t{160} << 20u;
+    constexpr std::uint64_t each = std::uint64_t{4} << 20u;
+    constexpr std::uint32_t first = 200u;
+    constexpr std::uint64_t addresses = 0x400000000ull;
+    av::LeaseRig lease(apis.vram_ledger(index), apis.host_ram_ledger(), room);
+    backend.lease_from(&lease.host());
+    const std::uint64_t before = lease.in_use();
+    std::uint32_t made = 0u, refused = 0u;
+    while (refused < 4u && made < 256u) {
+        if (!lease.admit(each)) {
+            refused++;
+            continue;
+        }
+        CHECK(av_d3d12_CreateCommittedResourceAsync12(wire, first + made, heap_of(heap_default), 0u, buffer_of(each),
+                                                       state_copy_dest, ClearValue{}, addresses + made * each));
+        made++;
+    }
+    CHECK(refused == 4u);
+    CHECK(made >= 8u);
+    std::uint32_t removed = 1u;
+    CHECK(av_d3d12_Finish12(wire, &removed));
+    CHECK_EQ(removed, 0u);
+    const std::uint64_t used = lease.in_use() - before;
+    std::fprintf(stderr, "d3d12 lease: %u buffers, %llu bytes estimated, %llu bytes the host runtime took\n", made,
+                 static_cast<unsigned long long>(each * made), static_cast<unsigned long long>(used));
+
+    CHECK(av_d3d12_ClearRenderTargetView12(wire, list, DescriptorRef{rtv_heap, 0u}, Float4{{0.0f, 0.0f, 1.0f, 1.0f}},
+                                            0u, nullptr));
+    read_frame(wire);
+    CHECK_EQ(pixel(wire, size / 2u, size / 2u), 0xff0000ffu);
+
+    const std::uint32_t freed = made / 2u;
+    for (std::uint32_t at = 0u; at < freed; at++) {
+        CHECK(av_d3d12_Destroy12(wire, first + at));
+        lease.credit(each);
+    }
+    for (std::uint32_t at = 0u; at < freed; at++) {
+        CHECK(lease.admit(each));
+        CHECK(av_d3d12_CreateCommittedResourceAsync12(wire, first + made + at, heap_of(heap_default), 0u,
+                                                       buffer_of(each), state_copy_dest, ClearValue{},
+                                                       addresses + (made + at) * each));
+    }
+    CHECK(av_d3d12_ResetCommandAllocator12(wire, allocator));
+    CHECK(av_d3d12_ResetCommandList12(wire, list, allocator, 0u));
+    CHECK(av_d3d12_ClearRenderTargetView12(wire, list, DescriptorRef{rtv_heap, 0u}, Float4{{0.0f, 1.0f, 0.0f, 1.0f}},
+                                            0u, nullptr));
+    read_frame(wire);
+    CHECK_EQ(pixel(wire, size / 2u, size / 2u), 0xff00ff00u);
+    CHECK(av_d3d12_Finish12(wire, &removed));
+    CHECK_EQ(removed, 0u);
+    CHECK_EQ(wire.refused(), 0u);
+    CHECK_EQ(lease.guest().left(av::LeaseRecord::Kind::device), lease.host().idle(av::LeaseRecord::Kind::device));
+    CHECK(backend.invariants_hold());
     backend.shut_down();
 }

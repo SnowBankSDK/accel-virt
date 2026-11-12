@@ -24,7 +24,7 @@ constexpr std::uint64_t gib = 1ull << 30;
 constexpr LeaseRecord::Kind device = LeaseRecord::Kind::device;
 
 struct Rig {
-    explicit Rig(std::uint64_t cap) : transport(host), guest(transport), gate(ledger)
+    explicit Rig(std::uint64_t cap) : transport(host), guest(), gate(ledger)
     {
         ledger.learn(cap);
         host.bind(&ledger, nullptr);
@@ -34,14 +34,14 @@ struct Rig {
 
     bool create(std::uint64_t bytes)
     {
-        if (!guest.take(device, bytes)) return false;
+        if (!guest.take(transport, device, bytes)) return false;
         return gate.take(bytes);
     }
 
     void destroy(std::uint64_t bytes)
     {
         gate.give(bytes);
-        guest.give(device, bytes);
+        guest.give(transport, device, bytes);
     }
 
     VramLedger         ledger;
@@ -74,20 +74,20 @@ TEST(memory_lease, a_create_the_host_cannot_cover_is_refused_and_takes_nothing)
   VramAccount other(rig.ledger);
   CHECK(other.take(rig.ledger.cap() - rig.ledger.used() - 32 * mib));
   CHECK(rig.create(LeaseRecord::initial_bytes));
-  CHECK(!rig.guest.take(device, 64 * mib));
+  CHECK(!rig.guest.take(rig.transport, device, 64 * mib));
   CHECK_EQ(rig.transport.extensions(), 1u);
   CHECK_EQ(rig.transport.returns(), 0u);
   CHECK_EQ(rig.transport.others(), 0u);
-  CHECK(rig.guest.take(device, 16 * mib));
+  CHECK(rig.guest.take(rig.transport, device, 16 * mib));
   CHECK(rig.ledger.used() <= rig.ledger.cap()); }
 
 TEST(memory_lease, a_refused_extension_answers_out_of_memory_without_a_return)
 { Rig rig(8 * gib);
   rig.transport.refuse_all(true);
-  CHECK(!rig.guest.take(device, 64 * mib));
+  CHECK(!rig.guest.take(rig.transport, device, 64 * mib));
   CHECK_EQ(rig.guest.left(device), LeaseRecord::initial_bytes);
   rig.transport.refuse_all(false);
-  CHECK(rig.guest.take(device, 64 * mib)); }
+  CHECK(rig.guest.take(rig.transport, device, 64 * mib)); }
 
 TEST(memory_lease, a_destroy_credits_the_lease_so_the_next_create_needs_no_round_trip)
 { Rig rig(8 * gib);

@@ -53,6 +53,7 @@ struct ResourceRecord {
     ResourceRecord          *immediate;
     uint64_t                 gpu_wrote;
     uint64_t                 write_order;
+    uint64_t                 leased;
     uint32_t                 tiles;
     uint32_t                 packed_mips;
     uint32_t                 packed_tiles;

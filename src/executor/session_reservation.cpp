@@ -64,12 +64,13 @@ void SessionReservation::give(uint64_t bytes)
     else ledger_->give(bytes);
 }
 
-void SessionReservation::draw(uint64_t bytes)
+uint64_t SessionReservation::draw(uint64_t bytes)
 {
     AV_SCOPE("SessionReservation::draw");
-    if (ledger_ == nullptr) return;
+    if (ledger_ == nullptr) return 0u;
     const uint64_t claimed = claim(bytes);
     if (claimed != 0u) ledger_->give(claimed);
+    return claimed;
 }
 
 void SessionReservation::restore(uint64_t bytes)
@@ -83,7 +84,7 @@ void SessionReservation::restore(uint64_t bytes)
 void SessionReservation::surrender(uint64_t bytes)
 {
     AV_SCOPE("SessionReservation::surrender");
-    draw(bytes);
+    static_cast<void>(draw(bytes));
 }
 
 uint64_t SessionReservation::close()

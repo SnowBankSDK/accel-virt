@@ -1,6 +1,7 @@
 #include "core/support/object_storage.hpp"
 #include "executor/imported_blob.hpp"
 #include "executor/d3d/d3d12_session.hpp"
+#include "executor/d3d/leased_objects.hpp"
 #include "executor/d3d/d3d_object_table.hpp"
 #include "executor/eventfd_wake.hpp"
 #include "executor/import_table.hpp"
@@ -46,6 +47,7 @@ av::ObjectStorage<D3d12Session> session_storage;
 av::HostHeap                    session_heap;
 av::WatchedBlocks               blocks(session_heap);
 av::D3dObjectTable              objects(blocks);
+av::LeasedObjects               leased(blocks);
 av::WakeSignal tenant;
 av::EventfdWake fence_wake;
 av::RecordingLog session_sink;
@@ -58,7 +60,7 @@ public:
     {
         CHECK_STATUS(guest_.bind(0u, guest, sizeof guest), av::Status::ok);
         objects.release_all();
-        CHECK_STATUS(session_storage.construct(guest_, objects, tenant, fence_wake, blocks, session_lines),
+        CHECK_STATUS(session_storage.construct(guest_, objects, leased, tenant, fence_wake, blocks, session_lines),
                      av::Status::ok);
         session_storage.object().initialize(imports_, nullptr);
     }

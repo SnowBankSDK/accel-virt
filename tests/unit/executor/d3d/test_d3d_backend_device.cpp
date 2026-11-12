@@ -16,6 +16,8 @@
 #include "executor/sharing/session_shares.hpp"
 #include "executor/shim/loader_host_apis.hpp"
 #include "harness/executor/d3d_loopback.hpp"
+#include "harness/executor/lease_rig.hpp"
+#include "proto/d3d/resource_footprint.hpp"
 #include "executor/shim/host_heap.hpp"
 #include "harness/framework/test_registry.hpp"
 #include "harness/platform/mock_platform.hpp"
@@ -87,6 +89,25 @@ av::D3d11HostDevice *host_device(av::LoaderHostApis &apis)
     apis.open();
     for (std::uint32_t index = 0u; index < apis.gpu_count(); index++)
         if (apis.d3d11_device(index) != nullptr) return apis.d3d11_device(index);
+    std::fprintf(stderr, "no GPU here runs DXVK: nothing judged\n");
+    return nullptr;
+}
+
+av::D3d11HostDevice *chosen_device(av::LoaderHostApis &apis, std::uint32_t &index)
+{
+    if (std::getenv("AV_D3D_PATH") == nullptr) setenv("AV_D3D_PATH", AV_FIXTURE_DIR "/../../build-d3d/lib", 1);
+    apis.open();
+    const char *const wanted = std::getenv("AV_TEST_HOST_GPU");
+    for (index = 0u; index < apis.gpu_count(); index++) {
+        if (wanted != nullptr) {
+            std::uint8_t candidate[16] = {};
+            apis.gpu_uuid(index, candidate);
+            char text[33] = {};
+            for (std::uint32_t at = 0u; at < 16u; at++) std::snprintf(text + 2u * at, 3u, "%02x", candidate[at]);
+            if (std::strcmp(text, wanted) != 0) continue;
+        }
+        if (apis.d3d11_device(index) != nullptr && apis.vram_ledger(index) != nullptr) return apis.d3d11_device(index);
+    }
     std::fprintf(stderr, "no GPU here runs DXVK: nothing judged\n");
     return nullptr;
 }
@@ -1467,4 +1488,91 @@ TEST(d3d_backend_device, every_host_d3d_runtime_destroys_its_vulkan_devices_insi
     CHECK_EQ(counted.held.load(), 0u);
     CHECK_EQ(counted.unbalanced.load(), 0u);
     CHECK_EQ(runtime.give_teardown_order(apis.teardown_order().abi()), 3u);
+}
+
+TEST(d3d_backend_device, creates_past_the_leased_room_are_refused_up_front_and_the_device_keeps_drawing_its_earlier_objects)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    std::uint32_t      index = 0u;
+    av::D3d11HostDevice *const device = chosen_device(apis, index);
+    if (device == nullptr) return;
+    HeldBackend     held(first_backend, rig.log);
+    av::D3dBackend &backend = held.backend();
+    av::SessionShares unshared;
+    CHECK(backend.initialize(unshared, rig.imports, device));
+    av::D3dLoopback wire(backend, rig.imports);
+    std::uint32_t hresult = 1u, level = 0u;
+    CHECK(av_d3d_CreateDevice11(wire, 1u, 0u, 0u, &hresult, &level));
+    make_triangle(wire);
+    std::uint32_t removed = 1u;
+    CHECK(av_d3d_Finish11(wire, &removed));
+
+    constexpr std::uint64_t room = std::uint64_t{160} << 20u;
+    av::LeaseRig lease(apis.vram_ledger(index), apis.host_ram_ledger(), room);
+    backend.lease_from(&lease.host());
+    ResourceDesc texture = {};
+    texture.dimension = 3u;
+    texture.width = 1024u;
+    texture.height = 1024u;
+    texture.depth_or_array = 1u;
+    texture.mip_levels = 1u;
+    texture.format = format_b8g8r8a8;
+    texture.sample_count = 1u;
+    texture.bind_flags = bind_render_target;
+    const std::uint64_t each = av::ResourceFootprint(texture).leased(0u);
+    CHECK_EQ(each, std::uint64_t{4} << 20u);
+    const std::uint64_t before = lease.in_use();
+    constexpr std::uint32_t first = 100u;
+    std::uint32_t made = 0u, refused = 0u;
+    while (refused < 4u && made < 256u) {
+        if (!lease.admit(each)) {
+            refused++;
+            continue;
+        }
+        CHECK(av_d3d_CreateResource(wire, first + made, texture, 0u, 0u, 0u));
+        made++;
+    }
+    CHECK(refused == 4u);
+    CHECK(made >= 8u);
+    CHECK(av_d3d_Finish11(wire, &removed));
+    CHECK_EQ(removed, 0u);
+    const std::uint64_t used = lease.in_use() - before;
+    std::fprintf(stderr, "d3d11 lease: %u textures, %llu bytes estimated, %llu bytes the host runtime took\n", made,
+                 static_cast<unsigned long long>(each * made), static_cast<unsigned long long>(used));
+
+    static std::uint8_t pixels[size * size * 4u];
+    std::uint32_t row_pitch = 0u, depth_pitch = 0u;
+    std::uint64_t read = 0u;
+    hresult = 1u;
+    CHECK(av_d3d_ReadSubresourceRange(wire, first + made - 1u, 0u, 0u, &hresult, &row_pitch, &depth_pitch, pixels, 16u,
+                                      &read));
+    CHECK_EQ(hresult, 0u);
+    bind_triangle(wire);
+    CHECK(av_d3d_Draw(wire, 3u, 0u));
+    hresult = 1u;
+    CHECK(av_d3d_ReadSubresource(wire, 1u, 0u, &hresult, &row_pitch, &depth_pitch, pixels, sizeof(pixels), &read));
+    CHECK_EQ(hresult, 0u);
+    CHECK_EQ(pixel(pixels, size - 4u, size / 2u), 0xff0000ffu);
+    CHECK_EQ(pixel(pixels, 4u, size / 2u) & 0xff00ffffu, 0xff000000u);
+
+    const std::uint32_t freed = made / 2u;
+    for (std::uint32_t at = 0u; at < freed; at++) {
+        CHECK(av_d3d_DestroyObject(wire, first + at));
+        lease.credit(each);
+    }
+    for (std::uint32_t at = 0u; at < freed; at++) {
+        CHECK(lease.admit(each));
+        CHECK(av_d3d_CreateResource(wire, first + made + at, texture, 0u, 0u, 0u));
+    }
+    hresult = 1u;
+    CHECK(av_d3d_ReadSubresourceRange(wire, first + made + freed - 1u, 0u, 0u, &hresult, &row_pitch, &depth_pitch, pixels,
+                                      16u, &read));
+    CHECK_EQ(hresult, 0u);
+    CHECK(av_d3d_Finish11(wire, &removed));
+    CHECK_EQ(removed, 0u);
+    CHECK_EQ(wire.refused(), 0u);
+    CHECK_EQ(lease.guest().left(av::LeaseRecord::Kind::device), lease.host().idle(av::LeaseRecord::Kind::device));
+    CHECK(backend.invariants_hold());
+    backend.shut_down();
 }

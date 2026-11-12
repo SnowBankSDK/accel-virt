@@ -48,12 +48,12 @@ D3d12QueryHeaps &D3d12SessionLoopback::queries()
 }
 
 D3d12SessionLoopback::D3d12SessionLoopback()
-    : RoomedTransport(command_bytes, reply_bytes), blocks_(heap_), objects_(blocks_), lines_(sink_, "d3d12: "),
+    : RoomedTransport(command_bytes, reply_bytes), blocks_(heap_), objects_(blocks_), leased_(blocks_), lines_(sink_, "d3d12: "),
       imports_(heap_), host_(lines_), guest_memory_{}, command_{}, reply_{}, arena_block_{}, arena_(arena_block_, arena_bytes),
       decode_arena_(nullptr, 0u), refused_(0u), placed_(nullptr)
 {
     static_cast<void>(guest_.bind(0u, guest_memory_, sizeof guest_memory_));
-    static_cast<void>(storage_.construct(guest_, objects_, tenant_, fence_wake_, blocks_, lines_));
+    static_cast<void>(storage_.construct(guest_, objects_, leased_, tenant_, fence_wake_, blocks_, lines_));
     storage_.object().initialize(imports_, nullptr);
 }
 

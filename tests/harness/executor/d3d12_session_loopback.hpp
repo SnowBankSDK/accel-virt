@@ -4,6 +4,7 @@
 #include "core/log/driver_log.hpp"
 #include "core/support/object_storage.hpp"
 #include "executor/d3d/d3d12_session.hpp"
+#include "executor/d3d/leased_objects.hpp"
 #include "executor/d3d/d3d_object_table.hpp"
 #include "executor/d3d/watched_blocks.hpp"
 #include "executor/eventfd_wake.hpp"
@@ -58,6 +59,7 @@ private:
     HostHeap                    heap_;
     WatchedBlocks               blocks_;
     D3dObjectTable              objects_;
+    LeasedObjects               leased_;
     WakeSignal                  tenant_;
     EventfdWake                 fence_wake_;
     RecordingLog                sink_;

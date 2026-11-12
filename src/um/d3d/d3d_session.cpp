@@ -16,7 +16,7 @@ D3dSession::D3dSession(Kmt &kmt, BlockSource &memory, DriverLog &log, uint64_t a
     : lines_(log), lock_(), placement_lock_(), connection_(kmt),
       channel_(memory, log,
                icd::ChannelShape(SubApi::d3d, ring_order, reply_bytes, staging_bytes, batch_bytes, arena_size), lock_),
-      stream_(), shared_memory_(memory, channel_, lock_, log, offer, this), query_results_(), contexts_(memory), members_(0u), ids_(),
+      stream_(), shared_memory_(memory, channel_, lock_, log, offer, this), lease_(), query_results_(), contexts_(memory), members_(0u), ids_(),
       select_command_(select_command), flush_command_(flush_command)
 {
     AV_SCOPE("D3dSession::D3dSession");
@@ -91,6 +91,7 @@ HRESULT D3dSession::open(uint32_t adapter)
     const Status opened = channel_.open(connection_);
     if (opened != Status::ok) return opened == Status::no_memory ? E_OUTOFMEMORY : E_FAIL;
     static_cast<void>(stream_.construct(channel_.transport()));
+    lease_.reset();
     stream_.object().speak_with(select_command_, flush_command_);
     uint8_t *slots = nullptr;
     uint64_t slots_at = 0u;
@@ -146,6 +147,12 @@ SessionMemory &D3dSession::shared_memory()
 {
     AV_SCOPE("D3dSession::shared_memory");
     return shared_memory_;
+}
+
+MemoryLease &D3dSession::lease()
+{
+    AV_SCOPE("D3dSession::lease");
+    return lease_;
 }
 
 uint32_t D3dSession::next_id()

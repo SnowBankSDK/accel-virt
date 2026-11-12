@@ -1,4 +1,6 @@
 #include "executor/d3d/d3d12_session.hpp"
+#include "executor/d3d/leased_objects.hpp"
+#include "core/support/scope_exit.hpp"
 #include "executor/shim/d3d11_host_device.hpp"
 #include "executor/sharing/shared_image_shape.hpp"
 #include "proto/d3d/descriptor_heap_rules.hpp"
@@ -143,10 +145,10 @@ StagedFrame *PresentedResource::stage()
 
 }
 
-D3d12Session::D3d12Session(const GuestBytes &guest, D3dObjectTable &objects, WakeSignal &tenant,
+D3d12Session::D3d12Session(const GuestBytes &guest, D3dObjectTable &objects, LeasedObjects &leased, WakeSignal &tenant,
                            EventfdWake &fence_wake, WatchedBlocks &blocks, DriverLog &lines)
     : d3d12proto::ServerDispatch(guest), imports_(nullptr), source_(nullptr), placing_(false), device_(nullptr), shown_by_(nullptr), shares_(nullptr), tenant_(tenant),
-      joined_(false), left_lost_(false), surfaces_(nullptr), objects_(objects), blocks_(blocks), addresses_(blocks), indirect_table_(addresses_),
+      joined_(false), left_lost_(false), surfaces_(nullptr), objects_(objects), leased_(leased), blocks_(blocks), addresses_(blocks), indirect_table_(addresses_),
       progress_(fence_wake, blocks), block_heaps_(blocks, progress_, lines), holds_(blocks), descriptors_(blocks, holds_), allocators_(blocks), queries_(blocks), refused_creates_(blocks), views_(objects_, addresses_),
       pipelines_(objects_), compiles_(blocks), presentation_(lines), tile_update_(), retained_(), state_builder_(blocks, objects_), inputs_(blocks, addresses_), sizes_(blocks), removed_(0u), lines_(lines), refusal_(lines_), clock_(), hang_ns_(hung_after), commands_(0u), polled_at_(0u), drain_commands_(0u), drain_mark_(0u), drain_marked_(false), oversized_heaps_(), refused_heaps_()
 {
@@ -578,6 +580,7 @@ bool D3d12Session::on_Destroy12(uint32_t id)
 {
     AV_SCOPE("D3d12Session::on_Destroy12");
     if (D3d12PipelineJob *const job = compiles_.pending(id)) static_cast<void>(settle(*job));
+    leased_.release(id);
     if (refused_creates_.forget(id)) return true;
     D3dObjectKind kind = D3dObjectKind::none;
     if (objects_.find_any(id, kind) == nullptr || kind < D3dObjectKind::heap12 ||
@@ -702,7 +705,9 @@ bool D3d12Session::on_CreateHeap12(uint32_t heap, const d3d12proto::HeapProperti
 {
     AV_SCOPE("D3d12Session::on_CreateHeap12");
     placed = 0u;
-    return create_heap(heap, properties, flags, size, alignment, memory, offset, hresult, placed);
+    const bool ran = create_heap(heap, properties, flags, size, alignment, memory, offset, hresult, placed);
+    if (FAILED(static_cast<HRESULT>(hresult))) leased_.release(heap);
+    return ran;
 }
 
 bool D3d12Session::on_CreateHeapAsync12(uint32_t heap, const d3d12proto::HeapProperties &properties, uint32_t flags,
@@ -755,6 +760,8 @@ bool D3d12Session::create_heap(uint32_t heap, const d3d12proto::HeapProperties &
         }
         return window_heap(heap, size, memory, offset, hresult);
     }
+    if (properties.type == heap_default) leased_.charge(heap, size);
+    const ScopeExit settled([this] { leased_.settle(); });
     D3D12_HEAP_DESC desc = {};
     desc.SizeInBytes = size;
     desc.Properties = host_properties(properties);
@@ -776,7 +783,9 @@ bool D3d12Session::on_CreateCommittedResource12(uint32_t resource, const d3d12pr
                                                 uint64_t address, uint32_t &hresult)
 {
     AV_SCOPE("D3d12Session::on_CreateCommittedResource12");
-    return create_committed(resource, properties, heap_flags, desc, state, clear, address, hresult);
+    const bool ran = create_committed(resource, properties, heap_flags, desc, state, clear, address, hresult);
+    if (FAILED(static_cast<HRESULT>(hresult))) leased_.release(resource);
+    return ran;
 }
 
 bool D3d12Session::on_CreateCommittedResourceAsync12(uint32_t resource, const d3d12proto::HeapProperties &properties,
@@ -801,6 +810,8 @@ bool D3d12Session::create_committed(uint32_t resource, const d3d12proto::HeapPro
         return false;
     const D3D12_HEAP_PROPERTIES heap = host_properties(properties);
     const D3D12_RESOURCE_DESC   made_desc = host_desc(desc);
+    leased_.charge(resource, committed_bytes(desc, made_desc));
+    const ScopeExit settled([this] { leased_.settle(); });
     D3D12_CLEAR_VALUE           value = {};
     ID3D12Resource             *made = nullptr;
     const HRESULT result = device_->device()->CreateCommittedResource(
@@ -927,6 +938,14 @@ ID3D12Resource *D3d12Session::viewed_by_d3d12(uint64_t key, IUnknown *opened)
     }
     static_cast<void>(D3dShares(*shares_->shares()).keep_view(shares_->domain(), key, ShareOrigin::d3d12, resource));
     return resource;
+}
+
+uint64_t D3d12Session::committed_bytes(const d3d12proto::ResourceDesc &desc, const D3D12_RESOURCE_DESC &made) const
+{
+    AV_SCOPE("D3d12Session::committed_bytes");
+    constexpr uint64_t buffer_alignment = uint64_t{64} << 10u;
+    if (desc.dimension == buffer_dimension) return (desc.width + buffer_alignment - 1u) & ~(buffer_alignment - 1u);
+    return device_->device()->GetResourceAllocationInfo(0u, 1u, &made).SizeInBytes;
 }
 
 bool D3d12Session::on_ResourceAllocation12(const d3d12proto::ResourceDesc &desc, uint64_t &size,

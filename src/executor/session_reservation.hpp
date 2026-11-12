@@ -18,7 +18,7 @@ public:
     uint64_t           grant(uint64_t bytes, uint64_t least);
     [[nodiscard]] bool take(uint64_t bytes, bool session);
     void               give(uint64_t bytes);
-    void               draw(uint64_t bytes);
+    uint64_t           draw(uint64_t bytes);
     void               restore(uint64_t bytes);
     void               surrender(uint64_t bytes);
     uint64_t           close();

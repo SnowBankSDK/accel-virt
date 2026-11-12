@@ -10,6 +10,7 @@
 #include "executor/d3d/d3d_object_table.hpp"
 #include "executor/d3d/d3d_refused_creates.hpp"
 #include "executor/d3d/guest_devices.hpp"
+#include "executor/d3d/leased_objects.hpp"
 #include "executor/d3d/queue_drain.hpp"
 #include "executor/d3d/watched_blocks.hpp"
 #include "executor/gpu_work_window.hpp"
@@ -279,7 +280,7 @@ private:
     WireArena              *arena_;
     D3dObjectTable          objects_;
     D3dRefusedCreates       refused_creates_;
-    SessionLease           *lease_;
+    LeasedObjects           leased_;
     GuestBytes              guest_;
     GuestRegion             region_;
     ImportTable            *imports_;

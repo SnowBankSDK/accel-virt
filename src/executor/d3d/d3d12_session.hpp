@@ -45,6 +45,7 @@ namespace av {
 
 class DriverLog;
 class D3d11HostDevice;
+class LeasedObjects;
 class SessionShares;
 class SourceMemory;
 class TeardownBudget;
@@ -61,7 +62,7 @@ struct D3d12SessionProbe;
 
 class D3d12Session final : public d3d12proto::ServerDispatch {
 public:
-    D3d12Session(const GuestBytes &guest, D3dObjectTable &objects, WakeSignal &tenant,
+    D3d12Session(const GuestBytes &guest, D3dObjectTable &objects, LeasedObjects &leased, WakeSignal &tenant,
                  EventfdWake &fence_wake, WatchedBlocks &blocks, DriverLog &lines);
 
     void               initialize(const ImportTable &imports, D3d12HostDevice *device,
@@ -196,6 +197,8 @@ private:
                                                 uint32_t heap_flags, const d3d12proto::ResourceDesc &desc,
                                                 uint32_t state, const d3d12proto::ClearValue &clear,
                                                 uint64_t address, uint32_t &hresult);
+    uint64_t                   committed_bytes(const d3d12proto::ResourceDesc &desc,
+                                               const D3D12_RESOURCE_DESC &made) const;
     void                       refresh_progress();
     ID3D12GraphicsCommandList *list(uint32_t id) const;
     bool                       cpu_handle(const d3d12proto::DescriptorRef &ref, uint32_t type, size_t &handle) const;
@@ -273,6 +276,7 @@ private:
     bool                   left_lost_;
     SharedSurfaces        *surfaces_;
     D3dObjectTable        &objects_;
+    LeasedObjects       &leased_;
     WatchedBlocks         &blocks_;
     D3d12AddressMap        addresses_;
     D3d12IndirectTable     indirect_table_;

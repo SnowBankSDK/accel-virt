@@ -1,5 +1,8 @@
 #include "executor/d3d/d3d_backend.hpp"
 
+#include "core/support/scope_exit.hpp"
+#include "proto/d3d/resource_footprint.hpp"
+
 #include "executor/d3d/bounded_transfer.hpp"
 
 #include "executor/teardown_budget.hpp"
@@ -123,8 +126,8 @@ D3dObjectKind D3dBackend::shader_kind(uint32_t stage) const
 D3dBackend::D3dBackend(ExecutorLog &log)
     : d3dproto::ServerDispatch(guest_), device11_(nullptr), surfaces_(nullptr), shares_(nullptr), wake_(), fence_wake_(), clock_(), admitted_(false), held_(false), heap_(),
       blocks_(heap_), remade_(blocks_, Pool::paged), states_(blocks_),
-      lines_(log.d3d11()), refusal_(lines_), arena_(nullptr), objects_(blocks_), refused_creates_(blocks_), lease_(nullptr), guest_(),
-      region_(guest_, lines_), imports_(nullptr), slices_(blocks_, lines_), d3d12_(guest_, objects_, wake_, fence_wake_, blocks_, log.d3d12()),
+      lines_(log.d3d11()), refusal_(lines_), arena_(nullptr), objects_(blocks_), refused_creates_(blocks_), leased_(blocks_), guest_(),
+      region_(guest_, lines_), imports_(nullptr), slices_(blocks_, lines_), d3d12_(guest_, objects_, leased_, wake_, fence_wake_, blocks_, log.d3d12()),
       d3d9_(guest_, objects_, blocks_, slices_, fence_wake_, log.d3d9()), tiles_(objects_),
       published_(blocks_, guest_), progress11_(fence_wake_), constants_(blocks_),
       missed_key_(0u), batches_(), queue_drain_(), submitted_(0u), drained_(false), predication_refusal_noted_(false), mark_refused_(false), show_refused_(false), lost_(false), memory_refused_(false)
@@ -182,12 +185,13 @@ void D3dBackend::use_host_ram(ByteLedger *ledger, uint64_t limit)
 void D3dBackend::lease_from(SessionLease *lease)
 {
     AV_SCOPE("D3dBackend::lease_from");
-    lease_ = lease;
+    leased_.draw_from(lease);
 }
 
 void D3dBackend::shut_down()
 {
     AV_SCOPE("D3dBackend::shut_down");
+    leased_.draw_from(nullptr);
     d3d12_.shut_down();
     d3d9_.shut_down();
     if (device11_ != nullptr) {
@@ -843,6 +847,7 @@ bool D3dBackend::on_Finish11(uint32_t &hresult)
 bool D3dBackend::on_DestroyObject(uint32_t id)
 {
     AV_SCOPE("D3dBackend::on_DestroyObject");
+    leased_.release(id);
     if (refused_creates_.forget(id)) return true;
     D3dObjectKind kind = D3dObjectKind::none;
     IUnknown *const found = objects_.find_any(id, kind);
@@ -860,6 +865,8 @@ bool D3dBackend::on_CreateResource(uint32_t id, const d3dproto::ResourceDesc &de
     AV_SCOPE("D3dBackend::on_CreateResource");
     if (!has_device() || !DxgiFormatLayout(desc.format).known() || (desc.bind_flags & ~known_bind_flags) != 0u) return false;
     if (desc.width == 0u || desc.mip_levels > 16u) return false;
+    leased_.charge(id, ResourceFootprint(desc).leased(memory));
+    const ScopeExit settled([this] { leased_.settle(); });
     const uint32_t misc = desc.misc_flags & kept_misc_flags;
     ID3D11Device5 *const device = device11_->device();
     IUnknown *made = nullptr;
