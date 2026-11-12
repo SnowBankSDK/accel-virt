@@ -171,7 +171,7 @@ int32_t D3dRuntime::create_device11(IDXGIAdapter1 *adapter, ID3D11Device *&devic
                             &feature_level, &context);
 }
 
-uint32_t D3dRuntime::vulkan_index(const uint8_t *uuid) const
+uint32_t D3dRuntime::vulkan_index(const uint8_t *uuid, uint32_t &count) const
 {
     AV_SCOPE("D3dRuntime::vulkan_index");
     constexpr uint32_t most_devices = 16u;
@@ -183,11 +183,13 @@ uint32_t D3dRuntime::vulkan_index(const uint8_t *uuid) const
     create.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     create.pApplicationInfo = &application;
     VkInstance instance = VK_NULL_HANDLE;
+    count = 0u;
     if (vkCreateInstance(&create, nullptr, &instance) != VK_SUCCESS) return ~0u;
     VkPhysicalDevice devices[most_devices] = {};
-    uint32_t count = most_devices;
+    count = most_devices;
     uint32_t found = ~0u;
-    if (vkEnumeratePhysicalDevices(instance, &count, devices) >= 0) {
+    if (vkEnumeratePhysicalDevices(instance, &count, devices) < 0) count = 0u;
+    else {
         for (uint32_t index = 0u; index < count && found == ~0u; index++)
             if (PhysicalDeviceIdentity(instance, devices[index]).is(uuid)) found = index;
     }
@@ -198,11 +200,46 @@ uint32_t D3dRuntime::vulkan_index(const uint8_t *uuid) const
 int32_t D3dRuntime::create_device12(const uint8_t *uuid, void *&device) const
 {
     AV_SCOPE("D3dRuntime::create_device12");
-    constexpr size_t index_bytes = 16u;
     device = nullptr;
     if (get_interface12_ == nullptr || uuid == nullptr) return E_FAIL;
-    const uint32_t index = vulkan_index(uuid);
-    if (index == ~0u) return E_FAIL;
+    uint32_t       count = 0u;
+    const uint32_t first = vulkan_index(uuid, count);
+    if (first == ~0u) return E_FAIL;
+    int32_t made = E_FAIL;
+    for (uint32_t tried = 0u; tried < count; tried++) {
+        void *candidate = nullptr;
+        made = create_device12_at((first + tried) % count, candidate);
+        if (FAILED(made) || candidate == nullptr) continue;
+        if (made_on(candidate, uuid)) {
+            device = candidate;
+            return made;
+        }
+        static_cast<IUnknown *>(candidate)->Release();
+        made = E_FAIL;
+    }
+    return made;
+}
+
+bool D3dRuntime::made_on(void *device, const uint8_t *uuid) const
+{
+    AV_SCOPE("D3dRuntime::made_on");
+    ID3D12DeviceExt *ext = nullptr;
+    if (FAILED(static_cast<IUnknown *>(device)->QueryInterface(__uuidof(ID3D12DeviceExt),
+                                                               reinterpret_cast<void **>(&ext))))
+        return false;
+    VkInstance       instance = VK_NULL_HANDLE;
+    VkPhysicalDevice physical = VK_NULL_HANDLE;
+    VkDevice         vulkan = VK_NULL_HANDLE;
+    const bool       asked = SUCCEEDED(ext->GetVulkanHandles(&instance, &physical, &vulkan));
+    ext->Release();
+    return asked && PhysicalDeviceIdentity(instance, physical).is(uuid);
+}
+
+int32_t D3dRuntime::create_device12_at(uint32_t index, void *&device) const
+{
+    AV_SCOPE("D3dRuntime::create_device12_at");
+    constexpr size_t index_bytes = 16u;
+    device = nullptr;
     ID3D12DeviceFactory *factory = nullptr;
     const GUID factory_class = clsid_d3d12_device_factory;
     const GUID factory_id = __uuidof(ID3D12DeviceFactory);

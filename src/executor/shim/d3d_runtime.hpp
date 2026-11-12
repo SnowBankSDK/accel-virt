@@ -61,7 +61,9 @@ private:
     using SetIndirectTable = int32_t (*)(void *list, uint64_t table);
 
     void *open_library(const char *name) const;
-    uint32_t vulkan_index(const uint8_t *uuid) const;
+    uint32_t vulkan_index(const uint8_t *uuid, uint32_t &count) const;
+    int32_t  create_device12_at(uint32_t index, void *&device) const;
+    bool     made_on(void *device, const uint8_t *uuid) const;
 
     void *dxgi_;
     void *d3d11_;
