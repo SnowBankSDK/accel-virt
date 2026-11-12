@@ -61,12 +61,14 @@ bool KernelLane::open()
     transport_.object().hold_in(batch_, batch_bytes);
     static_cast<void>(stream_.construct(transport_.object()));
     stream_.object().speak_with(session_.select_command(), session_.flush_command());
+    session_.shared_memory().join(*this);
     return true;
 }
 
 void KernelLane::close()
 {
     AV_SCOPE("KernelLane::close");
+    if (stream_.constructed()) session_.shared_memory().leave(*this);
     stream_.destroy();
     transport_.destroy();
     BlockSource &memory = session_.memory();
@@ -92,6 +94,12 @@ bool KernelLane::ran(uint64_t fence) const
 {
     AV_SCOPE("KernelLane::ran");
     return !opened() || transport_.object().faulted() || transport_.object().gpu_completed() >= fence;
+}
+
+uint64_t KernelLane::covering() const
+{
+    AV_SCOPE("KernelLane::covering");
+    return opened() ? transport_.object().covering_fence() : 0u;
 }
 
 uint64_t KernelLane::newest() const

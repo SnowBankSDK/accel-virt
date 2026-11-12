@@ -16,7 +16,7 @@ D3dSession::D3dSession(Kmt &kmt, BlockSource &memory, DriverLog &log, uint64_t a
     : lines_(log), memory_(memory), lock_(), placement_lock_(), connection_(kmt),
       channel_(memory, log,
                icd::ChannelShape(SubApi::d3d, ring_order, reply_bytes, staging_bytes, batch_bytes, arena_size), lock_),
-      stream_(), shared_memory_(memory, channel_, lock_, log, offer, this), lease_(), query_results_(), contexts_(memory), members_(0u), ids_(),
+      stream_(), shared_memory_(memory, channel_, lock_, kmt, log, offer, this), lease_(), query_results_(), contexts_(memory), members_(0u), ids_(),
       select_command_(select_command), flush_command_(flush_command)
 {
     AV_SCOPE("D3dSession::D3dSession");

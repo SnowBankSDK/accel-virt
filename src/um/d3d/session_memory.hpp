@@ -7,6 +7,7 @@
 #include "um/common/performance_clock.hpp"
 #include "um/common/srw_lock.hpp"
 #include "um/d3d/lent_pages.hpp"
+#include "icd/common/joint_timeline.hpp"
 #include "icd/common/locked_timeline.hpp"
 
 #include <stdint.h>
@@ -16,6 +17,7 @@ class BlockSource;
 class ClientTransport;
 class DriverLog;
 class HostAllocation;
+class Kmt;
 class ThreadLock;
 }
 
@@ -29,12 +31,14 @@ class SliceOffer;
 
 class SessionMemory {
 public:
-    SessionMemory(BlockSource &memory, icd::HostChannel &channel, ThreadLock &channel_lock, DriverLog &lines,
+    SessionMemory(BlockSource &memory, icd::HostChannel &channel, ThreadLock &channel_lock, Kmt &kmt, DriverLog &lines,
                   const SliceOffer *offer, const void *owner);
     SessionMemory(const SessionMemory &) = delete;
     SessionMemory &operator=(const SessionMemory &) = delete;
 
     void open(ClientTransport &host);
+    void join(icd::LaneProgress &lane);
+    void leave(const icd::LaneProgress &lane);
     void close_streams();
     void release_pages();
 
@@ -52,6 +56,7 @@ private:
     static constexpr uint32_t stream_kinds = 2u;
 
     bool host_grants_slices(ClientTransport &host);
+    void make_timeline();
 
     BlockSource                     &memory_;
     icd::HostChannel                &channel_;
@@ -60,7 +65,11 @@ private:
     const SliceOffer                *offer_;
     const void                      *owner_;
     SrwLock                          slices_lock_;
-    ObjectStorage<icd::LockedTimeline> timeline_;
+    Kmt                             &kmt_;
+    SrwLock                          timeline_lock_;
+    ObjectStorage<icd::LockedTimeline> session_timeline_;
+    ObjectStorage<icd::JointTimeline> timeline_;
+    bool                             slices_;
     ObjectStorage<icd::StreamMemory> streams_[stream_kinds];
     LentPages                        lent_pages_;
     PerformanceClock                 clock_;

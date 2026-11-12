@@ -5,6 +5,7 @@
 #include "core/support/status.hpp"
 #include "guest/transport/kmt_transport.hpp"
 #include "guest/transport/release_route.hpp"
+#include "icd/common/lane_progress.hpp"
 #include "icd/d3d/d3d_command_stream.hpp"
 #include "um/d3d/d3d11_ddi.hpp"
 
@@ -21,7 +22,7 @@ namespace av::d3d {
 
 class D3dSession;
 
-class KernelLane final : public ReleaseRoute {
+class KernelLane final : public ReleaseRoute, public icd::LaneProgress {
 public:
     static constexpr uint8_t  ring_order = 20u;
     static constexpr uint32_t reply_bytes = 64u * 1024u;
@@ -37,8 +38,9 @@ public:
     [[nodiscard]] bool open();
     bool               opened() const;
     D3dCommandStream  &stream();
-    bool               ran(uint64_t fence) const;
+    bool               ran(uint64_t fence) const override;
     uint64_t           newest() const;
+    uint64_t           covering() const override;
     void               writing(D3DKMT_HANDLE allocation);
     Status             release(const uint8_t *record, uint32_t size) override;
     void               waited_long() override;
