@@ -143,7 +143,6 @@ void DeviceContextTable::destroy_all()
 uint32_t DeviceContextTable::retire_all()
 {
     AV_SCOPE("DeviceContextTable::retire_all");
-    host_.require_main_loop("DeviceContextTable::retire_all");
     uint32_t retired = 0u;
     for (uint32_t index = 0u; index < max_contexts; index++) {
         if (!live_at(index)) continue;

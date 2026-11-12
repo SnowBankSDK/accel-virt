@@ -580,7 +580,7 @@ TEST(virtio_gpu_av, lifecycle_is_main_loop_only)
                    &device, thread),
                Status::ok);
   host.join_thread(thread);
-  for (int violation = 0; violation < 23; violation++) CHECK(host.claim(HostViolation::main_loop_required));
+  for (int violation = 0; violation < 24; violation++) CHECK(host.claim(HostViolation::main_loop_required));
   CHECK_EQ(host.unclaimed_violations(), 0u);
   CHECK_EQ(host.logged(), 1u); }
 
