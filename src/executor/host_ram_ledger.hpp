@@ -32,8 +32,11 @@ public:
 
 private:
     static constexpr uint64_t never = UINT64_MAX;
+    static constexpr uint64_t unread = UINT64_MAX - 1u;
+    static constexpr uint64_t largest = UINT64_MAX - 2u;
 
     bool admit(uint64_t bytes);
+    void read_first(uint64_t now);
     void refresh();
     void relieve();
     void restore(uint64_t bytes);
