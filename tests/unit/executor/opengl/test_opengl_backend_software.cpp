@@ -6,6 +6,7 @@
 #include "core/log/driver_log.hpp"
 #include "device/abi/av_executor.h"
 #include "executor/executor_log.hpp"
+#include "executor/host_lifecycle_gate.hpp"
 #include "executor/opengl/opengl_backend.hpp"
 #include "executor/sharing/shared_image_shape.hpp"
 #include "executor/shim/gl_display.hpp"
@@ -1034,3 +1035,47 @@ TEST(opengl_backend_software, a_backend_killed_after_any_of_its_commands_drains_
       CHECK_EQ(OpenGlBackendProbe::images(backend).count(), 0u);
       backend.shut_down();
   } }
+
+namespace {
+
+struct GatedCreate {
+    const av::GlDisplay *display;
+    bool                 made;
+};
+
+void *create_and_close(void *held)
+{
+    auto *const create = static_cast<GatedCreate *>(held);
+    OpenGlBackend backend(executor_log.opengl());
+    create->made = backend.initialize(create->display, nullptr, nullptr);
+    backend.shut_down();
+    return nullptr;
+}
+
+}
+
+TEST(opengl_backend_software, a_context_create_waits_for_the_gpus_lifecycle_gate_and_is_refused_when_its_holder_stays_inside)
+{ if (skipped()) return;
+  constexpr std::uint64_t      wait_ns = 100000000u;
+  static av::HostLifecycleGate gate(wait_ns);
+  static av::GlDisplay         display;
+  CHECK(display.open(software().uuid(), gate));
+  CHECK(display.lifecycle() == &gate);
+  const std::uint64_t entered = gate.entries();
+  CHECK(gate.enter());
+  GatedCreate refused{&display, true};
+  pthread_t   thread;
+  CHECK_EQ(pthread_create(&thread, nullptr, create_and_close, &refused), 0);
+  CHECK_EQ(pthread_join(thread, nullptr), 0);
+  CHECK(!refused.made);
+  CHECK_EQ(gate.refusals(), 1u);
+  gate.leave();
+  GatedCreate pair[2] = {{&display, false}, {&display, false}};
+  pthread_t   creators[2];
+  for (std::uint32_t at = 0u; at < 2u; at++)
+      CHECK_EQ(pthread_create(&creators[at], nullptr, create_and_close, &pair[at]), 0);
+  for (pthread_t creator : creators) CHECK_EQ(pthread_join(creator, nullptr), 0);
+  CHECK(pair[0].made);
+  CHECK(pair[1].made);
+  CHECK_EQ(gate.entries(), entered + 5u);
+  CHECK_EQ(gate.refusals(), 1u); }

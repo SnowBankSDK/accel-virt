@@ -47,6 +47,7 @@ class SharedImageShape;
 class OpenGlBackend;
 
 class GlDisplay;
+class HostLifecycleGate;
 class ImportTable;
 class OpenClDevice;
 class ClFreedMemory;
@@ -103,6 +104,7 @@ public:
                                           cl_int *errcode_ret) override;
     cl_context on_clCreateContext(const cl_context_properties *properties, cl_uint num_devices,
                                   const cl_device_id *devices, cl_int *errcode_ret) override;
+    cl_int     on_clReleaseContext(cl_context context) override;
 
     void *on_clSVMAlloc(cl_context context, cl_svm_mem_flags flags, size_t size,
                         cl_uint alignment) override;
@@ -268,6 +270,7 @@ private:
     BudgetedHeap            heap_;
     BlockSource        &blocks_;
     const OpenClDevice *bound_;
+    HostLifecycleGate  *lifecycle_;
     ClBinaryEnvelope    envelope_;
     ClArgumentRetention arguments_;
     StagingBytes        binaries_;

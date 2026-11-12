@@ -1,6 +1,7 @@
 #include "executor/shim/gl_context.hpp"
 
 #include "core/trace/function_scope.hpp"
+#include "executor/host_lifecycle_gate.hpp"
 #include "executor/shim/gl_display.hpp"
 
 #include <EGL/egl.h>
@@ -29,6 +30,8 @@ bool GlContext::open(const GlDisplay &display, const GlContextAttributes &attrib
     AV_SCOPE("GlContext::open");
     if (context_ != nullptr) return false;
     if (share != nullptr && (share->context_ == nullptr || share->display_ != &display)) return false;
+    const HostLifecycleHold hold(display.lifecycle());
+    if (!hold.held()) return false;
     void *const context = display.create_context(attributes, share != nullptr ? share->context_ : nullptr);
     if (context == nullptr) return false;
     if (!display.make_current(context)) {
@@ -51,8 +54,9 @@ bool GlContext::make_current()
 void GlContext::let_go()
 {
     AV_SCOPE("GlContext::let_go");
-    if (context_ == nullptr) return;
-    if (eglGetCurrentContext() == static_cast<EGLContext>(context_)) display_->release_current();
+    if (context_ == nullptr || eglGetCurrentContext() != static_cast<EGLContext>(context_)) return;
+    const HostLifecycleHold hold(display_->lifecycle());
+    if (hold.held()) display_->release_current();
 }
 
 void *GlContext::handle() const
@@ -78,7 +82,8 @@ void GlContext::close()
 {
     AV_SCOPE("GlContext::close");
     if (context_ == nullptr) return;
-    display_->destroy_context(context_);
+    const HostLifecycleHold hold(display_->lifecycle());
+    if (hold.held()) display_->destroy_context(context_);
     display_ = nullptr;
     context_ = nullptr;
 }

@@ -1,6 +1,7 @@
 #include "executor/shim/gl_display.hpp"
 
 #include "core/trace/function_scope.hpp"
+#include "executor/host_lifecycle_gate.hpp"
 #include "executor/opengl/gl_context_attributes.hpp"
 #include "proto/context/device_uuid.hpp"
 
@@ -25,7 +26,7 @@ using GetUnsignedBytev = void (*)(unsigned, unsigned char *);
 
 }
 
-GlDisplay::GlDisplay() : display_(nullptr)
+GlDisplay::GlDisplay() : display_(nullptr), gate_(nullptr)
 {
     AV_SCOPE("GlDisplay::GlDisplay");
 }
@@ -42,10 +43,13 @@ bool GlDisplay::open() const
     return display_ != nullptr;
 }
 
-bool GlDisplay::open(const uint8_t *uuid)
+bool GlDisplay::open(const uint8_t *uuid, HostLifecycleGate &gate)
 {
     AV_SCOPE("GlDisplay::open");
     if (display_ != nullptr || uuid == nullptr) return false;
+    const HostLifecycleHold hold(&gate);
+    if (!hold.held()) return false;
+    gate_ = &gate;
     setenv("mesa_glthread", "false", 0);
     static_cast<void>(dlopen("libEGL.so.1", RTLD_NOW | RTLD_NOLOAD | RTLD_GLOBAL));
 
@@ -81,14 +85,16 @@ void GlDisplay::close()
 {
     AV_SCOPE("GlDisplay::close");
     if (display_ == nullptr) return;
-    (void)eglTerminate(display_);
+    const HostLifecycleHold hold(gate_);
+    if (hold.held()) (void)eglTerminate(display_);
     display_ = nullptr;
 }
 
 void *GlDisplay::create_context(const GlContextAttributes &attributes, void *share) const
 {
     AV_SCOPE("GlDisplay::create_context");
-    if (display_ == nullptr || !attributes.valid() || eglBindAPI(EGL_OPENGL_API) != EGL_TRUE) return nullptr;
+    if (display_ == nullptr || !attributes.valid()) return nullptr;
+    if (eglQueryAPI() != EGL_OPENGL_API && eglBindAPI(EGL_OPENGL_API) != EGL_TRUE) return nullptr;
     const EGLContext context = eglCreateContext(display_, EGL_NO_CONFIG_KHR,
                                                 share != nullptr ? share : EGL_NO_CONTEXT, attributes.list());
     return context == EGL_NO_CONTEXT ? nullptr : context;
@@ -98,6 +104,12 @@ void *GlDisplay::handle() const
 {
     AV_SCOPE("GlDisplay::handle");
     return display_;
+}
+
+HostLifecycleGate *GlDisplay::lifecycle() const
+{
+    AV_SCOPE("GlDisplay::lifecycle");
+    return gate_;
 }
 
 bool GlDisplay::make_current(void *context) const

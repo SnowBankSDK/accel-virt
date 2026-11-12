@@ -19,7 +19,7 @@ using GetUnsignedBytev = void (*)(unsigned, unsigned char *);
 
 }
 
-SoftwareGl::SoftwareGl() : display_(), uuid_{}, usable_(false)
+SoftwareGl::SoftwareGl() : gate_(), display_(), uuid_{}, usable_(false)
 {
     AV_SCOPE("SoftwareGl::SoftwareGl");
     probe();
@@ -80,7 +80,7 @@ void SoftwareGl::probe()
         if (context != EGL_NO_CONTEXT) eglDestroyContext(display, context);
         eglTerminate(display);
     }
-    usable_ = usable_ && display_.open(uuid_);
+    usable_ = usable_ && display_.open(uuid_, gate_);
 }
 
 }

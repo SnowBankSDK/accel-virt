@@ -18,6 +18,7 @@
 #include <CL/cl_gl.h>
 
 #include "executor/shim/gl_context.hpp"
+#include "executor/host_lifecycle_gate.hpp"
 #include "executor/shim/gl_display.hpp"
 #include "executor/shim/gl_host_import.hpp"
 #include "executor/shim/gl_shared_buffer.hpp"
@@ -83,7 +84,7 @@ OpenClBackend::OpenClBackend(DriverLog &lines) : OpenClBackend(heap_, lines)
 }
 
 OpenClBackend::OpenClBackend(BlockSource &blocks, DriverLog &lines)
-    : clproto::RealDispatch(guest_), heap_(), blocks_(blocks), bound_(nullptr), envelope_(), arguments_(), binaries_(), il_(), argument_kinds_(),
+    : clproto::RealDispatch(guest_), heap_(), blocks_(blocks), bound_(nullptr), lifecycle_(nullptr), envelope_(), arguments_(), binaries_(), il_(), argument_kinds_(),
       vehicle_(), import_(), buffers_(), renderbuffer_textures_(), object_bytes_(),
       direct_(blocks, vehicle_, renderbuffer_textures_), copied_(blocks, object_bytes_, renderbuffer_textures_),
       gl_(nullptr), reaches_gl_(false), imports_(false), context_(nullptr), queue_(nullptr), handles_(blocks),
@@ -111,6 +112,7 @@ bool OpenClBackend::initialize(const OpenClDevice *device, const GlDisplay *disp
     AV_SCOPE("OpenClBackend::initialize");
     imported_ = &imports;
     bound_ = device;
+    lifecycle_ = display != nullptr ? display->lifecycle() : nullptr;
     if (bound_ == nullptr) return false;
     static_cast<void>(envelope_.identify(static_cast<cl_platform_id>(bound_->platform()),
                                          static_cast<cl_device_id>(bound_->device())));
@@ -358,9 +360,11 @@ bool OpenClBackend::shares_with_gl(const GlDisplay &display) const
         CL_GL_CONTEXT_KHR,   reinterpret_cast<cl_context_properties>(vehicle_.handle()),
         CL_EGL_DISPLAY_KHR,  reinterpret_cast<cl_context_properties>(display.handle()),
         0};
-    cl_device_id const one = static_cast<cl_device_id>(bound_->device());
-    cl_int             made = CL_SUCCESS;
-    cl_context const   asked = ::clCreateContext(named, 1u, &one, nullptr, nullptr, &made);
+    cl_device_id const      one = static_cast<cl_device_id>(bound_->device());
+    cl_int                  made = CL_SUCCESS;
+    const HostLifecycleHold hold(lifecycle_);
+    if (!hold.held()) return false;
+    cl_context const asked = ::clCreateContext(named, 1u, &one, nullptr, nullptr, &made);
     if (asked == nullptr) { AV_UNTESTABLE("no host beside a test here refuses a GL-sharing context; OpenClBackendProbe takes the copy path on one that shares"); return false; }
     static_cast<void>(::clReleaseContext(asked));
     return true;
@@ -381,8 +385,21 @@ cl_context OpenClBackend::on_clCreateContext(const cl_context_properties *proper
                                              const cl_device_id *devices, cl_int *errcode_ret)
 {
     AV_SCOPE("OpenClBackend::on_clCreateContext");
+    const HostLifecycleHold hold(lifecycle_);
+    if (!hold.held()) {
+        if (errcode_ret != nullptr) *errcode_ret = CL_OUT_OF_RESOURCES;
+        return nullptr;
+    }
     if (gl_ == nullptr) return RealDispatch::on_clCreateContext(properties, num_devices, devices, errcode_ret);
     return gl_->make_context(properties, num_devices, devices, errcode_ret);
+}
+
+cl_int OpenClBackend::on_clReleaseContext(cl_context context)
+{
+    AV_SCOPE("OpenClBackend::on_clReleaseContext");
+    const HostLifecycleHold hold(lifecycle_);
+    if (!hold.held()) return CL_OUT_OF_RESOURCES;
+    return RealDispatch::on_clReleaseContext(context);
 }
 
 bool OpenClBackend::knows(uint32_t command_id) const
@@ -625,8 +642,11 @@ cl_context OpenClBackend::on_clCreateContextFromType(const cl_context_properties
     AV_SCOPE("OpenClBackend::on_clCreateContextFromType");
     const cl_int refused = bound_ == nullptr ? CL_INVALID_PLATFORM : answers_type(device_type);
     if (refused == CL_SUCCESS) {
-        const cl_device_id device = static_cast<cl_device_id>(bound_->device());
-        return RealDispatch::on_clCreateContext(properties, 1u, &device, errcode_ret);
+        const cl_device_id      device = static_cast<cl_device_id>(bound_->device());
+        const HostLifecycleHold hold(lifecycle_);
+        if (hold.held()) return RealDispatch::on_clCreateContext(properties, 1u, &device, errcode_ret);
+        if (errcode_ret != nullptr) *errcode_ret = CL_OUT_OF_RESOURCES;
+        return nullptr;
     }
     if (errcode_ret != nullptr) *errcode_ret = refused;
     return nullptr;

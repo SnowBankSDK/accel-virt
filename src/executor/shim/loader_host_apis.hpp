@@ -16,6 +16,7 @@
 #include "executor/d3d/shared_surfaces.hpp"
 #include "executor/sharing/host_shares.hpp"
 #include "executor/shim/host_heap.hpp"
+#include "executor/host_lifecycle_gate.hpp"
 #include "executor/shim/gl_display.hpp"
 #include "executor/opencl/cl_freed_memory.hpp"
 #include "executor/shim/opencl_device.hpp"
@@ -66,6 +67,7 @@ private:
     uint32_t sub_apis_[HostGpuSet::max_gpus];
     int32_t  render_minors_[HostGpuSet::max_gpus];
     OpenClDevice opencl_devices_[HostGpuSet::max_gpus];
+    HostLifecycleGate lifecycles_[HostGpuSet::max_gpus];
     GlDisplay    gl_displays_[HostGpuSet::max_gpus];
     D3dRuntime      d3d_runtime_;
     ObjectStorage<D3d11HostDevice> d3d11_devices_[HostGpuSet::max_gpus];

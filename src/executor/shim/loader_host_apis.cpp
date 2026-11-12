@@ -13,7 +13,7 @@ namespace av {
 
 LoaderHostApis::LoaderHostApis(ExecutorLog &log)
     : instance_(nullptr), uuids_{}, sub_apis_{}, opencl_devices_{},
-      gl_displays_{}, d3d_runtime_(), d3d11_devices_{}, d3d12_devices_{}, d3d9_devices_{}, heap_(), surfaces_{},
+      lifecycles_(), gl_displays_{}, d3d_runtime_(), d3d11_devices_{}, d3d12_devices_{}, d3d9_devices_{}, heap_(), surfaces_{},
       shares_{}, ledgers_{}, gauge_(), host_ram_(), vram_gate_(*this, heap_), teardown_order_(), reopen_lock_(), reopened_{}, count_(0u), opened_(false)
 {
     AV_SCOPE("LoaderHostApis::LoaderHostApis");
@@ -85,7 +85,7 @@ void LoaderHostApis::enumerate()
         if (opencl_devices_[i].find(uuids_[i].raw())) sub_apis_[i] |= AV_EXECUTOR_SUB_API_OPENCL;
         if (compositors_[i].open(uuids_[i].raw(), teardown_order_))
             static_cast<void>(sources_[i].construct(exporters_[i].object(), heap_));
-        if (gl_displays_[i].open(uuids_[i].raw())) sub_apis_[i] |= AV_EXECUTOR_SUB_API_OPENGL;
+        if (gl_displays_[i].open(uuids_[i].raw(), lifecycles_[i])) sub_apis_[i] |= AV_EXECUTOR_SUB_API_OPENGL;
     }
     count_ = found;
     if (d3d_runtime_.open()) {
