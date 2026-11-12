@@ -147,7 +147,7 @@ D3d12Session::D3d12Session(const GuestBytes &guest, D3dObjectTable &objects, Wak
                            EventfdWake &fence_wake, WatchedBlocks &blocks, DriverLog &lines)
     : d3d12proto::ServerDispatch(guest), imports_(nullptr), source_(nullptr), placing_(false), device_(nullptr), shown_by_(nullptr), shares_(nullptr), tenant_(tenant),
       joined_(false), left_lost_(false), surfaces_(nullptr), objects_(objects), blocks_(blocks), addresses_(blocks), indirect_table_(addresses_),
-      progress_(fence_wake, blocks), block_heaps_(blocks, progress_, lines), holds_(blocks), descriptors_(blocks, holds_), allocators_(blocks), queries_(blocks), refused_creates_(), views_(objects_, addresses_),
+      progress_(fence_wake, blocks), block_heaps_(blocks, progress_, lines), holds_(blocks), descriptors_(blocks, holds_), allocators_(blocks), queries_(blocks), refused_creates_(blocks), views_(objects_, addresses_),
       pipelines_(objects_), compiles_(blocks), presentation_(lines), tile_update_(), retained_(), state_builder_(blocks, objects_), inputs_(blocks, addresses_), sizes_(blocks), removed_(0u), lines_(lines), refusal_(lines_), clock_(), hang_ns_(hung_after), commands_(0u), polled_at_(0u), drain_commands_(0u), drain_mark_(0u), drain_marked_(false), oversized_heaps_(), refused_heaps_()
 {
     AV_SCOPE("D3d12Session::D3d12Session");

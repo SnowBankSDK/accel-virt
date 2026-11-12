@@ -1,15 +1,17 @@
 #ifndef AV_EXECUTOR_D3D_REFUSED_CREATES_HPP
 #define AV_EXECUTOR_D3D_REFUSED_CREATES_HPP
 
+#include "core/support/growable_array.hpp"
+
 #include <stdint.h>
 
 namespace av {
 
+class BlockSource;
+
 class D3dRefusedCreates {
 public:
-    static constexpr uint32_t most = 64u;
-
-    D3dRefusedCreates();
+    explicit D3dRefusedCreates(BlockSource &blocks);
     D3dRefusedCreates(const D3dRefusedCreates &) = delete;
     D3dRefusedCreates &operator=(const D3dRefusedCreates &) = delete;
 
@@ -28,10 +30,11 @@ private:
         uint32_t hresult_;
     };
 
+    static constexpr uint32_t absent = UINT32_MAX;
+
     uint32_t find(uint32_t id) const;
 
-    Refusal  rows_[most];
-    uint32_t count_;
+    GrowableArray<Refusal> rows_;
 };
 
 }
