@@ -33,6 +33,12 @@
 
 namespace av {
 
+namespace {
+
+constexpr const char *cannot_order = "avgpu: a context's batches cannot be released in order: the context is lost";
+
+}
+
 AvContextTable::AvContextTable(Platform &platform, DxgkrnlInterface &dxgkrnl, AllocationTable &allocations,
                                  HostWindow &window)
     : platform_(platform), dxgkrnl_(dxgkrnl), allocations_(allocations), window_(window),
@@ -430,8 +436,12 @@ Status AvContextTable::submit(void *context, const uint8_t *private_data, size_t
     const uint32_t slot = slot_of(context);
     if (slot == no_slot || !live_[slot] || lost(slot)) return Status::invalid_parameter;
     SubmissionDescriptor submission;
-    if (reader_.read(private_data, size, RingHeader(orders_[slot], 0u, 0u), submission) != Status::ok)
+    if (reader_.read(private_data, size, RingHeader(orders_[slot], 0u, 0u), submission) != Status::ok) {
+        if (releases_[slot].active())
+            lose(slot, "avgpu: a batch of a context that keeps its batches in order could not be read: the context is lost",
+                 SubmissionDescriptor());
         return Status::invalid_parameter;
+    }
     Status status = Status::ok;
     if (releases_[slot].active())
         in_turn(slot, submission);
@@ -450,7 +460,7 @@ Status AvContextTable::release_batch(void *context, const SubmissionDescriptor &
     const uint32_t slot = slot_of(context);
     if (slot == no_slot || !live_[slot] || lost(slot)) return Status::invalid_parameter;
     if (batch.validate_against(RingHeader(orders_[slot], 0u, 0u)) != Status::ok) {
-        lose(slot, batch);
+        lose(slot, cannot_order, batch);
         return Status::invalid_parameter;
     }
     in_turn(slot, batch);
@@ -464,26 +474,31 @@ void AvContextTable::in_turn(uint32_t slot, const SubmissionDescriptor &batch)
     ReleaseQueue &queue = releases_[slot];
     AvContextBinding &binding = bindings_[slot].object();
     const ReleaseQueue::Turn turn = queue.arrive(batch, binding.next_begin());
-    if (turn == ReleaseQueue::Turn::held || turn == ReleaseQueue::Turn::released_already) return;
+    if (turn == ReleaseQueue::Turn::released_already) return;
+    if (turn == ReleaseQueue::Turn::held) {
+        queue.note(platform_.interrupt_time());
+        return;
+    }
     if (turn == ReleaseQueue::Turn::refused || binding.submit(batch) != Status::ok) {
-        lose(slot, batch);
+        lose(slot, cannot_order, batch);
         return;
     }
     queue.released(batch);
     SubmissionDescriptor next;
     while (queue.next_held(next)) {
         if (binding.submit(next) != Status::ok) {
-            lose(slot, next);
+            lose(slot, cannot_order, next);
             return;
         }
         queue.released(next);
     }
+    queue.note(platform_.interrupt_time());
 }
 
-void AvContextTable::lose(uint32_t slot, const SubmissionDescriptor &batch)
+void AvContextTable::lose(uint32_t slot, const char *why, const SubmissionDescriptor &batch)
 {
     AV_SCOPE("AvContextTable::lose");
-    StampedLine(platform_, adapter_, "avgpu: a context's batches cannot be released in order: the context is lost")
+    StampedLine(platform_, adapter_, why)
         .number("doorbell", slot)
         .number("held", releases_[slot].held())
         .number("next", releases_[slot].next())
@@ -551,6 +566,21 @@ void AvContextTable::serve(ExecutionNode &node, HwQueueSubmissions &queues)
         wake(slot, binding.raised(), lost_now);
         node.finish(contexts_[slot], completed);
         queues.completed_through(contexts_[slot], completed);
+    }
+    bool holding = false;
+    for (uint32_t slot = 0u; slot < max_contexts && !holding; slot++)
+        holding = live_[slot] && releases_[slot].held() != 0u;
+    if (!holding || node.awaits()) return;
+    const uint64_t now = platform_.interrupt_time();
+    for (uint32_t slot = 0u; slot < max_contexts; slot++) {
+        if (!live_[slot] || lost(slot) || !releases_[slot].starved(now, starved_after)) continue;
+        lose(slot,
+             "avgpu: a context's held batches waited past the deadline with nothing left on the GPU to bring the batch "
+             "before them: the context is lost",
+             SubmissionDescriptor());
+        wake(slot, bindings_[slot].object().raised(), true);
+        node.finish(contexts_[slot], UINT64_MAX);
+        queues.completed_through(contexts_[slot], UINT64_MAX);
     }
 }
 

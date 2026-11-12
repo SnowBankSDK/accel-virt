@@ -1961,6 +1961,75 @@ TEST(av_context_table_held_batches, a_held_batch_and_an_overdue_packet_leave_the
   CHECK(fixture.table().invariants_hold());
   CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok); }
 
+TEST(av_context_table_held_batches, a_held_batch_nothing_on_the_gpu_can_bring_a_predecessor_for_loses_its_context_after_the_deadline)
+{ Fixture fixture;
+  Host host(fixture.mapped());
+  CHECK_STATUS(fixture.bind(&first_context), Status::ok);
+  std::uint64_t awaited = 0u;
+  fixture.platform().set_irql(Irql::dispatch);
+  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(2u, 32u, 64u), awaited), Status::ok);
+  CHECK_STATUS(fixture.node().submit(5u, &first_context, awaited), Status::ok);
+  fixture.platform().advance_time(ExecutionNode::park_deadline);
+  CHECK_EQ(fixture.node().release_overdue(fixture.platform().interrupt_time()), 1u);
+  fixture.platform().set_irql(Irql::passive);
+  fixture.complete_through(0u);
+  fixture.serve();
+  CHECK(!fixture.platform().logged_line("the context is lost"));
+  fixture.platform().advance_time(ExecutionNode::park_deadline);
+  fixture.serve();
+  CHECK(fixture.platform().logged_line("nothing left on the GPU"));
+  std::uint32_t told = 0u;
+  std::memcpy(&told, fixture.ring_memory() + av::RingHeader::lost_at, sizeof told);
+  CHECK_EQ(told, static_cast<std::uint32_t>(av::FaultCode::batch_order));
+  CHECK_EQ(fixture.table().held_batches(&first_context), 0u);
+  CHECK_EQ(fixture.mapped().function().doorbells().rings(0u), 0u);
+  fixture.platform().set_irql(Irql::dispatch);
+  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(1u, 0u, 32u), awaited),
+               Status::invalid_parameter);
+  fixture.platform().set_irql(Irql::passive);
+  CHECK(fixture.table().invariants_hold());
+  CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok); }
+
+TEST(av_context_table_held_batches, a_held_batch_stays_while_the_gpu_still_has_work_that_can_bring_its_predecessor)
+{ Fixture fixture;
+  Host host(fixture.mapped());
+  CHECK_STATUS(fixture.bind(&first_context), Status::ok);
+  std::uint64_t awaited = 0u;
+  fixture.platform().set_irql(Irql::dispatch);
+  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(2u, 32u, 64u), awaited), Status::ok);
+  CHECK_STATUS(fixture.node().submit(5u, &first_context, awaited), Status::ok);
+  fixture.platform().set_irql(Irql::passive);
+  fixture.platform().advance_time(4u * ExecutionNode::park_deadline);
+  fixture.complete_through(0u);
+  fixture.serve();
+  CHECK(!fixture.platform().logged_line("the context is lost"));
+  CHECK_EQ(fixture.table().held_batches(&first_context), 1u);
+  fixture.platform().set_irql(Irql::dispatch);
+  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(1u, 0u, 32u), awaited), Status::ok);
+  fixture.platform().set_irql(Irql::passive);
+  CHECK_EQ(fixture.table().held_batches(&first_context), 0u);
+  CHECK_EQ(fixture.mapped().function().doorbells().rings(0u), 2u);
+  CHECK(fixture.table().invariants_hold());
+  CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok); }
+
+TEST(av_context_table_submit, a_batch_that_cannot_be_read_while_the_ring_keeps_order_loses_the_context)
+{ Fixture fixture;
+  Host host(fixture.mapped());
+  CHECK_STATUS(fixture.bind(&first_context), Status::ok);
+  std::uint64_t awaited = 0u;
+  fixture.platform().set_irql(Irql::dispatch);
+  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(2u, 32u, 64u), awaited), Status::ok);
+  std::uint8_t bytes[SubmissionDescriptor::encoded_size] = {};
+  CHECK_STATUS(fixture.table().submit(&first_context, bytes, 8u, awaited), Status::invalid_parameter);
+  fixture.platform().set_irql(Irql::passive);
+  CHECK(fixture.platform().logged_line("could not be read: the context is lost"));
+  std::uint32_t told = 0u;
+  std::memcpy(&told, fixture.ring_memory() + av::RingHeader::lost_at, sizeof told);
+  CHECK_EQ(told, static_cast<std::uint32_t>(av::FaultCode::batch_order));
+  CHECK_EQ(fixture.table().held_batches(&first_context), 0u);
+  CHECK_EQ(fixture.mapped().function().doorbells().rings(0u), 0u);
+  CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok); }
+
 TEST(av_context_table_adapter_is, the_line_of_a_lost_context_names_the_adapter_the_slot_and_the_batch)
 { Fixture fixture;
   Host host(fixture.mapped());

@@ -131,3 +131,31 @@ TEST(release_queue, a_batch_released_while_a_copy_of_it_was_held_leaves_nothing_
   SubmissionDescriptor next;
   CHECK(!queue.next_held(next));
   CHECK_EQ(queue.held(), 0u); }
+
+TEST(release_queue, the_wait_of_held_batches_counts_from_the_last_release_and_ends_when_none_is_held)
+{ ReleaseQueue queue;
+  CHECK(!queue.starved(1000u, 10u));
+  CHECK(queue.arrive(batch(2u, 64u, 128u), 0u) == ReleaseQueue::Turn::held);
+  queue.note(100u);
+  CHECK(queue.arrive(batch(3u, 192u, 256u), 0u) == ReleaseQueue::Turn::held);
+  queue.note(105u);
+  CHECK(!queue.starved(109u, 10u));
+  CHECK(queue.starved(110u, 10u));
+  CHECK(queue.arrive(batch(1u, 0u, 64u), 0u) == ReleaseQueue::Turn::release_now);
+  queue.released(batch(1u, 0u, 64u));
+  SubmissionDescriptor next;
+  CHECK(queue.next_held(next));
+  queue.released(next);
+  queue.note(200u);
+  CHECK_EQ(queue.held(), 1u);
+  CHECK(!queue.starved(209u, 10u));
+  CHECK(queue.starved(210u, 10u));
+  CHECK(queue.arrive(batch(4u, 128u, 192u), 0u) == ReleaseQueue::Turn::release_now);
+  queue.released(batch(4u, 128u, 192u));
+  CHECK(queue.next_held(next));
+  queue.released(next);
+  queue.note(300u);
+  CHECK(!queue.starved(1000u, 10u));
+  CHECK(queue.arrive(batch(6u, 320u, 384u), 0u) == ReleaseQueue::Turn::held);
+  queue.clear();
+  CHECK(!queue.starved(1000u, 10u)); }

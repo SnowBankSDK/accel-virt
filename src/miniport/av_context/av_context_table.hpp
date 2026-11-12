@@ -11,6 +11,7 @@
 #include "miniport/av_context/ring_submitter.hpp"
 #include "miniport/av_context/av_context_binding.hpp"
 #include "miniport/av_context/submission_reader.hpp"
+#include "miniport/scheduling/execution_node.hpp"
 #include "core/support/object_pool.hpp"
 #include "core/support/object_storage.hpp"
 #include "core/support/status.hpp"
@@ -79,6 +80,7 @@ public:
 
 private:
     static constexpr uint32_t no_slot = max_contexts;
+    static constexpr uint64_t starved_after = 2u * ExecutionNode::park_deadline;
 
     uint32_t             slot_of(const void *context) const;
     bool                 lost(uint32_t slot) const;
@@ -90,7 +92,7 @@ private:
                                 RegisterWindow &doorbells, const CapsetInfo &capset);
     void                 release(uint32_t slot);
     void                 in_turn(uint32_t slot, const SubmissionDescriptor &batch);
-    void                 lose(uint32_t slot, const SubmissionDescriptor &batch);
+    void                 lose(uint32_t slot, const char *why, const SubmissionDescriptor &batch);
     void                 release_chunks(uint32_t slot, VirtioGpuDevice *device, bool host_let_go);
     [[nodiscard]] Status open_window(uint32_t slot, HostWindowRecord &record, VirtioGpuDevice &device);
     [[nodiscard]] Status adopt_pages(uint32_t slot, HostWindowRecord &record, VirtioGpuDevice &device);

@@ -4,7 +4,7 @@
 
 namespace av {
 
-ReleaseQueue::ReleaseQueue() : held_{}, count_(0u), next_(0u), active_(false)
+ReleaseQueue::ReleaseQueue() : held_{}, count_(0u), next_(0u), held_since_(0u), noted_next_(0u), active_(false)
 {
     AV_SCOPE("ReleaseQueue::ReleaseQueue");
 }
@@ -57,6 +57,24 @@ bool ReleaseQueue::next_held(SubmissionDescriptor &batch)
     return false;
 }
 
+void ReleaseQueue::note(uint64_t now)
+{
+    AV_SCOPE("ReleaseQueue::note");
+    if (count_ == 0u) {
+        held_since_ = 0u;
+        return;
+    }
+    if (held_since_ != 0u && noted_next_ == next_) return;
+    held_since_ = now != 0u ? now : 1u;
+    noted_next_ = next_;
+}
+
+bool ReleaseQueue::starved(uint64_t now, uint64_t after) const
+{
+    AV_SCOPE("ReleaseQueue::starved");
+    return count_ != 0u && held_since_ != 0u && now >= held_since_ && now - held_since_ >= after;
+}
+
 bool ReleaseQueue::active() const
 {
     AV_SCOPE("ReleaseQueue::active");
@@ -68,6 +86,8 @@ void ReleaseQueue::clear()
     AV_SCOPE("ReleaseQueue::clear");
     count_ = 0u;
     next_ = 0u;
+    held_since_ = 0u;
+    noted_next_ = 0u;
     active_ = false;
 }
 

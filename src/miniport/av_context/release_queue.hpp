@@ -18,6 +18,8 @@ public:
     Turn     arrive(const SubmissionDescriptor &batch, uint64_t published);
     void     released(const SubmissionDescriptor &batch);
     bool     next_held(SubmissionDescriptor &batch);
+    void     note(uint64_t now);
+    bool     starved(uint64_t now, uint64_t after) const;
     bool     active() const;
     void     clear();
     uint32_t held() const;
@@ -29,6 +31,8 @@ private:
     SubmissionDescriptor held_[most_held];
     uint32_t             count_;
     uint64_t             next_;
+    uint64_t             held_since_;
+    uint64_t             noted_next_;
     bool                 active_;
 };
 
