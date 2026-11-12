@@ -1463,6 +1463,103 @@ TEST(d3d12_session_device, rows_another_adapter_lends_become_an_image_whose_copi
     backend.shut_down();
 }
 
+TEST(d3d12_session_device, a_copy_queue_moves_and_fills_rows_another_adapter_lends_by_layout_barrier_and_copy)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice *device11 = nullptr;
+    av::D3d12HostDevice *device12 = nullptr;
+    av::HostShares      *shares = nullptr;
+    av::HostMemorySource *source = nullptr;
+    if (!host_devices(apis, device11, device12, shares, source)) return;
+    av::D3dBackend    backend(rig.log);
+    av::SessionShares session;
+    CHECK(backend.initialize(*shared_as(session, shares, backend), rig.imports, device11, device12));
+    av::D3dLoopback wire(backend, rig.imports, source, region_bytes, lent_bytes);
+    make_frame(wire);
+    constexpr std::uint32_t list_copy = 3u;
+    constexpr std::uint32_t copy_queue = 90u;
+    constexpr std::uint32_t copy_allocator = 91u;
+    constexpr std::uint32_t copy_list = 92u;
+    constexpr std::uint32_t pixels = 93u;
+    constexpr std::uint32_t lent_image = 94u;
+    constexpr std::uint32_t lent_pitch = 512u;
+    constexpr std::uint32_t sync_copy = 0x200u;
+    constexpr std::uint32_t access_copy_dest = 0x400u;
+    constexpr std::uint32_t access_none = 0x80000000u;
+    constexpr std::uint32_t layout_common = 0u;
+    constexpr std::uint32_t green = 0xff00ff00u;
+    heaps.upload = wire.open_memory(upload_memory, heap_bytes);
+    CHECK(heaps.upload != 0u);
+    CHECK(av_d3d12_CreateHeap12(wire, upload_heap, heap_of(heap_upload), 0u, heap_bytes, 0u, heaps.upload, 0u));
+    for (std::uint32_t at = 0u; at < size * size; at++) std::memcpy(wire.memory(heaps.upload, at * 4u), &green, 4u);
+    CHECK(av_d3d12_CreatePlacedResource12(wire, pixels, upload_heap, 0u, buffer_of(row_pitch * size),
+                                           state_generic_read, ClearValue{}, upload_address));
+    const std::uint64_t lent = wire.open_memory(readback_memory, std::uint64_t{lent_pitch} * size);
+    CHECK(lent != 0u);
+    std::memset(wire.memory(lent), 0xcd, std::size_t{lent_pitch} * size);
+    ResourceDesc desc = {};
+    desc.dimension = dimension_texture2d;
+    desc.width = size;
+    desc.height = size;
+    desc.depth_or_array = 1u;
+    desc.mip_levels = 1u;
+    desc.format = format_b8g8r8a8;
+    desc.sample_count = 1u;
+    desc.layout = layout_row_major;
+    desc.flags = flag_render_target;
+    std::uint32_t hresult = 1u;
+    CHECK(av_d3d12_AdoptLentImage12(wire, lent_image, lent, desc, lent_pitch, &hresult));
+    CHECK_EQ(hresult, 0u);
+    CHECK(av_d3d12_CreateCommandQueue12(wire, copy_queue, list_copy, 0u, 0u));
+    CHECK(av_d3d12_CreateCommandAllocator12(wire, copy_allocator, list_copy));
+    CHECK(av_d3d12_CreateCommandList12(wire, copy_list, copy_allocator, list_copy, 0u));
+    LayoutBarrier into = {};
+    into.type = 1u;
+    into.sync_before = 0u;
+    into.sync_after = sync_copy;
+    into.access_before = access_none;
+    into.access_after = access_copy_dest;
+    into.layout_before = layout_common;
+    into.layout_after = layout_common;
+    into.resource = lent_image;
+    into.mip_count = 1u;
+    into.slice_count = 1u;
+    into.plane_count = 1u;
+    CHECK(av_d3d12_Barrier12(wire, copy_list, 1u, &into));
+    CopyLocation to = {};
+    to.resource = lent_image;
+    CopyLocation from = {};
+    from.resource = pixels;
+    from.type = 1u;
+    from.format = format_b8g8r8a8;
+    from.width = size;
+    from.height = size;
+    from.depth = 1u;
+    from.row_pitch = row_pitch;
+    CHECK(av_d3d12_CopyTextureRegion12(wire, copy_list, to, 0u, 0u, 0u, from, 0u, Box{}));
+    CHECK(av_d3d12_CloseCommandList12(wire, copy_list));
+    const std::uint32_t lists[1] = {copy_list};
+    CHECK(av_d3d12_ExecuteCommandLists12(wire, copy_queue, 1u, lists));
+    std::uint32_t removed = 1u;
+    CHECK(av_d3d12_Finish12(wire, &removed));
+    CHECK_EQ(removed, 0u);
+    std::uint32_t wrong = 0u;
+    for (std::uint32_t y = 0u; y < size; y++)
+        for (std::uint32_t x = 0u; x < size; x++) {
+            std::uint32_t value = 0u;
+            std::memcpy(&value, wire.memory(lent, std::uint64_t{y} * lent_pitch + x * 4u), sizeof value);
+            if (value != green) wrong++;
+        }
+    CHECK_EQ(wrong, 0u);
+    CHECK(av_d3d12_Destroy12(wire, lent_image));
+    CHECK(av_d3d12_Finish12(wire, &removed));
+    CHECK_EQ(removed, 0u);
+    CHECK_EQ(wire.refused(), 0u);
+    wire.close_memory(lent);
+    backend.shut_down();
+}
+
 TEST(d3d12_session_device, each_share_or_present_misuse_removes_a_healthy_device)
 {
     av::ExecutorLogRig rig;
