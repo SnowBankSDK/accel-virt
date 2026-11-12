@@ -33,6 +33,19 @@ HEADERS = (
              "libs/vkd3d/av_stream_swap.h"),
         ),
     },
+    {
+        "source": ROOT / "tools" / "forced-coverage" / "av_forced_coverage.h",
+        "subject": "the forced coverage generator of tools/forced-coverage",
+        "body": ("The SPIR-V change that makes a pixel shader compute the coverage of Direct3D's standard sample\n"
+                 "pattern for a forced sample count from the primitive's barycentrics and their screen-space\n"
+                 "derivatives, hand it to the shader as its sample mask input and end the invocation where no\n"
+                 "sample is covered, as one header for the runtimes. tools/shared_header_patches.py writes this\n"
+                 "patch from tools/forced-coverage/av_forced_coverage.h.\n"),
+        "targets": (
+            (ROOT / "tools" / "vkd3d-proton-patches" / "0035-the-forced-coverage-generator.patch",
+             "libs/vkd3d/av_forced_coverage.h"),
+        ),
+    },
 )
 
 

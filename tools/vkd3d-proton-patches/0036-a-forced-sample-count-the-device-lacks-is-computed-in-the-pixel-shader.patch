@@ -1,0 +1,150 @@
+From: accel-virt
+Subject: [PATCH] A forced sample count the device cannot rasterize without attachments is computed in the pixel shader
+
+Direct3D 12 makes ForcedSampleCount 16 mandatory from feature level 11_1 for UAV-only rendering;
+RADV rasterizes 1, 2, 4 and 8 samples without attachments, so such a pipeline was refused and the
+device removed. On a device with fragment shader barycentrics the pipeline now rasterizes at one
+sample with overestimating conservative rasterization (or at the highest count the device has
+without it), and the shared forced coverage generator makes its pixel shader compute the coverage
+of Direct3D's standard pattern for the forced count from its barycentrics, read it as its sample
+mask input and end where no sample is covered. The shader still sees the forced count as the
+rasterizer's. Such pipelines are not loaded from a pipeline cache. Other pipelines pay nothing.
+---
+diff --git a/libs/vkd3d/state.c b/libs/vkd3d/state.c
+--- a/libs/vkd3d/state.c
++++ b/libs/vkd3d/state.c
+@@ -20,6 +20,7 @@
+ #define VKD3D_DBG_CHANNEL VKD3D_DBG_CHANNEL_API
+ 
+ #include "vkd3d_private.h"
++#include "av_forced_coverage.h"
+ #include "av_line_coverage.h"
+ #include "av_stream_swap.h"
+ #include "vkd3d_descriptor_debug.h"
+@@ -4503,6 +4504,56 @@
+     }
+ }
+ 
++static bool d3d12_device_computes_coverage(struct d3d12_device *device,
++        const struct d3d12_graphics_pipeline_state *graphics, uint32_t samples)
++{
++    return device->device_info.barycentric_features_khr.fragmentShaderBarycentric && av_fc_pattern(samples) &&
++            (graphics->stage_flags & VK_SHADER_STAGE_FRAGMENT_BIT) &&
++            !(graphics->stage_flags & VK_SHADER_STAGE_MESH_BIT_EXT);
++}
++
++static VkSampleCountFlagBits d3d12_device_coverage_rasterization_samples(struct d3d12_device *device)
++{
++    VkSampleCountFlags supported = device->device_info.properties2.properties.limits.framebufferNoAttachmentsSampleCounts;
++
++    if (device->vk_info.EXT_conservative_rasterization || !supported)
++        return VK_SAMPLE_COUNT_1_BIT;
++    return (VkSampleCountFlagBits)(1u << vkd3d_log2i(supported));
++}
++
++static HRESULT d3d12_pipeline_state_compute_coverage(struct d3d12_pipeline_state *state)
++{
++    struct d3d12_graphics_pipeline_state *graphics = &state->graphics;
++    uint32_t *words = NULL;
++    unsigned int i;
++    size_t count;
++    int status;
++
++    for (i = 0; i < graphics->stage_count; i++)
++    {
++        if (graphics->cached_desc.bytecode_stages[i] != VK_SHADER_STAGE_FRAGMENT_BIT || !graphics->code[i].size)
++            continue;
++
++        status = av_fc_compute_coverage(graphics->code[i].code, graphics->code[i].size / sizeof(uint32_t),
++                graphics->computed_coverage, &words, &count);
++        if (status != AV_FC_OK)
++        {
++            WARN("ForcedSampleCount %u is not supported by the device, the pixel shader cannot compute it (%d).\n",
++                    graphics->computed_coverage, status);
++            return E_INVALIDARG;
++        }
++
++        vkd3d_shader_free_shader_code(&graphics->code[i]);
++        graphics->code[i].code = words;
++        graphics->code[i].size = count * sizeof(uint32_t);
++        return S_OK;
++    }
++
++    WARN("ForcedSampleCount %u is not supported by the device and there is no pixel shader to compute it.\n",
++            graphics->computed_coverage);
++    return E_INVALIDARG;
++}
++
+ static bool d3d12_pipeline_state_swaps_rasterized_stream(struct d3d12_pipeline_state *state,
+         const struct d3d12_pipeline_state_desc *desc)
+ {
+@@ -4703,6 +4754,9 @@
+     if (d3d12_pipeline_state_swaps_rasterized_stream(state, desc))
+         d3d12_pipeline_state_swap_rasterized_stream(state, desc);
+ 
++    if (graphics->computed_coverage && FAILED(hr = d3d12_pipeline_state_compute_coverage(state)))
++        return hr;
++
+     for (i = 0; i < graphics->stage_count; i++)
+     {
+         if (FAILED(hr = vkd3d_setup_shader_stage(state, device,
+@@ -5206,8 +5260,12 @@
+             sample_count = vk_samples_from_dxgi_sample_desc(&forced);
+             if (!(supported & sample_count))
+             {
+-                WARN("ForcedSampleCount %u is not supported by the device.\n", forced.Count);
+-                return E_INVALIDARG;
++                if (!d3d12_device_computes_coverage(state->device, graphics, forced.Count))
++                {
++                    WARN("ForcedSampleCount %u is not supported by the device.\n", forced.Count);
++                    return E_INVALIDARG;
++                }
++                graphics->computed_coverage = forced.Count;
+             }
+         }
+     }
+@@ -5767,6 +5825,13 @@
+     rs_stream_info_from_d3d12(&graphics->rs_stream_info, &graphics->rs_desc, so_desc, vk_info);
+     if (vk_info->EXT_conservative_rasterization)
+         rs_conservative_info_from_d3d12(&graphics->rs_conservative_info, &graphics->rs_desc, &desc->rasterizer_state);
++    if (graphics->computed_coverage && vk_info->EXT_conservative_rasterization && !graphics->rs_conservative_info.sType)
++    {
++        D3D12_RASTERIZER_DESC2 overestimated = desc->rasterizer_state;
++
++        overestimated.ConservativeRaster = D3D12_CONSERVATIVE_RASTERIZATION_MODE_ON;
++        rs_conservative_info_from_d3d12(&graphics->rs_conservative_info, &graphics->rs_desc, &overestimated);
++    }
+     if (vk_info->EXT_depth_clip_enable)
+         rs_depth_clip_info_from_d3d12(&graphics->rs_depth_clip_info, &graphics->rs_desc, &desc->rasterizer_state);
+ 
+@@ -5775,7 +5840,8 @@
+     graphics->ms_desc.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+     graphics->ms_desc.pNext = NULL;
+     graphics->ms_desc.flags = 0;
+-    graphics->ms_desc.rasterizationSamples = sample_count;
++    graphics->ms_desc.rasterizationSamples = graphics->computed_coverage
++            ? d3d12_device_coverage_rasterization_samples(device) : sample_count;
+     graphics->ms_desc.sampleShadingEnable = VK_FALSE;
+     graphics->ms_desc.minSampleShading = 0.0f;
+     graphics->ms_desc.pSampleMask = &graphics->sample_mask;
+@@ -5823,7 +5889,8 @@
+     struct d3d12_device *device = state->device;
+     HRESULT hr;
+ 
+-    if (!d3d12_pipeline_state_wants_line_coverage(state, desc) && !d3d12_pipeline_state_swaps_rasterized_stream(state, desc))
++    if (!d3d12_pipeline_state_wants_line_coverage(state, desc) && !d3d12_pipeline_state_swaps_rasterized_stream(state, desc) &&
++            !state->graphics.computed_coverage)
+         d3d12_pipeline_state_graphics_load_spirv_from_cached_state(state, device, desc, cached_pso);
+     if (FAILED(hr = d3d12_pipeline_state_graphics_create_shader_stages(state, device, desc)))
+         return hr;
+diff --git a/libs/vkd3d/vkd3d_private.h b/libs/vkd3d/vkd3d_private.h
+--- a/libs/vkd3d/vkd3d_private.h
++++ b/libs/vkd3d/vkd3d_private.h
+@@ -2257,6 +2257,7 @@
+ 
+     bool line_coverage;
+     uint32_t line_coverage_offset;
++    uint32_t computed_coverage;
+ 
+     struct vkd3d_shader_code indirect_code[VKD3D_INDIRECT_STATE_MODE_COUNT][VKD3D_MAX_SHADER_STAGES];
+     int indirect_code_status[VKD3D_INDIRECT_STATE_MODE_COUNT];
