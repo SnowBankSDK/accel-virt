@@ -59,6 +59,18 @@ bool ReleaseQueue::next_held(SubmissionDescriptor &batch)
     return false;
 }
 
+bool ReleaseQueue::next_forced(SubmissionDescriptor &batch)
+{
+    AV_SCOPE("ReleaseQueue::next_forced");
+    if (count_ == 0u) return false;
+    uint32_t first = 0u;
+    for (uint32_t index = 1u; index < count_; index++)
+        if (held_[index].begin() < held_[first].begin()) first = index;
+    batch = SubmissionDescriptor(held_[first].fence_id(), next_, held_[first].end());
+    take_out(first);
+    return true;
+}
+
 void ReleaseQueue::take_out(uint32_t index)
 {
     AV_SCOPE("ReleaseQueue::take_out");

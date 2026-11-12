@@ -450,6 +450,7 @@ void Adapter::dpc_routine()
         node_.finish(&presents_.object(), presents_.object().completed());
         present_waiters_.wake();
     }
+    release_parked_ahead_of_finished();
     void        *overdue_owners[8] = {};
     uint32_t     named = 0u;
     const uint32_t overdue = node_.release_overdue(now, overdue_owners, 8u, &named);
@@ -484,6 +485,23 @@ void Adapter::dpc_routine()
     refresh_waiting_ = refresh_waiting_ || presented;
     dxgkrnl_.notify_dpc();
     if (harvest) refresh_scanout(now);
+}
+
+void Adapter::release_parked_ahead_of_finished()
+{
+    AV_SCOPE("Adapter::release_parked_ahead_of_finished");
+    void          *owners[8] = {};
+    const uint32_t blocking = node_.parked_ahead_of_finished(owners, 8u);
+    for (uint32_t index = 0u; index < blocking; index++) {
+        const uint32_t published = av_contexts_.release_held(owners[index]);
+        node_.unpark(owners[index]);
+        if (budget_.allows())
+            StampedLine(platform_, luid_,
+                        "avgpu: held batches were published so a finished packet behind them is not kept waiting")
+                .address("owner", owners[index])
+                .number("batches", published)
+                .write();
+    }
 }
 
 void Adapter::refresh_scanout(uint64_t now)

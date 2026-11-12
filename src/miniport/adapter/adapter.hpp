@@ -322,6 +322,7 @@ private:
     [[nodiscard]] Status submit_release(const Context &context, const ReleaseRecord &release, uint32_t fence,
                                         void *&owner, uint64_t &awaited, ExecutionNode::Hold &hold);
     static void          park_deadline_passed(void *adapter);
+    void                 release_parked_ahead_of_finished();
     bool                 submit_present(const DxgkargSubmitCommandVirtualRecord &request, Status &status,
                                         void *&owner, uint64_t &awaited);
     void                 remember_device();

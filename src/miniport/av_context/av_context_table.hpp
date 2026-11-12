@@ -62,6 +62,7 @@ public:
     [[nodiscard]] Status release_batch(void *context, const ReleaseRecord &release, const void *writer,
                                        uint64_t &awaited, ExecutionNode::Hold &hold);
     bool                 writer_gone(const void *writer);
+    uint32_t             release_held(const void *context);
     void                 serve(ExecutionNode &node, HwQueueSubmissions &queues);
     uint32_t             held_batches(const void *context);
     void                 adapter_is(uint64_t adapter);

@@ -30,6 +30,7 @@ public:
     void                 finish(const void *owner, uint64_t completed);
     void                 unpark(const void *owner);
     uint32_t             parked();
+    uint32_t             parked_ahead_of_finished(void **owners, uint32_t room);
     static constexpr uint64_t park_deadline = 12000000u;
     uint32_t             release_overdue(uint64_t now, void **owners = nullptr, uint32_t room = 0u,
                                          uint32_t *named = nullptr);

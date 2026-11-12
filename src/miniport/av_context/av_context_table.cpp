@@ -477,6 +477,29 @@ Status AvContextTable::release_batch(void *context, const ReleaseRecord &release
     return Status::ok;
 }
 
+uint32_t AvContextTable::release_held(const void *context)
+{
+    AV_SCOPE("AvContextTable::release_held");
+    platform_.require_irql_at_most(Irql::dispatch, "AvContextTable::release_held");
+    SpinLockGuard  locked(lock_);
+    const uint32_t slot = slot_of(context);
+    if (slot == no_slot || !live_[slot] || lost(slot)) return 0u;
+    ReleaseQueue     &queue = releases_[slot];
+    AvContextBinding &binding = bindings_[slot].object();
+    uint32_t          published = 0u;
+    SubmissionDescriptor batch;
+    while (queue.next_forced(batch)) {
+        if (batch.validate_against(RingHeader(orders_[slot], 0u, 0u)) != Status::ok ||
+            binding.submit(batch) != Status::ok) {
+            lose(slot, cannot_order, batch);
+            return published;
+        }
+        queue.released(batch);
+        published++;
+    }
+    return published;
+}
+
 bool AvContextTable::writer_gone(const void *writer)
 {
     AV_SCOPE("AvContextTable::writer_gone");

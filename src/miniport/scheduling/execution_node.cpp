@@ -105,6 +105,25 @@ void ExecutionNode::unpark(const void *owner)
     watch_parks(platform_.interrupt_time());
 }
 
+uint32_t ExecutionNode::parked_ahead_of_finished(void **owners, uint32_t room)
+{
+    AV_SCOPE("ExecutionNode::parked_ahead_of_finished");
+    platform_.require_irql_at_most(Irql::dispatch, "ExecutionNode::parked_ahead_of_finished");
+    SpinLockGuard lock(lock_);
+    if (parked_count_ == 0u || owners == nullptr) return 0u;
+    uint32_t finished = count_;
+    while (finished != 0u && awaited_[(head_ + finished - 1u) % capacity] != 0u) finished--;
+    uint32_t named = 0u;
+    for (uint32_t index = 0u; index + 1u < finished && named < room; index++) {
+        const uint32_t slot = (head_ + index) % capacity;
+        if (!parked_[slot]) continue;
+        bool listed = false;
+        for (uint32_t earlier = 0u; earlier < named; earlier++) listed = listed || owners[earlier] == owners_[slot];
+        if (!listed) owners[named++] = owners_[slot];
+    }
+    return named;
+}
+
 uint32_t ExecutionNode::parked()
 {
     AV_SCOPE("ExecutionNode::parked");

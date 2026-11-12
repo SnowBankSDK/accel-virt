@@ -19,6 +19,7 @@ public:
     Turn     arrive(const SubmissionDescriptor &batch, uint64_t published, uint32_t after);
     void     released(const SubmissionDescriptor &batch);
     bool     next_held(SubmissionDescriptor &batch);
+    bool     next_forced(SubmissionDescriptor &batch);
     void     written_by(uint32_t writer, const void *context);
     bool     forget(const void *context);
     bool     stranded() const;

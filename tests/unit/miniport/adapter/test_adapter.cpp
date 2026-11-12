@@ -5959,6 +5959,113 @@ TEST(adapter_destroy_allocation, destroying_the_ring_of_a_bound_av_context_unbin
   CHECK_EQ(nt(fixture.adapter().destroy_context(context.hContext)), success);
   CHECK_EQ(nt(fixture.adapter().destroy_device(process.device())), success); }
 
+TEST(adapter_dpc_routine, two_routes_of_one_ring_released_out_of_order_do_not_keep_a_third_owner_behind_the_held_batch)
+{ Fixture fixture; av::FakeHandleTable handles;
+  fixture.function().add_doorbell_region();
+  CHECK_EQ(fixture.start(), success);
+  AvProcess process(fixture, handles);
+  AvProcess third(fixture, handles);
+  av::DxgkargCreateContextRecord context = {};
+  CHECK_EQ(process.create_context(context), success);
+  av::DxgkargCreateContextRecord third_context = {};
+  CHECK_EQ(third.create_context(third_context), success);
+  av::DxgkargCreateContextRecord first = {};
+  first.Flags = 0x4u;
+  CHECK_EQ(nt(fixture.adapter().create_context(process.device(), &first)), success);
+  av::DxgkargCreateContextRecord second = {};
+  second.Flags = 0x4u;
+  CHECK_EQ(nt(fixture.adapter().create_context(process.device(), &second)), success);
+
+  const std::uint32_t rings = fixture.function().doorbells().rings(0u);
+  std::uint8_t        later[av::ReleaseRecord::encoded_size] = {};
+  CHECK_STATUS(av::ReleaseRecord(process.ring().kmt_handle(), av::SubmissionDescriptor(2u, 32u, 64u), 2u, 1u)
+                   .encode(later, sizeof later),
+               av::Status::ok);
+  CHECK_EQ(submit_packet(fixture, second.hContext, 5u, later, sizeof later), success);
+  CHECK_EQ(fixture.function().doorbells().rings(0u), rings);
+  CHECK_EQ(third.submit(third_context.hContext, 6u, av::SubmissionDescriptor(1u, 0u, 32u)), success);
+  const std::uint32_t before = fixture.dxgkrnl().interrupts();
+  run_dpc(fixture);
+  CHECK_EQ(fixture.dxgkrnl().interrupts(), before);
+  CHECK_EQ(fixture.function().doorbells().rings(0u), rings);
+
+  third.host_completes(1u);
+  run_dpc(fixture);
+  CHECK_EQ(fixture.function().doorbells().rings(0u), rings + 1u);
+  CHECK(fixture.platform().logged_line("avgpu: held batches were published so a finished packet behind them is not kept waiting"));
+  CHECK(fixture.platform().logged_line(" batches 1"));
+  CHECK_EQ(fixture.platform().armed_timers(), 0u);
+  CHECK_EQ(fixture.dxgkrnl().interrupts(), before);
+  process.host_completes(2u);
+  run_dpc(fixture);
+  CHECK_EQ(fixture.dxgkrnl().interrupts(), before + 2u);
+  CHECK_EQ(fixture.dxgkrnl().interrupt(before).FenceId, 5u);
+  CHECK_EQ(fixture.dxgkrnl().interrupt(before + 1u).FenceId, 6u);
+
+  std::uint8_t earlier[av::ReleaseRecord::encoded_size] = {};
+  CHECK_STATUS(av::ReleaseRecord(process.ring().kmt_handle(), av::SubmissionDescriptor(1u, 0u, 32u), 1u, 0u)
+                   .encode(earlier, sizeof earlier),
+               av::Status::ok);
+  CHECK_EQ(submit_packet(fixture, first.hContext, 7u, earlier, sizeof earlier), success);
+  CHECK_EQ(third.submit(third_context.hContext, 8u, av::SubmissionDescriptor(2u, 32u, 64u)), success);
+  third.host_completes(2u);
+  run_dpc(fixture);
+  CHECK_EQ(fixture.dxgkrnl().interrupts(), before + 4u);
+  CHECK_EQ(fixture.dxgkrnl().interrupt(before + 2u).FenceId, 7u);
+  CHECK_EQ(fixture.dxgkrnl().interrupt(before + 3u).FenceId, 8u);
+  CHECK_EQ(fixture.function().doorbells().rings(0u), rings + 1u);
+  CHECK(!fixture.platform().logged_line("the context is lost"));
+  CHECK(!fixture.platform().logged_line("a held packet passed its deadline"));
+  CHECK(fixture.adapter().invariants_hold());
+  CHECK_EQ(nt(fixture.adapter().destroy_context(second.hContext)), success);
+  CHECK_EQ(nt(fixture.adapter().destroy_context(first.hContext)), success);
+  CHECK_EQ(nt(fixture.adapter().destroy_context(third_context.hContext)), success);
+  CHECK_EQ(nt(fixture.adapter().destroy_context(context.hContext)), success);
+  CHECK_EQ(nt(fixture.adapter().destroy_device(third.device())), success);
+  CHECK_EQ(nt(fixture.adapter().destroy_device(process.device())), success); }
+
+TEST(adapter_dpc_routine, a_held_release_with_nothing_finished_behind_it_stays_held_until_its_predecessor_comes)
+{ Fixture fixture; av::FakeHandleTable handles;
+  fixture.function().add_doorbell_region();
+  CHECK_EQ(fixture.start(), success);
+  AvProcess process(fixture, handles);
+  AvProcess third(fixture, handles);
+  av::DxgkargCreateContextRecord context = {};
+  CHECK_EQ(process.create_context(context), success);
+  av::DxgkargCreateContextRecord third_context = {};
+  CHECK_EQ(third.create_context(third_context), success);
+  av::DxgkargCreateContextRecord first = {};
+  first.Flags = 0x4u;
+  CHECK_EQ(nt(fixture.adapter().create_context(process.device(), &first)), success);
+  av::DxgkargCreateContextRecord second = {};
+  second.Flags = 0x4u;
+  CHECK_EQ(nt(fixture.adapter().create_context(process.device(), &second)), success);
+
+  const std::uint32_t rings = fixture.function().doorbells().rings(0u);
+  std::uint8_t        later[av::ReleaseRecord::encoded_size] = {};
+  CHECK_STATUS(av::ReleaseRecord(process.ring().kmt_handle(), av::SubmissionDescriptor(2u, 32u, 64u), 2u, 1u)
+                   .encode(later, sizeof later),
+               av::Status::ok);
+  CHECK_EQ(submit_packet(fixture, second.hContext, 5u, later, sizeof later), success);
+  CHECK_EQ(third.submit(third_context.hContext, 6u, av::SubmissionDescriptor(1u, 0u, 32u)), success);
+  run_dpc(fixture);
+  CHECK_EQ(fixture.function().doorbells().rings(0u), rings);
+  std::uint8_t earlier[av::ReleaseRecord::encoded_size] = {};
+  CHECK_STATUS(av::ReleaseRecord(process.ring().kmt_handle(), av::SubmissionDescriptor(1u, 0u, 32u), 1u, 0u)
+                   .encode(earlier, sizeof earlier),
+               av::Status::ok);
+  CHECK_EQ(submit_packet(fixture, first.hContext, 7u, earlier, sizeof earlier), success);
+  CHECK_EQ(fixture.function().doorbells().rings(0u), rings + 2u);
+  CHECK(!fixture.platform().logged_line("held batches were published"));
+  CHECK_EQ(fixture.platform().armed_timers(), 0u);
+  CHECK(fixture.adapter().invariants_hold());
+  CHECK_EQ(nt(fixture.adapter().destroy_context(second.hContext)), success);
+  CHECK_EQ(nt(fixture.adapter().destroy_context(first.hContext)), success);
+  CHECK_EQ(nt(fixture.adapter().destroy_context(third_context.hContext)), success);
+  CHECK_EQ(nt(fixture.adapter().destroy_context(context.hContext)), success);
+  CHECK_EQ(nt(fixture.adapter().destroy_device(third.device())), success);
+  CHECK_EQ(nt(fixture.adapter().destroy_device(process.device())), success); }
+
 TEST(adapter_submit_command_virtual, batches_of_one_ring_released_through_two_contexts_are_published_in_ring_order)
 { Fixture fixture; av::FakeHandleTable handles;
   fixture.function().add_doorbell_region();

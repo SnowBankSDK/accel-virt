@@ -615,3 +615,29 @@ TEST(execution_node_park, a_reset_or_a_preemption_drops_the_parks_and_the_alarm)
   CHECK_EQ(alarmed.node().abort_pending(), 2u);
   CHECK_EQ(alarmed.platform().armed_timers(), 0u);
   CHECK(alarmed.node().invariants_hold()); }
+
+TEST(execution_node_park, names_the_owners_of_parked_packets_queued_ahead_of_a_finished_packet)
+{ Fixture fixture;
+  int held = 0;
+  int other = 0;
+  int third = 0;
+  void *owners[4] = {};
+  CHECK_EQ(fixture.node().parked_ahead_of_finished(owners, 4u), 0u);
+  CHECK_STATUS(fixture.node().submit(1u, &held, 4u, ExecutionNode::Hold::parks), Status::ok);
+  CHECK_STATUS(fixture.node().submit(2u, &other, 3u), Status::ok);
+  CHECK_EQ(fixture.node().parked_ahead_of_finished(owners, 4u), 0u);
+  CHECK_STATUS(fixture.node().submit(3u, &third, 9u, ExecutionNode::Hold::parks), Status::ok);
+  fixture.node().finish(&other, 3u);
+  CHECK_EQ(fixture.node().parked_ahead_of_finished(owners, 4u), 1u);
+  CHECK(owners[0] == &held);
+  CHECK_STATUS(fixture.node().submit(4u), Status::ok);
+  CHECK_EQ(fixture.node().parked_ahead_of_finished(owners, 4u), 2u);
+  CHECK(owners[1] == &third);
+  CHECK_EQ(fixture.node().parked_ahead_of_finished(owners, 1u), 1u);
+  CHECK_STATUS(fixture.node().complete(fixture.notification()), Status::ok);
+  CHECK_EQ(fixture.dxgkrnl().interrupts(), 0u);
+  fixture.node().unpark(&held);
+  fixture.node().unpark(&third);
+  CHECK_EQ(fixture.node().parked_ahead_of_finished(owners, 4u), 0u);
+  CHECK_EQ(fixture.node().pending(), 4u);
+  CHECK(fixture.node().invariants_hold()); }
