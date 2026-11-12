@@ -82,6 +82,13 @@ bool host_devices(av::LoaderHostApis &apis, av::D3d11HostDevice *&device11, av::
     return false;
 }
 
+std::uint32_t gpu_of(av::LoaderHostApis &apis, const av::D3d9HostDevice *device9)
+{
+    std::uint32_t index = 0u;
+    while (index < apis.gpu_count() && apis.d3d9_device(index) != device9) index++;
+    return index;
+}
+
 struct Pixels {
     std::uint32_t hresult = 1u, width = 0u, height = 0u, format = 0u, pitch = 0u;
     std::uint8_t  bytes[size * size * 4u] = {};
@@ -578,7 +585,7 @@ TEST(d3d9_session_device, a_flipped_primary_is_shared_under_its_key_as_it_was_dr
     av::D3d11HostDevice *device11 = nullptr;
     av::D3d9HostDevice  *device9 = nullptr;
     if (!host_devices(apis, device11, device9)) return;
-    av::HostShares *const shares = apis.shares(0u);
+    av::HostShares *const shares = apis.shares(gpu_of(apis, device9));
     constexpr std::uint64_t key = 0x9160u, other_key = 0x9161u;
     constexpr std::uint32_t domain = 1u, format_r5g6b5 = 23u;
     av::HostHeap       surfaces_heap;
@@ -632,7 +639,7 @@ TEST(d3d9_session_device, a_flip_with_no_compositor_crosses_through_the_cpu)
     if (!host_devices(apis, device11, device9)) return;
     av::CompositorDevice *const compositor = device11->compositor();
     device11->use_compositor(nullptr);
-    av::HostShares *const shares = apis.shares(0u);
+    av::HostShares *const shares = apis.shares(gpu_of(apis, device9));
     constexpr std::uint64_t key = 0x9170u;
     constexpr std::uint32_t domain = 1u;
     {
@@ -670,7 +677,7 @@ TEST(d3d9_session_device, each_flipping_device_has_a_lane_of_its_own_and_gives_i
     av::D3d11HostDevice *device11 = nullptr;
     av::D3d9HostDevice  *device9 = nullptr;
     if (!host_devices(apis, device11, device9)) return;
-    av::HostShares *const shares = apis.shares(0u);
+    av::HostShares *const shares = apis.shares(gpu_of(apis, device9));
     constexpr std::uint32_t domain = 1u, devices = 8u;
     av::MockPlatform platform;
     {
@@ -1179,16 +1186,6 @@ TEST(d3d9_session_device, a_host_without_fragment_shader_barycentrics_wraps_the_
     check_wrap({false, false, render_state_wrap0, wrap_coord_1, true}, WrapPath::strip_linear_at_offset, without);
 }
 
-namespace {
-
-std::uint32_t gpu_of(av::LoaderHostApis &apis, const av::D3d9HostDevice *device9)
-{
-    std::uint32_t index = 0u;
-    while (index < apis.gpu_count() && apis.d3d9_device(index) != device9) index++;
-    return index;
-}
-
-}
 
 TEST(d3d9_session_device, a_device_made_from_the_initial_lease_alone_draws)
 {
