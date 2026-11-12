@@ -265,6 +265,7 @@ public:
     std::uint8_t       *ring_named(std::uint32_t name);
     std::uint8_t       *window_base() const;
     void                accept_wake_events();
+    void                accept_tail_publishing();
     std::uint64_t       wake_event() const;
     std::uint32_t       wake_events() const;
     const std::uint8_t *last_escape() const;
@@ -400,6 +401,7 @@ private:
     std::uint32_t escape_answer_size_;
     bool          escape_scripted_;
     bool          accepts_wakes_ = false;
+    bool          accepts_tails_ = false;
     std::uint64_t wake_event_ = 0u;
     std::uint32_t wake_events_ = 0u;
     AdapterEscapes *adapter_escapes_;

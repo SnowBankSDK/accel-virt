@@ -475,7 +475,7 @@ TEST(batch_executor_run, a_stream_no_producer_could_frame_or_an_executor_failure
   const Case cases[] = {
       {"past the batch", [](Commands &c) { c.raw(0x10002u, 200u); }, Status::malformed},
       {"below the header", [](Commands &c) { c.raw(0x10002u, 7u); }, Status::malformed},
-      {"unknown flag", [](Commands &c) { c.raw(0x10002u, 0x02000008u); }, Status::malformed},
+      {"unknown flag", [](Commands &c) { c.raw(0x10002u, 0x04000008u); }, Status::malformed},
       {"short tail", [](Commands &c) { c.tail(5u); }, Status::malformed},
       {"undecodable", [](Commands &c) { c.add(MockExecutorOps::undecodable_id, 0u); }, Status::malformed},
       {"device lost", [](Commands &c) { c.add(MockExecutorOps::lost_id, 0u); }, Status::invalid_state},

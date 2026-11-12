@@ -62,6 +62,12 @@ Status AvContextBinding::submit(const SubmissionDescriptor &submission)
     return context_.submit(submission);
 }
 
+void AvContextBinding::kick_if_behind()
+{
+    AV_SCOPE("AvContextBinding::kick_if_behind");
+    context_.kick_if_behind();
+}
+
 void AvContextBinding::fail(FaultCode reason)
 {
     AV_SCOPE("AvContextBinding::fail");

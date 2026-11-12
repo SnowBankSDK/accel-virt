@@ -52,7 +52,11 @@ public:
     ~KmtTransport();
 
     [[nodiscard]] Status initialize(const GlContextOptions &options = GlContextOptions());
+    [[nodiscard]] Status initialize_lane(KmtTransport &session, ReleaseRoute &route);
     void                 teardown();
+    bool                 lane() const;
+    uint64_t             published_end() const;
+    [[nodiscard]] TransportResult flush_quietly();
     bool                 established() const;
     bool                 faulted() const;
     bool                 host_faulted() const;
@@ -90,6 +94,7 @@ public:
     WireWriter      request_writer() override;
     WireWriter      request_writer_with_room(const uint64_t *sizes, uint32_t count) override;
     TransportResult send_async(uint32_t command_id, WireWriter &writer) override;
+    TransportResult send_restoring(uint32_t command_id, WireWriter &writer);
     TransportResult send_sync(uint32_t command_id, WireWriter &writer, WireReader &reply) override;
     void            end_call() override;
     [[nodiscard]] bool make_room_for_blobs(const uint64_t *sizes, uint32_t count) override;
@@ -123,6 +128,7 @@ private:
     static constexpr uint64_t gpu_spin_us = 20000u;
 
     bool                 record_carries(const GlContextOptions &options) const;
+    [[nodiscard]] Status open(const GlContextOptions &options, bool lane);
     [[nodiscard]] Status setup_allocation(uint32_t index, AllocationKind kind, uint64_t bytes, bool map_gpu,
                                           uint64_t &address);
     [[nodiscard]] Status adopt_views();
@@ -143,6 +149,7 @@ private:
                                                   uint32_t trailer_length, uint64_t &next, uint64_t &begin,
                                                   uint64_t &end);
     [[nodiscard]] TransportResult submit_written(uint64_t begin, uint64_t end, uint64_t &fence);
+    uint64_t                      session_after() const;
     uint32_t                      stats_trailer(const uint8_t *batch, uint32_t length, uint64_t now, uint8_t *into);
     void                          note_wait(uint64_t began, ChannelCounter waits, ChannelCounter wait_us);
     [[nodiscard]] TransportResult hold(uint32_t command_id, const WireWriter &writer, uint8_t flags);
@@ -192,6 +199,9 @@ private:
     uint32_t         route_count_;
     uint32_t         next_serial_;
     ReleaseRoute    *speaker_;
+    KmtTransport    *session_;
+    ReleaseRoute    *lane_route_;
+    bool             quiet_;
     uint32_t         gates_busy_;
 
     ReleaseRoute    *speaking_route() const;

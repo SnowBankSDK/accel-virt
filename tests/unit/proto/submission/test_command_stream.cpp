@@ -84,7 +84,7 @@ TEST(command_stream_next, a_command_past_the_payload_a_bad_header_or_a_short_tai
   const Case cases[] = {
       {"past the end", 64u, 0u},
       {"below the header", 4u, 0u},
-      {"unknown flag", 0x02000008u, 0u},
+      {"unknown flag", 0x04000008u, 0u},
   };
   for (const Case &c : cases) {
       Payload payload;

@@ -22,7 +22,7 @@ public:
     D3dOrdering &operator=(const D3dOrdering &) = delete;
 
     [[nodiscard]] Status initialize();
-    void                 add(RingConsumer &ring, Worker &worker);
+    void                 add(RingConsumer &ring, Worker &worker, bool orders);
     void                 remove(RingConsumer &ring);
     void                 wait_before(const RingConsumer &ring, uint64_t published_at);
     void                 settle();
@@ -32,6 +32,7 @@ private:
     struct Member {
         RingConsumer *ring_;
         Worker       *worker_;
+        bool          orders_;
     };
 
     bool wake_earlier(const RingConsumer *ring, uint64_t published_at);

@@ -27,7 +27,7 @@ Status TransportRing::initialize(uint8_t *ring, uint8_t order)
 
 Status TransportRing::write_batch(const uint8_t *payload, uint32_t length, const uint8_t *trailer,
                                   uint32_t trailer_length, uint64_t fence_id, uint64_t published_at,
-                                  uint64_t &begin, uint64_t &end)
+                                  uint64_t after, uint64_t &begin, uint64_t &end)
 {
     AV_SCOPE("TransportRing::write_batch");
     if (ring_ == nullptr) return Status::invalid_state;
@@ -35,7 +35,7 @@ Status TransportRing::write_batch(const uint8_t *payload, uint32_t length, const
         return Status::invalid_parameter;
     const uint64_t total = uint64_t{length} + trailer_length;
     if (total > 0xFFFFFFFFu) return Status::invalid_parameter;
-    const BatchHeader header(static_cast<uint32_t>(total), fence_id, published_at);
+    const BatchHeader header(static_cast<uint32_t>(total), fence_id, published_at, after);
     if (!header.fits(capacity())) return Status::invalid_parameter;
     const uint64_t span = header.span();
     if (span > free_space()) return Status::no_space;

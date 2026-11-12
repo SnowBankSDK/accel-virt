@@ -2974,3 +2974,84 @@ TEST(kmt_transport, a_batch_that_fits_the_empty_ring_but_not_the_unconsumed_tail
   const std::size_t length = frame_batch(framed, 0x10001u, most, false);
   CHECK(up.transport().hold_framed(framed, length) == TransportResult::failed);
   CHECK_EQ(sent_commands(up.kmt()), 1u); }
+
+TEST(kmt_transport_lane, a_session_batch_crosses_without_a_kernel_call_while_its_host_is_awake)
+{ Fixture fixture;
+  fixture.kmt().accept_tail_publishing();
+  CHECK_STATUS(fixture.open(), Status::ok);
+  std::uint8_t staging[staging_bytes] = {};
+  KmtTransport session(fixture.connection(), SubApi::d3d, 12u, reply_bytes, staging, sizeof staging);
+  CHECK_STATUS(session.initialize(), Status::ok);
+  fixture.kmt().ring_of(session.context())[5] = 1u;
+  const std::uint32_t before = fixture.kmt().calls(MockKmt::Call::submit);
+  for (std::uint32_t index = 0u; index < 4u; index++) {
+      WireWriter writer = session.request_writer();
+      writer.write_u32(index);
+      CHECK(session.send_async(0x30001u, writer) == TransportResult::ok);
+  }
+  CHECK_EQ(fixture.kmt().calls(MockKmt::Call::submit), before);
+  CHECK_EQ(session.submissions(), 4u);
+  CHECK_EQ(session.submissions_through_kernel(), 0u);
+  session.teardown(); }
+
+TEST(kmt_transport_lane, each_lane_batch_is_one_release_packet_on_its_lane_after_what_the_session_published)
+{ Fixture fixture;
+  fixture.kmt().accept_tail_publishing();
+  CHECK_STATUS(fixture.open(), Status::ok);
+  std::uint8_t staging[staging_bytes] = {};
+  std::uint8_t held[4096] = {};
+  KmtTransport session(fixture.connection(), SubApi::d3d, 12u, reply_bytes, staging, sizeof staging);
+  CHECK_STATUS(session.initialize(), Status::ok);
+  session.hold_in(held, sizeof held);
+  std::uint8_t          lane_staging[staging_bytes] = {};
+  KmtTransport          lane(fixture.connection(), SubApi::d3d, 12u, reply_bytes, lane_staging, sizeof lane_staging);
+  RecordingReleaseRoute route;
+  CHECK_STATUS(lane.initialize_lane(session, route), Status::ok);
+  CHECK(lane.lane());
+  CHECK(!session.lane());
+  AvContextRecord record;
+  CHECK_STATUS(record.decode(fixture.kmt().last_private(), fixture.kmt().last_private_size()), Status::ok);
+  CHECK_EQ(record.options().share_context(), session.ring());
+  for (std::uint32_t round = 0u; round < 3u; round++) {
+      WireWriter recorded = session.request_writer();
+      recorded.write_u32(round);
+      CHECK(session.send_async(0x30001u, recorded) == TransportResult::ok);
+      CHECK(session.held() != 0u);
+      const std::uint32_t submits = fixture.kmt().calls(MockKmt::Call::submit);
+      WireWriter executed = lane.request_writer();
+      executed.write_u32(round);
+      CHECK(lane.send_async(0x30002u, executed) == TransportResult::ok);
+      CHECK_EQ(route.releases(), round + 1u);
+      CHECK_EQ(fixture.kmt().calls(MockKmt::Call::submit), submits);
+      CHECK_EQ(session.held(), 0u);
+      CHECK_EQ(route.last().ring(), lane.ring());
+      const std::uint8_t *const ring = fixture.kmt().ring_of(lane.context());
+      std::uint8_t header_bytes[BatchHeader::encoded_size] = {};
+      std::memcpy(header_bytes, ring + 32u + (route.last().batch().begin() & ((1u << 12u) - 1u)), sizeof header_bytes);
+      BatchHeader header;
+      CHECK_STATUS(header.decode(header_bytes, sizeof header_bytes), Status::ok);
+      CHECK(header.after() == session.published_end());
+      CHECK(header.after() != 0u);
+  }
+  CHECK_EQ(session.submissions_through_kernel(), 0u);
+  CHECK_EQ(lane.submissions_through_kernel(), 0u);
+  lane.teardown();
+  session.teardown(); }
+
+TEST(kmt_transport_lane, a_lane_needs_an_established_session_that_is_no_lane_itself)
+{ Fixture fixture;
+  CHECK_STATUS(fixture.open(), Status::ok);
+  std::uint8_t          staging[staging_bytes] = {};
+  std::uint8_t          lane_staging[staging_bytes] = {};
+  KmtTransport          session(fixture.connection(), SubApi::d3d, 12u, reply_bytes, staging, sizeof staging);
+  KmtTransport          lane(fixture.connection(), SubApi::d3d, 12u, reply_bytes, lane_staging, sizeof lane_staging);
+  RecordingReleaseRoute route;
+  CHECK_STATUS(lane.initialize_lane(session, route), Status::invalid_state);
+  CHECK_STATUS(session.initialize(), Status::ok);
+  CHECK_STATUS(lane.initialize_lane(lane, route), Status::invalid_state);
+  CHECK_STATUS(lane.initialize_lane(session, route), Status::ok);
+  std::uint8_t further_staging[staging_bytes] = {};
+  KmtTransport further(fixture.connection(), SubApi::d3d, 12u, reply_bytes, further_staging, sizeof further_staging);
+  CHECK_STATUS(further.initialize_lane(lane, route), Status::invalid_state);
+  lane.teardown();
+  session.teardown(); }

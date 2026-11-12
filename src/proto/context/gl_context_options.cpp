@@ -84,7 +84,8 @@ bool GlContextOptions::fit_for(uint32_t sub_api) const
 {
     AV_SCOPE("GlContextOptions::fit_for");
     if (sub_api == static_cast<uint32_t>(SubApi::opengl)) return valid();
-    if (sub_api == static_cast<uint32_t>(SubApi::opencl)) return shares_only();
+    if (sub_api == static_cast<uint32_t>(SubApi::opencl) || sub_api == static_cast<uint32_t>(SubApi::d3d))
+        return shares_only();
     return defaults();
 }
 

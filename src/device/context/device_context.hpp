@@ -52,6 +52,7 @@ public:
     const ContextBinding &binding() const;
     [[nodiscard]] Status hand_placement(HostBlobErrand &errand);
     uint32_t             id() const;
+    uint32_t             lane_of() const;
     bool                 running() const;
     void                 report(StateWriter &writer);
 
@@ -60,6 +61,7 @@ private:
     DevicePulse          &pulse_;
     WireRecorder  &recorder_;
     uint32_t       id_;
+    uint32_t       lane_of_;
     ContextLabel   label_;
     ContextBinding binding_;
     FenceReporter   fences_;

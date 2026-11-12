@@ -16,10 +16,12 @@ extern "C" void av_context_signalled(void *context)
     static_cast<ContextSignal *>(context)->raise();
 }
 
+extern "C" void av_session_gate_raised(void *gate);
+
 
 ContextExecutor::ContextExecutor(Host &host, const ExecutorLibrary &library, ExecutorShares &shares, uint32_t id)
     : host_(host), library_(library), signal_(nullptr), shares_(shares), id_(id), executor_(nullptr), api_(SubApi::vulkan), uuid_(),
-      options_(), configured_(false)
+      options_(), configured_(false), own_gate_(host), gate_(nullptr)
       {
           AV_SCOPE("ContextExecutor::ContextExecutor");
       }
@@ -28,6 +30,10 @@ ContextExecutor::~ContextExecutor()
 {
     AV_SCOPE("ContextExecutor::~ContextExecutor");
     if (executor_ == nullptr) return;
+    if (lane()) {
+        shares_.leave(executor_);
+        return;
+    }
     shares_.withdraw(id_, executor_);
     library_.destroy(executor_);
 }
@@ -63,6 +69,7 @@ Status ContextExecutor::create()
     AV_SCOPE("ContextExecutor::create");
     host_.require_worker("ContextExecutor::create");
     if (executor_ != nullptr || !configured_) return Status::invalid_state;
+    if (lane()) return join_session();
     __atomic_store_n(&executor_, make(), __ATOMIC_RELEASE);
     if (executor_ == nullptr) {
         StdioLog  sink(stderr);
@@ -70,6 +77,7 @@ Status ContextExecutor::create()
         LogLine(lines).text("context ").number(id_).text(" got no executor session for sub-API ").number(static_cast<uint32_t>(api_)).write();
         return Status::no_memory;
     }
+    if (api_ == SubApi::d3d) return open_session();
     if (signal_ != nullptr) library_.set_signal(executor_, &av_context_signalled, signal_);
     if (api_ != SubApi::opengl) return Status::ok;
     const Status published = shares_.publish(id_, uuid_.raw(), executor_);
@@ -79,28 +87,110 @@ Status ContextExecutor::create()
     return Status::invalid_state;
 }
 
+Status ContextExecutor::open_session()
+{
+    AV_SCOPE("ContextExecutor::open_session");
+    if (own_gate_.initialize() != Status::ok || (signal_ != nullptr && own_gate_.listen(*signal_) != Status::ok)) {
+        if (signal_ != nullptr) library_.set_signal(executor_, &av_context_signalled, signal_);
+        return Status::ok;
+    }
+    gate_ = &own_gate_;
+    library_.set_signal(executor_, &av_session_gate_raised, gate_);
+    static_cast<void>(shares_.publish(id_, uuid_.raw(), executor_, gate_));
+    return Status::ok;
+}
+
+Status ContextExecutor::join_session()
+{
+    AV_SCOPE("ContextExecutor::join_session");
+    SessionGate *gate = nullptr;
+    AvExecutor *const joined = shares_.join(options_.share_context(), uuid_.raw(), gate);
+    if (joined == nullptr || (signal_ != nullptr && gate->listen(*signal_) != Status::ok)) {
+        shares_.leave(joined);
+        StdioLog  sink(stderr);
+        DriverLog lines(sink, "virtio-gpu-av: ");
+        LogLine(lines).text("context ").number(id_).text(" found no session ").number(options_.share_context()).text(" to be a lane of").write();
+        return Status::not_found;
+    }
+    gate_ = gate;
+    __atomic_store_n(&executor_, joined, __ATOMIC_RELEASE);
+    return Status::ok;
+}
+
 void ContextExecutor::destroy()
 {
     AV_SCOPE("ContextExecutor::destroy");
     host_.require_worker("ContextExecutor::destroy");
     if (executor_ == nullptr) return;
+    if (gate_ != nullptr && signal_ != nullptr) gate_->forget(*signal_);
+    if (lane()) {
+        shares_.leave(executor_);
+        executor_ = nullptr;
+        gate_ = nullptr;
+        return;
+    }
+    own_gate_.close();
     shares_.withdraw(id_, executor_);
     shares_.await_unused(executor_);
     library_.destroy(executor_);
     executor_ = nullptr;
+    gate_ = nullptr;
 }
 
 void ContextExecutor::withdraw()
 {
     AV_SCOPE("ContextExecutor::withdraw");
     const AvExecutor *const made = __atomic_load_n(&executor_, __ATOMIC_ACQUIRE);
-    if (made != nullptr) shares_.withdraw(id_, made);
+    if (made == nullptr || lane()) return;
+    own_gate_.close();
+    shares_.withdraw(id_, made);
+}
+
+bool ContextExecutor::lane() const
+{
+    AV_SCOPE("ContextExecutor::lane");
+    return api_ == SubApi::d3d && options_.share_context() != 0u;
+}
+
+bool ContextExecutor::enter(const void *runner)
+{
+    AV_SCOPE("ContextExecutor::enter");
+    return gate_ != nullptr && gate_->enter(runner);
+}
+
+void ContextExecutor::leave()
+{
+    AV_SCOPE("ContextExecutor::leave");
+    if (gate_ != nullptr) gate_->leave();
+}
+
+void ContextExecutor::consumed(uint64_t head)
+{
+    AV_SCOPE("ContextExecutor::consumed");
+    if (gate_ != nullptr && !lane()) gate_->consumed(head);
+}
+
+bool ContextExecutor::session_reached(uint64_t end, uint64_t deadline)
+{
+    AV_SCOPE("ContextExecutor::session_reached");
+    if (!lane()) return true;
+    return gate_ != nullptr && gate_->reached(end, deadline);
+}
+
+bool ContextExecutor::session_gone() const
+{
+    AV_SCOPE("ContextExecutor::session_gone");
+    return lane() && (gate_ == nullptr || gate_->closed());
 }
 
 HostPoll ContextExecutor::poll()
 {
     AV_SCOPE("ContextExecutor::poll");
-    return executor_ != nullptr ? library_.poll(executor_) : HostPoll::idle;
+    if (executor_ == nullptr) return HostPoll::idle;
+    static_cast<void>(enter(nullptr));
+    const HostPoll polled = library_.poll(executor_);
+    leave();
+    return polled;
 }
 
 Status ContextExecutor::lose_device()
@@ -116,7 +206,10 @@ void ContextExecutor::gpu_progress(uint64_t &marked, uint64_t &reached) const
     AV_SCOPE("ContextExecutor::gpu_progress");
     marked = 0u;
     reached = 0u;
-    if (executor_ != nullptr) library_.gpu_progress(executor_, marked, reached);
+    if (executor_ == nullptr) return;
+    if (gate_ != nullptr) static_cast<void>(gate_->enter(nullptr));
+    library_.gpu_progress(executor_, marked, reached);
+    if (gate_ != nullptr) gate_->leave();
 }
 
 void ContextExecutor::end_batch()
@@ -160,7 +253,10 @@ Status ContextExecutor::place(uint64_t size, uint32_t request, AvHostMemory &mem
     AV_SCOPE("ContextExecutor::place");
     host_.require_worker("ContextExecutor::place");
     if (executor_ == nullptr) return Status::invalid_state;
-    return library_.place_memory(executor_, size, request, memory);
+    static_cast<void>(enter(nullptr));
+    const Status placed = library_.place_memory(executor_, size, request, memory);
+    leave();
+    return placed;
 }
 
 void ContextExecutor::channel_stats(const uint8_t *body, size_t size)

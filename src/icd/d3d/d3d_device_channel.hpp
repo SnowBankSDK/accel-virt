@@ -25,6 +25,8 @@ public:
     D3dDeviceChannel &operator=(const D3dDeviceChannel &) = delete;
 
     uint32_t device() const;
+    [[nodiscard]] Status move_to(D3dCommandStream &stream);
+    bool                 speaks_on(const D3dCommandStream &stream) const;
     [[nodiscard]] bool   open(uint32_t feature_level, uint32_t &hresult, uint32_t &level);
     [[nodiscard]] bool   open9(uint32_t &hresult);
     [[nodiscard]] Status flush();
@@ -54,7 +56,7 @@ public:
 private:
     friend struct D3dDeviceChannelProbe;
 
-    D3dCommandStream &stream_;
+    D3dCommandStream *stream_;
     ThreadLock       &lock_;
     uint32_t          device_;
     ReleaseRoute     *route_;

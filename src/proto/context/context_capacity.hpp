@@ -7,6 +7,7 @@ namespace av {
 
 struct ContextCapacity {
     static constexpr uint32_t contexts = 256u;
+    static constexpr uint32_t lanes = 16u;
     static constexpr uint32_t fence_queue_first = 2u;
     static constexpr uint32_t special_lines = 2u;
     static constexpr uint32_t queues = fence_queue_first + contexts + special_lines;

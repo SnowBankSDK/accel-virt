@@ -65,7 +65,7 @@ public:
 private:
     friend struct D3dCommandStreamProbe;
 
-    [[nodiscard]] TransportResult append(uint32_t command_id, WireWriter &writer);
+    [[nodiscard]] TransportResult append(uint32_t command_id, WireWriter &writer, uint8_t flags);
     void                          adopt_recording();
     [[nodiscard]] bool            room_for(size_t wanted);
     size_t                        whole_commands(const uint8_t *bytes, size_t length) const;

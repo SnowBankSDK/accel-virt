@@ -36,6 +36,7 @@ public:
     [[nodiscard]] Status accept(const uint8_t *bytes, size_t length);
     [[nodiscard]] Status submit(const SubmissionDescriptor &submission);
     void                 kick();
+    void                 kick_if_behind();
     void                 user_mode_submits(uint64_t *progress);
     void                 driver_submits();
     bool                 forget_progress(const uint64_t *progress);

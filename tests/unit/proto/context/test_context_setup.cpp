@@ -219,13 +219,15 @@ TEST(context_setup, carries_the_options_and_the_share_contexts_device_id)
   Encoded again(decoded);
   CHECK(std::memcmp(again.bytes(), encoded.bytes(), ContextSetup::encoded_size) == 0); }
 
-TEST(gl_context_options, fit_for_takes_gl_options_for_opengl_a_share_for_opencl_and_nothing_else)
+TEST(gl_context_options, fit_for_takes_gl_options_for_opengl_a_share_for_opencl_and_d3d_and_nothing_else)
 { const GlContextOptions share_only = GlContextOptions().sharing(share_device_id);
   CHECK(core_46.fit_for(static_cast<std::uint32_t>(SubApi::opengl)));
   CHECK(!core_46.fit_for(static_cast<std::uint32_t>(SubApi::opencl)));
   CHECK(!core_46.fit_for(static_cast<std::uint32_t>(SubApi::vulkan)));
   CHECK(share_only.fit_for(static_cast<std::uint32_t>(SubApi::opencl)));
-  CHECK(!share_only.fit_for(static_cast<std::uint32_t>(SubApi::d3d)));
+  CHECK(share_only.fit_for(static_cast<std::uint32_t>(SubApi::d3d)));
+  CHECK(!share_only.fit_for(static_cast<std::uint32_t>(SubApi::vulkan)));
+  CHECK(!core_46.fit_for(static_cast<std::uint32_t>(SubApi::d3d)));
   CHECK(GlContextOptions().fit_for(static_cast<std::uint32_t>(SubApi::vulkan)));
   CHECK(GlContextOptions().fit_for(static_cast<std::uint32_t>(SubApi::d3d))); }
 

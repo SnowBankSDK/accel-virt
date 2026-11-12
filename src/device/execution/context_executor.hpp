@@ -3,6 +3,7 @@
 
 #include "core/support/status.hpp"
 #include "device/execution/host_poll.hpp"
+#include "device/execution/session_gate.hpp"
 #include "device/abi/av_executor.h"
 #include "proto/context/device_uuid.hpp"
 #include "proto/submission/blob_role.hpp"
@@ -36,6 +37,12 @@ public:
     void                 destroy();
     void                 withdraw();
     void                 end_batch();
+    [[nodiscard]] bool   enter(const void *runner);
+    void                 leave();
+    void                 consumed(uint64_t head);
+    [[nodiscard]] bool   session_reached(uint64_t end, uint64_t deadline);
+    bool                 session_gone() const;
+    bool                 lane() const;
     HostPoll             poll();
     void                 gpu_progress(uint64_t &marked, uint64_t &reached) const;
     [[nodiscard]] Status execute(uint32_t command_id, const uint8_t *payload, size_t size, uint8_t *reply,
@@ -62,6 +69,8 @@ public:
 private:
     AvExecutor *make() const;
     Status      status_of(uint32_t answered) const;
+    [[nodiscard]] Status join_session();
+    [[nodiscard]] Status open_session();
 
     Host                  &host_;
     const ExecutorLibrary &library_;
@@ -73,6 +82,8 @@ private:
     DeviceUuid             uuid_;
     GlContextOptions       options_;
     bool                   configured_;
+    SessionGate            own_gate_;
+    SessionGate           *gate_;
 
     friend struct ContextExecutorProbe;
 };

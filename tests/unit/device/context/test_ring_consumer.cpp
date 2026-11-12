@@ -626,12 +626,12 @@ TEST(d3d_ordering, settling_waits_only_for_what_was_published_before_it_began)
   published.ring().publish();
   published.bind();
   drained.bind();
-  ordering.add(drained.consumer(), drained.worker());
+  ordering.add(drained.consumer(), drained.worker(), true);
   std::uint64_t started = now_ns();
   ordering.settle();
   CHECK(now_ns() - started < 1000000u);
   published.serve();
-  ordering.add(published.consumer(), published.worker());
+  ordering.add(published.consumer(), published.worker(), true);
   started = now_ns();
   ordering.settle();
   CHECK(now_ns() - started < 1000000u);
@@ -817,8 +817,8 @@ TEST(ring_consumer_order_with, a_batch_waits_for_an_earlier_one_on_another_strea
   other.ring().publish();
   other.bind();
   waiting.bind();
-  ordering.add(waiting.consumer(), waiting.worker());
-  ordering.add(other.consumer(), other.worker());
+  ordering.add(waiting.consumer(), waiting.worker(), true);
+  ordering.add(other.consumer(), other.worker(), true);
   waiting.consumer().order_with(ordering);
 
   waiting.ring().write_batch(1u, 0u);
@@ -855,8 +855,8 @@ TEST(d3d_ordering, a_stream_waited_on_is_woken_to_run_its_batch)
   CHECK_STATUS(ordering.initialize(), Status::ok);
   other.bind();
   waiting.bind();
-  ordering.add(waiting.consumer(), waiting.worker());
-  ordering.add(other.consumer(), other.worker());
+  ordering.add(waiting.consumer(), waiting.worker(), true);
+  ordering.add(other.consumer(), other.worker(), true);
   waiting.consumer().order_with(ordering);
   other.host().advance_clock_per_read(1000u);
   CHECK_STATUS(other.worker().start(), Status::ok);
@@ -888,13 +888,13 @@ TEST(d3d_ordering, an_ordering_never_initialized_or_an_unstamped_batch_waits_for
   other.ring().publish();
   other.bind();
   waiting.bind();
-  ordering.add(other.consumer(), other.worker());
-  ordering.add(waiting.consumer(), waiting.worker());
+  ordering.add(other.consumer(), other.worker(), true);
+  ordering.add(waiting.consumer(), waiting.worker(), true);
   std::uint64_t started = now_ns();
   ordering.wait_before(waiting.consumer(), 900u);
   CHECK(now_ns() - started < 20000000u);
   CHECK_STATUS(ordering.initialize(), Status::ok);
-  ordering.add(other.consumer(), other.worker());
+  ordering.add(other.consumer(), other.worker(), true);
   started = now_ns();
   ordering.wait_before(waiting.consumer(), 0u);
   CHECK(now_ns() - started < 20000000u);
@@ -1107,8 +1107,8 @@ TEST(d3d_ordering, a_stream_added_past_the_table_is_not_waited_on)
   other.bind();
   waiting.bind();
   for (std::uint32_t member = 0u; member < av::D3dOrdering::capacity; member++)
-      ordering.add(waiting.consumer(), waiting.worker());
-  ordering.add(other.consumer(), other.worker());
+      ordering.add(waiting.consumer(), waiting.worker(), true);
+  ordering.add(other.consumer(), other.worker(), true);
   const std::uint64_t started = now_ns();
   ordering.wait_before(waiting.consumer(), 900u);
   CHECK(now_ns() - started < 20000000u);

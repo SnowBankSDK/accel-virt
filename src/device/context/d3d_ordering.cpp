@@ -34,12 +34,12 @@ Status D3dOrdering::initialize()
     return mutex_ != nullptr ? Status::ok : host_.create_mutex(mutex_);
 }
 
-void D3dOrdering::add(RingConsumer &ring, Worker &worker)
+void D3dOrdering::add(RingConsumer &ring, Worker &worker, bool orders)
 {
     AV_SCOPE("D3dOrdering::add");
     if (mutex_ == nullptr) return;
     host_.lock_mutex(mutex_);
-    if (count_ < capacity) members_[count_++] = Member{&ring, &worker};
+    if (count_ < capacity) members_[count_++] = Member{&ring, &worker, orders};
     host_.unlock_mutex(mutex_);
 }
 
@@ -51,7 +51,7 @@ void D3dOrdering::remove(RingConsumer &ring)
     for (uint32_t index = 0u; index < count_; index++) {
         if (members_[index].ring_ != &ring) continue;
         members_[index] = members_[--count_];
-        members_[count_] = Member{nullptr, nullptr};
+        members_[count_] = Member{nullptr, nullptr, false};
         break;
     }
     host_.unlock_mutex(mutex_);
@@ -64,7 +64,7 @@ bool D3dOrdering::wake_earlier(const RingConsumer *ring, uint64_t published_at)
     bool pending = false;
     for (uint32_t index = 0u; index < count_; index++) {
         const Member &member = members_[index];
-        if (member.ring_ == ring || member.ring_->earliest_pending() >= published_at) continue;
+        if (member.ring_ == ring || !member.orders_ || member.ring_->earliest_pending() >= published_at) continue;
         member.worker_->wake();
         pending = true;
     }

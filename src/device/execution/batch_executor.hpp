@@ -41,6 +41,8 @@ public:
     HostPoll             poll();
     void                 gpu_progress(uint64_t &marked, uint64_t &reached) const;
     [[nodiscard]] Status run(const RingWindow &ring, uint64_t head, const BatchHeader &batch);
+    [[nodiscard]] bool   session_reached(uint64_t end, uint64_t deadline);
+    void                 consumed(uint64_t head);
 
     uint64_t batches() const;
     uint64_t commands() const;
@@ -58,6 +60,8 @@ private:
                                    size_t &answer);
     [[nodiscard]] Status failed(uint64_t fence, Status status);
     void                 write_reply(uint64_t fence_id, size_t answer);
+    void                 remember(const CommandHeader &header, const uint8_t *payload, size_t size);
+    void                 restore();
 
     Host            &host_;
     ContextExecutor &executor_;
@@ -73,6 +77,10 @@ private:
     uint64_t         skipped_;
     GatheredCommand  gathered_;
     bool             abandoned_;
+    static constexpr size_t restore_capacity = 32u;
+    uint32_t         restore_id_;
+    size_t           restore_size_;
+    uint8_t          restore_[restore_capacity];
 
     friend struct BatchExecutorProbe;
 };

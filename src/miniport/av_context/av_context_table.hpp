@@ -88,7 +88,10 @@ private:
     void                 wake(uint32_t slot, uint64_t raised, bool lost_now);
     uint32_t             claim(void *context, bool &duplicate);
     [[nodiscard]] Status resolve(uint32_t handle, AllocationKind kind, Allocation *&allocation);
-    [[nodiscard]] Status resolve_share(uint32_t slot, SubApi asking, uint32_t handle, uint32_t &context_id);
+    [[nodiscard]] Status resolve_share(uint32_t slot, SubApi asking, uint32_t handle, uint32_t &context_id,
+                                       uint32_t &parent);
+    uint32_t             lanes_of(uint32_t parent) const;
+    [[nodiscard]] Status release_in_lane(uint32_t slot, const SubmissionDescriptor &batch, uint64_t &awaited);
     [[nodiscard]] Status set_up(uint32_t slot, const AvContextRecord &record, VirtioGpuDevice &device,
                                 RegisterWindow &doorbells, const CapsetInfo &capset);
     void                 release(uint32_t slot);
@@ -125,6 +128,8 @@ private:
     bool                             told_lost_[max_contexts];
     uint32_t                         generations_[max_contexts];
     bool                             live_[max_contexts];
+    bool                             lanes_[max_contexts];
+    uint32_t                         parents_[max_contexts];
     void                            *departed_[max_contexts];
     uint8_t                          request_[AvContextBinding::request_bytes];
     WaitMutex                        requests_;

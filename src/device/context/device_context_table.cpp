@@ -50,7 +50,16 @@ bool DeviceContextTable::can_share(uint32_t asking, uint32_t share)
     AV_SCOPE("DeviceContextTable::can_share");
     host_.require_main_loop("DeviceContextTable::can_share");
     const DeviceContext *const shared = asking != share ? find(share) : nullptr;
-    return shared != nullptr && shared->binding().bound() && shared->binding().sub_api() == SubApi::opengl;
+    const DeviceContext *const lane = find(asking);
+    if (shared == nullptr || !shared->binding().bound() || lane == nullptr) return false;
+    if (shared->binding().sub_api() == SubApi::opengl) return true;
+    if (shared->binding().sub_api() != SubApi::d3d || shared->lane_of() != 0u) return false;
+    uint32_t lanes = 0u;
+    for (uint32_t index = 0u; index < max_contexts; index++)
+        lanes += live_at(index) && slots_[index].object().binding().bound() && slots_[index].object().lane_of() == share
+                     ? 1u
+                     : 0u;
+    return lanes < ContextCapacity::lanes;
 }
 
 ObjectStorage<DeviceContext> *DeviceContextTable::slot_of(uint32_t id)

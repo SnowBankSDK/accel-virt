@@ -16,7 +16,7 @@ SubmissionPath::SubmissionPath(Kmt &kmt, GuestDoorbell &doorbell, TransportRing 
 }
 
 Status SubmissionPath::submit(uint32_t context, uint64_t dma_address, const uint8_t *descriptor, uint32_t size,
-                              uint64_t fence, ReleaseRoute *route, uint32_t writer)
+                              uint64_t fence, ReleaseRoute *route, uint32_t writer, bool quiet)
 {
     AV_SCOPE("SubmissionPath::submit");
     const bool ordered = ordered_ring_ != 0u;
@@ -34,6 +34,12 @@ Status SubmissionPath::submit(uint32_t context, uint64_t dma_address, const uint
         if (released != Status::not_supported) return released;
     }
     last_writer_ = 0u;
+    if (!ordered && quiet && publishes_tail_ && !doorbell_.established()) {
+        const Status published = ring_.publish_tail();
+        if (published != Status::ok) return published;
+        user_submissions_++;
+        return Status::ok;
+    }
     if (!ordered && doorbell_.established()) {
         const Status published = ring_.publish_tail();
         if (published != Status::ok) return published;

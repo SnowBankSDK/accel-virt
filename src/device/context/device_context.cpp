@@ -42,7 +42,7 @@ DeviceContext::DeviceContext(Host &host, BlobTable &blobs, HostBlobOwners &owner
                              const ExecutorLibrary &library,
                              ExecutorShares &shares, WireRecorder &recorder, D3dOrdering &ordering,
                              DevicePulse &pulse, uint32_t id, const char *name)
-    : ordering_(ordering), pulse_(pulse), recorder_(recorder), id_(id), label_(name), binding_(host, blobs), fences_(host, interrupts, recorder, id),
+    : ordering_(ordering), pulse_(pulse), recorder_(recorder), id_(id), lane_of_(0u), label_(name), binding_(host, blobs), fences_(host, interrupts, recorder, id),
       imports_(host, owners, executor_, recorder, id),
       executor_(host, library, shares, id), staging_(host),
       batches_(host, executor_, imports_, staging_, fences_, recorder, id),
@@ -137,9 +137,10 @@ Status DeviceContext::bind(const ContextSetup &setup, const CapsetInfo &capset)
     disconnect.dismiss();
     withdraw.dismiss();
     unbind.dismiss();
+    lane_of_ = setup.sub_api() == SubApi::d3d ? setup.options().share_context() : 0u;
     if (setup.sub_api() == SubApi::d3d) {
-        ring_.order_with(ordering_);
-        ordering_.add(ring_, worker_);
+        if (lane_of_ == 0u) ring_.order_with(ordering_);
+        ordering_.add(ring_, worker_, lane_of_ == 0u);
     }
     recorder_.record_context_setup(id_, setup);
     return Status::ok;
@@ -163,6 +164,12 @@ uint32_t DeviceContext::id() const
 {
     AV_SCOPE("DeviceContext::id");
     return id_;
+}
+
+uint32_t DeviceContext::lane_of() const
+{
+    AV_SCOPE("DeviceContext::lane_of");
+    return lane_of_;
 }
 
 bool DeviceContext::running() const
@@ -190,6 +197,7 @@ void DeviceContext::report(StateWriter &writer)
         writer.number("fence", binding_.fence_resource());
         writer.number("doorbell", binding_.doorbell());
         writer.number("reply", binding_.reply_resource());
+        writer.number("lane_of", lane_of_);
     }
     writer.flag("attached", ring_.attached());
     writer.flag("faulted", ring_.faulted());

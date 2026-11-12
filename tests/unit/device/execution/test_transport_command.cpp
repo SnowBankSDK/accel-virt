@@ -113,7 +113,7 @@ TEST(transport_command_run, every_bit_flip_of_a_nop_is_refused_skipped_or_still_
       flipped[bit / 8u] = static_cast<std::uint8_t>(flipped[bit / 8u] ^ (1u << (bit % 8u)));
       CommandHeader header;
       const Status  decoded = header.decode(flipped, sizeof flipped);
-      if (bit == 35u || bit > 56u) {
+      if (bit == 35u || bit > 57u) {
           CHECK_STATUS(decoded, Status::malformed);
           continue;
       }
@@ -125,7 +125,7 @@ TEST(transport_command_run, every_bit_flip_of_a_nop_is_refused_skipped_or_still_
       const bool known = (header.id() >= CommandHeader::nop_id &&
                           header.id() <= CommandHeader::release_shared_object_id) ||
                          header.id() == CommandHeader::answer_piece_id;
-      const Status expected = bit == 1u || (bit >= 32u && bit != 56u) ? Status::malformed
+      const Status expected = bit == 1u || (bit >= 32u && bit != 56u && bit != 57u) ? Status::malformed
                               : bit < 16u                             ? (known ? Status::malformed
                                                                                : Status::not_found)
                                                                       : Status::ok;

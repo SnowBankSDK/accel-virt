@@ -14,6 +14,7 @@
 #include "miniport/scheduling/execution_node.hpp"
 #include "core/support/status.hpp"
 #include "miniport/virtio/virtio_gpu_device.hpp"
+#include "harness/virtio/fake_doorbell_pages.hpp"
 #include "harness/virtio/fake_register_bytes.hpp"
 #include "harness/virtio/fake_virtqueue_device.hpp"
 #include "harness/virtio/mapped_virtio_function.hpp"
@@ -44,6 +45,8 @@
 #include "proto/virtio_gpu/gpu_response.hpp"
 
 #include <cstdint>
+#include <memory>
+#include <vector>
 #include <cstdio>
 #include <cstring>
 #include <optional>
@@ -1612,7 +1615,7 @@ TEST(av_context_table_report, writes_each_live_context_its_memory_and_its_chunks
   std::snprintf(expected, sizeof expected,
                 "av_context_table/0 busy=false bound=1\n"
                 "av_context_table/0/av_context/0 handle=0x%016llX doorbell=0 ring_order=12 name=0x%016llX"
-                " ring_view=%llu reply_view=%llu state=2 context_id=1 completed=0 live=true lost=false"
+                " ring_view=%llu reply_view=%llu state=2 context_id=1 completed=0 live=true lane=false lost=false"
                 " wakes=false raised=0 chunks=1",
                 hex_of(&first_context), hex_of(fixture.ring().allocation()),
                 static_cast<unsigned long long>(fixture.memory().ring_view()),
@@ -2453,3 +2456,163 @@ TEST(av_context_table_unbind, the_packets_that_waited_on_the_context_are_finishe
   CHECK_STATUS(fixture.table().unbind(&second_context, &fixture.device()), Status::ok);
   fixture.serve();
   CHECK_EQ(fixture.node().pending(), 0u); }
+
+namespace {
+
+int lane_device = 0;
+int lane_process = 0;
+int foreign_process = 0;
+
+void owned(ProcessAllocation &ring, void *process = &lane_process)
+{
+    static_cast<void>(ring.allocation()->open(&lane_device, process));
+}
+
+CapsetInfo d3d_capset()
+{
+    return CapsetInfo(av::ProtocolVersion(av::ProtocolVersion::current_major, av::ProtocolVersion::current_minor), 0xFu,
+                      av::ContextCapacity::contexts, 12u, 20u, 0u, av::GpuIdentity(0u, 0u, 0u, uuid, 0u, 0u, "gpu"));
+}
+
+Status bind_d3d(Fixture &fixture, void *context, const AvContextRecord &record)
+{
+    return fixture.table().bind(context, record, fixture.device(), fixture.mapped().function().doorbells(), d3d_capset());
+}
+
+Status release_in(Fixture &fixture, void *context, std::uint32_t ring, const SubmissionDescriptor &batch,
+                  std::uint64_t &awaited)
+{
+    fixture.platform().set_irql(Irql::dispatch);
+    const Status status = fixture.table().release_batch(context, av::ReleaseRecord(ring, batch), nullptr, awaited);
+    fixture.platform().set_irql(Irql::passive);
+    return status;
+}
+
+}
+
+TEST(av_context_table_lane, a_session_has_at_most_its_lanes_and_the_next_is_refused_unsent_so_its_context_stays_on_the_session)
+{ Fixture fixture;
+  Host host(fixture.mapped());
+  CHECK_STATUS(bind_d3d(fixture, &first_context, AvContextRecord(SubApi::d3d, 12u, fixture.ring().handle(), page)),
+               Status::ok);
+  owned(fixture.ring());
+  const GlContextOptions lane = GlContextOptions().sharing(fixture.ring().handle());
+  std::vector<std::unique_ptr<Transport>> rings;
+  int                                     handles[av::ContextCapacity::lanes + 1u] = {};
+  for (std::uint32_t index = 0u; index < av::ContextCapacity::lanes; index++) {
+      rings.push_back(std::make_unique<Transport>(fixture));
+      owned(rings.back()->ring());
+      CHECK_STATUS(bind_d3d(fixture, &handles[index], rings.back()->record(SubApi::d3d, lane)), Status::ok);
+  }
+  CHECK_EQ(host.field(submit_3d_type, 1u, options_offset + 4u), 1u);
+  const std::uint32_t sent = host.count_of(submit_3d_type);
+  rings.push_back(std::make_unique<Transport>(fixture));
+  owned(rings.back()->ring());
+  CHECK_STATUS(bind_d3d(fixture, &handles[av::ContextCapacity::lanes], rings.back()->record(SubApi::d3d, lane)),
+               Status::no_space);
+  CHECK_EQ(host.count_of(submit_3d_type), sent);
+  CHECK(fixture.table().invariants_hold());
+  CHECK_STATUS(fixture.table().unbind(&handles[0], &fixture.device()), Status::ok);
+  CHECK_STATUS(bind_d3d(fixture, &handles[av::ContextCapacity::lanes], rings.back()->record(SubApi::d3d, lane)),
+               Status::ok);
+  for (std::uint32_t index = 1u; index <= av::ContextCapacity::lanes; index++)
+      CHECK_STATUS(fixture.table().unbind(&handles[index], &fixture.device()), Status::ok);
+  CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok);
+  CHECK(fixture.table().invariants_hold()); }
+
+TEST(av_context_table_lane, a_lane_of_a_lane_or_of_another_api_or_process_is_refused)
+{ Fixture fixture;
+  Host host(fixture.mapped());
+  CHECK_STATUS(bind_d3d(fixture, &first_context, AvContextRecord(SubApi::d3d, 12u, fixture.ring().handle(), page)),
+               Status::ok);
+  owned(fixture.ring());
+  Transport lane(fixture);
+  owned(lane.ring());
+  CHECK_STATUS(bind_d3d(fixture, &second_context,
+                        lane.record(SubApi::d3d, GlContextOptions().sharing(fixture.ring().handle()))),
+               Status::ok);
+  Transport further(fixture);
+  owned(further.ring());
+  int       third = 0;
+  CHECK_STATUS(bind_d3d(fixture, &third, further.record(SubApi::d3d, GlContextOptions().sharing(lane.ring().handle()))),
+               Status::invalid_parameter);
+  Transport vulkan(fixture);
+  owned(vulkan.ring());
+  int       fourth = 0;
+  CHECK_STATUS(bind_d3d(fixture, &fourth, vulkan.record(SubApi::vulkan, GlContextOptions())), Status::ok);
+  Transport other(fixture);
+  owned(other.ring());
+  int       fifth = 0;
+  CHECK_STATUS(bind_d3d(fixture, &fifth, other.record(SubApi::d3d, GlContextOptions().sharing(vulkan.ring().handle()))),
+               Status::invalid_parameter);
+  Transport stranger(fixture);
+  owned(stranger.ring(), &foreign_process);
+  int       sixth = 0;
+  CHECK_STATUS(bind_d3d(fixture, &sixth,
+                        stranger.record(SubApi::d3d, GlContextOptions().sharing(fixture.ring().handle()))),
+               Status::invalid_parameter);
+  CHECK_STATUS(fixture.table().unbind(&fourth, &fixture.device()), Status::ok);
+  CHECK_STATUS(fixture.table().unbind(&second_context, &fixture.device()), Status::ok);
+  CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok); }
+
+TEST(av_context_table_lane, a_lane_publishes_each_released_batch_at_once_and_wakes_its_session_only_while_it_has_work)
+{ Fixture fixture;
+  Host host(fixture.mapped());
+  CHECK_STATUS(bind_d3d(fixture, &first_context, AvContextRecord(SubApi::d3d, 12u, fixture.ring().handle(), page)),
+               Status::ok);
+  owned(fixture.ring());
+  Transport lane(fixture);
+  owned(lane.ring());
+  CHECK_STATUS(bind_d3d(fixture, &second_context,
+                        lane.record(SubApi::d3d, GlContextOptions().sharing(fixture.ring().handle()))),
+               Status::ok);
+  const std::uint32_t lane_slot = fixture.table().doorbell_of(&second_context);
+  const std::uint32_t session_slot = fixture.table().doorbell_of(&first_context);
+  av::FakeDoorbellPages &doorbells = fixture.mapped().function().doorbells();
+  const std::uint32_t session_rings = doorbells.rings(session_slot);
+  std::uint64_t awaited = 0u;
+  CHECK_STATUS(release_in(fixture, &second_context, lane.ring().handle(), SubmissionDescriptor(1u, 0u, 64u), awaited),
+               Status::ok);
+  CHECK_EQ(awaited, 1u);
+  std::uint64_t tail = 0u;
+  std::memcpy(&tail, fixture.ring_memory(lane_slot) + 8u, sizeof tail);
+  CHECK_EQ(tail, 64u);
+  CHECK_EQ(doorbells.rings(session_slot), session_rings);
+  fixture.process_publishes(96u, session_slot);
+  CHECK_STATUS(release_in(fixture, &second_context, lane.ring().handle(), SubmissionDescriptor(2u, 64u, 128u), awaited),
+               Status::ok);
+  CHECK_EQ(awaited, 2u);
+  std::memcpy(&tail, fixture.ring_memory(lane_slot) + 8u, sizeof tail);
+  CHECK_EQ(tail, 128u);
+  CHECK_EQ(doorbells.rings(session_slot), session_rings + 1u);
+  CHECK_EQ(fixture.table().held_batches(&second_context), 0u);
+  CHECK_STATUS(fixture.table().unbind(&second_context, &fixture.device()), Status::ok);
+  CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok); }
+
+TEST(av_context_table_lane, a_lane_batch_out_of_its_own_order_loses_the_lane_at_once_and_holds_nothing)
+{ Fixture fixture;
+  Host host(fixture.mapped());
+  CHECK_STATUS(bind_d3d(fixture, &first_context, AvContextRecord(SubApi::d3d, 12u, fixture.ring().handle(), page)),
+               Status::ok);
+  owned(fixture.ring());
+  Transport lane(fixture);
+  owned(lane.ring());
+  CHECK_STATUS(bind_d3d(fixture, &second_context,
+                        lane.record(SubApi::d3d, GlContextOptions().sharing(fixture.ring().handle()))),
+               Status::ok);
+  std::uint64_t awaited = 0u;
+  CHECK_STATUS(release_in(fixture, &second_context, lane.ring().handle(), SubmissionDescriptor(2u, 64u, 128u), awaited),
+               Status::ok);
+  CHECK_EQ(awaited, 2u);
+  CHECK_EQ(fixture.table().held_batches(&second_context), 0u);
+  const std::uint32_t lane_slot = fixture.table().doorbell_of(&second_context);
+  std::uint32_t       lost = 0u;
+  std::memcpy(&lost, fixture.ring_memory(lane_slot) + av::RingHeader::lost_at, sizeof lost);
+  CHECK(lost != 0u);
+  CHECK(fixture.platform().logged_line("cannot be released in order"));
+  std::uint32_t session_lost = 0u;
+  std::memcpy(&session_lost, fixture.ring_memory(fixture.table().doorbell_of(&first_context)) + av::RingHeader::lost_at,
+              sizeof session_lost);
+  CHECK_EQ(session_lost, 0u);
+  CHECK_STATUS(fixture.table().unbind(&second_context, &fixture.device()), Status::ok);
+  CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok); }

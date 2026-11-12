@@ -78,6 +78,18 @@ void GuestContext::kick()
     if (state_ == State::established) submitter_.kick();
 }
 
+void GuestContext::kick_if_behind()
+{
+    AV_SCOPE("GuestContext::kick_if_behind");
+    platform_.require_irql_at_most(Irql::dispatch, "GuestContext::kick_if_behind");
+    SpinLockGuard guard(lock_);
+    const uint8_t *const ring = pages_.ring_view();
+    if (state_ != State::established || ring == nullptr) return;
+    const uint64_t tail = __atomic_load_n(reinterpret_cast<const uint64_t *>(ring + 8u), __ATOMIC_ACQUIRE);
+    const uint64_t head = __atomic_load_n(reinterpret_cast<const uint64_t *>(ring + 16u), __ATOMIC_ACQUIRE);
+    if (head < tail) submitter_.kick();
+}
+
 Status GuestContext::submit(const SubmissionDescriptor &submission)
 {
     AV_SCOPE("GuestContext::submit");

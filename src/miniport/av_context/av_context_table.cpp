@@ -24,6 +24,7 @@
 #include "miniport/memory/shared_object_release.hpp"
 #include "proto/escape/context_views_record.hpp"
 #include "proto/escape/av_context_record.hpp"
+#include "proto/context/context_capacity.hpp"
 #include "proto/context/sub_api.hpp"
 #include "proto/resources/allocation_kind.hpp"
 #include "proto/escape/host_window_record.hpp"
@@ -47,9 +48,10 @@ AvContextTable::AvContextTable(Platform &platform, DxgkrnlInterface &dxgkrnl, Al
     : platform_(platform), dxgkrnl_(dxgkrnl), allocations_(allocations), window_(window),
       lock_(platform, LockRank::av_context_slots),
       reader_(platform), bindings_(), contexts_{}, names_{}, memories_(), chunks_(platform), ids_(platform, HostBlobId::most), held_chunks_{}, orders_{},
-      wakes_{}, raised_{}, told_lost_{}, generations_{}, live_{}, departed_{}, request_{}, requests_(platform, LockRank::av_control_requests), adapter_(0u)
+      wakes_{}, raised_{}, told_lost_{}, generations_{}, live_{}, lanes_{}, parents_{}, departed_{}, request_{}, requests_(platform, LockRank::av_control_requests), adapter_(0u)
       {
           AV_SCOPE("AvContextTable::AvContextTable");
+          for (uint32_t &parent : parents_) parent = no_slot;
       }
 
 AvContextTable::~AvContextTable()
@@ -97,10 +99,12 @@ Status AvContextTable::resolve(uint32_t handle, AllocationKind kind, Allocation 
     return Status::ok;
 }
 
-Status AvContextTable::resolve_share(uint32_t slot, SubApi asking, uint32_t handle, uint32_t &context_id)
+Status AvContextTable::resolve_share(uint32_t slot, SubApi asking, uint32_t handle, uint32_t &context_id,
+                                     uint32_t &parent)
 {
     AV_SCOPE("AvContextTable::resolve_share");
     context_id = 0u;
+    parent = no_slot;
     if (handle == 0u) return Status::ok;
     AcquiredHandleData acquired(dxgkrnl_, handle);
     if (acquired.acquire() != Status::ok) return Status::invalid_parameter;
@@ -111,11 +115,26 @@ Status AvContextTable::resolve_share(uint32_t slot, SubApi asking, uint32_t hand
         const AvContextBinding &binding = bindings_[other].object();
         const Allocation &own = *names_[slot];
         const bool same_owner = asking == SubApi::opengl ? ring->held_with(own) : ring->held_in_process_of(own);
-        if (binding.sub_api() != SubApi::opengl || !same_owner) return Status::invalid_parameter;
+        if (!same_owner) return Status::invalid_parameter;
+        if (asking == SubApi::d3d) {
+            if (binding.sub_api() != SubApi::d3d || lanes_[other] || lost(other)) return Status::invalid_parameter;
+            if (lanes_of(other) >= ContextCapacity::lanes) return Status::no_space;
+            parent = other;
+        } else if (binding.sub_api() != SubApi::opengl) {
+            return Status::invalid_parameter;
+        }
         context_id = binding.context_id();
         return Status::ok;
     }
     return Status::invalid_parameter;
+}
+
+uint32_t AvContextTable::lanes_of(uint32_t parent) const
+{
+    AV_SCOPE("AvContextTable::lanes_of");
+    uint32_t count = 0u;
+    for (uint32_t slot = 0u; slot < max_contexts; slot++) count += contexts_[slot] != nullptr && parents_[slot] == parent ? 1u : 0u;
+    return count;
 }
 
 Status AvContextTable::bind(void *context, const AvContextRecord &record, VirtioGpuDevice &device,
@@ -141,9 +160,15 @@ Status AvContextTable::bind(void *context, const AvContextRecord &record, Virtio
         orders_[slot] = record.ring_order();
     }
     uint32_t     share = 0u;
+    uint32_t     parent = no_slot;
     const Status shared =
-        resolve_share(slot, record.sub_api(), record.options().share_context(), share);
+        resolve_share(slot, record.sub_api(), record.options().share_context(), share, parent);
     if (shared != Status::ok) return shared;
+    if (parent != no_slot) {
+        SpinLockGuard locked(lock_);
+        lanes_[slot] = true;
+        parents_[slot] = parent;
+    }
     static_cast<void>(memories_[slot].construct(platform_));
     ContextMemory &memory = memories_[slot].object();
     Status         status = memory.allocate(record.ring_order(), record.reply_bytes());
@@ -222,6 +247,10 @@ void AvContextTable::release(uint32_t slot)
         wakes_[slot] = nullptr;
         raised_[slot] = 0u;
         told_lost_[slot] = false;
+        lanes_[slot] = false;
+        parents_[slot] = no_slot;
+        for (uint32_t &parent : parents_)
+            if (parent == slot) parent = no_slot;
         contexts_[slot] = nullptr;
     }
     if (wake != nullptr) {
@@ -468,8 +497,22 @@ Status AvContextTable::release_batch(void *context, const ReleaseRecord &release
         lose(slot, cannot_order, batch);
         return Status::invalid_parameter;
     }
+    if (lanes_[slot]) return release_in_lane(slot, batch, awaited);
     releases_[slot].written_by(release.writer(), writer);
     awaited = in_turn(slot, batch, release.after());
+    return Status::ok;
+}
+
+Status AvContextTable::release_in_lane(uint32_t slot, const SubmissionDescriptor &batch, uint64_t &awaited)
+{
+    AV_SCOPE("AvContextTable::release_in_lane");
+    awaited = batch.fence_id();
+    if (bindings_[slot].object().submit(batch) != Status::ok) {
+        lose(slot, cannot_order, batch);
+        return Status::ok;
+    }
+    const uint32_t parent = parents_[slot];
+    if (parent != no_slot && live_[parent]) bindings_[parent].object().kick_if_behind();
     return Status::ok;
 }
 
@@ -732,6 +775,7 @@ void AvContextTable::report(StateWriter &writer)
             writer.number("context_id", binding.context_id());
             writer.number("completed", binding.completed());
             writer.flag("live", live_[slot]);
+            writer.flag("lane", lanes_[slot]);
             writer.flag("lost", lost(slot));
             writer.flag("wakes", wakes_[slot] != nullptr);
             writer.number("raised", raised_[slot]);
@@ -754,6 +798,8 @@ bool AvContextTable::invariants_hold() const
                             wakes_[slot] != nullptr || raised_[slot] != 0u || told_lost_[slot]))
             return false;
         if (bound_slot && names_[slot] == nullptr) return false;
+        if ((!bound_slot && (lanes_[slot] || parents_[slot] != no_slot)) || (parents_[slot] != no_slot && !lanes_[slot]))
+            return false;
         if (memories_[slot].constructed() && !memories_[slot].object().invariants_hold()) return false;
         uint32_t held = 0u;
         chunks_.for_each([slot, &held](const ContextChunk &chunk) { held += chunk.slot() == slot ? 1u : 0u; });

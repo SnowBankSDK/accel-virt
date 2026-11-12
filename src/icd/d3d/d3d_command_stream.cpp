@@ -224,7 +224,7 @@ bool D3dCommandStream::speak_as(uint32_t device, ReleaseRoute *route)
     if (device == 0u || device == speaking_) return !failed_;
     WireWriter selection = request_writer();
     selection.write_pod<uint32_t>(device);
-    if (send_async(select_command_, selection) != TransportResult::ok) return false;
+    if (append(select_command_, selection, CommandHeader::restores_context) != TransportResult::ok) return false;
     speaking_ = device;
     return true;
 }
@@ -263,19 +263,20 @@ WireWriter D3dCommandStream::request_writer()
     return framed_.lend(command_room);
 }
 
-TransportResult D3dCommandStream::append(uint32_t command_id, WireWriter &writer)
+TransportResult D3dCommandStream::append(uint32_t command_id, WireWriter &writer, uint8_t flags)
 {
     AV_SCOPE("D3dCommandStream::append");
     lent_ = false;
     if (failed_) return TransportResult::failed;
     if (recording_ == nullptr) {
-        const TransportResult held = transport_.send_async(command_id, writer);
+        const TransportResult held = flags != 0u ? transport_.send_restoring(command_id, writer)
+                                                 : transport_.send_async(command_id, writer);
         if (held == TransportResult::ok) recorded_ += header_bytes + writer.offset();
         failed_ = transport_.faulted();
         return held;
     }
     const size_t before = framed_.used();
-    if (!framed_.frame(command_id, writer, 0u)) {
+    if (!framed_.frame(command_id, writer, flags)) {
         incomplete_ = true;
         return TransportResult::failed;
     }
@@ -286,7 +287,7 @@ TransportResult D3dCommandStream::append(uint32_t command_id, WireWriter &writer
 TransportResult D3dCommandStream::send_async(uint32_t command_id, WireWriter &writer)
 {
     AV_SCOPE("D3dCommandStream::send_async");
-    const TransportResult appended = append(command_id, writer);
+    const TransportResult appended = append(command_id, writer, 0u);
     if (appended != TransportResult::ok || recorded_bytes() < stream_bytes) return appended;
     return flush_hint() == Status::ok ? TransportResult::ok : TransportResult::failed;
 }

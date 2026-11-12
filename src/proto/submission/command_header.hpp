@@ -13,6 +13,7 @@ public:
     static constexpr size_t   encoded_size   = 8u;
     static constexpr uint32_t max_size       = 0x00FFFFFFu;
     static constexpr uint8_t  generate_reply = 1u;
+    static constexpr uint8_t  restores_context = 2u;
     static constexpr uint16_t transport_api  = 0u;
     static constexpr uint32_t nop_id          = 0x00000001u;
     static constexpr uint32_t import_blob_id  = 0x00000002u;
@@ -37,6 +38,7 @@ public:
     uint16_t api() const;
     uint32_t size() const;
     bool     generates_reply() const;
+    bool     restores() const;
 
     [[nodiscard]] Status encode(uint8_t *bytes, size_t capacity) const;
     [[nodiscard]] Status decode(const uint8_t *bytes, size_t length);

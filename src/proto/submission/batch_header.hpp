@@ -15,7 +15,9 @@ public:
     BatchHeader();
     BatchHeader(uint32_t length, uint64_t fence_id);
     BatchHeader(uint32_t length, uint64_t fence_id, uint64_t published_at);
+    BatchHeader(uint32_t length, uint64_t fence_id, uint64_t published_at, uint64_t after);
     uint64_t published_at() const;
+    uint64_t after() const;
 
     uint32_t length() const;
     uint64_t fence_id() const;
@@ -32,6 +34,7 @@ private:
     uint32_t length_;
     uint64_t fence_id_;
     uint64_t published_at_;
+    uint64_t after_;
 };
 
 }

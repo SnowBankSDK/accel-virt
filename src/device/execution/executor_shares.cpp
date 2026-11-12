@@ -7,7 +7,7 @@
 namespace av {
 
 ExecutorShares::ExecutorShares(Host &host, const ExecutorLibrary &library)
-    : host_(host), library_(library), lock_(nullptr), ids_{}, uuids_(), executors_{}, users_{}, withdrawn_{},
+    : host_(host), library_(library), lock_(nullptr), ids_{}, uuids_(), executors_{}, gates_{}, users_{}, withdrawn_{},
       waiters_{}
     {
         AV_SCOPE("ExecutorShares::ExecutorShares");
@@ -48,6 +48,7 @@ void ExecutorShares::vacate(uint32_t index)
     if (waiters_[index] != nullptr) host_.signal_event(waiters_[index]);
     ids_[index] = 0u;
     executors_[index] = nullptr;
+    gates_[index] = nullptr;
     withdrawn_[index] = false;
     waiters_[index] = nullptr;
 }
@@ -58,7 +59,7 @@ bool ExecutorShares::on_gpu(uint32_t index, const uint8_t *uuid) const
     return uuids_[index].equals(uuid);
 }
 
-Status ExecutorShares::publish(uint32_t id, const uint8_t *uuid, AvExecutor *executor)
+Status ExecutorShares::publish(uint32_t id, const uint8_t *uuid, AvExecutor *executor, SessionGate *gate)
 {
     AV_SCOPE("ExecutorShares::publish");
     if (lock_ == nullptr) return Status::invalid_state;
@@ -72,6 +73,7 @@ Status ExecutorShares::publish(uint32_t id, const uint8_t *uuid, AvExecutor *exe
         ids_[free] = id;
         uuids_[free] = DeviceUuid(uuid);
         executors_[free] = executor;
+        gates_[free] = gate;
         status = Status::ok;
     }
     host_.unlock_mutex(lock_);
@@ -128,6 +130,37 @@ AvExecutor *ExecutorShares::create_sharing(SubApi api, uint32_t share_id, const 
     if (users_[index] == 0u && withdrawn_[index]) vacate(index);
     host_.unlock_mutex(lock_);
     return made;
+}
+
+AvExecutor *ExecutorShares::join(uint32_t share_id, const uint8_t *uuid, SessionGate *&gate)
+{
+    AV_SCOPE("ExecutorShares::join");
+    gate = nullptr;
+    if (lock_ == nullptr || share_id == 0u) return nullptr;
+    host_.lock_mutex(lock_);
+    const uint32_t index = index_of(share_id);
+    AvExecutor   *joined = nullptr;
+    if (index != none && on_gpu(index, uuid) && gates_[index] != nullptr) {
+        joined = executors_[index];
+        gate = gates_[index];
+        users_[index]++;
+    }
+    host_.unlock_mutex(lock_);
+    return joined;
+}
+
+void ExecutorShares::leave(const AvExecutor *executor)
+{
+    AV_SCOPE("ExecutorShares::leave");
+    if (lock_ == nullptr || executor == nullptr) return;
+    host_.lock_mutex(lock_);
+    const uint32_t index = index_using(executor);
+    if (index != none) {
+        users_[index]--;
+        if (users_[index] == 0u && withdrawn_[index]) vacate(index);
+        else if (users_[index] == 0u && waiters_[index] != nullptr) host_.signal_event(waiters_[index]);
+    }
+    host_.unlock_mutex(lock_);
 }
 
 uint32_t ExecutorShares::published()

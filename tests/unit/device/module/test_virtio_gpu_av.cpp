@@ -448,13 +448,13 @@ TEST(virtio_gpu_av_control, answers_context_requests_and_reset_destroys_contexts
                                     "device/3/window_stats/0 attached=false stable=false\n"
                                     "device/3/contexts/0 live=1 reaping=0 refused_attaches=0\n"
                                     "device/3/contexts/0/context/7 name= bound=true sub_api=1 version=2.0 ring=1 "
-                                    "ring_order=12 fence=2 doorbell=0 reply=0 attached=",
+                                    "ring_order=12 fence=2 doorbell=0 reply=0 lane_of=0 attached=",
                      std::strlen("device/3 realized=true gpu=0 capsets=1 blobs=2 scanouts=0 host_window_bytes=65536 contexts=1 driver_ok=true\n"
                                  "device/3/host_blobs/0 live=0\n"
                                  "device/3/window_stats/0 attached=false stable=false\n"
                                  "device/3/contexts/0 live=1 reaping=0 refused_attaches=0\n"
                                  "device/3/contexts/0/context/7 name= bound=true sub_api=1 version=2.0 ring=1 "
-                                 "ring_order=12 fence=2 doorbell=0 reply=0 attached=")) == 0);
+                                 "ring_order=12 fence=2 doorbell=0 reply=0 lane_of=0 attached=")) == 0);
   CHECK(std::strstr(writer.dump(), "\ndevice/3/contexts/0/context/7/worker/0 running=true ") != nullptr);
   device.reset();
   CHECK_EQ(device.contexts(), 0u);

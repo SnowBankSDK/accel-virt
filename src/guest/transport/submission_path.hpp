@@ -20,8 +20,8 @@ public:
     SubmissionPath &operator=(const SubmissionPath &) = delete;
 
     [[nodiscard]] Status submit(uint32_t context, uint64_t dma_address, const uint8_t *descriptor,
-                                uint32_t size, uint64_t fence, ReleaseRoute *route = nullptr,
-                                uint32_t writer = 0u);
+                                uint32_t size, uint64_t fence, ReleaseRoute *route = nullptr, uint32_t writer = 0u,
+                                bool quiet = false);
 
     uint64_t through_doorbell() const;
     void     publish_before_kernel();

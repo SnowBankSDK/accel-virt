@@ -74,9 +74,9 @@ TEST(batch_header_fits, accepts_a_span_up_to_the_capacity)
   CHECK(BatchHeader(0u, 1u).fits(32u));
   CHECK(!BatchHeader(0u, 1u).fits(31u)); }
 
-TEST(batch_header_decode, rejects_a_bad_magic_fence_zero_and_a_reserved_byte)
+TEST(batch_header_decode, rejects_a_bad_magic_and_fence_zero)
 { struct Case { std::size_t offset; std::uint8_t value; };
-  const Case cases[] = {{0u, 0u}, {3u, 0x51u}, {8u, 0u}, {24u, 1u}, {31u, 0x80u}};
+  const Case cases[] = {{0u, 0u}, {3u, 0x51u}, {8u, 0u}};
   for (const Case &c : cases) {
       std::uint8_t bytes[BatchHeader::encoded_size] = {};
       CHECK_STATUS(BatchHeader(16u, 1u).encode(bytes, sizeof bytes), Status::ok);
@@ -86,6 +86,15 @@ TEST(batch_header_decode, rejects_a_bad_magic_fence_zero_and_a_reserved_byte)
       CHECK_EQ(decoded.length(), 4u);
       CHECK(decoded.fence_id() == 9u);
   } }
+
+TEST(batch_header, the_session_position_a_lane_batch_follows_round_trips)
+{ std::uint8_t bytes[BatchHeader::encoded_size] = {};
+  CHECK_STATUS(BatchHeader(16u, 4u, 7u, 0x1234567890ull).encode(bytes, sizeof bytes), Status::ok);
+  BatchHeader decoded;
+  CHECK_STATUS(decoded.decode(bytes, sizeof bytes), Status::ok);
+  CHECK(decoded.after() == 0x1234567890ull);
+  CHECK(decoded.published_at() == 7u);
+  CHECK(BatchHeader(16u, 4u).after() == 0u); }
 
 TEST(batch_header_decode, a_short_buffer_is_malformed)
 { std::uint8_t bytes[BatchHeader::encoded_size] = {};
@@ -105,5 +114,5 @@ TEST(batch_header_decode, survives_the_hostile_sweep)
   const av::HostileSweep sweep(rejects, bytes, sizeof bytes);
   sweep.run();
   CHECK(sweep.cases_run() > 128u);
-  const std::uint32_t acceptable = 32u + 64u + 64u + 1u;
+  const std::uint32_t acceptable = 32u + 64u + 64u + 64u + 1u;
   CHECK(sweep.rejections() >= sweep.cases_run() - acceptable); }
