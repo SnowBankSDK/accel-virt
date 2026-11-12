@@ -3,6 +3,7 @@
 #include "core/trace/function_scope.hpp"
 #include "icd/opencl/d3d11_resource.hpp"
 #include "icd/opencl/d3d11_rows.hpp"
+#include "um/opencl/d3d11_key_turn.hpp"
 #include "um/common/shared_rows_texture.hpp"
 
 namespace av {
@@ -69,6 +70,7 @@ cl_int WindowsD3d11Bridge::read(void *device, void *resource, uint32_t subresour
                                               : nullptr;
     cl_int result = CL_OUT_OF_RESOURCES;
     if (staging != nullptr) {
+        const D3d11KeyTurn   turn(*source);
         ID3D11DeviceContext *context = nullptr;
         owner->GetImmediateContext(&context);
         ID3D10Multithread *const section = section_of(*owner);
@@ -96,6 +98,7 @@ cl_int WindowsD3d11Bridge::write(void *device, void *resource, uint32_t subresou
                                               : nullptr;
     cl_int result = CL_OUT_OF_RESOURCES;
     if (staging != nullptr) {
+        const D3d11KeyTurn   turn(*target);
         ID3D11DeviceContext *context = nullptr;
         owner->GetImmediateContext(&context);
         ID3D10Multithread *const section = section_of(*owner);
@@ -202,6 +205,7 @@ cl_int WindowsD3d11Bridge::to_twin(void *device, void *resource, uint32_t subres
     ID3D11Resource *const target = as_resource(twin);
     cl_int                result = CL_OUT_OF_RESOURCES;
     if (owner != nullptr && source != nullptr && target != nullptr) {
+        const D3d11KeyTurn   turn(*source);
         ID3D11DeviceContext *context = nullptr;
         owner->GetImmediateContext(&context);
         ID3D10Multithread *const section = section_of(*owner);
@@ -226,6 +230,7 @@ cl_int WindowsD3d11Bridge::from_twin(void *device, void *twin, void *resource, u
     ID3D11Resource *const target = as_resource(resource);
     cl_int                result = CL_OUT_OF_RESOURCES;
     if (owner != nullptr && source != nullptr && target != nullptr) {
+        const D3d11KeyTurn   turn(*target);
         ID3D11DeviceContext *context = nullptr;
         owner->GetImmediateContext(&context);
         ID3D10Multithread *const section = section_of(*owner);
