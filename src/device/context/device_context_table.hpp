@@ -26,6 +26,7 @@ struct DeviceContextTableProbe;
 class DeviceContextTable {
 public:
     static constexpr uint32_t max_contexts = ContextCapacity::contexts;
+    static constexpr uint64_t teardown_budget_nanoseconds = 2000000000u;
 
     DeviceContextTable(Host &host, BlobTable &blobs, HostBlobOwners &owners, FenceInterrupts &interrupts,
                        const ExecutorLibrary &library, WireRecorder &recorder);
@@ -53,6 +54,7 @@ private:
     ObjectStorage<DeviceContext> *slot_of(uint32_t id);
     bool                          live_at(uint32_t index) const;
     void                          retire(uint32_t index);
+    uint32_t                      retire_all();
 
     Host                        &host_;
     BlobTable                   &blobs_;

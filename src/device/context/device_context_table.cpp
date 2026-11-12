@@ -1,5 +1,6 @@
 #include "device/context/device_context_table.hpp"
 
+#include "core/support/text_buffer.hpp"
 #include "core/trace/function_scope.hpp"
 #include "core/trace/state_writer.hpp"
 #include "device/context/context_binding.hpp"
@@ -24,7 +25,8 @@ DeviceContextTable::DeviceContextTable(Host &host, BlobTable &blobs, HostBlobOwn
 DeviceContextTable::~DeviceContextTable()
 {
     AV_SCOPE("DeviceContextTable::~DeviceContextTable");
-    destroy_all();
+    if (retire_all() != 0u) reaper_.abandon();
+    else reaper_.stop();
 }
 
 Status DeviceContextTable::initialize()
@@ -70,6 +72,10 @@ void DeviceContextTable::retire(uint32_t index)
     AV_SCOPE("DeviceContextTable::retire");
     DeviceContext &context = slots_[index].object();
     context.retire();
+    if (!context.worker().running()) {
+        slots_[index].destroy();
+        return;
+    }
     if (!reaper_.running()) static_cast<void>(reaper_.start());
     if (reaper_.running() && reaper_.take(context.worker(), index) == Status::ok) {
         retired_[index] = true;
@@ -130,14 +136,37 @@ void DeviceContextTable::destroy_all()
 {
     AV_SCOPE("DeviceContextTable::destroy_all");
     host_.require_main_loop("DeviceContextTable::destroy_all");
-    for (uint32_t index = 0u; index < max_contexts; index++)
-        if (live_at(index)) slots_[index].object().retire();
-    reaper_.stop();
-    finish_reaped();
+    if (retire_all() != 0u) reaper_.resume();
+    else reaper_.stop();
+}
+
+uint32_t DeviceContextTable::retire_all()
+{
+    AV_SCOPE("DeviceContextTable::retire_all");
+    host_.require_main_loop("DeviceContextTable::retire_all");
+    uint32_t retired = 0u;
     for (uint32_t index = 0u; index < max_contexts; index++) {
-        slots_[index].destroy();
-        retired_[index] = false;
+        if (!live_at(index)) continue;
+        retire(index);
+        retired++;
     }
+    const bool     waits = retired != 0u || reaper_.fresh() != 0u;
+    const uint64_t now = host_.monotonic_nanoseconds();
+    uint32_t       overdue = 0u;
+    const uint32_t stuck = reaper_.drain(waits ? now + teardown_budget_nanoseconds : now, overdue);
+    finish_reaped();
+    for (uint32_t index = 0u; index < max_contexts; index++)
+        if (!retired_[index]) slots_[index].destroy();
+    if (overdue == 0u) return stuck;
+    char       bytes[192];
+    TextBuffer message(bytes, sizeof bytes);
+    message.append("virtio-gpu-av: ");
+    message.append_decimal(overdue);
+    message.append(" context worker(s) did not exit within ");
+    message.append_decimal(teardown_budget_nanoseconds / 1000000u);
+    message.append(" ms of the teardown; they are left running and keep their slots and pins until they exit");
+    host_.log(message.text());
+    return stuck;
 }
 
 DeviceContext *DeviceContextTable::find(uint32_t id)

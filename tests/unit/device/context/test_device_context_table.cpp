@@ -20,9 +20,11 @@
 #include "harness/host/mock_host.hpp"
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <sched.h>
+#include <thread>
 
 using av::BlobTable;
 using av::DeviceContext;
@@ -214,6 +216,61 @@ TEST(device_context_table_destroy, a_busy_context_is_destroyed_at_once_and_its_p
   CHECK_EQ(table.live(), 1u);
   CHECK(table.invariants_hold());
   table.destroy_all();
+  host.destroy_event(gate.event); }
+
+TEST(device_context_table_destroy_all, a_worker_stuck_past_the_budget_is_left_running_with_its_slot_and_pins_and_reaped_when_it_ends)
+{ MockHost host; BlobTable blobs(host); av::HostBlobTable owners(host); FenceInterrupts interrupts(host); ExecutorLibrary library; av::WireRecorder recorder(host);
+  DeviceContextTable table(host, blobs, owners, interrupts, library, recorder);
+  host.set_hostmem_size(0x10000u);
+  CHECK_STATUS(blobs.initialize(), Status::ok);
+  CHECK_STATUS(table.initialize(), Status::ok);
+  av::GuestBlobMaker maker(host, blobs);
+  CHECK_STATUS(maker.create(1u, 0x2000u), Status::ok);
+  CHECK_STATUS(maker.create(2u, 0x1000u), Status::ok);
+  av::RingBlobWriter(blobs).write_header(1u, 12u);
+  CHECK_STATUS(table.create(2u, "test"), Status::ok);
+  CHECK_STATUS(table.create(3u, "test"), Status::ok);
+  const std::uint8_t uuid[av::GpuIdentity::uuid_bytes] = {};
+  const av::CapsetInfo capset(av::ProtocolVersion(1u, 0u), 1u, 64u, 12u, 24u, 0u,
+                              av::GpuIdentity(0u, 0u, 0u, uuid, 0u, 0u, ""));
+  const av::ContextSetup setup(av::ProtocolVersion(1u, 0u), av::SubApi::vulkan, 1u, 12u, 2u, 5u, 0u);
+  CHECK_STATUS(table.find(2u)->bind(setup, capset), Status::ok);
+  Gate gate{&host, nullptr};
+  CHECK_STATUS(host.create_event(gate.event), Status::ok);
+  CHECK_STATUS(table.find(2u)->post(WorkItem([](void *held) {
+                                                 auto *const g = static_cast<Gate *>(held);
+                                                 g->host->wait_event(g->event);
+                                             },
+                                             nullptr, &gate)),
+               Status::ok);
+  while (table.find(2u)->worker().pending() != 0u) sched_yield();
+  std::atomic<bool> torn{false};
+  std::thread clock([&] {
+      while (!torn.load()) {
+          host.set_clock(host.monotonic_nanoseconds() + DeviceContextTable::teardown_budget_nanoseconds);
+          std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+  });
+  const std::uint32_t logged = host.logged();
+  table.destroy_all();
+  torn = true;
+  clock.join();
+  CHECK(host.logged() > logged);
+  CHECK(std::strstr(host.last_log(), "did not exit") != nullptr);
+  CHECK_EQ(table.live(), 0u);
+  CHECK_EQ(table.reaping(), 1u);
+  CHECK(table.retiring_pins(1u));
+  CHECK_STATUS(blobs.release(1u), Status::invalid_state);
+  CHECK_STATUS(table.create(2u, "test"), Status::ok);
+  CHECK(table.invariants_hold());
+  host.signal_event(gate.event);
+  CHECK(host.wait_for_main_loop_work(1u, 5000u));
+  CHECK_EQ(host.run_main_loop(), 1u);
+  CHECK_EQ(table.reaping(), 0u);
+  CHECK(!table.retiring_pins(1u));
+  CHECK(table.invariants_hold());
+  table.destroy_all();
+  CHECK_EQ(table.live(), 0u);
   host.destroy_event(gate.event); }
 
 TEST(device_context_table, is_main_loop_only)

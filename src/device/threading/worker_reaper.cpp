@@ -7,8 +7,8 @@
 namespace av {
 
 WorkerReaper::WorkerReaper(Host &host, HostRoutine reaped, void *owner)
-    : host_(host), reaped_(reaped), owner_(owner), thread_(nullptr), wake_(nullptr), lock_(nullptr), entries_{},
-      held_(0u), stopping_(false), scheduled_(false)
+    : host_(host), reaped_(reaped), owner_(owner), thread_(nullptr), wake_(nullptr), drained_(nullptr), lock_(nullptr),
+      entries_{}, held_(0u), stopping_(false), scheduled_(false), quiet_(false), abandoned_(false)
 {
     AV_SCOPE("WorkerReaper::WorkerReaper");
 }
@@ -16,6 +16,7 @@ WorkerReaper::WorkerReaper(Host &host, HostRoutine reaped, void *owner)
 WorkerReaper::~WorkerReaper()
 {
     AV_SCOPE("WorkerReaper::~WorkerReaper");
+    if (abandoned_) return;
     stop();
     release();
 }
@@ -24,9 +25,11 @@ Status WorkerReaper::start()
 {
     AV_SCOPE("WorkerReaper::start");
     host_.require_main_loop("WorkerReaper::start");
-    if (thread_ != nullptr) return Status::invalid_state;
+    if (thread_ != nullptr || abandoned_) return Status::invalid_state;
     stopping_ = false;
+    quiet_ = false;
     Status status = wake_ == nullptr ? host_.create_event(wake_) : Status::ok;
+    if (status == Status::ok && drained_ == nullptr) status = host_.create_event(drained_);
     if (status == Status::ok && lock_ == nullptr) status = host_.create_mutex(lock_);
     if (status == Status::ok) status = host_.start_thread(&AvWorkerReaperRun, this, thread_);
     if (status != Status::ok && held_ == 0u) release();
@@ -43,7 +46,7 @@ Status WorkerReaper::take(Worker &worker, uint32_t token)
     for (uint32_t index = 0u; index < capacity && at == capacity; index++)
         if (entries_[index].state_ == State::free) at = index;
     if (at != capacity) {
-        entries_[at] = Entry{&worker, token, State::waiting};
+        entries_[at] = Entry{&worker, token, State::waiting, false};
         held_++;
     }
     host_.unlock_mutex(lock_);
@@ -71,11 +74,71 @@ uint32_t WorkerReaper::collect(uint32_t *tokens, uint32_t room)
     return taken;
 }
 
+uint32_t WorkerReaper::drain(uint64_t deadline, uint32_t &newly_overdue)
+{
+    AV_SCOPE("WorkerReaper::drain");
+    host_.require_main_loop("WorkerReaper::drain");
+    newly_overdue = 0u;
+    if (thread_ == nullptr) return 0u;
+    host_.lock_mutex(lock_);
+    quiet_ = true;
+    host_.unlock_mutex(lock_);
+    host_.signal_event(wake_);
+    for (;;) {
+        host_.lock_mutex(lock_);
+        const uint32_t left = waiting();
+        host_.unlock_mutex(lock_);
+        if (left == 0u) return 0u;
+        if (!host_.wait_event_until(drained_, deadline)) break;
+    }
+    host_.lock_mutex(lock_);
+    for (Entry &entry : entries_) {
+        if (entry.state_ != State::waiting || entry.overdue_) continue;
+        entry.overdue_ = true;
+        newly_overdue++;
+    }
+    const uint32_t left = waiting();
+    host_.unlock_mutex(lock_);
+    return left;
+}
+
+void WorkerReaper::resume()
+{
+    AV_SCOPE("WorkerReaper::resume");
+    host_.require_main_loop("WorkerReaper::resume");
+    if (thread_ == nullptr) return;
+    host_.lock_mutex(lock_);
+    quiet_ = false;
+    host_.unlock_mutex(lock_);
+    host_.signal_event(wake_);
+}
+
+void WorkerReaper::abandon()
+{
+    AV_SCOPE("WorkerReaper::abandon");
+    host_.require_main_loop("WorkerReaper::abandon");
+    if (thread_ == nullptr) return;
+    host_.lock_mutex(lock_);
+    quiet_ = true;
+    stopping_ = true;
+    host_.unlock_mutex(lock_);
+    host_.signal_event(wake_);
+    abandoned_ = true;
+}
+
+uint32_t WorkerReaper::waiting() const
+{
+    AV_SCOPE("WorkerReaper::waiting");
+    uint32_t count = 0u;
+    for (const Entry &entry : entries_) count += entry.state_ == State::waiting ? 1u : 0u;
+    return count;
+}
+
 void WorkerReaper::stop()
 {
     AV_SCOPE("WorkerReaper::stop");
     host_.require_main_loop("WorkerReaper::stop");
-    if (thread_ == nullptr) return;
+    if (thread_ == nullptr || abandoned_) return;
     host_.lock_mutex(lock_);
     stopping_ = true;
     host_.unlock_mutex(lock_);
@@ -101,6 +164,17 @@ uint32_t WorkerReaper::held()
     return count;
 }
 
+uint32_t WorkerReaper::fresh()
+{
+    AV_SCOPE("WorkerReaper::fresh");
+    if (lock_ == nullptr) return 0u;
+    uint32_t count = 0u;
+    host_.lock_mutex(lock_);
+    for (const Entry &entry : entries_) count += entry.state_ == State::waiting && !entry.overdue_ ? 1u : 0u;
+    host_.unlock_mutex(lock_);
+    return count;
+}
+
 Worker *WorkerReaper::exited_at(uint32_t index)
 {
     AV_SCOPE("WorkerReaper::exited_at");
@@ -120,7 +194,7 @@ void WorkerReaper::join_exited()
         worker->join();
         host_.lock_mutex(lock_);
         entries_[index].state_ = State::joined;
-        if (!scheduled_ && !stopping_) {
+        if (!scheduled_ && !stopping_ && !quiet_) {
             scheduled_ = true;
             host_.run_on_main_loop(reaped_, owner_);
         }
@@ -136,10 +210,16 @@ void WorkerReaper::run()
         host_.wait_event(wake_);
         join_exited();
         host_.lock_mutex(lock_);
-        bool waiting = false;
-        for (const Entry &entry : entries_) waiting = waiting || entry.state_ == State::waiting;
-        const bool over = stopping_ && !waiting;
+        const bool settled = waiting() == 0u;
+        const bool over = stopping_ && settled;
+        bool       owed = false;
+        if (!quiet_ && !stopping_ && !scheduled_) {
+            for (const Entry &entry : entries_) owed = owed || entry.state_ == State::joined;
+            scheduled_ = owed;
+        }
         host_.unlock_mutex(lock_);
+        if (owed) host_.run_on_main_loop(reaped_, owner_);
+        if (settled) host_.signal_event(drained_);
         if (over) return;
     }
 }
@@ -149,8 +229,10 @@ void WorkerReaper::release()
     AV_SCOPE("WorkerReaper::release");
     if (lock_ != nullptr) host_.destroy_mutex(lock_);
     if (wake_ != nullptr) host_.destroy_event(wake_);
+    if (drained_ != nullptr) host_.destroy_event(drained_);
     lock_ = nullptr;
     wake_ = nullptr;
+    drained_ = nullptr;
     thread_ = nullptr;
 }
 

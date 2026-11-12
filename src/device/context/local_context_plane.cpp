@@ -20,7 +20,7 @@ LocalContextPlane::~LocalContextPlane()
 {
     AV_SCOPE("LocalContextPlane::~LocalContextPlane");
     contexts_.destroy_all();
-    library_.close_domain();
+    if (contexts_.reaping() == 0u) library_.close_domain();
 }
 
 Status LocalContextPlane::accept(const AvExecutorOps *executor)
