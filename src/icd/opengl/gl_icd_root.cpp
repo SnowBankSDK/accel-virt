@@ -362,7 +362,6 @@ bool GlIcdRoot::swap_buffers(void *dc)
     const Shown shown = show_frame(dc);
     if (shown == Shown::refused) return false;
     currents_.current()->end_frame();
-    if (shown == Shown::handed) currents_.current()->pacing().after_present();
     contexts_.reap();
     return true;
 }
@@ -401,6 +400,7 @@ GlIcdRoot::Shown GlIcdRoot::present_frame(void *dc, bool paced)
     if (seen == icd::WindowExtent::Look::gone || seen == icd::WindowExtent::Look::empty) return Shown::nothing;
     WindowFramebuffers &framebuffers = context->framebuffers();
     framebuffers.drop_gone(*transport, surface_);
+    framebuffers.paced_by(context->pacing());
     if (!framebuffers.present(*transport, context->arrays(), dc, window, surface_, &presents_,
                               context->adapter_luid()))
         return Shown::refused;

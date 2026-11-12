@@ -145,6 +145,7 @@ bool BackBufferPresenter::present(ClientTransport &wire, const ClientArrayState 
     read_back(wire);
     if (!plain) set_pack(wire, state, false);
     front_.presented(pixels_, width_, height_);
+    if (pacing_ != nullptr) pacing_->before_show();
     if (surface.blit(dc, width_, height_, pixels_) || !refusal_logged_.first()) return true;
     LogLine(lines_).text("the window's DC refused a frame of ").number(width_).text("x").number(height_).write();
     return true;
@@ -160,11 +161,18 @@ void BackBufferPresenter::hand_over(const BatchMark &mark)
 GlFrame BackBufferPresenter::take_pending(const BatchMark &mark)
 {
     AV_SCOPE("BackBufferPresenter::take_pending");
-    const GlFrame frame(*this, pending_, pending_chained_ ? nullptr : room_pixels(pending_),
-                        GlFrame::Rows::bgra_bottom_up, width_, height_, window_, mark);
+    GlFrame frame(*this, pending_, pending_chained_ ? nullptr : room_pixels(pending_), GlFrame::Rows::bgra_bottom_up,
+                  width_, height_, window_, mark);
+    frame.paced_by(pacing_);
     pending_ = no_slot;
     pending_chained_ = false;
     return frame;
+}
+
+void BackBufferPresenter::paced_by(icd::PresentPacing &pacing)
+{
+    AV_SCOPE("BackBufferPresenter::paced_by");
+    pacing_ = &pacing;
 }
 
 void BackBufferPresenter::hold_over(const BatchMark &mark, icd::PresentPacing &pacing)

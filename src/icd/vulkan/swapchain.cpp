@@ -195,7 +195,6 @@ VkResult Swapchain::present(VkQueue queue, uint32_t index, uint32_t wait_count, 
                                              : present_now(queue, index, wait_count, waits);
     if (shown != VK_SUCCESS) return shown;
     presented_++;
-    pacing_.after_present();
     return VK_SUCCESS;
 }
 
@@ -358,8 +357,10 @@ VkFrame Swapchain::frame(uint32_t slot)
 {
     AV_SCOPE("Swapchain::frame");
     const VkFrame::Rows rows = shows_bgra() ? VkFrame::Rows::bgra_top_down : VkFrame::Rows::rgba_top_down;
-    return VkFrame(*this, slot, through_chain_ ? nullptr : device_.readback(slot), rows, extent_.width,
-                   extent_.height, window_, FenceReady::Mark{app_device_, device_.fence(slot)});
+    VkFrame made(*this, slot, through_chain_ ? nullptr : device_.readback(slot), rows, extent_.width, extent_.height,
+                 window_, FenceReady::Mark{app_device_, device_.fence(slot)});
+    made.paced_by(&pacing_);
+    return made;
 }
 
 void Swapchain::done(const VkFrame &frame, bool drawn)

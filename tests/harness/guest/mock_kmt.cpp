@@ -891,7 +891,8 @@ Status MockKmt::wait_for_vertical_blank(std::uint32_t adapter, std::uint32_t dev
     const Object *const object = find(Kind::device, device);
     if (find(Kind::adapter, adapter) == nullptr || object == nullptr || object->owner != adapter || source != 0u)
         return misuse();
-    ticks_ += blank_period_;
+    const std::uint64_t now = ticks_ + read_ticks_;
+    ticks_ += blank_boundaries_ && blank_period_ != 0u ? blank_period_ - now % blank_period_ : blank_period_;
     if (slip_nth_ != 0u && calls_[static_cast<unsigned>(Call::wait_for_vertical_blank)] % slip_nth_ == 0u)
         ticks_ += slip_ticks_;
     return succeed();
@@ -1230,6 +1231,12 @@ void MockKmt::reads_clock(ClockReader *reader, std::uint64_t step)
 }
 
 void MockKmt::set_blank_period(std::uint64_t ticks) { blank_period_ = ticks; }
+
+void MockKmt::blank_on_boundaries() { blank_boundaries_ = true; }
+
+void MockKmt::advance(std::uint64_t ticks) { ticks_ += ticks; }
+
+std::uint64_t MockKmt::clock() const { return ticks_ + read_ticks_; }
 
 void MockKmt::set_refresh_millihz(std::uint32_t millihz) { refresh_millihz_ = millihz; }
 

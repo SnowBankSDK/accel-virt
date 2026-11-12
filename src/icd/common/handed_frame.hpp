@@ -7,6 +7,8 @@
 
 namespace av::icd {
 
+class PresentPacing;
+
 template <typename Source, typename Mark>
 class HandedFrame {
 public:
@@ -25,6 +27,8 @@ public:
     uint32_t       height() const;
     void          *window() const;
     const Mark    &mark() const;
+    void           paced_by(PresentPacing *pacing);
+    PresentPacing *pacing() const;
 
 private:
     Source        *owner_;
@@ -35,12 +39,13 @@ private:
     uint32_t       height_;
     void          *window_;
     Mark           mark_;
+    PresentPacing *pacing_;
 };
 
 template <typename Source, typename Mark>
 HandedFrame<Source, Mark>::HandedFrame()
     : owner_(nullptr), slot_(0u), pixels_(nullptr), rows_(Rows::bgra_bottom_up), width_(0u), height_(0u),
-      window_(nullptr), mark_()
+      window_(nullptr), mark_(), pacing_(nullptr)
 {
     AV_SCOPE("HandedFrame::HandedFrame");
 }
@@ -49,7 +54,7 @@ template <typename Source, typename Mark>
 HandedFrame<Source, Mark>::HandedFrame(Source &owner, uint32_t slot, const uint8_t *pixels, Rows rows,
                                        uint32_t width, uint32_t height, void *window, const Mark &mark)
     : owner_(&owner), slot_(slot), pixels_(pixels), rows_(rows), width_(width), height_(height), window_(window),
-      mark_(mark)
+      mark_(mark), pacing_(nullptr)
 {
     AV_SCOPE("HandedFrame::HandedFrame");
 }
@@ -115,6 +120,20 @@ const Mark &HandedFrame<Source, Mark>::mark() const
 {
     AV_SCOPE("HandedFrame::mark");
     return mark_;
+}
+
+template <typename Source, typename Mark>
+void HandedFrame<Source, Mark>::paced_by(PresentPacing *pacing)
+{
+    AV_SCOPE("HandedFrame::paced_by");
+    pacing_ = pacing;
+}
+
+template <typename Source, typename Mark>
+PresentPacing *HandedFrame<Source, Mark>::pacing() const
+{
+    AV_SCOPE("HandedFrame::pacing");
+    return pacing_;
 }
 
 }

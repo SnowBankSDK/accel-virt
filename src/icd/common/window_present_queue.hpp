@@ -13,6 +13,7 @@
 #include "icd/common/held_flusher.hpp"
 #include "icd/common/handed_frame.hpp"
 #include "icd/common/once_latch.hpp"
+#include "icd/common/present_pacing.hpp"
 #include "icd/common/service_thread.hpp"
 #include "icd/common/thread_wake.hpp"
 #include "icd/common/window_chains.hpp"
@@ -315,6 +316,7 @@ template <typename Source, typename Readiness>
 bool WindowPresentQueue<Source, Readiness>::show_now(const Frame &frame)
 {
     AV_SCOPE("WindowPresentQueue::show_now");
+    if (frame.pacing() != nullptr) frame.pacing()->before_show();
     const ThreadLockHold held(lock_);
     return put_on_window(frame);
 }
@@ -545,6 +547,7 @@ void WindowPresentQueue<Source, Readiness>::show(uint32_t row, const Frame &fram
 {
     AV_SCOPE("WindowPresentQueue::show");
     const bool drawn = wait_for(frame.mark());
+    if (drawn && frame.pacing() != nullptr) frame.pacing()->before_show();
     const bool shown = drawn && put_on_window(frame);
     {
         const ThreadLockHold held(lock_);

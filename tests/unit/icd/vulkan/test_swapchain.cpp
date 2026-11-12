@@ -293,21 +293,37 @@ TEST(swapchain, a_present_puts_the_frame_on_the_window_top_down_in_the_window_s_
       CHECK_EQ(rig.memory().live_allocations() != 0u, rgba);
   } }
 
-TEST(swapchain, fifo_paces_a_present_on_the_vertical_blank_and_immediate_does_not)
-{ const VkPresentModeKHR modes[] = {VK_PRESENT_MODE_FIFO_KHR, VK_PRESENT_MODE_IMMEDIATE_KHR};
-  for (const VkPresentModeKHR mode : modes) {
-      SwapchainRig rig;
-      Swapchain &chain = rig.chain();
-      VkSwapchainCreateInfoKHR info = create_info();
-      info.presentMode = mode;
-      CHECK_EQ(rig.initialize(chain, info), VK_SUCCESS);
+TEST(swapchain, a_fifo_present_returns_without_waiting_for_a_blank_and_the_present_thread_shows_one_frame_a_refresh)
+{ SwapchainRig rig(true);
+  Swapchain &chain = rig.chain();
+  CHECK_EQ(rig.initialize(chain, create_info()), VK_SUCCESS);
+  CHECK_EQ(chain.pacing().blanks(), 1u);
+  for (std::uint32_t frame = 0u; frame < 2u; frame++) {
       std::uint32_t index = 0u;
       CHECK_EQ(chain.acquire(0u, index), VK_SUCCESS);
       CHECK_EQ(chain.present(rig.host().queue(), index, 0u, nullptr), VK_SUCCESS);
-      const bool fifo = mode == VK_PRESENT_MODE_FIFO_KHR;
-      CHECK_EQ(chain.pacing().blanks(), fifo ? 1u : 0u);
-      CHECK_EQ(rig.kmt().calls(MockKmt::Call::wait_for_vertical_blank), fifo ? 1u : 0u);
-  } }
+  }
+  CHECK_EQ(rig.kmt().calls(MockKmt::Call::wait_for_vertical_blank), 0u);
+  CHECK_EQ(rig.presents().queued(), 2u);
+  rig.pump();
+  CHECK_EQ(rig.presents().shown_frames(), 2u);
+  CHECK_EQ(rig.presents().dropped_frames(), 0u);
+  CHECK_EQ(rig.kmt().calls(MockKmt::Call::wait_for_vertical_blank), 1u);
+  CHECK(chain.invariants_hold()); }
+
+TEST(swapchain, an_immediate_present_is_never_paced_on_the_vertical_blank)
+{ SwapchainRig rig(true);
+  Swapchain &chain = rig.chain();
+  VkSwapchainCreateInfoKHR info = create_info();
+  info.presentMode = VK_PRESENT_MODE_IMMEDIATE_KHR;
+  CHECK_EQ(rig.initialize(chain, info), VK_SUCCESS);
+  CHECK_EQ(chain.pacing().blanks(), 0u);
+  std::uint32_t index = 0u;
+  CHECK_EQ(chain.acquire(0u, index), VK_SUCCESS);
+  CHECK_EQ(chain.present(rig.host().queue(), index, 0u, nullptr), VK_SUCCESS);
+  rig.pump();
+  CHECK_EQ(rig.presents().shown_frames(), 1u);
+  CHECK_EQ(rig.kmt().calls(MockKmt::Call::wait_for_vertical_blank), 0u); }
 
 TEST(swapchain, a_create_structure_this_driver_cannot_present_is_refused)
 { struct Hostile {

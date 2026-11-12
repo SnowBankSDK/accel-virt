@@ -78,6 +78,7 @@ public:
                      GlPresentQueue *loop, uint64_t luid);
     void     hand_over(const BatchMark &mark);
     void     hold_over(const BatchMark &mark, icd::PresentPacing &pacing);
+    void     paced_by(icd::PresentPacing &pacing);
     void     show_held_now();
     uint32_t flush_held() override;
     void     done(const GlFrame &frame, bool drawn);

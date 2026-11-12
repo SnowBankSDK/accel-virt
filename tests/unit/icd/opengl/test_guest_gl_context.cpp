@@ -329,7 +329,8 @@ TEST(guest_gl_context, an_unmade_context_paces_nothing)
 { GlContextRig rig;
   Context context(rig);
   const std::uint32_t blanks = rig.kmt().calls(MockKmt::Call::wait_for_vertical_blank);
-  context->pacing().after_present();
+  context->pacing().before_show();
+  context->pacing().before_show();
   CHECK_EQ(rig.kmt().calls(MockKmt::Call::wait_for_vertical_blank), blanks); }
 
 TEST(guest_gl_context, a_destroyed_context_gives_back_everything)

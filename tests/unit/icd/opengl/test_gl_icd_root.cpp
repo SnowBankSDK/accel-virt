@@ -602,6 +602,8 @@ TEST(gl_icd_root_set_swap_interval, a_swap_waits_for_the_blanks_its_interval_ask
   const std::uint32_t blanks = rig.kmt().calls(MockKmt::Call::wait_for_vertical_blank);
   rig.host().gl_bytes(nullptr, 0u);
   CHECK(rig.opengl32().swap_buffers(rig.dc()));
+  rig.host().gl_bytes(nullptr, 0u);
+  CHECK(rig.opengl32().swap_buffers(rig.dc()));
   CHECK_EQ(rig.kmt().calls(MockKmt::Call::wait_for_vertical_blank), blanks + 1u);
 
   CHECK_EQ(set(2), 1);

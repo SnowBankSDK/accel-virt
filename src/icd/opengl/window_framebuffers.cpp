@@ -12,7 +12,7 @@ namespace av::glicd {
 
 WindowFramebuffers::WindowFramebuffers(BlockSource &memory, DriverLog &log)
     : memory_(memory), log_(log), pool_(memory), presenters_(memory, Pool::paged), current_(nullptr),
-      presented_(nullptr), draws_window_(false),
+      presented_(nullptr), pacing_(nullptr), draws_window_(false),
       reads_window_(false),
       read_buffer_(gl_back), viewport_width_(0u), viewport_height_(0u), shown_calls_(no_calls),
       resolved_calls_(no_calls),       ever_current_(false)
@@ -181,7 +181,14 @@ bool WindowFramebuffers::present(ClientTransport &wire, const ClientArrayState &
     if (presenter == nullptr) return false;
     presented_ = presenter;
     resolved_calls_ = no_calls;
+    if (pacing_ != nullptr) presenter->paced_by(*pacing_);
     return presenter->present(wire, state, dc, surface, loop, luid);
+}
+
+void WindowFramebuffers::paced_by(icd::PresentPacing &pacing)
+{
+    AV_SCOPE("WindowFramebuffers::paced_by");
+    pacing_ = &pacing;
 }
 
 void WindowFramebuffers::hand_over(const BatchMark &mark)

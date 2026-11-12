@@ -67,6 +67,7 @@ public:
                      icd::WindowSurface &surface, GlPresentQueue *loop, uint64_t luid);
     void     hand_over(const BatchMark &mark);
     void     hold_over(const BatchMark &mark, icd::PresentPacing &pacing);
+    void     paced_by(icd::PresentPacing &pacing);
     void     show_held_now();
     bool     viewport_resizes(uint32_t width, uint32_t height);
     void     follow(ClientTransport &wire, void *window, const PixelFormat &format, icd::WindowSurface &surface);
@@ -93,6 +94,7 @@ private:
     KeyedSlots<uint64_t, BackBufferPresenter *> presenters_;
     BackBufferPresenter                *current_;
     BackBufferPresenter                *presented_;
+    icd::PresentPacing                 *pacing_;
     bool                                draws_window_;
     bool                                reads_window_;
     uint32_t                            read_buffer_;
