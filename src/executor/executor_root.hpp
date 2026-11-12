@@ -18,7 +18,6 @@
 #include "executor/opengl/gl_memory_group.hpp"
 #include "executor/opengl/opengl_backend.hpp"
 #include "executor/sharing/session_shares.hpp"
-#include "executor/vulkan/pipeline_teardown_order.hpp"
 #include "executor/vulkan/vulkan_backend.hpp"
 
 #include <pthread.h>
@@ -167,7 +166,6 @@ private:
     ExecutorLog   &log_;
     uint64_t       lost_leak_after_;
     ContextRefusals refusals_;
-    PipelineTeardownOrder teardown_order_;
 };
 
 }

@@ -6,6 +6,9 @@
 #include "executor/d3d/d3d_backend.hpp"
 #include "executor/host_memory_source.hpp"
 #include "executor/shim/d3d11_host_device.hpp"
+#include "executor/shim/d3d_runtime.hpp"
+#include "executor/av_teardown_order.h"
+#include "executor/pipeline_teardown_order.hpp"
 #include "executor/shim/d3d_headers.hpp"
 #include "executor/sharing/d3d_shares.hpp"
 #include "executor/sharing/host_shares.hpp"
@@ -1269,4 +1272,67 @@ TEST(d3d_backend_device, predicated_clears_copies_and_resolves_run_when_the_pred
 {
     check_predicated_operations(false, 1u);
     check_predicated_operations(true, 0u);
+}
+
+namespace {
+
+struct CountedOrder {
+    std::atomic<std::uint32_t> held{0u};
+    std::atomic<std::uint32_t> destroys{0u};
+    std::atomic<std::uint32_t> unbalanced{0u};
+};
+
+int counted_needed_by(void *, std::uint32_t) { return 1; }
+void counted_compiling(void *) {}
+void counted_compiled(void *) {}
+
+void counted_destroying(void *self)
+{
+    CountedOrder &order = *static_cast<CountedOrder *>(self);
+    if (order.held.fetch_add(1u) != 0u) order.unbalanced++;
+}
+
+void counted_destroyed(void *self)
+{
+    CountedOrder &order = *static_cast<CountedOrder *>(self);
+    if (order.held.fetch_sub(1u) != 1u) order.unbalanced++;
+    order.destroys++;
+}
+
+}
+
+TEST(d3d_backend_device, every_host_d3d_runtime_destroys_its_vulkan_devices_inside_the_embedder_teardown_order)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    if (host_device(apis) == nullptr) return;
+    std::uint32_t index = 0u;
+    while (apis.d3d11_device(index) == nullptr) index++;
+    std::uint8_t uuid[16] = {};
+    apis.gpu_uuid(index, uuid);
+    av::D3dRuntime runtime;
+    CHECK(runtime.open());
+    CountedOrder         counted;
+    const AvTeardownOrder table = {sizeof(AvTeardownOrder), &counted, counted_needed_by, counted_compiling,
+                                   counted_compiled, counted_destroying, counted_destroyed};
+    CHECK_EQ(runtime.give_teardown_order(table), 3u);
+    IDXGIAdapter1 *const adapter = runtime.adapter_for(uuid);
+    CHECK(adapter != nullptr);
+    ID3D11Device        *device = nullptr;
+    ID3D11DeviceContext *context = nullptr;
+    std::uint32_t        level = 0u;
+    CHECK(adapter != nullptr && SUCCEEDED(runtime.create_device11(adapter, device, context, level)));
+    if (context != nullptr) context->Release();
+    if (device != nullptr) device->Release();
+    if (adapter != nullptr) adapter->Release();
+    const std::uint32_t after11 = counted.destroys.load();
+    CHECK(after11 >= 1u);
+    void *device12 = nullptr;
+    if (SUCCEEDED(runtime.create_device12(uuid, device12)) && device12 != nullptr) {
+        static_cast<IUnknown *>(device12)->Release();
+        CHECK(counted.destroys.load() > after11);
+    }
+    CHECK_EQ(counted.held.load(), 0u);
+    CHECK_EQ(counted.unbalanced.load(), 0u);
+    CHECK_EQ(runtime.give_teardown_order(apis.teardown_order().abi()), 3u);
 }

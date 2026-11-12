@@ -1,7 +1,7 @@
 #include "executor/vulkan/vulkan_backend.hpp"
 
 #include "core/trace/function_scope.hpp"
-#include "executor/vulkan/pipeline_teardown_order.hpp"
+#include "executor/pipeline_teardown_order.hpp"
 
 namespace av {
 

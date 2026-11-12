@@ -21,6 +21,7 @@
 #include "executor/shim/opencl_device.hpp"
 #include "executor/host_ram_ledger.hpp"
 #include "executor/proc_memory_gauge.hpp"
+#include "executor/pipeline_teardown_order.hpp"
 #include "executor/vram_gate.hpp"
 #include "executor/vram_ledger.hpp"
 #include "proto/context/device_uuid.hpp"
@@ -55,6 +56,7 @@ public:
     VramLedger         *vram_ledger(uint32_t index) override;
     ClFreedMemory      *cl_freed(uint32_t index) override;
     HostRamLedger      *host_ram_ledger() override;
+    PipelineTeardownOrder &teardown_order() override;
 
 private:
     void enumerate();
@@ -81,6 +83,7 @@ private:
     ProcMemoryGauge gauge_;
     HostRamLedger host_ram_;
     VramGate    vram_gate_;
+    PipelineTeardownOrder teardown_order_;
     PosixLock   reopen_lock_;
     uint32_t    reopened_[HostGpuSet::max_gpus];
     uint32_t count_;

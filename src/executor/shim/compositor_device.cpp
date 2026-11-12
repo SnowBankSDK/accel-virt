@@ -1,6 +1,7 @@
 #include "executor/shim/compositor_device.hpp"
 
 #include "core/trace/function_scope.hpp"
+#include "executor/pipeline_teardown_order.hpp"
 #include "executor/shim/physical_device_identity.hpp"
 
 #include <vulkan/vulkan.h>
@@ -18,7 +19,7 @@ constexpr uint32_t api_version_1_2 = (1u << 22u) | (2u << 12u);
 
 }
 
-CompositorDevice::CompositorDevice() : instance_(VK_NULL_HANDLE), device_(VK_NULL_HANDLE)
+CompositorDevice::CompositorDevice() : instance_(VK_NULL_HANDLE), device_(VK_NULL_HANDLE), order_(nullptr)
 {
     AV_SCOPE("CompositorDevice::CompositorDevice");
 }
@@ -29,7 +30,7 @@ CompositorDevice::~CompositorDevice()
     close();
 }
 
-bool CompositorDevice::open(const uint8_t *uuid)
+bool CompositorDevice::open(const uint8_t *uuid, PipelineTeardownOrder &order)
 {
     AV_SCOPE("CompositorDevice::open");
     if (device_ != VK_NULL_HANDLE) return true;
@@ -61,6 +62,13 @@ bool CompositorDevice::open(const uint8_t *uuid)
         close();
         return false;
     }
+    VkPhysicalDeviceDriverProperties driver = {};
+    driver.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES;
+    VkPhysicalDeviceProperties2 properties = {};
+    properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+    properties.pNext = &driver;
+    vkGetPhysicalDeviceProperties2(physical, &properties);
+    order_ = order.needed_by(driver.driverID) ? &order : nullptr;
     if (table_.load(instance_, physical, device_) && table_.interoperates()) return true;
     close();
     return false;
@@ -76,7 +84,10 @@ void CompositorDevice::close()
 {
     AV_SCOPE("CompositorDevice::close");
     table_.forget();
+    if (device_ != VK_NULL_HANDLE && order_ != nullptr) order_->destroying();
     if (device_ != VK_NULL_HANDLE) vkDestroyDevice(device_, nullptr);
+    if (device_ != VK_NULL_HANDLE && order_ != nullptr) order_->destroyed();
+    order_ = nullptr;
     if (instance_ != VK_NULL_HANDLE) vkDestroyInstance(instance_, nullptr);
     device_ = VK_NULL_HANDLE;
     instance_ = VK_NULL_HANDLE;

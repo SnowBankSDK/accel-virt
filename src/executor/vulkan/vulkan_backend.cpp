@@ -11,7 +11,7 @@
 #include "core/log/driver_log.hpp"
 #include "core/support/untestable.hpp"
 #include "core/trace/function_scope.hpp"
-#include "executor/vulkan/pipeline_teardown_order.hpp"
+#include "executor/pipeline_teardown_order.hpp"
 #include "proto/submission/blob_role.hpp"
 #include "device/abi/av_executor.h"
 #include "executor/host_gpu.hpp"

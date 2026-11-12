@@ -14,7 +14,7 @@ namespace av {
 LoaderHostApis::LoaderHostApis(ExecutorLog &log)
     : instance_(nullptr), uuids_{}, sub_apis_{}, opencl_devices_{},
       gl_displays_{}, d3d_runtime_(), d3d11_devices_{}, d3d12_devices_{}, d3d9_devices_{}, heap_(), surfaces_{},
-      shares_{}, ledgers_{}, gauge_(), host_ram_(), vram_gate_(*this, heap_), reopen_lock_(), reopened_{}, count_(0u), opened_(false)
+      shares_{}, ledgers_{}, gauge_(), host_ram_(), vram_gate_(*this, heap_), teardown_order_(), reopen_lock_(), reopened_{}, count_(0u), opened_(false)
 {
     AV_SCOPE("LoaderHostApis::LoaderHostApis");
     host_ram_.watch(&gauge_);
@@ -83,13 +83,14 @@ void LoaderHostApis::enumerate()
         budgets_[i].bind(devices[i]);
         ledgers_[i].follow(&budgets_[i]);
         if (opencl_devices_[i].find(uuids_[i].raw())) sub_apis_[i] |= AV_EXECUTOR_SUB_API_OPENCL;
-        if (compositors_[i].open(uuids_[i].raw()))
+        if (compositors_[i].open(uuids_[i].raw(), teardown_order_))
             static_cast<void>(sources_[i].construct(exporters_[i].object(), heap_));
         if (gl_displays_[i].open(uuids_[i].raw())) sub_apis_[i] |= AV_EXECUTOR_SUB_API_OPENGL;
     }
     count_ = found;
     if (d3d_runtime_.open()) {
         d3d_runtime_.give_vram_gate(vram_gate_.abi());
+        static_cast<void>(d3d_runtime_.give_teardown_order(teardown_order_.abi()));
         for (uint32_t i = 0u; i < found; i++)
             if (d3d11_devices_[i].object().open(d3d_runtime_, uuids_[i].raw(), shares_[i].object())) {
                 sub_apis_[i] |= AV_EXECUTOR_SUB_API_D3D;
@@ -163,6 +164,12 @@ HostRamLedger *LoaderHostApis::host_ram_ledger()
 {
     AV_SCOPE("LoaderHostApis::host_ram_ledger");
     return &host_ram_;
+}
+
+PipelineTeardownOrder &LoaderHostApis::teardown_order()
+{
+    AV_SCOPE("LoaderHostApis::teardown_order");
+    return teardown_order_;
 }
 
 HostMemorySource *LoaderHostApis::memory_source(uint32_t index)

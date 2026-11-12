@@ -8,6 +8,8 @@
 
 namespace av {
 
+class PipelineTeardownOrder;
+
 class CompositorDevice {
 public:
     CompositorDevice();
@@ -15,7 +17,7 @@ public:
     CompositorDevice(const CompositorDevice &) = delete;
     CompositorDevice &operator=(const CompositorDevice &) = delete;
 
-    [[nodiscard]] bool       open(const uint8_t *uuid);
+    [[nodiscard]] bool       open(const uint8_t *uuid, PipelineTeardownOrder &order);
     bool                     opened() const;
     void                     close();
     const VulkanDeviceTable &table() const;
@@ -23,6 +25,7 @@ public:
 private:
     VkInstance        instance_;
     VkDevice          device_;
+    PipelineTeardownOrder *order_;
     VulkanDeviceTable table_;
 };
 

@@ -123,6 +123,27 @@ void D3dRuntime::give_vram_gate(const AvVramGate &gate) const
     if (set12 != nullptr) set12(&gate);
 }
 
+uint32_t D3dRuntime::give_teardown_order(const AvTeardownOrder &order) const
+{
+    AV_SCOPE("D3dRuntime::give_teardown_order");
+    uint32_t taken = 0u;
+    void *const libraries[] = {d3d11_, d3d9_};
+    for (void *library : libraries) {
+        if (library == nullptr) continue;
+        const SetTeardownOrder set =
+            reinterpret_cast<SetTeardownOrder>(dlsym(library, "dxvk_proton_set_teardown_order"));
+        if (set == nullptr) continue;
+        set(&order);
+        taken++;
+    }
+    if (d3d12core_ == nullptr) return taken;
+    const SetTeardownOrder set12 =
+        reinterpret_cast<SetTeardownOrder>(dlsym(d3d12core_, "vkd3d_proton_set_teardown_order"));
+    if (set12 == nullptr) return taken;
+    set12(&order);
+    return taken + 1u;
+}
+
 IDirect3D9 *D3dRuntime::create_d3d9() const
 {
     AV_SCOPE("D3dRuntime::create_d3d9");

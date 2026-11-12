@@ -1,0 +1,134 @@
+From: accel-virt
+Subject: [PATCH] vulkan: a device is destroyed under the embedder's teardown order
+
+The embedder registers a table of callbacks (dxvk_proton_set_teardown_order).
+A device DXVK creates asks it once whether its driver needs ordering; if so
+vkDestroyDevice runs between destroying and destroyed, so it never overlaps a
+ray tracing pipeline compile of any other Vulkan user in the process.
+---
+diff --git a/src/d3d11/d3d11.sym b/src/d3d11/d3d11.sym
+index 9420ce4..ea52189 100644
+--- a/src/d3d11/d3d11.sym
++++ b/src/d3d11/d3d11.sym
+@@ -5,6 +5,7 @@
+     D3D11CreateDeviceAndSwapChain;
+     D3D11On12CreateDevice;
+     dxvk_proton_set_vram_gate;
++    dxvk_proton_set_teardown_order;
+     dxvk_take_out_of_memory;
+ 
+   local:
+diff --git a/src/d3d11/d3d11_main.cpp b/src/d3d11/d3d11_main.cpp
+index 1076d27..118e3b4 100644
+--- a/src/d3d11/d3d11_main.cpp
++++ b/src/d3d11/d3d11_main.cpp
+@@ -224,6 +224,11 @@ extern "C" {
+     }
+ 
+ 
++    DLLEXPORT void dxvk_proton_set_teardown_order(const dxvk::vk::TeardownOrder* order) {
++      dxvk::vk::g_teardownOrder = order && order->size >= sizeof(dxvk::vk::TeardownOrder) ? order : nullptr;
++    }
++
++
+     DLLEXPORT HRESULT __stdcall D3D11CoreCreateDevice(
+             IDXGIFactory*       pFactory,
+             IDXGIAdapter*       pAdapter,
+diff --git a/src/d3d9/d3d9.sym b/src/d3d9/d3d9.sym
+index 48d3337..3310e89 100644
+--- a/src/d3d9/d3d9.sym
++++ b/src/d3d9/d3d9.sym
+@@ -21,6 +21,7 @@
+     Direct3DCreate9On12;
+     Direct3DCreate9On12Ex;
+     dxvk_proton_set_vram_gate;
++    dxvk_proton_set_teardown_order;
+     dxvk_take_out_of_memory;
+ 
+   local:
+diff --git a/src/d3d9/d3d9_main.cpp b/src/d3d9/d3d9_main.cpp
+index 8962a20..1502bbf 100644
+--- a/src/d3d9/d3d9_main.cpp
++++ b/src/d3d9/d3d9_main.cpp
+@@ -33,6 +33,10 @@ extern "C" {
+     dxvk::g_vramGate = gate;
+   }
+ 
++  DLLEXPORT void dxvk_proton_set_teardown_order(const dxvk::vk::TeardownOrder* order) {
++    dxvk::vk::g_teardownOrder = order && order->size >= sizeof(dxvk::vk::TeardownOrder) ? order : nullptr;
++  }
++
+   DLLEXPORT IDirect3D9* __stdcall Direct3DCreate9(UINT nSDKVersion) {
+     IDirect3D9Ex* pDirect3D = nullptr;
+     dxvk::CreateD3D9(false, &pDirect3D, nullptr, 0);
+diff --git a/src/dxvk/dxvk_adapter.cpp b/src/dxvk/dxvk_adapter.cpp
+index 9579d0e..ce45ebf 100644
+--- a/src/dxvk/dxvk_adapter.cpp
++++ b/src/dxvk/dxvk_adapter.cpp
+@@ -345,6 +345,7 @@ namespace dxvk {
+     }
+ 
+     Rc<vk::DeviceFn> vkd = new vk::DeviceFn(vk, true, device);
++    vkd->orderTeardown(m_capabilities.getProperties().vk12.driverID);
+ 
+     DxvkDeviceQueueSet deviceQueues = { };
+     deviceQueues.graphics = getDeviceQueue(vkd, caps, queueMapping.graphics);
+diff --git a/src/vulkan/vulkan_loader.cpp b/src/vulkan/vulkan_loader.cpp
+index f9d1e98..a3f4437 100644
+--- a/src/vulkan/vulkan_loader.cpp
++++ b/src/vulkan/vulkan_loader.cpp
+@@ -101,8 +101,22 @@ namespace dxvk::vk {
+   DeviceFn::DeviceFn(const Rc<InstanceLoader>& library, bool owned, VkDevice device)
+   : DeviceLoader(library, owned, device) { }
+   DeviceFn::~DeviceFn() {
+-    if (m_owned)
+-      this->vkDestroyDevice(m_device, nullptr);
++    if (!m_owned)
++      return;
++
++    if (m_teardownOrder)
++      m_teardownOrder->destroying(m_teardownOrder->self);
++
++    this->vkDestroyDevice(m_device, nullptr);
++
++    if (m_teardownOrder)
++      m_teardownOrder->destroyed(m_teardownOrder->self);
++  }
++
++
++  void DeviceFn::orderTeardown(VkDriverId driver) {
++    const TeardownOrder* order = g_teardownOrder;
++    m_teardownOrder = order && order->neededBy(order->self, uint32_t(driver)) ? order : nullptr;
+   }
+   
+ }
+diff --git a/src/vulkan/vulkan_loader.h b/src/vulkan/vulkan_loader.h
+index 8ad6478..40a31b2 100644
+--- a/src/vulkan/vulkan_loader.h
++++ b/src/vulkan/vulkan_loader.h
+@@ -184,9 +184,25 @@ namespace dxvk::vk {
+    * Vulkan functions for a specific Vulkan device.
+    * This ensures that no slow dispatch code is executed.
+    */
++  struct TeardownOrder {
++    uint32_t size;
++    void*    self;
++    int      (*neededBy)(void* self, uint32_t driverId);
++    void     (*compiling)(void* self);
++    void     (*compiled)(void* self);
++    void     (*destroying)(void* self);
++    void     (*destroyed)(void* self);
++  };
++
++  inline const TeardownOrder* g_teardownOrder = nullptr;
++
+   struct DeviceFn : DeviceLoader {
+     DeviceFn(const Rc<InstanceLoader>& library, bool owned, VkDevice device);
+     ~DeviceFn();
++
++    void orderTeardown(VkDriverId driver);
++
++    const TeardownOrder* m_teardownOrder = nullptr;
+     
+     VULKAN_FN(vkDestroyDevice);
+     VULKAN_FN(vkGetDeviceQueue);

@@ -47,7 +47,7 @@ void *run_closing_watch(void *root)
 
 ExecutorRoot::ExecutorRoot(ExecutorLog &log)
     : gpus_(), domains_(), memory_groups_{}, group_of_{}, group_refs_{}, sessions_{}, vulkan_{}, opencl_{}, opengl_{}, d3d_{}, shares_{}, apis_of_{}, gpus_of_{},
-      wedged_{}, reaping_{}, closing_{}, wedged_since_{}, lock_(), wake_(lock_), watcher_{}, watching_(false), helpers_{}, helpers_running_(0u), prepared_{}, exhausted_(0u), exhaustion_logged_(false), stopping_(false), clock_(), apis_(nullptr), log_(log), lost_leak_after_(lost_leak_nanoseconds), refusals_(log.sessions()), teardown_order_()
+      wedged_{}, reaping_{}, closing_{}, wedged_since_{}, lock_(), wake_(lock_), watcher_{}, watching_(false), helpers_{}, helpers_running_(0u), prepared_{}, exhausted_(0u), exhaustion_logged_(false), stopping_(false), clock_(), apis_(nullptr), log_(log), lost_leak_after_(lost_leak_nanoseconds), refusals_(log.sessions())
 {
     AV_SCOPE("ExecutorRoot::ExecutorRoot");
     for (uint32_t slot = 0u; slot < max_sessions; slot++) group_of_[slot] = max_sessions;
@@ -469,7 +469,7 @@ bool ExecutorRoot::bind(uint32_t slot, uint32_t sub_api, const HostGpu &gpu, con
     }
     default:
         vulkan_[slot].object().use_vram(apis_->vram_ledger(gpu.index()), apis_->host_ram_ledger());
-        vulkan_[slot].object().order_teardown(&teardown_order_);
+        vulkan_[slot].object().order_teardown(&apis_->teardown_order());
         vulkan_[slot].object().initialize(gpu, apis_->memory_source(gpu.index()), sessions_[slot].object().imports());
         started = true;
         break;

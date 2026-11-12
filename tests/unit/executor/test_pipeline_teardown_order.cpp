@@ -1,7 +1,8 @@
-#include "executor/vulkan/pipeline_teardown_order.hpp"
+#include "executor/pipeline_teardown_order.hpp"
 #include "harness/framework/test_registry.hpp"
 
 #include <atomic>
+#include <cstdint>
 #include <chrono>
 #include <thread>
 
@@ -51,3 +52,23 @@ TEST(pipeline_teardown_order, compiles_run_side_by_side_and_one_waits_for_a_dest
   order.destroyed();
   compiler.join();
   CHECK(compiled.load()); }
+
+TEST(pipeline_teardown_order, the_embedder_table_answers_and_orders_as_the_order_itself_does)
+{ PipelineTeardownOrder order;
+  const AvTeardownOrder &table = order.abi();
+  CHECK_EQ(table.size, static_cast<std::uint32_t>(sizeof(AvTeardownOrder)));
+  CHECK_EQ(table.needed_by(table.self, VK_DRIVER_ID_NVIDIA_PROPRIETARY), 1);
+  CHECK_EQ(table.needed_by(table.self, VK_DRIVER_ID_MESA_RADV), 0);
+  table.compiling(table.self);
+  std::atomic<bool> destroyed{false};
+  std::thread destroyer([&] {
+      table.destroying(table.self);
+      destroyed = true;
+      table.destroyed(table.self);
+  });
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  CHECK(!destroyed.load());
+  table.compiled(table.self);
+  destroyer.join();
+  CHECK(destroyed.load());
+  CHECK_EQ(order.destroys(), 1u); }

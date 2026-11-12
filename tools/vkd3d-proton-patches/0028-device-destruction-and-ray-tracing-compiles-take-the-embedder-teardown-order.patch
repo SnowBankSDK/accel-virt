@@ -1,0 +1,180 @@
+From: accel-virt
+Subject: [PATCH] device: device destruction and ray tracing compiles take the embedder's teardown order
+
+The embedder registers a table of callbacks (vkd3d_proton_set_teardown_order).
+On a driver it names, vkCreateRayTracingPipelinesKHR runs between compiling
+and compiled and vkDestroyDevice between destroying and destroyed, so a device
+destroyed in one context never overlaps a ray tracing compile in another.
+---
+diff --git a/include/vkd3d.h b/include/vkd3d.h
+index 5d1d7c2..59b0584 100644
+--- a/include/vkd3d.h
++++ b/include/vkd3d.h
+@@ -195,6 +195,8 @@ ULONG vkd3d_resource_incref(ID3D12Resource *resource);
+ /* The embedder's cap on device-local memory: a table of callbacks, kept by pointer. */
+ void vkd3d_set_vram_gate(const void *gate);
+ 
++void vkd3d_set_teardown_order(const void *order);
++
+ /* Releases every submission thread of `device` blocked in a wait for a fence
+  * value nothing has been submitted to signal, and makes later such waits
+  * return at once: the wait is dropped, which on a device being torn down or
+diff --git a/libs/d3d12core/d3d12core.def b/libs/d3d12core/d3d12core.def
+index f00694f..31e23cf 100644
+--- a/libs/d3d12core/d3d12core.def
++++ b/libs/d3d12core/d3d12core.def
+@@ -6,6 +6,7 @@ EXPORTS
+     vkd3d_proton_open_heap_from_dmabuf
+     vkd3d_proton_create_exported_heap
+     vkd3d_proton_set_vram_gate
++    vkd3d_proton_set_teardown_order
+     vkd3d_proton_abandon_waits
+     vkd3d_proton_export_image
+     vkd3d_proton_export_fence
+diff --git a/libs/d3d12core/main.c b/libs/d3d12core/main.c
+index bd8bf0b..ea4900e 100644
+--- a/libs/d3d12core/main.c
++++ b/libs/d3d12core/main.c
+@@ -1362,6 +1362,11 @@ void WINAPI DLLEXPORT vkd3d_proton_set_vram_gate(const void *gate)
+     vkd3d_set_vram_gate(gate);
+ }
+ 
++void WINAPI DLLEXPORT vkd3d_proton_set_teardown_order(const void *order)
++{
++    vkd3d_set_teardown_order(order);
++}
++
+ void WINAPI DLLEXPORT vkd3d_proton_abandon_waits(ID3D12Device *device)
+ {
+     vkd3d_abandon_waits(device);
+diff --git a/libs/vkd3d/device.c b/libs/vkd3d/device.c
+index a9fbe7c..615ec90 100644
+--- a/libs/vkd3d/device.c
++++ b/libs/vkd3d/device.c
+@@ -3937,6 +3937,32 @@ static void d3d12_device_init_workarounds(struct d3d12_device *device)
+     }
+ }
+ 
++static const struct vkd3d_teardown_order *vkd3d_teardown_order;
++
++void vkd3d_set_teardown_order(const void *order)
++{
++    const struct vkd3d_teardown_order *given = order;
++    vkd3d_teardown_order = given && given->size >= sizeof(*given) ? given : NULL;
++}
++
++const struct vkd3d_teardown_order *vkd3d_teardown_order_for(const struct d3d12_device *device)
++{
++    const struct vkd3d_teardown_order *order = vkd3d_teardown_order;
++    if (!order || !order->needed_by(order->self, device->device_info.vulkan_1_2_properties.driverID))
++        return NULL;
++    return order;
++}
++
++static void vkd3d_destroy_vk_device(struct d3d12_device *device, VkDevice vk_device)
++{
++    const struct vkd3d_teardown_order *order = vkd3d_teardown_order_for(device);
++    if (order)
++        order->destroying(order->self);
++    device->vk_procs.vkDestroyDevice(vk_device, NULL);
++    if (order)
++        order->destroyed(order->self);
++}
++
+ static HRESULT vkd3d_create_vk_device(struct d3d12_device *device,
+         const struct vkd3d_device_create_info *create_info)
+ {
+@@ -4114,7 +4140,7 @@ static HRESULT vkd3d_create_vk_device(struct d3d12_device *device,
+     {
+         ERR("Failed to load device procs, hr %#x.\n", hr);
+         if (device->vk_procs.vkDestroyDevice)
+-            device->vk_procs.vkDestroyDevice(vk_device, NULL);
++            vkd3d_destroy_vk_device(device, vk_device);
+         return hr;
+     }
+ 
+@@ -4123,7 +4149,7 @@ static HRESULT vkd3d_create_vk_device(struct d3d12_device *device,
+     if (FAILED(hr = d3d12_device_create_vkd3d_queues(device, &device_queue_info)))
+     {
+         ERR("Failed to create queues, hr %#x.\n", hr);
+-        device->vk_procs.vkDestroyDevice(vk_device, NULL);
++        vkd3d_destroy_vk_device(device, vk_device);
+         return hr;
+     }
+ 
+@@ -4791,7 +4817,7 @@ static void d3d12_device_destroy(struct d3d12_device *device)
+ #endif
+ 
+     vkd3d_free((void *)device->vk_info.extension_names);
+-    VK_CALL(vkDestroyDevice(device->vk_device, NULL));
++    vkd3d_destroy_vk_device(device, device->vk_device);
+     rwlock_destroy(&device->fragment_output_lock);
+     rwlock_destroy(&device->vertex_input_lock);
+     pthread_mutex_destroy(&device->mutex);
+@@ -10924,8 +10950,7 @@ out_free_private_store:
+     vkd3d_private_store_destroy(&device->private_store);
+ out_free_vk_resources:
+     d3d12_device_destroy_vkd3d_queues(device);
+-    vk_procs = &device->vk_procs;
+-    VK_CALL(vkDestroyDevice(device->vk_device, NULL));
++    vkd3d_destroy_vk_device(device, device->vk_device);
+ out_free_instance:
+     vkd3d_instance_decref(device->vkd3d_instance);
+ out_free_fragment_output_lock:
+diff --git a/libs/vkd3d/raytracing_pipeline.c b/libs/vkd3d/raytracing_pipeline.c
+index 353a5d6..d176ce6 100644
+--- a/libs/vkd3d/raytracing_pipeline.c
++++ b/libs/vkd3d/raytracing_pipeline.c
+@@ -1882,6 +1882,7 @@ static HRESULT d3d12_state_object_compile_pipeline_variant(struct d3d12_rt_state
+ {
+     struct vkd3d_nv_shader_extn nv_shader_extn = d3d12_device_get_nv_shader_extn(object->device);
+     const struct vkd3d_vk_device_procs *vk_procs = &object->device->vk_procs;
++    const struct vkd3d_teardown_order *teardown_order;
+     struct vkd3d_shader_interface_local_info shader_interface_local_info;
+     VkRayTracingPipelineInterfaceCreateInfoKHR interface_create_info;
+     VkDescriptorSetLayoutBinding *local_static_sampler_bindings;
+@@ -2536,6 +2537,10 @@ static HRESULT d3d12_state_object_compile_pipeline_variant(struct d3d12_rt_state
+ 
+     TRACE("Calling vkCreateRayTracingPipelinesKHR.\n");
+ 
++    teardown_order = vkd3d_teardown_order_for(object->device);
++    if (teardown_order)
++        teardown_order->compiling(teardown_order->self);
++
+     vr = VK_CALL(vkCreateRayTracingPipelinesKHR(object->device->vk_device, VK_NULL_HANDLE,
+             VK_NULL_HANDLE, 1, &pipeline_create_info, NULL,
+             (pipeline_create_info.flags & VK_PIPELINE_CREATE_LIBRARY_BIT_KHR) ?
+@@ -2558,6 +2563,9 @@ static HRESULT d3d12_state_object_compile_pipeline_variant(struct d3d12_rt_state
+                 VK_NULL_HANDLE, 1, &pipeline_create_info, NULL, &variant->pipeline));
+     }
+ 
++    if (teardown_order)
++        teardown_order->compiled(teardown_order->self);
++
+     TRACE("Completed vkCreateRayTracingPipelinesKHR.\n");
+ 
+     if (vr)
+diff --git a/libs/vkd3d/vkd3d_private.h b/libs/vkd3d/vkd3d_private.h
+index 6326f39..73896bd 100644
+--- a/libs/vkd3d/vkd3d_private.h
++++ b/libs/vkd3d/vkd3d_private.h
+@@ -4446,6 +4446,19 @@ struct vkd3d_vram_gate
+ 
+ extern const struct vkd3d_vram_gate *vkd3d_vram_gate;
+ 
++struct vkd3d_teardown_order
++{
++    uint32_t size;
++    void *self;
++    int (*needed_by)(void *self, uint32_t driver_id);
++    void (*compiling)(void *self);
++    void (*compiled)(void *self);
++    void (*destroying)(void *self);
++    void (*destroyed)(void *self);
++};
++
++const struct vkd3d_teardown_order *vkd3d_teardown_order_for(const struct d3d12_device *device);
++
+ struct vkd3d_memory_info
+ {
+     void *vram_account;
