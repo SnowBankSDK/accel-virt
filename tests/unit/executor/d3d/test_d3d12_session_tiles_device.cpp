@@ -1,6 +1,7 @@
 #include "core/support/object_storage.hpp"
 #include "executor/sharing/session_shares.hpp"
 #include "executor/d3d/d3d12_session.hpp"
+#include "executor/d3d/leased_objects.hpp"
 #include "executor/d3d/d3d12_tile_update.hpp"
 #include "executor/d3d/d3d_backend.hpp"
 #include "executor/d3d/d3d_object_table.hpp"
@@ -444,6 +445,7 @@ av::ObjectStorage<av::D3d12Session> session_storage;
 av::HostHeap                        session_heap;
 av::WatchedBlocks                   session_blocks(session_heap);
 av::D3dObjectTable                  objects(session_blocks);
+av::LeasedObjects                   leased(session_blocks);
 av::WakeSignal tenant;
 av::EventfdWake fence_wake;
 alignas(64) std::uint8_t guest[4096];
@@ -465,7 +467,7 @@ TEST(d3d12_session_tiles_device, more_regions_than_one_command_carries_map_none)
     av::DriverLog        lines(rig.sink, "d3d12: ");
     CHECK_STATUS(bytes.bind(0u, guest, sizeof guest), av::Status::ok);
     objects.release_all();
-    CHECK_STATUS(session_storage.construct(bytes, objects, tenant, fence_wake, session_blocks, lines), av::Status::ok);
+    CHECK_STATUS(session_storage.construct(bytes, objects, leased, tenant, fence_wake, session_blocks, lines), av::Status::ok);
     av::D3d12Session &session = session_storage.object();
     session.initialize(imports, device12);
     CHECK(session.on_CreateCommandQueue12(queue, 0u, 0u, 0u));
