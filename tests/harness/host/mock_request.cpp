@@ -7,7 +7,7 @@ namespace av {
 
 MockRequest::MockRequest(const std::uint8_t *bytes, std::size_t size)
     : bytes_(static_cast<std::uint8_t *>(std::malloc(size + 1u))), size_(size), response_{}, response_size_(0u),
-      answered_(false)
+      answered_(false), dropped_(false)
 {
     std::memcpy(bytes_, bytes, size);
 }
@@ -22,9 +22,13 @@ std::size_t MockRequest::read(std::size_t offset, std::uint8_t *buffer, std::siz
     return count;
 }
 
+std::size_t MockRequest::size() const { return size_; }
+
+const std::uint8_t *MockRequest::bytes() const { return bytes_; }
+
 bool MockRequest::answer(const std::uint8_t *bytes, std::size_t size)
 {
-    if (answered_) return false;
+    if (answered_ || dropped_) return false;
     response_size_ = size < sizeof response_ ? size : sizeof response_;
     std::memcpy(response_, bytes, response_size_);
     answered_ = true;
@@ -32,6 +36,10 @@ bool MockRequest::answer(const std::uint8_t *bytes, std::size_t size)
 }
 
 bool MockRequest::answered() const { return answered_; }
+
+void MockRequest::drop() { dropped_ = true; }
+
+bool MockRequest::dropped() const { return dropped_; }
 
 std::uint32_t MockRequest::response_type() const { return response_u32(0u); }
 

@@ -2,6 +2,7 @@
 #define AV_VIRTIO_GPU_AV_HPP
 
 #include "core/support/status.hpp"
+#include "device/control/held_requests.hpp"
 #include "device/gpu/device_capset.hpp"
 #include "device/context/local_context_plane.hpp"
 #include "device/isolation/renderer_context_plane.hpp"
@@ -21,6 +22,7 @@
 #include "device/present/present_engine.hpp"
 #include "device/feasibility/host_feasibility.hpp"
 #include "device/recording/wire_recorder.hpp"
+#include "device/threading/service_thread.hpp"
 
 #include <stdint.h>
 
@@ -67,6 +69,7 @@ public:
     [[nodiscard]] Status destroy_context(uint32_t id);
     uint32_t             contexts() const;
     uint32_t             reaping() const;
+    uint32_t             outstanding() const;
     void                 renderer_lost();
     bool                 export_accepted(int connection, bool same_user);
     bool                 realized() const;
@@ -85,6 +88,7 @@ private:
     HostFeasibility    feasibility_;
     DeviceCapset       capset_;
     WireRecorder       recorder_;
+    HeldRequests       held_;
     BlobTable          blobs_;
     HostBlobTable      host_blobs_;
     WindowStatsWindow  window_stats_;
@@ -100,6 +104,7 @@ private:
     ContextPlane        *contexts_;
     ExportService        exports_;
     DisplayShow          shower_;
+    ServiceThread        service_;
 
     friend struct VirtioGpuAvProbe;
 };

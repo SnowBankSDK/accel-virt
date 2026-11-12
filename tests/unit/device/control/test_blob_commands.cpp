@@ -1,6 +1,8 @@
 #include "core/support/status.hpp"
 #include "device/abi/av_executor.h"
 #include "device/control/blob_commands.hpp"
+#include "device/control/held_requests.hpp"
+#include "device/threading/service_thread.hpp"
 #include "device/recording/wire_recorder.hpp"
 #include "proto/context/gpu_identity.hpp"
 #include "proto/context/protocol_version.hpp"
@@ -88,18 +90,33 @@ GpuRequestBuilder named(std::uint32_t type, std::uint32_t id)
 
 class Fixture {
 public:
-    Fixture() : blobs_(host_), recorder_(host_), host_blobs_(host_), commands_(host_, blobs_, host_blobs_, recorder_, plane_)
+    Fixture()
+        : blobs_(host_), recorder_(host_), host_blobs_(host_), held_(host_), service_(host_),
+          commands_(host_, blobs_, host_blobs_, held_, recorder_, plane_)
     {
         static_cast<void>(blobs_.initialize());
-        static_cast<void>(host_blobs_.initialize(plane_));
+        static_cast<void>(service_.start());
+        static_cast<void>(host_blobs_.initialize(plane_, service_, held_, recorder_));
         plane_.hold_context(context);
         host_.add_guest_ram(ram, 0x10000u);
         host_.add_bounce_region(0x800000u, 0x1000u);
         host_.set_hostmem_size(0x10000u);
         host_.add_resource(50u);
     }
-    ~Fixture() { host_blobs_.release_all(); }
+    ~Fixture()
+    {
+        host_blobs_.release_all();
+        settle();
+    }
 
+    void settle()
+    {
+        for (int round = 0; round < 1000; round++) {
+            const std::uint32_t ran = host_.run_main_loop();
+            if (ran == 0u && service_.outstanding() == 0u && host_blobs_.pending() == 0u) return;
+            static_cast<void>(host_.wait_for_main_loop_work(1u, 10u));
+        }
+    }
     std::uint32_t send(const GpuRequestBuilder &builder, std::uint32_t *map_info = nullptr)
     {
         MockRequest mock(builder.bytes(), builder.size());
@@ -107,6 +124,7 @@ public:
         std::uint32_t type = 0u;
         std::memcpy(&type, builder.bytes(), sizeof type);
         if (!commands_.answer(request, type)) return mock.answered() ? 0xDEADu : 0u;
+        settle();
         if (map_info != nullptr) *map_info = mock.response_u32(24u);
         return mock.response_type();
     }
@@ -114,13 +132,16 @@ public:
     {
         MockRequest mock(builder.bytes(), builder.size());
         ControlRequest request(host_, &mock);
-        return commands_.answer(request, type) ? mock.response_type() : 0u;
+        if (!commands_.answer(request, type)) return 0u;
+        settle();
+        return mock.response_type();
     }
     MockHost  &host() { return host_; }
     BlobTable &blobs() { return blobs_; }
     HostBlobTable &host_blobs() { return host_blobs_; }
     WireRecorder &recorder() { return recorder_; }
     av::RecordingContextPlane &plane() { return plane_; }
+    av::HeldRequests &held() { return held_; }
 
 private:
     MockHost                  host_;
@@ -128,6 +149,8 @@ private:
     WireRecorder              recorder_;
     av::RecordingContextPlane plane_;
     HostBlobTable             host_blobs_;
+    av::HeldRequests          held_;
+    av::ServiceThread         service_;
     BlobCommands              commands_;
 };
 
@@ -322,7 +345,8 @@ TEST(blob_commands_create, a_host_blob_table_never_initialized_refuses_every_hos
   WireRecorder              recorder(host);
   av::RecordingContextPlane plane;
   HostBlobTable             host_blobs(host);
-  BlobCommands              commands(host, blobs, host_blobs, recorder, plane);
+  av::HeldRequests          held(host);
+  BlobCommands              commands(host, blobs, host_blobs, held, recorder, plane);
   plane.hold_context(context);
   const GpuRequestBuilder builder = create_host(host_blob, 0x1000u);
   MockRequest             mock(builder.bytes(), builder.size());

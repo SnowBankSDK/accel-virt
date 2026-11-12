@@ -125,22 +125,23 @@ TEST(executor_shares, nothing_published_on_that_gpu_is_no_executor_and_no_call)
   });
   CHECK_EQ(fixture.ops().misuses(), 0u); }
 
-TEST(executor_shares, a_withdraw_waits_for_a_create_that_is_using_the_executor)
+TEST(executor_shares, a_withdraw_returns_at_once_and_only_the_destroyer_waits_for_a_create_using_the_executor)
 { Fixture fixture;
   ExecutorShares &shares = fixture.shares();
   AvExecutor *shared = nullptr;
   std::atomic<bool> published{false};
-  std::atomic<bool> withdrawing{false};
-  std::atomic<bool> withdrawn{false};
+  std::atomic<bool> destroying{false};
+  std::atomic<bool> destroyed{false};
   std::atomic<bool> destroy_now{false};
   auto owner = [&] {
       shared = fixture.library().create(SubApi::opengl, AvContextOptions{}, nullptr);
       CHECK_STATUS(shares.publish(5u, gpu, shared), Status::ok);
       published = true;
       while (!destroy_now) sched_yield();
-      withdrawing = true;
       shares.withdraw(5u, shared);
-      withdrawn = true;
+      destroying = true;
+      shares.await_unused(shared);
+      destroyed = true;
       fixture.library().destroy(shared);
   };
   AvExecutor *made = nullptr;
@@ -150,18 +151,23 @@ TEST(executor_shares, a_withdraw_waits_for_a_create_that_is_using_the_executor)
   fixture.ops().hold_creates();
   void *const sharing = fixture.start(sharer);
   while (fixture.ops().creates_waiting() == 0u) sched_yield();
+  shares.withdraw(5u, shared);
+  CHECK_EQ(shares.published(), 0u);
+  CHECK(shares.create_sharing(av::SubApi::opengl, 5u, gpu, core_46) == nullptr);
   destroy_now = true;
-  while (!withdrawing) sched_yield();
+  while (!destroying) sched_yield();
   for (int spins = 0; spins < 2000; spins++) sched_yield();
-  CHECK(!withdrawn);
+  CHECK(!destroyed);
+  CHECK(shares.invariants_hold());
   fixture.ops().release_creates();
   fixture.host().join_thread(sharing);
   fixture.host().join_thread(owning);
-  CHECK(withdrawn);
+  CHECK(destroyed);
   CHECK(made != nullptr);
   CHECK(fixture.ops().last_share() == shared);
   CHECK(fixture.ops().last_share_live());
   CHECK_EQ(shares.published(), 0u);
+  CHECK(shares.invariants_hold());
   fixture.on_worker([&] { fixture.library().destroy(made); });
   CHECK_EQ(fixture.ops().live(), 0u); }
 

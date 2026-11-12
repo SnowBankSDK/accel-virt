@@ -94,6 +94,8 @@ typedef struct AvHostOps {
     void (*raise_fence_interrupt)(void *opaque, uint32_t line);
     size_t (*read_request)(void *opaque, void *request, size_t offset, uint8_t *buffer, size_t size);
     void (*respond)(void *opaque, void *request, const uint8_t *bytes, size_t size);
+    void *(*keep_request)(void *opaque, void *request);
+    void (*release_request)(void *opaque, void *kept, int answered);
     int (*resource_exists)(void *opaque, uint32_t id);
     void *(*create_recording)(void *opaque, const char *path);
     int (*append_recording)(void *opaque, void *file, const uint8_t *bytes, size_t size);

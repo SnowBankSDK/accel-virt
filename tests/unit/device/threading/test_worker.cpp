@@ -259,7 +259,7 @@ void release_once_stopping(void *context)
 
 }
 
-TEST(worker_stop, finishes_the_running_item_and_drops_the_rest)
+TEST(worker_stop, finishes_the_running_item_and_completes_the_rest_without_running_them)
 { Fixture fixture;
   void *gate = nullptr;
   CHECK_STATUS(fixture.host().create_event(gate), Status::ok);
@@ -275,7 +275,8 @@ TEST(worker_stop, finishes_the_running_item_and_drops_the_rest)
   fixture.halt();
   fixture.host().join_thread(helper);
   CHECK_EQ(fixture.journal().ran.load(), 1u);
-  CHECK_EQ(fixture.host().run_main_loop(), 1u);
+  CHECK_EQ(fixture.host().run_main_loop(), 4u);
+  CHECK_EQ(fixture.journal().ran.load(), 1u);
   CHECK(!fixture.worker().stopping());
   CHECK_EQ(fixture.worker().pending(), 0u);
   CHECK_STATUS(fixture.worker().post(WorkItem(&work, &completion, &dropped[0])), Status::invalid_state);

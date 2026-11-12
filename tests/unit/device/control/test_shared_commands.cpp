@@ -1,6 +1,8 @@
 #include "device/display/head_planes.hpp"
 #include "device/control/control_request.hpp"
+#include "device/control/held_requests.hpp"
 #include "device/control/shared_commands.hpp"
+#include "device/threading/service_thread.hpp"
 #include "device/display/display_clock.hpp"
 #include "device/export/export_connection.hpp"
 #include "device/export/export_service.hpp"
@@ -9,6 +11,7 @@
 #include "harness/export/fake_export_consumer.hpp"
 #include "harness/framework/test_registry.hpp"
 #include "harness/host/gpu_request_builder.hpp"
+#include "harness/host/main_loop_pump.hpp"
 #include "harness/host/mock_host.hpp"
 #include "harness/host/mock_request.hpp"
 #include "proto/export/export_greeting.hpp"
@@ -34,17 +37,21 @@ void unshown(void *) {}
 class Fixture {
 public:
     Fixture()
-        : interrupts_(host_), clock_(host_, interrupts_, &unshown, nullptr), exports_(host_, clock_),
-          commands_(host_, plane_, exports_, gpu)
+        : interrupts_(host_), clock_(host_, interrupts_, &unshown, nullptr), exports_(host_, clock_), held_(host_),
+          service_(host_), commands_(host_, plane_, exports_, gpu, service_, held_)
     {
         exports_.attach(plane_, gpu, av::ExportGreeting(gpu), heads_);
+        static_cast<void>(service_.start());
     }
 
     std::uint32_t send(std::uint32_t type, const GpuRequestBuilder &builder)
     {
         MockRequest    mock(builder.bytes(), builder.size());
         ControlRequest request(host_, &mock);
-        return commands_.answer(request, type) ? mock.response_type() : 0u;
+        if (!commands_.answer(request, type)) return 0u;
+        CHECK(av::pump_main_loop(host_, [this, &mock] { return mock.answered() && service_.outstanding() == 0u; }));
+        CHECK_EQ(held_.held(), 0u);
+        return mock.response_type();
     }
 
     av::RecordingContextPlane &plane() { return plane_; }
@@ -57,6 +64,8 @@ private:
     av::FenceInterrupts       interrupts_;
     av::DisplayClock          clock_;
     av::ExportService         exports_;
+    av::HeldRequests          held_;
+    av::ServiceThread         service_;
     SharedCommands            commands_;
 };
 

@@ -331,6 +331,18 @@ void TableHost::respond(void *request, const uint8_t *bytes, size_t size)
     ops_.respond(ops_.opaque, request, bytes, size);
 }
 
+void *TableHost::keep_request(void *request)
+{
+    AV_SCOPE("TableHost::keep_request");
+    return ops_.keep_request(ops_.opaque, request);
+}
+
+void TableHost::release_request(void *kept, bool answered)
+{
+    AV_SCOPE("TableHost::release_request");
+    ops_.release_request(ops_.opaque, kept, answered ? 1 : 0);
+}
+
 bool TableHost::resource_exists(uint32_t id)
 {
     AV_SCOPE("TableHost::resource_exists");

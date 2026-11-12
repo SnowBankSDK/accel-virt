@@ -13,6 +13,7 @@
 #include "device/control/window_stats_commands.hpp"
 #include "device/present/present_frames.hpp"
 #include "device/control/shared_commands.hpp"
+#include "device/control/shared_release.hpp"
 #include "device/control/control_request.hpp"
 #include "device/abi/entry_points.hpp"
 #include "device/execution/executor_library.hpp"
@@ -25,10 +26,11 @@
 namespace av {
 
 VirtioGpuAv::VirtioGpuAv(Host &host)
-    : host_(host), binding_(host), pci_(host), feasibility_(host), capset_(host), recorder_(host), blobs_(host),
+    : host_(host), binding_(host), pci_(host), feasibility_(host), capset_(host), recorder_(host), held_(host), blobs_(host),
       host_blobs_(host), window_stats_(host), heads_(host, blobs_), display_modes_(host), interrupts_(host),
       clock_(host, interrupts_, &AvDisplayFramesShow, this), planes_(host), presents_(host, interrupts_), status_(host, interrupts_), local_(host, blobs_, host_blobs_, interrupts_, recorder_),
-      remote_(host, blobs_, interrupts_), contexts_(&local_), exports_(host, clock_), shower_(host, &AvDisplayFramesExport, this)
+      remote_(host, blobs_, interrupts_), contexts_(&local_), exports_(host, clock_), shower_(host, &AvDisplayFramesExport, this),
+      service_(host)
       {
           AV_SCOPE("VirtioGpuAv::VirtioGpuAv");
       }
@@ -75,7 +77,7 @@ Status VirtioGpuAv::realize(const char *host_gpu, bool base_blobs, const AvExecu
         host_.log(message.text());
         return Status::no_memory;
     }
-    if (host_blobs_.initialize(*contexts_) == Status::no_memory) {
+    if (host_blobs_.initialize(*contexts_, service_, held_, recorder_) == Status::no_memory) {
         message.append("virtio-gpu-av: the host has no mutex for the host blob table");
         host_.log(message.text());
         return Status::no_memory;
@@ -113,6 +115,11 @@ Status VirtioGpuAv::realize(const char *host_gpu, bool base_blobs, const AvExecu
         host_.log(message.text());
         return Status::no_memory;
     }
+    if (service_.start() != Status::ok) {
+        message.append("virtio-gpu-av: the host has no thread, event or mutex for the service thread");
+        host_.log(message.text());
+        return Status::no_memory;
+    }
     return start_recording(recording, message);
 }
 
@@ -142,13 +149,15 @@ void VirtioGpuAv::reset()
 {
     AV_SCOPE("VirtioGpuAv::reset");
     host_.require_main_loop("VirtioGpuAv::reset");
+    held_.drop_all();
     clock_.detach();
     shower_.stop();
     window_stats_.release();
     planes_.clear();
     presents_.detach();
     contexts_->destroy_all();
-    contexts_->shared_released(capset_.info().gpu().uuid(), 0u);
+    static_cast<void>(SharedRelease::hand_off(host_, *contexts_, service_, capset_.info().gpu().uuid(), 0u,
+                                              SharedRelease::Answer{nullptr, nullptr, HeldRequests::no_ticket}));
     exports_.revoke(0u, ExportRevocation::reset);
     const bool connected = interrupts_.connected();
     status_.reset();
@@ -184,9 +193,10 @@ bool VirtioGpuAv::control(void *request, uint32_t type)
     ControlRequest         control(host_, request);
     const PresentFrames snapshots(*contexts_, capset_.info().gpu().uuid());
     return ContextCommands(host_, *contexts_, capset_).answer(control, type) ||
-           BlobCommands(host_, blobs_, host_blobs_, recorder_, *contexts_).answer(control, type) ||
+           BlobCommands(host_, blobs_, host_blobs_, held_, recorder_, *contexts_).answer(control, type) ||
            ScanoutCommands(host_, blobs_, heads_).answer(control, type) ||
-           SharedCommands(host_, *contexts_, exports_, capset_.info().gpu().uuid()).answer(control, type) ||
+           SharedCommands(host_, *contexts_, exports_, capset_.info().gpu().uuid(), service_, held_)
+               .answer(control, type) ||
            PresentCommands(host_).answer(control, type) ||
            DisplayModeCommands(host_, display_modes_).answer(control, type) ||
            DisplayClockCommands(host_, clock_).answer(control, type) ||
@@ -407,6 +417,17 @@ void VirtioGpuAv::report(StateWriter &writer)
     host_blobs_.report(writer);
     window_stats_.report(writer);
     contexts_->report(writer);
+    writer.open("service", 0u);
+    writer.flag("running", service_.running());
+    writer.number("outstanding", service_.outstanding());
+    writer.number("held", held_.held());
+    writer.close();
+}
+
+uint32_t VirtioGpuAv::outstanding() const
+{
+    AV_SCOPE("VirtioGpuAv::outstanding");
+    return held_.held() + service_.outstanding();
 }
 
 bool VirtioGpuAv::invariants_hold() const
@@ -414,7 +435,8 @@ bool VirtioGpuAv::invariants_hold() const
     AV_SCOPE("VirtioGpuAv::invariants_hold");
     return contexts_->invariants_hold() && blobs_.invariants_hold() && host_blobs_.invariants_hold() &&
            heads_.invariants_hold() && interrupts_.invariants_hold() && presents_.invariants_hold() &&
-           status_.invariants_hold() && exports_.invariants_hold() &&
+           status_.invariants_hold() && exports_.invariants_hold() && held_.invariants_hold() &&
+           service_.invariants_hold() &&
            (binding_.bound() || (contexts_->live() == 0u && exports_.live() == 0u));
 }
 

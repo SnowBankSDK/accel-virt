@@ -85,6 +85,7 @@ void ContextExecutor::destroy()
     host_.require_worker("ContextExecutor::destroy");
     if (executor_ == nullptr) return;
     shares_.withdraw(id_, executor_);
+    shares_.await_unused(executor_);
     library_.destroy(executor_);
     executor_ = nullptr;
 }
@@ -157,10 +158,9 @@ Status ContextExecutor::import(uint64_t blob_id, uint64_t memory_key, uint64_t &
 Status ContextExecutor::place(uint64_t size, uint32_t request, AvHostMemory &memory)
 {
     AV_SCOPE("ContextExecutor::place");
-    host_.require_main_loop("ContextExecutor::place");
-    AvExecutor *const made = __atomic_load_n(&executor_, __ATOMIC_ACQUIRE);
-    if (made == nullptr) return Status::invalid_state;
-    return library_.place_memory(made, size, request, memory);
+    host_.require_worker("ContextExecutor::place");
+    if (executor_ == nullptr) return Status::invalid_state;
+    return library_.place_memory(executor_, size, request, memory);
 }
 
 void ContextExecutor::channel_stats(const uint8_t *body, size_t size)

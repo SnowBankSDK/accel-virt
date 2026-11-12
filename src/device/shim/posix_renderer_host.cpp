@@ -530,6 +530,17 @@ void PosixRendererHost::respond(void *, const uint8_t *, size_t)
     AV_SCOPE("PosixRendererHost::respond");
 }
 
+void *PosixRendererHost::keep_request(void *)
+{
+    AV_SCOPE("PosixRendererHost::keep_request");
+    return nullptr;
+}
+
+void PosixRendererHost::release_request(void *, bool)
+{
+    AV_SCOPE("PosixRendererHost::release_request");
+}
+
 bool PosixRendererHost::resource_exists(uint32_t)
 {
     AV_SCOPE("PosixRendererHost::resource_exists");

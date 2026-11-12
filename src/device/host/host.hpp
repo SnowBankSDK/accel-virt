@@ -77,6 +77,8 @@ public:
 
     virtual size_t read_request(void *request, size_t offset, uint8_t *buffer, size_t size) = 0;
     virtual void   respond(void *request, const uint8_t *bytes, size_t size) = 0;
+    virtual void  *keep_request(void *request) = 0;
+    virtual void   release_request(void *kept, bool answered) = 0;
     virtual bool   resource_exists(uint32_t id) = 0;
 
     [[nodiscard]] virtual Status create_recording(const char *path, void *&file) = 0;

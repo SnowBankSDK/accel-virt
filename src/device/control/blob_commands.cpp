@@ -3,6 +3,7 @@
 #include "core/trace/function_scope.hpp"
 #include "device/context/context_plane.hpp"
 #include "device/control/control_request.hpp"
+#include "device/control/held_requests.hpp"
 #include "device/host/host.hpp"
 #include "device/recording/wire_recorder.hpp"
 #include "device/memory/blob_table.hpp"
@@ -17,9 +18,9 @@
 
 namespace av {
 
-BlobCommands::BlobCommands(Host &host, BlobTable &blobs, HostBlobTable &host_blobs, WireRecorder &recorder,
-                           ContextPlane &contexts)
-    : host_(host), blobs_(blobs), host_blobs_(host_blobs), recorder_(recorder), contexts_(contexts)
+BlobCommands::BlobCommands(Host &host, BlobTable &blobs, HostBlobTable &host_blobs, HeldRequests &held,
+                           WireRecorder &recorder, ContextPlane &contexts)
+    : host_(host), blobs_(blobs), host_blobs_(host_blobs), held_(held), recorder_(recorder), contexts_(contexts)
 {
     AV_SCOPE("BlobCommands::BlobCommands");
 }
@@ -88,7 +89,7 @@ uint32_t BlobCommands::create(ControlRequest &request)
     const uint32_t id = create.resource_id();
     if (id == 0u || host_.resource_exists(id) || blobs_.contains(id) || host_blobs_.contains(id))
         return GpuResponse::err_invalid_resource_id;
-    if (create.memory() == CreateBlobRequest::memory_host3d) return create_host(create);
+    if (create.memory() == CreateBlobRequest::memory_host3d) return create_host(request, create);
     if (create.memory() == CreateBlobRequest::memory_host3d_guest) return create_adopted(create);
     if (create.blob_id() != no_context_object) return GpuResponse::err_invalid_parameter;
     if (create.memory() == CreateBlobRequest::memory_guest)
@@ -106,21 +107,41 @@ uint32_t BlobCommands::create_guest(ControlRequest &request, uint32_t id, uint32
     return answer;
 }
 
-uint32_t BlobCommands::create_host(const CreateBlobRequest &create)
+uint32_t BlobCommands::host_answer(Status status)
+{
+    AV_SCOPE("BlobCommands::host_answer");
+    switch (status) {
+    case Status::ok: return GpuResponse::ok_nodata;
+    case Status::not_found: return GpuResponse::err_invalid_resource_id;
+    case Status::no_memory: return GpuResponse::err_out_of_memory;
+    default: return GpuResponse::err_invalid_parameter;
+    }
+}
+
+uint32_t BlobCommands::attach_answer(Status status)
+{
+    AV_SCOPE("BlobCommands::attach_answer");
+    switch (status) {
+    case Status::ok: return GpuResponse::ok_nodata;
+    case Status::no_memory: return GpuResponse::err_out_of_memory;
+    case Status::not_supported: return GpuResponse::err_unspec;
+    default: return GpuResponse::err_invalid_parameter;
+    }
+}
+
+uint32_t BlobCommands::create_host(ControlRequest &request, const CreateBlobRequest &create)
 {
     AV_SCOPE("BlobCommands::create_host");
     if ((create.flags() & CreateBlobRequest::flag_mappable) == 0u || create.entries() != 0u ||
         (create.blob_id() & ~request_mask) != 0u)
         return GpuResponse::err_invalid_parameter;
     if (!contexts_.holds(create.context_id())) return GpuResponse::err_invalid_context_id;
+    uint32_t ticket = HeldRequests::no_ticket;
+    if (held_.hold(request, &BlobCommands::host_answer, ticket) != Status::ok) return GpuResponse::err_out_of_memory;
     const HostMemoryRequest memory(static_cast<uint32_t>(create.blob_id()));
-    switch (host_blobs_.create(create.resource_id(), create.context_id(), memory, create.size())) {
-    case Status::ok: break;
-    case Status::not_found: return GpuResponse::err_invalid_resource_id;
-    case Status::no_memory: return GpuResponse::err_out_of_memory;
-    default: return GpuResponse::err_invalid_parameter;
-    }
-    recorder_.record_blob(create.context_id(), BlobAction::created, 0u, create.resource_id(), 0u, create.size());
+    const Status            handed =
+        host_blobs_.create(create.resource_id(), create.context_id(), memory, create.size(), ticket);
+    if (handed != Status::ok) held_.conclude(ticket, handed);
     return GpuResponse::ok_nodata;
 }
 
@@ -151,12 +172,17 @@ bool BlobCommands::attach(ControlRequest &request, GpuResponse &response)
     const uint32_t resource = reader.read_u32();
     const uint32_t entries = reader.read_u32();
     if (!whole || !host_blobs_.contains(resource)) return false;
-    switch (host_blobs_.adopt(resource, request, attach_header_size, entries)) {
-    case Status::ok: response.set(GpuResponse::ok_nodata); break;
-    case Status::no_memory: response.set(GpuResponse::err_out_of_memory); break;
-    case Status::not_supported: response.set(GpuResponse::err_unspec); break;
-    default: response.set(GpuResponse::err_invalid_parameter); break;
+    if (!host_blobs_.waits_for_backing(resource)) {
+        response.set(attach_answer(host_blobs_.adopt(resource, request, attach_header_size, entries)));
+        return true;
     }
+    uint32_t ticket = HeldRequests::no_ticket;
+    if (held_.hold(request, &BlobCommands::attach_answer, ticket) != Status::ok) {
+        response.set(GpuResponse::err_out_of_memory);
+        return true;
+    }
+    const Status handed = host_blobs_.begin_adopting(resource, request, attach_header_size, entries, ticket);
+    if (handed != Status::ok) held_.conclude(ticket, handed);
     return true;
 }
 

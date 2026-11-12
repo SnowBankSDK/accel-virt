@@ -21,6 +21,10 @@ public:
     Status        allocate_memory(std::uint32_t context, std::uint64_t key, std::uint64_t size,
                                   std::uint32_t request, AvHostMemory &memory) override;
     void          free_memory(std::uint64_t key) override;
+    Status        hand_memory(HostBlobErrand &errand, ServiceThread &service) override;
+    Status        hand_off(Errand &errand, ServiceThread &service) override;
+    void          refuse_hand_off_at(std::uint32_t nth) { refuse_hand_off_ = nth; }
+    std::uint32_t hand_offs() const { return hand_offs_; }
     Status        alias_memory(std::uint64_t key, const ContextPlane &lender, std::uint64_t lender_key,
                                AvHostMemory &memory) override
     {
@@ -254,6 +258,8 @@ private:
     bool            snapshot_mapped_ = false;
     MemoryAsked     last_memory_ = {};
     std::uint32_t   memory_allocations_ = 0u;
+    std::uint32_t   refuse_hand_off_ = 0u;
+    std::uint32_t   hand_offs_ = 0u;
     std::uint64_t   freed_[capacity] = {};
     std::uint32_t   freed_count_ = 0u;
     std::uint32_t   refuse_memory_ = 0u;

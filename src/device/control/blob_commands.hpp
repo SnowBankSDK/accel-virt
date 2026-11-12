@@ -14,6 +14,7 @@ class CreateBlobRequest;
 class HostBlobTable;
 class ControlRequest;
 class GpuResponse;
+class HeldRequests;
 class Host;
 class WireRecorder;
 
@@ -28,7 +29,7 @@ public:
         resource_unmap_blob = 0x0209u,
     };
 
-    BlobCommands(Host &host, BlobTable &blobs, HostBlobTable &host_blobs, WireRecorder &recorder,
+    BlobCommands(Host &host, BlobTable &blobs, HostBlobTable &host_blobs, HeldRequests &held, WireRecorder &recorder,
                  ContextPlane &contexts);
     BlobCommands(const BlobCommands &) = delete;
     BlobCommands &operator=(const BlobCommands &) = delete;
@@ -40,10 +41,13 @@ private:
     static constexpr uint64_t request_mask = 0xFFFFFFFFu;
     static constexpr size_t   attach_header_size = 32u;
 
+    static uint32_t host_answer(Status status);
+    static uint32_t attach_answer(Status status);
+
     uint32_t create_answer(Status status) const;
     uint32_t create(ControlRequest &request);
     uint32_t create_guest(ControlRequest &request, uint32_t id, uint32_t entries, uint64_t size);
-    uint32_t create_host(const CreateBlobRequest &create);
+    uint32_t create_host(ControlRequest &request, const CreateBlobRequest &create);
     uint32_t create_adopted(const CreateBlobRequest &create);
     bool     attach(ControlRequest &request, GpuResponse &response);
     void     map(ControlRequest &request, GpuResponse &response);
@@ -54,6 +58,7 @@ private:
     Host         &host_;
     BlobTable    &blobs_;
     HostBlobTable &host_blobs_;
+    HeldRequests &held_;
     WireRecorder &recorder_;
     ContextPlane &contexts_;
 };

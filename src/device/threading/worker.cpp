@@ -47,9 +47,11 @@ Status Worker::post(const WorkItem &item)
     host_.require_main_loop("Worker::post");
     if (!running()) return Status::invalid_state;
     host_.lock_mutex(lock_);
-    const bool room = count_ < queue_capacity;
+    const bool stopping = stopping_;
+    const bool room = !stopping && count_ < queue_capacity;
     if (room) queue_[(head_ + count_++) % queue_capacity] = item;
     host_.unlock_mutex(lock_);
+    if (stopping) return Status::invalid_state;
     if (!room) return Status::no_space;
     host_.signal_event(wake_);
     return Status::ok;
@@ -221,13 +223,29 @@ void Worker::serve()
         }
         WorkItem item;
         for (Step step = next(item); step != Step::idle; step = next(item)) {
-            if (step == Step::stop) return ring_.detach();
+            if (step == Step::stop) {
+                forgo_queued();
+                return ring_.detach();
+            }
             item.run();
             item.complete_on(host_);
         }
         if (signal_ != nullptr) signal_->drain();
         ring_.service();
     }
+}
+
+void Worker::forgo_queued()
+{
+    AV_SCOPE("Worker::forgo_queued");
+    host_.lock_mutex(lock_);
+    WorkItem forgone[queue_capacity];
+    const uint32_t count = count_;
+    for (uint32_t index = 0u; index < count; index++) forgone[index] = queue_[(head_ + index) % queue_capacity];
+    head_ = 0u;
+    count_ = 0u;
+    host_.unlock_mutex(lock_);
+    for (uint32_t index = 0u; index < count; index++) forgone[index].complete_on(host_);
 }
 
 bool Worker::work_within_spin()

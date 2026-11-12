@@ -27,6 +27,7 @@ public:
     [[nodiscard]] Status initialize();
     [[nodiscard]] Status publish(uint32_t id, const uint8_t *uuid, AvExecutor *executor);
     void                 withdraw(uint32_t id, const AvExecutor *executor);
+    void                 await_unused(const AvExecutor *executor);
     AvExecutor         *create_sharing(SubApi api, uint32_t share_id, const uint8_t *uuid,
                                         const AvContextOptions &options);
     uint32_t             published();
@@ -37,7 +38,9 @@ private:
     static constexpr uint32_t none = capacity;
 
     uint32_t index_of(uint32_t id) const;
+    uint32_t index_using(const AvExecutor *executor) const;
     bool     on_gpu(uint32_t index, const uint8_t *uuid) const;
+    void     vacate(uint32_t index);
 
     Host                  &host_;
     const ExecutorLibrary &library_;
@@ -45,6 +48,9 @@ private:
     uint32_t               ids_[capacity];
     DeviceUuid             uuids_[capacity];
     AvExecutor           *executors_[capacity];
+    uint32_t               users_[capacity];
+    bool                   withdrawn_[capacity];
+    void                  *waiters_[capacity];
 
     friend struct ExecutorSharesProbe;
 };

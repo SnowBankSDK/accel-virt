@@ -2,6 +2,7 @@
 
 #include "core/support/text_buffer.hpp"
 #include "device/module/driver_status.hpp"
+#include "harness/host/main_loop_pump.hpp"
 #include "harness/host/mock_request.hpp"
 #include "harness/platform/mock_platform.hpp"
 
@@ -56,7 +57,7 @@ LoopbackDevice::~LoopbackDevice()
 {
     executor_.release();
     device_.reset();
-    static_cast<void>(host_.run_main_loop());
+    static_cast<void>(settle_device(host_, device_));
 }
 
 MockHost          &LoopbackDevice::host() { return host_; }
@@ -71,6 +72,8 @@ std::size_t LoopbackDevice::exchange(const std::uint8_t *request, std::size_t le
     std::uint32_t type = 0u;
     std::memcpy(&type, request, sizeof type);
     if (!device_.control(&mock, type)) return 0u;
+    static_cast<void>(pump_main_loop(host_, [this, &mock] { return mock.answered() || device_.outstanding() == 0u; },
+                                     patience_ms));
     const std::size_t answered = mock.response_size() < capacity ? mock.response_size() : capacity;
     std::memcpy(answer, mock.response_bytes(), answered);
     return answered;

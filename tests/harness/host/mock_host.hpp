@@ -79,6 +79,8 @@ public:
     void     raise_fence_interrupt(std::uint32_t line) override;
     std::size_t read_request(void *request, std::size_t offset, std::uint8_t *buffer, std::size_t size) override;
     void     respond(void *request, const std::uint8_t *bytes, std::size_t size) override;
+    void    *keep_request(void *request) override;
+    void     release_request(void *kept, bool answered) override;
     bool     resource_exists(std::uint32_t id) override;
     Status   create_recording(const char *path, void *&file) override;
     Status   append_recording(void *file, const std::uint8_t *bytes, std::size_t size) override;
@@ -234,6 +236,9 @@ public:
     std::uint32_t run_main_loop();
 
     bool          holds_main_loop() const;
+    std::uint32_t kept_requests() const;
+    std::uint32_t dropped_requests() const;
+    void          fail_keep_at(std::uint32_t nth);
     bool          claim(HostViolation kind);
     std::uint32_t unclaimed_violations();
     std::uint32_t logged();
@@ -458,6 +463,9 @@ private:
     const void     *watched_ = nullptr;
     std::uint64_t   watched_when_landed_ = 0u;
     std::uint32_t   store_fences_ = 0u;
+    std::atomic<std::uint32_t> kept_{0u};
+    std::atomic<std::uint32_t> dropped_{0u};
+    std::uint32_t   fail_keep_ = 0u;
 };
 
 }

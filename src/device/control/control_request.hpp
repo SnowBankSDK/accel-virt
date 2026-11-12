@@ -18,6 +18,7 @@ public:
     size_t read(size_t offset, uint8_t *buffer, size_t size);
     void   respond(const GpuResponse &response);
     bool   responded() const;
+    void  *keep();
 
 private:
     Host &host_;

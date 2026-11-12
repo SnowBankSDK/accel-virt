@@ -47,6 +47,7 @@ private:
 
     Step next(WorkItem &item);
     void serve();
+    void forgo_queued();
     bool work_within_spin();
     void release();
 

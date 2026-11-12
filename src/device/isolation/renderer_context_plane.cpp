@@ -1,5 +1,7 @@
 #include "device/isolation/renderer_context_plane.hpp"
 
+#include "device/memory/host_blob_errand.hpp"
+
 #include "core/support/text_buffer.hpp"
 #include "core/trace/function_scope.hpp"
 #include "core/trace/state_writer.hpp"
@@ -127,6 +129,20 @@ uint32_t RendererContextPlane::sub_apis() const
 {
     AV_SCOPE("RendererContextPlane::sub_apis");
     return ready_.sub_apis();
+}
+
+Status RendererContextPlane::hand_memory(HostBlobErrand &errand, ServiceThread &)
+{
+    AV_SCOPE("RendererContextPlane::hand_memory");
+    errand.run_here();
+    return Status::ok;
+}
+
+Status RendererContextPlane::hand_off(Errand &errand, ServiceThread &)
+{
+    AV_SCOPE("RendererContextPlane::hand_off");
+    errand.run_here();
+    return Status::ok;
 }
 
 Status RendererContextPlane::allocate_memory(uint32_t context, uint64_t key, uint64_t size, uint32_t request,

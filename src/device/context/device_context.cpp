@@ -11,6 +11,7 @@
 #include "device/abi/entry_points.hpp"
 #include "device/fence/device_pulse.hpp"
 #include "device/fence/fence_window.hpp"
+#include "device/memory/host_blob_errand.hpp"
 #include "device/host/stdio_log.hpp"
 #include "device/recording/wire_recorder.hpp"
 #include "device/context/ring_window.hpp"
@@ -136,11 +137,12 @@ const ContextBinding &DeviceContext::binding() const
     return binding_;
 }
 
-Status DeviceContext::place_memory(uint64_t size, uint32_t request, AvHostMemory &memory)
+Status DeviceContext::hand_placement(HostBlobErrand &errand)
 {
-    AV_SCOPE("DeviceContext::place_memory");
+    AV_SCOPE("DeviceContext::hand_placement");
     if (!binding_.bound()) return Status::invalid_state;
-    return executor_.place(size, request, memory);
+    errand.place_through(executor_);
+    return worker_.post(errand.item());
 }
 
 uint32_t DeviceContext::id() const

@@ -26,6 +26,14 @@ public:
     uint32_t caching() const;
 
     bool                 waiting() const;
+    void                 await(uint32_t serial);
+    void                 fill(const AvHostMemory &memory);
+    void                 join(GuestRamLending &lending);
+    void                 settle();
+    bool                 pending() const;
+    uint32_t             serial() const;
+    void                 doom();
+    bool                 doomed() const;
     HostMemoryRequest    request() const;
     void                 lend(GuestRamLending &lending, bool made_here, const AvHostMemory &memory);
     GuestRamLending     *lending() const;
@@ -48,6 +56,9 @@ private:
     bool             mapped_;
     bool             waiting_;
     bool             lender_;
+    bool             pending_;
+    bool             doomed_;
+    uint32_t         serial_;
     uint32_t         request_;
     uint32_t         laid_;
     GuestRamLending *lending_;

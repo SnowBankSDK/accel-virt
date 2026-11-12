@@ -20,6 +20,7 @@
 #include "harness/framework/test_registry.hpp"
 #include "harness/host/gpu_request_builder.hpp"
 #include "harness/host/mock_host.hpp"
+#include "harness/memory/host_blob_maker.hpp"
 #include "harness/recording/recorded_file.hpp"
 #include "harness/host/mock_request.hpp"
 #include "harness/context/guest_ring.hpp"
@@ -101,12 +102,12 @@ public:
     Fixture()
         : blobs_(host_), maker_(host_, blobs_), interrupts_(host_), ops_(AV_EXECUTOR_SUB_API_VULKAN), library_(),
           shares_(host_, library_), recorder_(host_), ordering_(host_), pulse_(host_), plane_(),
-          host_blobs_(host_),
+          host_blobs_(host_), host_maker_(host_, host_blobs_),
           context_(host_, blobs_, host_blobs_, interrupts_, library_, shares_, recorder_, ordering_, pulse_, 5u, "test")
     {
         static_cast<void>(pulse_.initialize());
         plane_.allocate_through(library_);
-        static_cast<void>(host_blobs_.initialize(plane_));
+        static_cast<void>(host_maker_.initialize(plane_));
         static_cast<void>(ordering_.initialize());
         static_cast<void>(blobs_.initialize());
         static_cast<void>(shares_.initialize());
@@ -130,6 +131,7 @@ public:
     av::MockExecutorOps &ops() { return ops_; }
     BlobTable     &blobs() { return blobs_; }
     av::HostBlobTable &host_blobs() { return host_blobs_; }
+    av::HostBlobMaker &host_maker() { return host_maker_; }
     DeviceContext &context() { return context_; }
     av::DevicePulse &pulse() { return pulse_; }
     av::FenceInterrupts &interrupts() { return interrupts_; }
@@ -172,6 +174,7 @@ private:
     av::DevicePulse     pulse_;
     av::RecordingContextPlane plane_;
     av::HostBlobTable   host_blobs_;
+    av::HostBlobMaker   host_maker_;
     DeviceContext       context_;
 };
 
@@ -389,8 +392,8 @@ TEST(device_context_bind, a_bound_context_imports_a_host_blob_made_for_it_and_no
   const std::uint32_t mine = av::HostBlobId::first;
   const std::uint32_t theirs = av::HostBlobId::first + 1u;
   const av::HostMemoryRequest upload(av::HostMemoryRequest::Kind::upload, 0u);
-  CHECK_STATUS(fixture.host_blobs().create(mine, 5u, upload, 0x1000u), Status::ok);
-  CHECK_STATUS(fixture.host_blobs().create(theirs, 6u, upload, 0x1000u), Status::ok);
+  CHECK_STATUS(fixture.host_maker().create(mine, 5u, upload, 0x1000u), Status::ok);
+  CHECK_STATUS(fixture.host_maker().create(theirs, 6u, upload, 0x1000u), Status::ok);
   GuestRing guest = fixture.guest();
   CHECK_STATUS(fixture.context().bind(setup(3u, reply), capset()), Status::ok);
   std::uint8_t         answer[32u + av::BlobImportAnswer::encoded_size] = {};
@@ -407,8 +410,8 @@ TEST(device_context_bind, a_bound_context_imports_a_host_blob_made_for_it_and_no
   std::uint64_t key = 0u;
   CHECK(fixture.ops().import_of(1u, key));
   CHECK_EQ(key, mine);
-  CHECK_STATUS(fixture.host_blobs().release(mine), Status::ok);
-  CHECK_STATUS(fixture.host_blobs().release(theirs), Status::ok);
+  CHECK_STATUS(fixture.host_maker().release(mine), Status::ok);
+  CHECK_STATUS(fixture.host_maker().release(theirs), Status::ok);
   CHECK_EQ(fixture.ops().held_memory(), 0u);
   CHECK_EQ(fixture.ops().live_memory(), 1u); }
 

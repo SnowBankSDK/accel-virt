@@ -1,5 +1,7 @@
 #include "device/context/local_context_plane.hpp"
 
+#include "device/memory/host_blob_errand.hpp"
+#include "device/threading/service_thread.hpp"
 #include "proto/context/capset_info.hpp"
 #include "proto/resources/host_memory_request.hpp"
 
@@ -79,11 +81,23 @@ Status LocalContextPlane::allocate_memory(uint32_t context, uint64_t key, uint64
                                           AvHostMemory &memory)
 {
     AV_SCOPE("LocalContextPlane::allocate_memory");
-    if (HostMemoryRequest(request).places()) {
-        DeviceContext *const placing = contexts_.find(context);
-        return placing != nullptr ? placing->place_memory(size, request, memory) : Status::not_found;
-    }
+    static_cast<void>(context);
+    if (HostMemoryRequest(request).places()) return Status::not_supported;
     return library_.allocate_memory(key, size, request, memory);
+}
+
+Status LocalContextPlane::hand_memory(HostBlobErrand &errand, ServiceThread &service)
+{
+    AV_SCOPE("LocalContextPlane::hand_memory");
+    if (!errand.places()) return service.post(errand);
+    DeviceContext *const placing = contexts_.find(errand.context());
+    return placing != nullptr ? placing->hand_placement(errand) : Status::not_found;
+}
+
+Status LocalContextPlane::hand_off(Errand &errand, ServiceThread &service)
+{
+    AV_SCOPE("LocalContextPlane::hand_off");
+    return service.post(errand);
 }
 
 void LocalContextPlane::free_memory(uint64_t key)

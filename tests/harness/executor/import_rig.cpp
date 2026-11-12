@@ -16,14 +16,14 @@ constexpr std::uint8_t no_uuid[ContextExecutor::uuid_bytes] = {};
 
 ImportRig::ImportRig(bool executor)
     : host_(), ops_(AV_EXECUTOR_SUB_API_VULKAN), recorder_(host_), library_(), shares_(host_, library_),
-      executor_(host_, library_, shares_, context), plane_(), host_blobs_(host_),
+      executor_(host_, library_, shares_, context), plane_(), host_blobs_(host_), maker_(host_, host_blobs_),
       imports_(host_, host_blobs_, executor_, recorder_, context), start_(nullptr), done_(nullptr),
       thread_(nullptr), job_(nullptr), job_context_(nullptr), stopping_(false)
 {
     plane_.allocate_through(library_);
     host_.set_hostmem_size(64u * page);
     if (library_.accept(&ops_.table()) != Status::ok || library_.open_domain(no_uuid, 0u, 0u, 0u) != Status::ok ||
-        host_blobs_.initialize(plane_) != Status::ok || host_.create_event(start_) != Status::ok ||
+        maker_.initialize(plane_) != Status::ok || host_.create_event(start_) != Status::ok ||
         host_.create_event(done_) != Status::ok ||
         host_.start_thread([](void *rig) { static_cast<ImportRig *>(rig)->serve(); }, this, thread_) != Status::ok)
         std::abort();
@@ -35,6 +35,7 @@ ImportRig::~ImportRig()
 {
     on_worker([this] { executor_.destroy(); });
     host_blobs_.release_all();
+    static_cast<void>(maker_.settle());
     stopping_ = true;
     host_.signal_event(start_);
     host_.join_thread(thread_);
@@ -61,6 +62,7 @@ void ImportRig::serve()
 MockHost              &ImportRig::host() { return host_; }
 MockExecutorOps       &ImportRig::ops() { return ops_; }
 HostBlobTable         &ImportRig::host_blobs() { return host_blobs_; }
+HostBlobMaker         &ImportRig::maker() { return maker_; }
 RecordingContextPlane &ImportRig::plane() { return plane_; }
 BlobImports           &ImportRig::imports() { return imports_; }
 WireRecorder          &ImportRig::recorder() { return recorder_; }
@@ -73,7 +75,7 @@ std::uint32_t ImportRig::blob(std::uint32_t slot) const
 
 Status ImportRig::create_host_blob(std::uint32_t id, std::uint32_t owner, std::uint32_t pages)
 {
-    return host_blobs_.create(id, owner, HostMemoryRequest(HostMemoryRequest::Kind::upload, 0u), pages * page);
+    return maker_.create(id, owner, HostMemoryRequest(HostMemoryRequest::Kind::upload, 0u), pages * page);
 }
 
 std::uint8_t *ImportRig::memory_of(std::uint32_t id)

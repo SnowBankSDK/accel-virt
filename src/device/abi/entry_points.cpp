@@ -11,6 +11,8 @@
 #include "device/module/virtio_gpu_av.hpp"
 #include "device/context/ring_consumer.hpp"
 #include "device/shim/device_trace.hpp"
+#include "device/threading/errand.hpp"
+#include "device/threading/service_thread.hpp"
 #include "device/threading/worker.hpp"
 #include "device/threading/worker_reaper.hpp"
 #include "device/context/device_context_table.hpp"
@@ -135,5 +137,17 @@ void AvPresentEngineRun(void *engine)
 
 void AvExportConnectionServe(void *connection)
 { static_cast<av::ExportConnection *>(connection)->serve(); }
+
+void AvServiceThreadRun(void *service)
+{ static_cast<av::ServiceThread *>(service)->run(); }
+
+void AvServiceThreadConclude(void *service)
+{ static_cast<av::ServiceThread *>(service)->conclude_done(); }
+
+void AvErrandPerform(void *errand)
+{ static_cast<av::Errand *>(errand)->perform(); }
+
+void AvErrandConclude(void *errand)
+{ static_cast<av::Errand *>(errand)->conclude(); }
 
 }

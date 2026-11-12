@@ -95,7 +95,7 @@ TEST(blob_imports_import, a_blob_this_context_did_not_open_is_not_found_and_asks
 { ImportRig rig;
   CHECK_STATUS(rig.create_host_blob(rig.blob(1u), ImportRig::other_context), Status::ok);
   CHECK_STATUS(rig.create_host_blob(rig.blob(2u), ImportRig::context), Status::ok);
-  CHECK_STATUS(rig.host_blobs().release(rig.blob(2u)), Status::ok);
+  CHECK_STATUS(rig.maker().release(rig.blob(2u)), Status::ok);
   const std::uint32_t allocations = rig.host().live_allocations();
   std::uint64_t device_memory = 7u;
   CHECK_STATUS(import(rig, rig.blob(1u), device_memory), Status::not_found);
@@ -114,7 +114,7 @@ TEST(blob_imports_import, an_import_keeps_the_memory_after_the_guest_releases_th
   rig.memory_of(rig.blob(6u))[5] = 0x5Eu;
   std::uint64_t device_memory = 0u;
   CHECK_STATUS(import(rig, rig.blob(6u), device_memory), Status::ok);
-  CHECK_STATUS(rig.host_blobs().release(rig.blob(6u)), Status::ok);
+  CHECK_STATUS(rig.maker().release(rig.blob(6u)), Status::ok);
   CHECK_EQ(rig.ops().held_memory(), 0u);
   CHECK_EQ(rig.ops().live_memory(), 1u);
   CHECK(rig.memory_of(rig.blob(6u)) != nullptr);

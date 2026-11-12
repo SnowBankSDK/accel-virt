@@ -122,6 +122,10 @@ MockHostOps::MockHostOps(MockHost &host) : table_{}
     table_.respond = [](void *opaque, void *request, const std::uint8_t *bytes, std::size_t size) {
         host_of(opaque).respond(request, bytes, size);
     };
+    table_.keep_request = [](void *opaque, void *request) { return host_of(opaque).keep_request(request); };
+    table_.release_request = [](void *opaque, void *kept, int answered) {
+        host_of(opaque).release_request(kept, answered != 0);
+    };
     table_.resource_exists = [](void *opaque, std::uint32_t id) { return host_of(opaque).resource_exists(id) ? 1 : 0; };
     table_.create_recording = [](void *opaque, const char *path) -> void * {
         void *file = nullptr;

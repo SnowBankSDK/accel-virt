@@ -7,14 +7,16 @@ namespace av {
 
 HostBlob::HostBlob(Host &host, uint32_t context, const AvHostMemory &memory)
     : host_(host), size_(memory.size), offset_(0u), context_(context), fd_(memory.fd), caching_(memory.caching),
-      mapped_(false), waiting_(false), lender_(false), request_(0u), laid_(0u), lending_(nullptr)
+      mapped_(false), waiting_(false), lender_(false), pending_(false), doomed_(false), serial_(0u), request_(0u),
+      laid_(0u), lending_(nullptr)
 {
     AV_SCOPE("HostBlob::HostBlob");
 }
 
 HostBlob::HostBlob(Host &host, uint32_t context, uint64_t size, HostMemoryRequest request)
     : host_(host), size_(size), offset_(0u), context_(context), fd_(-1), caching_(0u), mapped_(false),
-      waiting_(true), lender_(false), request_(request.encoded()), laid_(0u), lending_(nullptr)
+      waiting_(true), lender_(false), pending_(false), doomed_(false), serial_(0u), request_(request.encoded()),
+      laid_(0u), lending_(nullptr)
 {
     AV_SCOPE("HostBlob::HostBlob");
 }
@@ -50,6 +52,60 @@ bool HostBlob::waiting() const
     return waiting_;
 }
 
+void HostBlob::await(uint32_t serial)
+{
+    AV_SCOPE("HostBlob::await");
+    pending_ = true;
+    serial_ = serial;
+}
+
+void HostBlob::fill(const AvHostMemory &memory)
+{
+    AV_SCOPE("HostBlob::fill");
+    fd_ = memory.fd;
+    caching_ = memory.caching;
+    waiting_ = false;
+    pending_ = false;
+}
+
+void HostBlob::join(GuestRamLending &lending)
+{
+    AV_SCOPE("HostBlob::join");
+    lending_ = &lending;
+    lender_ = false;
+}
+
+void HostBlob::settle()
+{
+    AV_SCOPE("HostBlob::settle");
+    pending_ = false;
+    if (waiting_) lending_ = nullptr;
+}
+
+bool HostBlob::pending() const
+{
+    AV_SCOPE("HostBlob::pending");
+    return pending_;
+}
+
+uint32_t HostBlob::serial() const
+{
+    AV_SCOPE("HostBlob::serial");
+    return serial_;
+}
+
+void HostBlob::doom()
+{
+    AV_SCOPE("HostBlob::doom");
+    doomed_ = true;
+}
+
+bool HostBlob::doomed() const
+{
+    AV_SCOPE("HostBlob::doomed");
+    return doomed_;
+}
+
 HostMemoryRequest HostBlob::request() const
 {
     AV_SCOPE("HostBlob::request");
@@ -62,6 +118,7 @@ void HostBlob::lend(GuestRamLending &lending, bool made_here, const AvHostMemory
     lending_ = &lending;
     lender_ = made_here;
     waiting_ = false;
+    pending_ = false;
     caching_ = memory.caching;
     fd_ = -1;
 }

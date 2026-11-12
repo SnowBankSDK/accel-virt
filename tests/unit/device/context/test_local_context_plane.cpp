@@ -12,6 +12,8 @@
 #include "harness/executor/mock_executor_ops.hpp"
 #include "harness/framework/test_registry.hpp"
 #include "harness/host/mock_host.hpp"
+#include "harness/memory/host_blob_maker.hpp"
+#include "proto/resources/host_blob_id.hpp"
 #include "harness/context/ring_blob_writer.hpp"
 #include "proto/context/capset_info.hpp"
 #include "proto/context/context_setup.hpp"
@@ -41,7 +43,7 @@ class Fixture {
 public:
     Fixture()
         : blobs_(host_), maker_(host_, blobs_), owners_(host_), interrupts_(host_), recorder_(host_), ops_(vulkan_only),
-          plane_(host_, blobs_, owners_, interrupts_, recorder_)
+          plane_(host_, blobs_, owners_, interrupts_, recorder_), host_maker_(host_, owners_)
     {
         host_.set_hostmem_size(0x10000u);
         static_cast<void>(blobs_.initialize());
@@ -49,11 +51,17 @@ public:
         static_cast<void>(maker_.create(fence, 0x1000u));
         av::RingBlobWriter(blobs_).write_header(ring, 12u);
     }
-    ~Fixture() { plane_.destroy_all(); }
+    ~Fixture()
+    {
+        plane_.destroy_all();
+        static_cast<void>(host_maker_.settle());
+    }
 
     MockHost          &host() { return host_; }
     LocalContextPlane &plane() { return plane_; }
     MockExecutorOps   &ops() { return ops_; }
+    av::HostBlobTable &owners() { return owners_; }
+    av::HostBlobMaker &host_maker() { return host_maker_; }
 
 private:
     MockHost          host_;
@@ -64,6 +72,7 @@ private:
     av::WireRecorder  recorder_;
     MockExecutorOps   ops_;
     LocalContextPlane plane_;
+    av::HostBlobMaker host_maker_;
 };
 
 const std::uint8_t uuid[av::GpuIdentity::uuid_bytes] = {7u};
@@ -124,40 +133,44 @@ TEST(local_context_plane, starting_hands_the_executor_the_host_ram_floor_the_cap
   CHECK_STATUS(fixture.plane().start(other_gpu, capset), Status::ok);
   CHECK_EQ(fixture.ops().last_host_ram_floor_bytes(), 7ull << 30); }
 
-TEST(local_context_plane, a_placed_request_is_made_by_the_executor_of_the_context_that_asked_and_by_no_other)
+TEST(local_context_plane, a_placed_request_is_made_on_the_worker_of_the_context_that_asked_and_by_no_other)
 { Fixture fixture;
-  AvHostMemory memory = {-1, 0u, 0u};
-  const std::uint32_t placed = av::HostMemoryRequest(av::HostMemoryRequest::Kind::placed, 3u).encoded();
+  const av::HostMemoryRequest placed(av::HostMemoryRequest::Kind::placed, 3u);
+  const std::uint32_t         blob = av::HostBlobId::first;
   CHECK_STATUS(fixture.plane().initialize(), Status::ok);
   CHECK_STATUS(fixture.plane().accept(&fixture.ops().table()), Status::ok);
   CHECK_STATUS(fixture.plane().start(uuid, capset()), Status::ok);
-  CHECK_STATUS(fixture.plane().allocate_memory(3u, 0x01000000u, 0x2000u, placed, memory), Status::not_found);
+  CHECK_STATUS(fixture.host_maker().initialize(fixture.plane()), Status::ok);
+  CHECK_STATUS(fixture.host_maker().create(blob, 3u, placed, 0x2000u), Status::no_memory);
   CHECK_STATUS(fixture.plane().create(3u, "test"), Status::ok);
-  CHECK_STATUS(fixture.plane().allocate_memory(3u, 0x01000000u, 0x2000u, placed, memory), Status::invalid_state);
+  CHECK_STATUS(fixture.host_maker().create(blob, 3u, placed, 0x2000u), Status::no_memory);
+  CHECK_EQ(fixture.ops().placements(), 0u);
   CHECK_STATUS(fixture.plane().bind(3u, setup(5u), capset()), Status::ok);
-  Status asked = Status::invalid_state;
-  for (std::uint32_t attempt = 0u; attempt < 5000u && asked == Status::invalid_state; attempt++) {
-      asked = fixture.plane().allocate_memory(3u, 0x01000000u, 0x2000u, placed, memory);
-      if (asked == Status::invalid_state) ::usleep(1000u);
+  Status asked = Status::no_memory;
+  for (std::uint32_t attempt = 0u; attempt < 5000u && asked == Status::no_memory; attempt++) {
+      asked = fixture.host_maker().create(blob, 3u, placed, 0x2000u);
+      if (asked == Status::no_memory) ::usleep(1000u);
   }
   CHECK_STATUS(asked, Status::ok);
-  CHECK(fixture.host().descriptor_open(memory.fd));
-  CHECK_EQ(memory.size, 0x2000u);
+  CHECK(fixture.owners().owns(3u, blob));
   CHECK_EQ(fixture.ops().placements(), 1u);
-  CHECK_EQ(fixture.ops().last_placement().request, placed);
+  CHECK_EQ(fixture.ops().last_placement().request, placed.encoded());
   CHECK_EQ(fixture.ops().last_placement().size, 0x2000u);
-  fixture.host().close_descriptor(memory.fd);
+  CHECK_EQ(fixture.host().unclaimed_violations(), 0u);
   fixture.ops().refuse_placement_at(1u);
-  CHECK_STATUS(fixture.plane().allocate_memory(3u, 0x01000001u, 0x2000u, placed, memory), Status::no_memory); }
+  CHECK_STATUS(fixture.host_maker().create(blob + 1u, 3u, placed, 0x2000u), Status::no_memory);
+  CHECK(!fixture.owners().contains(blob + 1u)); }
 
 TEST(local_context_plane, a_placed_heap_request_is_routed_like_a_placed_one_and_not_allocated)
 { Fixture fixture;
   AvHostMemory memory = {-1, 0u, 0u};
-  const std::uint32_t heap = av::HostMemoryRequest(av::HostMemoryRequest::Kind::placed_heap, 0u).encoded();
+  const av::HostMemoryRequest heap(av::HostMemoryRequest::Kind::placed_heap, 0u);
   CHECK_STATUS(fixture.plane().initialize(), Status::ok);
   CHECK_STATUS(fixture.plane().accept(&fixture.ops().table()), Status::ok);
   CHECK_STATUS(fixture.plane().start(uuid, capset()), Status::ok);
-  CHECK_STATUS(fixture.plane().allocate_memory(3u, 0x01000000u, 0x2000u, heap, memory), Status::not_found);
+  CHECK_STATUS(fixture.host_maker().initialize(fixture.plane()), Status::ok);
+  CHECK_STATUS(fixture.host_maker().create(av::HostBlobId::first, 3u, heap, 0x2000u), Status::no_memory);
+  CHECK_STATUS(fixture.plane().allocate_memory(3u, 0x01000000u, 0x2000u, heap.encoded(), memory), Status::not_supported);
   CHECK_EQ(fixture.ops().memory_allocations(), 0u); }
 
 TEST(local_context_plane, allocates_and_frees_host_memory_in_the_device_s_domain)
