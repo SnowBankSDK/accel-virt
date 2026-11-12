@@ -20,7 +20,8 @@ public:
     SubmissionPath &operator=(const SubmissionPath &) = delete;
 
     [[nodiscard]] Status submit(uint32_t context, uint64_t dma_address, const uint8_t *descriptor,
-                                uint32_t size, uint64_t fence, ReleaseRoute *route = nullptr);
+                                uint32_t size, uint64_t fence, ReleaseRoute *route = nullptr,
+                                uint32_t writer = 0u);
 
     uint64_t through_doorbell() const;
     void     publish_before_kernel();
@@ -41,6 +42,7 @@ private:
     bool           publishes_tail_;
     uint64_t       user_submissions_;
     uint32_t       ordered_ring_;
+    uint32_t       last_writer_;
     uint64_t       release_submissions_;
 
     friend struct SubmissionPathProbe;

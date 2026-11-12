@@ -2298,6 +2298,10 @@ TEST(kmt_transport_release, a_batch_is_released_by_the_context_that_spoke_it_and
   CHECK_EQ(first.releases(), 1u);
   CHECK_EQ(second.releases(), 1u);
   CHECK(first.last().batch().begin() >= second.last().batch().end());
+  CHECK(first.last().writer() != 0u);
+  CHECK(second.last().writer() != 0u);
+  CHECK(first.last().writer() != second.last().writer());
+  CHECK_EQ(first.last().after(), second.last().writer());
   transport.release_directly(first);
   CHECK(!transport.routed_by(first));
   CHECK(transport.routed_by(second));

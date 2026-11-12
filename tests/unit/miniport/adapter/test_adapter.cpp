@@ -5915,6 +5915,43 @@ TEST(adapter_submit_command_virtual, batches_of_one_ring_released_through_two_co
   CHECK_EQ(nt(fixture.adapter().destroy_context(context.hContext)), success);
   CHECK_EQ(nt(fixture.adapter().destroy_device(process.device())), success); }
 
+TEST(adapter_destroy_context, destroying_the_context_that_wrote_the_batch_before_a_held_one_loses_the_ring_and_no_other_does)
+{ Fixture fixture; av::FakeHandleTable handles;
+  fixture.function().add_doorbell_region();
+  CHECK_EQ(fixture.start(), success);
+  AvProcess process(fixture, handles);
+  av::DxgkargCreateContextRecord context = {};
+  CHECK_EQ(process.create_context(context), success);
+  av::DxgkargCreateContextRecord first = {};
+  first.Flags = 0x4u;
+  CHECK_EQ(nt(fixture.adapter().create_context(process.device(), &first)), success);
+  av::DxgkargCreateContextRecord second = {};
+  second.Flags = 0x4u;
+  CHECK_EQ(nt(fixture.adapter().create_context(process.device(), &second)), success);
+  av::DxgkargCreateContextRecord bystander = {};
+  bystander.Flags = 0x4u;
+  CHECK_EQ(nt(fixture.adapter().create_context(process.device(), &bystander)), success);
+  std::uint8_t opening[av::ReleaseRecord::encoded_size] = {};
+  CHECK_STATUS(av::ReleaseRecord(process.ring().kmt_handle(), av::SubmissionDescriptor(1u, 0u, 32u), 1u, 0u)
+                   .encode(opening, sizeof opening),
+               av::Status::ok);
+  CHECK_EQ(submit_packet(fixture, first.hContext, 5u, opening, sizeof opening), success);
+  std::uint8_t later[av::ReleaseRecord::encoded_size] = {};
+  CHECK_STATUS(av::ReleaseRecord(process.ring().kmt_handle(), av::SubmissionDescriptor(3u, 64u, 96u), 2u, 1u)
+                   .encode(later, sizeof later),
+               av::Status::ok);
+  CHECK_EQ(submit_packet(fixture, second.hContext, 6u, later, sizeof later), success);
+  CHECK_EQ(nt(fixture.adapter().destroy_context(bystander.hContext)), success);
+  CHECK(!fixture.platform().logged_line("the context is lost"));
+  const std::uint32_t queued = fixture.dxgkrnl().dpcs_queued();
+  CHECK_EQ(nt(fixture.adapter().destroy_context(first.hContext)), success);
+  CHECK(fixture.platform().logged_line("writing context was destroyed: the context is lost"));
+  CHECK(fixture.dxgkrnl().dpcs_queued() > queued);
+  CHECK(fixture.adapter().invariants_hold());
+  CHECK_EQ(nt(fixture.adapter().destroy_context(second.hContext)), success);
+  CHECK_EQ(nt(fixture.adapter().destroy_context(context.hContext)), success);
+  CHECK_EQ(nt(fixture.adapter().destroy_device(process.device())), success); }
+
 namespace {
 
 std::uint32_t preempt(Fixture &fixture, std::uint32_t fence)

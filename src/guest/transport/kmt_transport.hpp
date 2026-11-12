@@ -188,11 +188,14 @@ private:
     static constexpr uint32_t most_routes = 32u;
     PublishGate     *held_[most_gates];
     ReleaseRoute    *routes_[most_routes];
+    uint32_t         serials_[most_routes];
     uint32_t         route_count_;
+    uint32_t         next_serial_;
     ReleaseRoute    *speaker_;
     uint32_t         gates_busy_;
 
     ReleaseRoute    *speaking_route() const;
+    uint32_t         serial_of(const ReleaseRoute *route) const;
 
     void             lock_gates();
     void             unlock_gates();

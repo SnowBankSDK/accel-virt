@@ -303,6 +303,38 @@ TEST(submission_path, a_release_route_takes_the_submission_as_a_record_naming_th
   CHECK_EQ(submitting.kmt().calls(MockKmt::Call::submit), 0u);
   CHECK(submitting.path().invariants_hold()); }
 
+TEST(submission_path, each_released_record_names_its_writer_and_the_writer_of_the_batch_before_it)
+{ Submitting submitting;
+  RecordingReleaseRoute first;
+  RecordingReleaseRoute second;
+  submitting.path().keep_order_of(7u);
+  std::uint8_t descriptor[SubmissionDescriptor::encoded_size] = {};
+  describe(descriptor, 1u, 0u, 32u);
+  CHECK_STATUS(submitting.write_batch(1u), Status::ok);
+  CHECK_STATUS(submitting.path().submit(submitting.context(), submitting.dma_address(), descriptor, sizeof descriptor, 1u,
+                                        &first, 4u),
+               Status::ok);
+  CHECK_EQ(first.last().writer(), 4u);
+  CHECK_EQ(first.last().after(), 0u);
+  describe(descriptor, 2u, 32u, 64u);
+  CHECK_STATUS(submitting.write_batch(2u), Status::ok);
+  CHECK_STATUS(submitting.path().submit(submitting.context(), submitting.dma_address(), descriptor, sizeof descriptor, 2u,
+                                        &second, 9u),
+               Status::ok);
+  CHECK_EQ(second.last().writer(), 9u);
+  CHECK_EQ(second.last().after(), 4u);
+  describe(descriptor, 3u, 64u, 96u);
+  CHECK_STATUS(submitting.write_batch(3u), Status::ok);
+  CHECK_STATUS(submitting.path().submit(submitting.context(), submitting.dma_address(), descriptor, sizeof descriptor, 3u),
+               Status::ok);
+  describe(descriptor, 4u, 96u, 128u);
+  CHECK_STATUS(submitting.write_batch(4u), Status::ok);
+  CHECK_STATUS(submitting.path().submit(submitting.context(), submitting.dma_address(), descriptor, sizeof descriptor, 4u,
+                                        &first, 4u),
+               Status::ok);
+  CHECK_EQ(first.last().after(), 0u);
+  CHECK(submitting.path().invariants_hold()); }
+
 TEST(submission_path, a_route_that_does_not_support_the_submission_leaves_it_to_the_kernel)
 { Submitting submitting;
   RecordingReleaseRoute route;

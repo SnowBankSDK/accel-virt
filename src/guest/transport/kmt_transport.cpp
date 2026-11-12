@@ -38,7 +38,7 @@ KmtTransport::KmtTransport(GuestConnection &connection, BlockSource &memory, Sub
       staging_(staging), staging_bytes_(staging != nullptr ? staging_bytes : 0u),
       room_(staging != nullptr ? staging_bytes : 0u, reply_bytes), allocations_{},
       dma_address_(0u), context_(0u), hardware_scheduled_(false), ring_(), newest_end_(0u), newest_fence_(0u), previous_end_(0u), doorbell_(connection.kmt()),
-      path_(connection.kmt(), doorbell_, ring_), reply_(), watch_(connection.kmt(), ring_), fences_(), fence_ends_{}, faulted_(false), held_{}, routes_{}, route_count_(0u), speaker_(nullptr), gates_busy_(0u), pending_(nullptr, 0u), unpublished_(0u), answered_(false), answered_fence_(0u),
+      path_(connection.kmt(), doorbell_, ring_), reply_(), watch_(connection.kmt(), ring_), fences_(), fence_ends_{}, faulted_(false), held_{}, routes_{}, serials_{}, route_count_(0u), next_serial_(0u), speaker_(nullptr), gates_busy_(0u), pending_(nullptr, 0u), unpublished_(0u), answered_(false), answered_fence_(0u),
       decode_arena_(nullptr, 0u), blobs_(), arena_(nullptr), room_pressure_(0u), room_wait_ticks_(0u), window_began_(0u), windowed_(false), calls_sent_(0u), spill_(memory), answer_(memory)
 {
     AV_SCOPE("KmtTransport::KmtTransport");
@@ -50,7 +50,7 @@ KmtTransport::KmtTransport(GuestConnection &connection, SubApi sub_api, uint8_t 
       staging_(staging), staging_bytes_(staging != nullptr ? staging_bytes : 0u),
       room_(staging != nullptr ? staging_bytes : 0u, reply_bytes), allocations_{},
       dma_address_(0u), context_(0u), hardware_scheduled_(false), ring_(), newest_end_(0u), newest_fence_(0u), previous_end_(0u), doorbell_(connection.kmt()),
-      path_(connection.kmt(), doorbell_, ring_), reply_(), watch_(connection.kmt(), ring_), fences_(), fence_ends_{}, faulted_(false), held_{}, routes_{}, route_count_(0u), speaker_(nullptr), gates_busy_(0u), pending_(nullptr, 0u), unpublished_(0u), answered_(false), answered_fence_(0u),
+      path_(connection.kmt(), doorbell_, ring_), reply_(), watch_(connection.kmt(), ring_), fences_(), fence_ends_{}, faulted_(false), held_{}, routes_{}, serials_{}, route_count_(0u), next_serial_(0u), speaker_(nullptr), gates_busy_(0u), pending_(nullptr, 0u), unpublished_(0u), answered_(false), answered_fence_(0u),
       decode_arena_(nullptr, 0u), blobs_(), arena_(nullptr), room_pressure_(0u), room_wait_ticks_(0u), window_began_(0u), windowed_(false), calls_sent_(0u), spill_(), answer_()
 {
     AV_SCOPE("KmtTransport::KmtTransport");
@@ -283,6 +283,8 @@ Status KmtTransport::release_by(ReleaseRoute &route)
     if (routed_by(route)) return Status::ok;
     if (route_count_ == most_routes) return Status::no_space;
     if (route_count_ == 0u && pending_.used() != 0u && flush() != TransportResult::ok) return Status::invalid_state;
+    next_serial_ = next_serial_ == UINT32_MAX ? 1u : next_serial_ + 1u;
+    serials_[route_count_] = next_serial_;
     routes_[route_count_++] = &route;
     path_.keep_order_of(ring());
     return Status::ok;
@@ -298,7 +300,9 @@ void KmtTransport::release_directly(const ReleaseRoute &route)
     for (uint32_t index = 0u; index < route_count_; index++) {
         if (routes_[index] != &route) continue;
         routes_[index] = routes_[--route_count_];
+        serials_[index] = serials_[route_count_];
         routes_[route_count_] = nullptr;
+        serials_[route_count_] = 0u;
         if (route_count_ != 0u) return;
         if (!faulted_) static_cast<void>(await_gpu(newest_fence_));
         path_.keep_order_of(0u);
@@ -326,6 +330,14 @@ ReleaseRoute *KmtTransport::speaking_route() const
 {
     AV_SCOPE("KmtTransport::speaking_route");
     return speaker_ != nullptr && routed_by(*speaker_) ? speaker_ : nullptr;
+}
+
+uint32_t KmtTransport::serial_of(const ReleaseRoute *route) const
+{
+    AV_SCOPE("KmtTransport::serial_of");
+    for (uint32_t index = 0u; index < route_count_; index++)
+        if (route != nullptr && routes_[index] == route) return serials_[index];
+    return 0u;
 }
 
 bool KmtTransport::releases_by_packet() const
@@ -496,6 +508,7 @@ void KmtTransport::teardown()
     for (PublishGate *&held : held_) held = nullptr;
     path_.keep_order_of(0u);
     for (ReleaseRoute *&route : routes_) route = nullptr;
+    for (uint32_t &serial : serials_) serial = 0u;
     route_count_ = 0u;
     speaker_ = nullptr;
     pending_.clear();
@@ -866,8 +879,9 @@ TransportResult KmtTransport::submit_written(uint64_t begin, uint64_t end, uint6
     blobs_.mark(fence);
     uint8_t      descriptor[SubmissionDescriptor::encoded_size] = {};
     static_cast<void>(SubmissionDescriptor(fence, begin, end).encode(descriptor, sizeof descriptor));
+    ReleaseRoute *const speaking = speaking_route();
     const Status submitted = path_.submit(context_, dma_address_, descriptor, SubmissionDescriptor::encoded_size,
-                                          fence, speaking_route());
+                                          fence, speaking, serial_of(speaking));
     if (submitted != Status::ok) {
         faulted_ = true;
         return TransportResult::failed;

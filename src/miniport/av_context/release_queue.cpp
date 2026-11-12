@@ -4,12 +4,13 @@
 
 namespace av {
 
-ReleaseQueue::ReleaseQueue() : held_{}, count_(0u), next_(0u), held_since_(0u), noted_next_(0u), active_(false)
+ReleaseQueue::ReleaseQueue()
+    : held_{}, after_{}, writers_{}, writer_contexts_{}, count_(0u), next_(0u), active_(false)
 {
     AV_SCOPE("ReleaseQueue::ReleaseQueue");
 }
 
-ReleaseQueue::Turn ReleaseQueue::arrive(const SubmissionDescriptor &batch, uint64_t published)
+ReleaseQueue::Turn ReleaseQueue::arrive(const SubmissionDescriptor &batch, uint64_t published, uint32_t after)
 {
     AV_SCOPE("ReleaseQueue::arrive");
     if (!active_) {
@@ -25,6 +26,7 @@ ReleaseQueue::Turn ReleaseQueue::arrive(const SubmissionDescriptor &batch, uint6
     for (uint32_t index = 0u; index < count_; index++)
         if (held_[index].begin() == batch.begin()) return Turn::held;
     if (count_ == most_held) return Turn::refused;
+    after_[count_] = after;
     held_[count_++] = batch;
     return Turn::held;
 }
@@ -40,7 +42,7 @@ void ReleaseQueue::drop_passed()
 {
     AV_SCOPE("ReleaseQueue::drop_passed");
     for (uint32_t index = 0u; index < count_;) {
-        if (held_[index].begin() < next_) held_[index] = held_[--count_];
+        if (held_[index].begin() < next_) take_out(index);
         else index++;
     }
 }
@@ -51,28 +53,63 @@ bool ReleaseQueue::next_held(SubmissionDescriptor &batch)
     for (uint32_t index = 0u; index < count_; index++) {
         if (held_[index].begin() != next_) continue;
         batch = held_[index];
-        held_[index] = held_[--count_];
+        take_out(index);
         return true;
     }
     return false;
 }
 
-void ReleaseQueue::note(uint64_t now)
+void ReleaseQueue::take_out(uint32_t index)
 {
-    AV_SCOPE("ReleaseQueue::note");
-    if (count_ == 0u) {
-        held_since_ = 0u;
-        return;
-    }
-    if (held_since_ != 0u && noted_next_ == next_) return;
-    held_since_ = now != 0u ? now : 1u;
-    noted_next_ = next_;
+    AV_SCOPE("ReleaseQueue::take_out");
+    count_--;
+    held_[index] = held_[count_];
+    after_[index] = after_[count_];
 }
 
-bool ReleaseQueue::starved(uint64_t now, uint64_t after) const
+void ReleaseQueue::written_by(uint32_t writer, const void *context)
 {
-    AV_SCOPE("ReleaseQueue::starved");
-    return count_ != 0u && held_since_ != 0u && now >= held_since_ && now - held_since_ >= after;
+    AV_SCOPE("ReleaseQueue::written_by");
+    if (writer == 0u || context == nullptr) return;
+    uint32_t free = most_writers;
+    for (uint32_t index = 0u; index < most_writers; index++) {
+        if (writers_[index] == writer) return;
+        if (free == most_writers && writers_[index] == 0u) free = index;
+    }
+    for (uint32_t index = 0u; index < most_writers && free == most_writers; index++)
+        if (writer_contexts_[index] == nullptr) free = index;
+    if (free == most_writers) return;
+    writers_[free] = writer;
+    writer_contexts_[free] = context;
+}
+
+bool ReleaseQueue::forget(const void *context)
+{
+    AV_SCOPE("ReleaseQueue::forget");
+    bool forgot = false;
+    for (uint32_t index = 0u; index < most_writers; index++) {
+        if (context == nullptr || writer_contexts_[index] != context) continue;
+        writer_contexts_[index] = nullptr;
+        forgot = true;
+    }
+    return forgot;
+}
+
+bool ReleaseQueue::gone(uint32_t writer) const
+{
+    AV_SCOPE("ReleaseQueue::gone");
+    for (uint32_t index = 0u; index < most_writers; index++)
+        if (writer != 0u && writers_[index] == writer) return writer_contexts_[index] == nullptr;
+    return false;
+}
+
+bool ReleaseQueue::stranded() const
+{
+    AV_SCOPE("ReleaseQueue::stranded");
+    uint32_t first = most_held;
+    for (uint32_t index = 0u; index < count_; index++)
+        if (first == most_held || held_[index].begin() < held_[first].begin()) first = index;
+    return first != most_held && gone(after_[first]);
 }
 
 bool ReleaseQueue::active() const
@@ -86,8 +123,10 @@ void ReleaseQueue::clear()
     AV_SCOPE("ReleaseQueue::clear");
     count_ = 0u;
     next_ = 0u;
-    held_since_ = 0u;
-    noted_next_ = 0u;
+    for (uint32_t index = 0u; index < most_writers; index++) {
+        writers_[index] = 0u;
+        writer_contexts_[index] = nullptr;
+    }
     active_ = false;
 }
 

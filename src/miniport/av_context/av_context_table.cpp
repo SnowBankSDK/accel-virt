@@ -27,6 +27,7 @@
 #include "proto/context/sub_api.hpp"
 #include "proto/resources/allocation_kind.hpp"
 #include "proto/escape/host_window_record.hpp"
+#include "proto/escape/release_record.hpp"
 #include "proto/resources/host_blob_id.hpp"
 #include "proto/submission/ring_header.hpp"
 #include "proto/submission/submission_descriptor.hpp"
@@ -36,6 +37,8 @@ namespace av {
 namespace {
 
 constexpr const char *cannot_order = "avgpu: a context's batches cannot be released in order: the context is lost";
+constexpr const char *stranded = "avgpu: a context's held batches wait for a batch whose writing context was destroyed: "
+                                 "the context is lost";
 
 }
 
@@ -444,14 +447,15 @@ Status AvContextTable::submit(void *context, const uint8_t *private_data, size_t
     }
     Status status = Status::ok;
     if (releases_[slot].active())
-        in_turn(slot, submission);
+        in_turn(slot, submission, 0u);
     else
         status = bindings_[slot].object().submit(submission);
     if (status == Status::ok) awaited = submission.fence_id();
     return status;
 }
 
-Status AvContextTable::release_batch(void *context, const SubmissionDescriptor &batch, uint64_t &awaited)
+Status AvContextTable::release_batch(void *context, const ReleaseRecord &release, const void *writer,
+                                     uint64_t &awaited)
 {
     AV_SCOPE("AvContextTable::release_batch");
     platform_.require_irql_at_most(Irql::dispatch, "AvContextTable::release_batch");
@@ -459,24 +463,40 @@ Status AvContextTable::release_batch(void *context, const SubmissionDescriptor &
     SpinLockGuard  locked(lock_);
     const uint32_t slot = slot_of(context);
     if (slot == no_slot || !live_[slot] || lost(slot)) return Status::invalid_parameter;
+    const SubmissionDescriptor &batch = release.batch();
     if (batch.validate_against(RingHeader(orders_[slot], 0u, 0u)) != Status::ok) {
         lose(slot, cannot_order, batch);
         return Status::invalid_parameter;
     }
-    in_turn(slot, batch);
+    releases_[slot].written_by(release.writer(), writer);
+    in_turn(slot, batch, release.after());
     awaited = batch.fence_id();
     return Status::ok;
 }
 
-void AvContextTable::in_turn(uint32_t slot, const SubmissionDescriptor &batch)
+bool AvContextTable::writer_gone(const void *writer)
+{
+    AV_SCOPE("AvContextTable::writer_gone");
+    platform_.require_irql_at_most(Irql::dispatch, "AvContextTable::writer_gone");
+    SpinLockGuard locked(lock_);
+    bool          lost_any = false;
+    for (uint32_t slot = 0u; slot < max_contexts; slot++) {
+        if (!live_[slot] || lost(slot) || !releases_[slot].forget(writer) || !releases_[slot].stranded()) continue;
+        lose(slot, stranded, SubmissionDescriptor());
+        lost_any = true;
+    }
+    return lost_any;
+}
+
+void AvContextTable::in_turn(uint32_t slot, const SubmissionDescriptor &batch, uint32_t after)
 {
     AV_SCOPE("AvContextTable::in_turn");
     ReleaseQueue &queue = releases_[slot];
     AvContextBinding &binding = bindings_[slot].object();
-    const ReleaseQueue::Turn turn = queue.arrive(batch, binding.next_begin());
+    const ReleaseQueue::Turn turn = queue.arrive(batch, binding.next_begin(), after);
     if (turn == ReleaseQueue::Turn::released_already) return;
     if (turn == ReleaseQueue::Turn::held) {
-        queue.note(platform_.interrupt_time());
+        if (queue.stranded()) lose(slot, stranded, batch);
         return;
     }
     if (turn == ReleaseQueue::Turn::refused || binding.submit(batch) != Status::ok) {
@@ -492,7 +512,7 @@ void AvContextTable::in_turn(uint32_t slot, const SubmissionDescriptor &batch)
         }
         queue.released(next);
     }
-    queue.note(platform_.interrupt_time());
+    if (queue.stranded()) lose(slot, stranded, batch);
 }
 
 void AvContextTable::lose(uint32_t slot, const char *why, const SubmissionDescriptor &batch)
@@ -566,21 +586,6 @@ void AvContextTable::serve(ExecutionNode &node, HwQueueSubmissions &queues)
         wake(slot, binding.raised(), lost_now);
         node.finish(contexts_[slot], completed);
         queues.completed_through(contexts_[slot], completed);
-    }
-    bool holding = false;
-    for (uint32_t slot = 0u; slot < max_contexts && !holding; slot++)
-        holding = live_[slot] && releases_[slot].held() != 0u;
-    if (!holding || node.awaits()) return;
-    const uint64_t now = platform_.interrupt_time();
-    for (uint32_t slot = 0u; slot < max_contexts; slot++) {
-        if (!live_[slot] || lost(slot) || !releases_[slot].starved(now, starved_after)) continue;
-        lose(slot,
-             "avgpu: a context's held batches waited past the deadline with nothing left on the GPU to bring the batch "
-             "before them: the context is lost",
-             SubmissionDescriptor());
-        wake(slot, bindings_[slot].object().raised(), true);
-        node.finish(contexts_[slot], UINT64_MAX);
-        queues.completed_through(contexts_[slot], UINT64_MAX);
     }
 }
 

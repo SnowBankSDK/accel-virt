@@ -35,6 +35,7 @@
 #include "proto/resources/allocation_descriptor.hpp"
 #include "proto/escape/context_views_record.hpp"
 #include "proto/escape/host_window_record.hpp"
+#include "proto/escape/release_record.hpp"
 #include "proto/resources/host_blob_id.hpp"
 #include "proto/resources/host_memory_request.hpp"
 #include "proto/submission/fence_page.hpp"
@@ -343,7 +344,7 @@ public:
     Status release(void *context, const SubmissionDescriptor &descriptor, std::uint64_t &awaited)
     {
         mapped_.platform().set_irql(Irql::dispatch);
-        const Status status = table_.release_batch(context, descriptor, awaited);
+        const Status status = table_.release_batch(context, av::ReleaseRecord(1u, descriptor), nullptr, awaited);
         mapped_.platform().set_irql(Irql::passive);
         return status;
     }
@@ -1890,12 +1891,12 @@ TEST(av_context_table_release_batch, releases_batches_in_ring_order_and_holds_on
   CHECK_STATUS(fixture.bind(&first_context), Status::ok);
   std::uint64_t awaited = 0u;
   fixture.platform().set_irql(Irql::dispatch);
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(2u, 32u, 64u), awaited), Status::ok);
+  CHECK_STATUS(fixture.table().release_batch(&first_context, av::ReleaseRecord(1u, SubmissionDescriptor(2u, 32u, 64u)), nullptr, awaited), Status::ok);
   CHECK_EQ(awaited, 2u);
   fixture.platform().set_irql(Irql::passive);
   CHECK_EQ(fixture.mapped().function().doorbells().rings(0u), 0u);
   fixture.platform().set_irql(Irql::dispatch);
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(1u, 0u, 32u), awaited), Status::ok);
+  CHECK_STATUS(fixture.table().release_batch(&first_context, av::ReleaseRecord(1u, SubmissionDescriptor(1u, 0u, 32u)), nullptr, awaited), Status::ok);
   CHECK_EQ(awaited, 1u);
   fixture.platform().set_irql(Irql::passive);
   CHECK_EQ(fixture.mapped().function().doorbells().rings(0u), 2u);
@@ -1903,7 +1904,7 @@ TEST(av_context_table_release_batch, releases_batches_in_ring_order_and_holds_on
   std::memcpy(&tail, fixture.ring_memory() + 8u, sizeof tail);
   CHECK_EQ(tail, 64u);
   fixture.platform().set_irql(Irql::dispatch);
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(1u, 0u, 32u), awaited), Status::ok);
+  CHECK_STATUS(fixture.table().release_batch(&first_context, av::ReleaseRecord(1u, SubmissionDescriptor(1u, 0u, 32u)), nullptr, awaited), Status::ok);
   fixture.platform().set_irql(Irql::passive);
   CHECK_EQ(fixture.mapped().function().doorbells().rings(0u), 2u);
   CHECK(fixture.table().invariants_hold());
@@ -1914,13 +1915,13 @@ TEST(av_context_table_release_batch, refuses_a_context_it_does_not_hold_and_a_ba
   Host host(fixture.mapped());
   std::uint64_t awaited = 9u;
   fixture.platform().set_irql(Irql::dispatch);
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(1u, 0u, 32u), awaited),
+  CHECK_STATUS(fixture.table().release_batch(&first_context, av::ReleaseRecord(1u, SubmissionDescriptor(1u, 0u, 32u)), nullptr, awaited),
                Status::invalid_parameter);
   CHECK_EQ(awaited, 0u);
   fixture.platform().set_irql(Irql::passive);
   CHECK_STATUS(fixture.bind(&first_context), Status::ok);
   fixture.platform().set_irql(Irql::dispatch);
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(1u, 0u, 5000u), awaited),
+  CHECK_STATUS(fixture.table().release_batch(&first_context, av::ReleaseRecord(1u, SubmissionDescriptor(1u, 0u, 5000u)), nullptr, awaited),
                Status::invalid_parameter);
   fixture.platform().set_irql(Irql::passive);
   CHECK_EQ(fixture.mapped().function().doorbells().rings(0u), 0u);
@@ -1938,7 +1939,7 @@ TEST(av_context_table_held_batches, a_held_batch_and_an_overdue_packet_leave_the
   fixture.platform().set_irql(Irql::dispatch);
   CHECK_EQ(fixture.table().held_batches(&first_context), 0u);
   CHECK_EQ(fixture.table().held_batches(nullptr), 0u);
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(2u, 32u, 64u), awaited), Status::ok);
+  CHECK_STATUS(fixture.table().release_batch(&first_context, av::ReleaseRecord(1u, SubmissionDescriptor(2u, 32u, 64u)), nullptr, awaited), Status::ok);
   CHECK_STATUS(fixture.node().submit(5u, &first_context, awaited), Status::ok);
   CHECK_EQ(fixture.table().held_batches(&first_context), 1u);
   CHECK_EQ(fixture.table().held_batches(&second_context), 0u);
@@ -1951,7 +1952,7 @@ TEST(av_context_table_held_batches, a_held_batch_and_an_overdue_packet_leave_the
   CHECK_EQ(fixture.mapped().function().doorbells().rings(0u), 0u);
   CHECK(!fixture.platform().logged_line("the context is lost"));
   fixture.platform().set_irql(Irql::dispatch);
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(1u, 0u, 32u), awaited), Status::ok);
+  CHECK_STATUS(fixture.table().release_batch(&first_context, av::ReleaseRecord(1u, SubmissionDescriptor(1u, 0u, 32u)), nullptr, awaited), Status::ok);
   CHECK_EQ(fixture.table().held_batches(&first_context), 0u);
   fixture.platform().set_irql(Irql::passive);
   CHECK_EQ(fixture.mapped().function().doorbells().rings(0u), 2u);
@@ -1961,55 +1962,94 @@ TEST(av_context_table_held_batches, a_held_batch_and_an_overdue_packet_leave_the
   CHECK(fixture.table().invariants_hold());
   CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok); }
 
-TEST(av_context_table_held_batches, a_held_batch_nothing_on_the_gpu_can_bring_a_predecessor_for_loses_its_context_after_the_deadline)
+TEST(av_context_table_held_batches, a_held_batch_older_than_any_deadline_waits_for_a_live_writer_and_publishes_when_it_comes)
 { Fixture fixture;
   Host host(fixture.mapped());
   CHECK_STATUS(fixture.bind(&first_context), Status::ok);
+  int           queue = 0;
+  int           waiting_queue = 0;
   std::uint64_t awaited = 0u;
   fixture.platform().set_irql(Irql::dispatch);
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(2u, 32u, 64u), awaited), Status::ok);
+  CHECK_STATUS(fixture.table().release_batch(&first_context, av::ReleaseRecord(1u, SubmissionDescriptor(2u, 32u, 64u), 1u, 2u),
+                                             &queue, awaited),
+               Status::ok);
   CHECK_STATUS(fixture.node().submit(5u, &first_context, awaited), Status::ok);
-  fixture.platform().advance_time(ExecutionNode::park_deadline);
-  CHECK_EQ(fixture.node().release_overdue(fixture.platform().interrupt_time()), 1u);
   fixture.platform().set_irql(Irql::passive);
-  fixture.complete_through(0u);
-  fixture.serve();
+  for (int deadline = 0; deadline < 100; deadline++) {
+      fixture.platform().advance_time(ExecutionNode::park_deadline);
+      fixture.platform().set_irql(Irql::dispatch);
+      static_cast<void>(fixture.node().release_overdue(fixture.platform().interrupt_time()));
+      fixture.platform().set_irql(Irql::passive);
+      fixture.complete_through(0u);
+      fixture.serve();
+  }
+  CHECK(!fixture.table().writer_gone(&queue));
   CHECK(!fixture.platform().logged_line("the context is lost"));
-  fixture.platform().advance_time(ExecutionNode::park_deadline);
-  fixture.serve();
-  CHECK(fixture.platform().logged_line("nothing left on the GPU"));
+  CHECK_EQ(fixture.table().held_batches(&first_context), 1u);
+  CHECK_EQ(fixture.mapped().function().doorbells().rings(0u), 0u);
+  fixture.platform().set_irql(Irql::dispatch);
+  CHECK_STATUS(fixture.table().release_batch(&first_context, av::ReleaseRecord(1u, SubmissionDescriptor(1u, 0u, 32u), 2u, 0u),
+                                             &waiting_queue, awaited),
+               Status::ok);
+  fixture.platform().set_irql(Irql::passive);
+  CHECK_EQ(fixture.table().held_batches(&first_context), 0u);
+  CHECK_EQ(fixture.mapped().function().doorbells().rings(0u), 2u);
+  std::uint64_t tail = 0u;
+  std::memcpy(&tail, fixture.ring_memory() + 8u, sizeof tail);
+  CHECK_EQ(tail, 64u);
+  CHECK(fixture.table().invariants_hold());
+  CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok); }
+
+TEST(av_context_table_held_batches, a_held_batch_whose_predecessor_writer_is_destroyed_loses_its_context)
+{ Fixture fixture;
+  Host host(fixture.mapped());
+  CHECK_STATUS(fixture.bind(&first_context), Status::ok);
+  int           queue = 0;
+  int           waiting_queue = 0;
+  std::uint64_t awaited = 0u;
+  fixture.platform().set_irql(Irql::dispatch);
+  CHECK_STATUS(fixture.table().release_batch(&first_context, av::ReleaseRecord(1u, SubmissionDescriptor(1u, 0u, 32u), 2u, 0u),
+                                             &waiting_queue, awaited),
+               Status::ok);
+  CHECK_STATUS(fixture.table().release_batch(&first_context, av::ReleaseRecord(1u, SubmissionDescriptor(3u, 64u, 96u), 1u, 2u),
+                                             &queue, awaited),
+               Status::ok);
+  CHECK_EQ(fixture.table().held_batches(&first_context), 1u);
+  CHECK(!fixture.table().writer_gone(&queue));
+  CHECK(!fixture.platform().logged_line("the context is lost"));
+  CHECK(fixture.table().writer_gone(&waiting_queue));
+  fixture.platform().set_irql(Irql::passive);
+  CHECK(fixture.platform().logged_line("writing context was destroyed: the context is lost"));
   std::uint32_t told = 0u;
   std::memcpy(&told, fixture.ring_memory() + av::RingHeader::lost_at, sizeof told);
   CHECK_EQ(told, static_cast<std::uint32_t>(av::FaultCode::batch_order));
   CHECK_EQ(fixture.table().held_batches(&first_context), 0u);
-  CHECK_EQ(fixture.mapped().function().doorbells().rings(0u), 0u);
   fixture.platform().set_irql(Irql::dispatch);
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(1u, 0u, 32u), awaited),
+  CHECK_STATUS(fixture.table().release_batch(&first_context, av::ReleaseRecord(1u, SubmissionDescriptor(2u, 32u, 64u), 2u, 2u),
+                                             &waiting_queue, awaited),
                Status::invalid_parameter);
   fixture.platform().set_irql(Irql::passive);
   CHECK(fixture.table().invariants_hold());
   CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok); }
 
-TEST(av_context_table_held_batches, a_held_batch_stays_while_the_gpu_still_has_work_that_can_bring_its_predecessor)
+TEST(av_context_table_held_batches, a_batch_held_behind_a_writer_already_destroyed_loses_its_context_as_it_arrives)
 { Fixture fixture;
   Host host(fixture.mapped());
   CHECK_STATUS(fixture.bind(&first_context), Status::ok);
+  int           queue = 0;
+  int           gone_queue = 0;
   std::uint64_t awaited = 0u;
   fixture.platform().set_irql(Irql::dispatch);
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(2u, 32u, 64u), awaited), Status::ok);
-  CHECK_STATUS(fixture.node().submit(5u, &first_context, awaited), Status::ok);
+  CHECK_STATUS(fixture.table().release_batch(&first_context, av::ReleaseRecord(1u, SubmissionDescriptor(1u, 0u, 32u), 2u, 0u),
+                                             &gone_queue, awaited),
+               Status::ok);
+  CHECK(!fixture.table().writer_gone(&gone_queue));
+  CHECK_STATUS(fixture.table().release_batch(&first_context, av::ReleaseRecord(1u, SubmissionDescriptor(3u, 64u, 96u), 1u, 2u),
+                                             &queue, awaited),
+               Status::ok);
   fixture.platform().set_irql(Irql::passive);
-  fixture.platform().advance_time(4u * ExecutionNode::park_deadline);
-  fixture.complete_through(0u);
-  fixture.serve();
-  CHECK(!fixture.platform().logged_line("the context is lost"));
-  CHECK_EQ(fixture.table().held_batches(&first_context), 1u);
-  fixture.platform().set_irql(Irql::dispatch);
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(1u, 0u, 32u), awaited), Status::ok);
-  fixture.platform().set_irql(Irql::passive);
+  CHECK(fixture.platform().logged_line("writing context was destroyed: the context is lost"));
   CHECK_EQ(fixture.table().held_batches(&first_context), 0u);
-  CHECK_EQ(fixture.mapped().function().doorbells().rings(0u), 2u);
-  CHECK(fixture.table().invariants_hold());
   CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok); }
 
 TEST(av_context_table_submit, a_batch_that_cannot_be_read_while_the_ring_keeps_order_loses_the_context)
@@ -2018,7 +2058,7 @@ TEST(av_context_table_submit, a_batch_that_cannot_be_read_while_the_ring_keeps_o
   CHECK_STATUS(fixture.bind(&first_context), Status::ok);
   std::uint64_t awaited = 0u;
   fixture.platform().set_irql(Irql::dispatch);
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(2u, 32u, 64u), awaited), Status::ok);
+  CHECK_STATUS(fixture.table().release_batch(&first_context, av::ReleaseRecord(1u, SubmissionDescriptor(2u, 32u, 64u)), nullptr, awaited), Status::ok);
   std::uint8_t bytes[SubmissionDescriptor::encoded_size] = {};
   CHECK_STATUS(fixture.table().submit(&first_context, bytes, 8u, awaited), Status::invalid_parameter);
   fixture.platform().set_irql(Irql::passive);
@@ -2037,8 +2077,8 @@ TEST(av_context_table_adapter_is, the_line_of_a_lost_context_names_the_adapter_t
   CHECK_STATUS(fixture.bind(&first_context), Status::ok);
   std::uint64_t awaited = 0u;
   fixture.platform().set_irql(Irql::dispatch);
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(1u, 0u, 32u), awaited), Status::ok);
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(2u, 16u, 48u), awaited), Status::ok);
+  CHECK_STATUS(fixture.table().release_batch(&first_context, av::ReleaseRecord(1u, SubmissionDescriptor(1u, 0u, 32u)), nullptr, awaited), Status::ok);
+  CHECK_STATUS(fixture.table().release_batch(&first_context, av::ReleaseRecord(1u, SubmissionDescriptor(2u, 16u, 48u)), nullptr, awaited), Status::ok);
   fixture.platform().set_irql(Irql::passive);
   CHECK(fixture.platform().logged_line("the context is lost: adapter 0000000000007801 at "));
   CHECK(fixture.platform().logged_line(" doorbell 0 held 0 next 32 begin 16 end 48 fence 2"));
@@ -2077,7 +2117,7 @@ TEST(av_context_table_submit, a_submission_after_a_release_waits_its_turn_like_a
   CHECK_STATUS(fixture.bind(&first_context), Status::ok);
   std::uint64_t awaited = 0u;
   fixture.platform().set_irql(Irql::dispatch);
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(1u, 0u, 32u), awaited), Status::ok);
+  CHECK_STATUS(fixture.table().release_batch(&first_context, av::ReleaseRecord(1u, SubmissionDescriptor(1u, 0u, 32u)), nullptr, awaited), Status::ok);
   fixture.platform().set_irql(Irql::passive);
   CHECK_EQ(fixture.mapped().function().doorbells().rings(0u), 1u);
   CHECK_STATUS(fixture.submit(&first_context, SubmissionDescriptor(3u, 64u, 96u), awaited), Status::ok);
@@ -2094,9 +2134,9 @@ TEST(av_context_table_release_batch, a_slot_not_yet_live_takes_nothing_and_has_n
   CHECK_STATUS(fixture.bind(&first_context), Status::ok);
   std::uint64_t awaited = 9u;
   fixture.platform().set_irql(Irql::dispatch);
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(2u, 32u, 64u), awaited), Status::ok);
+  CHECK_STATUS(fixture.table().release_batch(&first_context, av::ReleaseRecord(1u, SubmissionDescriptor(2u, 32u, 64u)), nullptr, awaited), Status::ok);
   AvContextTableProbe::set_live(fixture.table(), 0u, false);
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(1u, 0u, 32u), awaited),
+  CHECK_STATUS(fixture.table().release_batch(&first_context, av::ReleaseRecord(1u, SubmissionDescriptor(1u, 0u, 32u)), nullptr, awaited),
                Status::invalid_parameter);
   CHECK_EQ(fixture.table().held_batches(&first_context), 0u);
   const std::uint32_t rings = fixture.mapped().function().doorbells().rings(0u);
@@ -2116,10 +2156,10 @@ TEST(av_context_table_release_batch, a_batch_overlapping_one_released_or_refused
   CHECK_STATUS(fixture.bind(&first_context), Status::ok);
   std::uint64_t awaited = 0u;
   fixture.platform().set_irql(Irql::dispatch);
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(1u, 0u, 32u), awaited), Status::ok);
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(2u, 16u, 48u), awaited), Status::ok);
+  CHECK_STATUS(fixture.table().release_batch(&first_context, av::ReleaseRecord(1u, SubmissionDescriptor(1u, 0u, 32u)), nullptr, awaited), Status::ok);
+  CHECK_STATUS(fixture.table().release_batch(&first_context, av::ReleaseRecord(1u, SubmissionDescriptor(2u, 16u, 48u)), nullptr, awaited), Status::ok);
   CHECK(fixture.platform().logged_line("the context is lost"));
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(3u, 32u, 64u), awaited),
+  CHECK_STATUS(fixture.table().release_batch(&first_context, av::ReleaseRecord(1u, SubmissionDescriptor(3u, 32u, 64u)), nullptr, awaited),
                Status::invalid_parameter);
   fixture.platform().set_irql(Irql::passive);
   CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok);
@@ -2128,16 +2168,16 @@ TEST(av_context_table_release_batch, a_batch_overlapping_one_released_or_refused
   CHECK_STATUS(fixture.submit(&first_context, SubmissionDescriptor(7u, 0u, 32u), awaited), Status::ok);
   const std::uint32_t lost = fixture.platform().logged();
   fixture.platform().set_irql(Irql::dispatch);
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(3u, 32u, 64u), awaited), Status::ok);
+  CHECK_STATUS(fixture.table().release_batch(&first_context, av::ReleaseRecord(1u, SubmissionDescriptor(3u, 32u, 64u)), nullptr, awaited), Status::ok);
   fixture.platform().set_irql(Irql::passive);
   CHECK(fixture.platform().logged() > lost);
   CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok);
 
   CHECK_STATUS(fixture.bind(&first_context), Status::ok);
   fixture.platform().set_irql(Irql::dispatch);
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(5u, 32u, 64u), awaited), Status::ok);
+  CHECK_STATUS(fixture.table().release_batch(&first_context, av::ReleaseRecord(1u, SubmissionDescriptor(5u, 32u, 64u)), nullptr, awaited), Status::ok);
   const std::uint32_t held = fixture.platform().logged();
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(9u, 0u, 32u), awaited), Status::ok);
+  CHECK_STATUS(fixture.table().release_batch(&first_context, av::ReleaseRecord(1u, SubmissionDescriptor(9u, 0u, 32u)), nullptr, awaited), Status::ok);
   CHECK(fixture.platform().logged() > held);
   CHECK_EQ(fixture.table().held_batches(&first_context), 0u);
   fixture.platform().set_irql(Irql::passive);
@@ -2205,10 +2245,10 @@ TEST(av_context_table_release_batch, a_lost_context_ends_the_wait_of_the_process
   CHECK(watch.keeps_waiting());
   std::uint64_t awaited = 0u;
   fixture.platform().set_irql(Irql::dispatch);
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(1u, 0u, 32u), awaited), Status::ok);
+  CHECK_STATUS(fixture.table().release_batch(&first_context, av::ReleaseRecord(1u, SubmissionDescriptor(1u, 0u, 32u)), nullptr, awaited), Status::ok);
   CHECK_STATUS(fixture.node().submit(5u, &first_context, awaited), Status::ok);
   CHECK(watch.keeps_waiting());
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(2u, 16u, 48u), awaited), Status::ok);
+  CHECK_STATUS(fixture.table().release_batch(&first_context, av::ReleaseRecord(1u, SubmissionDescriptor(2u, 16u, 48u)), nullptr, awaited), Status::ok);
   fixture.platform().set_irql(Irql::passive);
   CHECK(watch.faulted());
   CHECK(!watch.keeps_waiting());

@@ -83,15 +83,6 @@ uint32_t ExecutionNode::release_overdue(uint64_t now, void **owners, uint32_t ro
     return released;
 }
 
-bool ExecutionNode::awaits()
-{
-    AV_SCOPE("ExecutionNode::awaits");
-    SpinLockGuard lock(lock_);
-    for (uint32_t index = 0u; index < count_; index++)
-        if (awaited_[(head_ + index) % capacity] != 0u) return true;
-    return false;
-}
-
 Status ExecutionNode::preempt(uint32_t fence)
 {
     AV_SCOPE("ExecutionNode::preempt");

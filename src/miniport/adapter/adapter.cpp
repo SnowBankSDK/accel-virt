@@ -1050,6 +1050,8 @@ int32_t Adapter::destroy_context(void *context)
             .code("status", static_cast<uint32_t>(NtStatus(unbound).value()))
             .write();
     }
+    if (found != nullptr && !found->is_av() && av_contexts_.writer_gone(context))
+        static_cast<void>(dxgkrnl_.queue_dpc());
     return NtStatus(contexts_.destroy(context)).value();
 }
 
@@ -2177,7 +2179,7 @@ Status Adapter::submit_release(const Context &context, const ReleaseRecord &rele
     if (released == nullptr) return Status::invalid_parameter;
     owner = released;
     uint64_t     batch_fence = 0u;
-    const Status published = av_contexts_.release_batch(released, release.batch(), batch_fence);
+    const Status published = av_contexts_.release_batch(released, release, &context, batch_fence);
     if (published != Status::ok) return published;
     awaited = batch_fence;
     return node_.submit(fence, released, awaited);

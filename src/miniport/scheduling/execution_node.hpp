@@ -30,7 +30,6 @@ public:
                                          uint32_t *named = nullptr);
     [[nodiscard]] Status preempt(uint32_t fence);
     [[nodiscard]] Status complete(InterruptNotification &notification, uint32_t *returned = nullptr);
-    bool                 awaits();
     uint32_t             current_fence();
     uint32_t             pending();
     uint32_t             last_submitted();

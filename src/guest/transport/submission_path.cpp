@@ -10,13 +10,13 @@
 namespace av {
 
 SubmissionPath::SubmissionPath(Kmt &kmt, GuestDoorbell &doorbell, TransportRing &ring)
-    : kmt_(kmt), doorbell_(doorbell), ring_(ring), doorbell_submissions_(0u), kernel_submissions_(0u), publishes_tail_(false), user_submissions_(0u), ordered_ring_(0u), release_submissions_(0u)
+    : kmt_(kmt), doorbell_(doorbell), ring_(ring), doorbell_submissions_(0u), kernel_submissions_(0u), publishes_tail_(false), user_submissions_(0u), ordered_ring_(0u), last_writer_(0u), release_submissions_(0u)
 {
     AV_SCOPE("SubmissionPath::SubmissionPath");
 }
 
 Status SubmissionPath::submit(uint32_t context, uint64_t dma_address, const uint8_t *descriptor, uint32_t size,
-                              uint64_t fence, ReleaseRoute *route)
+                              uint64_t fence, ReleaseRoute *route, uint32_t writer)
 {
     AV_SCOPE("SubmissionPath::submit");
     const bool ordered = ordered_ring_ != 0u;
@@ -24,14 +24,16 @@ Status SubmissionPath::submit(uint32_t context, uint64_t dma_address, const uint
         SubmissionDescriptor batch;
         uint8_t              record[ReleaseRecord::encoded_size] = {};
         if (batch.decode(descriptor, size) != Status::ok) return Status::invalid_parameter;
-        static_cast<void>(ReleaseRecord(ordered_ring_, batch).encode(record, sizeof record));
+        static_cast<void>(ReleaseRecord(ordered_ring_, batch, writer, last_writer_).encode(record, sizeof record));
         const Status released = route->release(record, sizeof record);
         if (released == Status::ok) {
+            last_writer_ = writer;
             release_submissions_++;
             return Status::ok;
         }
         if (released != Status::not_supported) return released;
     }
+    last_writer_ = 0u;
     if (!ordered && doorbell_.established()) {
         const Status published = ring_.publish_tail();
         if (published != Status::ok) return published;

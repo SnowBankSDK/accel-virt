@@ -13,13 +13,18 @@ using av::SubmissionDescriptor;
 
 TEST(release_record, places_its_fields_and_reads_back_as_written)
 { std::uint8_t bytes[ReleaseRecord::encoded_size] = {};
-  CHECK_STATUS(ReleaseRecord(0x11223344u, SubmissionDescriptor(7u, 64u, 128u)).encode(bytes, sizeof bytes), Status::ok);
+  CHECK_STATUS(ReleaseRecord(0x11223344u, SubmissionDescriptor(7u, 64u, 128u), 3u, 9u).encode(bytes, sizeof bytes),
+               Status::ok);
   const ByteLayout layout(bytes, sizeof bytes);
   CHECK(layout.at(0u, 4u) == 0x00525641u);
   CHECK(layout.at(4u, 4u) == 0x11223344u);
+  CHECK(layout.at(8u, 4u) == 3u);
+  CHECK(layout.at(12u, 4u) == 9u);
   ReleaseRecord read;
   CHECK_STATUS(read.decode(bytes, sizeof bytes), Status::ok);
   CHECK_EQ(read.ring(), 0x11223344u);
+  CHECK_EQ(read.writer(), 3u);
+  CHECK_EQ(read.after(), 9u);
   CHECK(read.batch().fence_id() == 7u && read.batch().begin() == 64u && read.batch().end() == 128u); }
 
 TEST(release_record, a_longer_private_data_carries_the_record_as_its_prefix)
@@ -43,9 +48,10 @@ TEST(release_record, anything_else_is_malformed_and_leaves_the_reader_unchanged)
   other[4] = other[5] = other[6] = other[7] = 0u;
   CHECK_STATUS(read.decode(other, sizeof other), Status::malformed);
   for (std::size_t i = 0u; i < sizeof other; i++) other[i] = bytes[i];
-  for (std::size_t i = 16u; i < 24u; i++) other[i] = 0u;
+  for (std::size_t i = 24u; i < 32u; i++) other[i] = 0u;
   CHECK_STATUS(read.decode(other, sizeof other), Status::malformed);
   CHECK_EQ(read.ring(), 3u);
+  CHECK_EQ(read.writer(), 0u);
   CHECK_STATUS(ReleaseRecord(5u, SubmissionDescriptor(1u, 0u, 8u)).encode(other, ReleaseRecord::encoded_size - 1u),
                Status::too_large); }
 
