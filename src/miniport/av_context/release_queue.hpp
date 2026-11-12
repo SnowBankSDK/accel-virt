@@ -19,7 +19,6 @@ public:
     Turn     arrive(const SubmissionDescriptor &batch, uint64_t published, uint32_t after);
     void     released(const SubmissionDescriptor &batch);
     bool     next_held(SubmissionDescriptor &batch);
-    bool     next_forced(SubmissionDescriptor &batch);
     void     written_by(uint32_t writer, const void *context);
     bool     forget(const void *context);
     bool     stranded() const;
@@ -27,6 +26,7 @@ public:
     void     clear();
     uint32_t held() const;
     uint64_t next() const;
+    uint64_t awaitable(uint64_t fence) const;
 
 private:
     void drop_passed();
@@ -39,6 +39,7 @@ private:
     const void          *writer_contexts_[most_writers];
     uint32_t             count_;
     uint64_t             next_;
+    uint64_t             published_fence_;
     bool                 active_;
 };
 

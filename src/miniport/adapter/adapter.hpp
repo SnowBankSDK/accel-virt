@@ -315,14 +315,11 @@ private:
     int32_t          next_point(const DxgkargEscapeRecord &escape);
     int32_t          pages_read(const DxgkargEscapeRecord &escape);
     int32_t          publish_own_tail(const DxgkargEscapeRecord &escape);
-    [[nodiscard]] Status submit_av(const DxgkargSubmitCommandVirtualRecord &request, uint64_t &awaited,
-                                   ExecutionNode::Hold &hold);
+    [[nodiscard]] Status submit_av(const DxgkargSubmitCommandVirtualRecord &request, uint64_t &awaited);
     [[nodiscard]] Status submit_follow(const Context &context, const FollowRecord &follow, uint32_t fence,
-                                       void *&owner, uint64_t &awaited, ExecutionNode::Hold &hold);
+                                       void *&owner, uint64_t &awaited);
     [[nodiscard]] Status submit_release(const Context &context, const ReleaseRecord &release, uint32_t fence,
-                                        void *&owner, uint64_t &awaited, ExecutionNode::Hold &hold);
-    static void          park_deadline_passed(void *adapter);
-    void                 release_parked_ahead_of_finished();
+                                        void *&owner, uint64_t &awaited);
     bool                 submit_present(const DxgkargSubmitCommandVirtualRecord &request, Status &status,
                                         void *&owner, uint64_t &awaited);
     void                 remember_device();

@@ -172,8 +172,6 @@ TEST(miniport_add_device, is_passive_only)
   int pdo = 0; void *context = nullptr;
   CHECK_STATUS(miniport.add_device(&pdo, context), Status::ok);
   CHECK(platform.claim(av::Violation::irql_ceiling));
-  CHECK(platform.claim(av::Violation::irql_ceiling));
-  CHECK(platform.claim(av::Violation::irql_ceiling));
   CHECK_EQ(platform.unclaimed_violations(), 0u);
   platform.set_irql(av::Irql::passive);
   CHECK_STATUS(miniport.remove_device(context), Status::ok); }

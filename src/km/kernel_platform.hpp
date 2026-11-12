@@ -56,10 +56,6 @@ public:
     void     initialize_wake_event(void *storage) override;
     void     set_wake_event(void *storage) override;
     bool     wait_wake_event(void *storage, uint64_t ticks) override;
-    void     initialize_timer(void *storage, TimerRoutine routine, void *context) override;
-    void     arm_timer(void *storage, uint64_t ticks) override;
-    void     cancel_timer(void *storage) override;
-    void     release_timer(void *storage) override;
     uint8_t  read_register_u8(void *address) override;
     uint16_t read_register_u16(void *address) override;
     uint32_t read_register_u32(void *address) override;

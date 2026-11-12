@@ -135,7 +135,9 @@ TEST(execution_node_finish, only_the_owner_s_packets_are_finished)
   int owner = 0;
   int stranger = 0;
   CHECK_STATUS(fixture.node().submit(4u, nullptr, 2u), Status::invalid_parameter);
-  CHECK_STATUS(fixture.node().submit(4u, &owner, 0u), Status::invalid_parameter);
+  CHECK_EQ(fixture.node().pending(), 0u);
+  CHECK_STATUS(fixture.node().submit(3u, &owner, 0u), Status::ok);
+  CHECK_STATUS(fixture.node().complete(fixture.notification()), Status::ok);
   CHECK_EQ(fixture.node().pending(), 0u);
   CHECK_STATUS(fixture.node().submit(4u, &owner, 2u), Status::ok);
   fixture.node().finish(&stranger, 100u);
@@ -269,11 +271,11 @@ TEST(execution_node_preempt, a_packet_given_back_starts_its_deadline_again_when_
 { Fixture fixture;
   int owner = 0;
   CHECK_STATUS(fixture.node().submit(1u, &owner, 4u), Status::ok);
-  fixture.platform().advance_time(ExecutionNode::park_deadline - 1u);
+  fixture.platform().advance_time(ExecutionNode::overdue_after - 1u);
   CHECK_STATUS(fixture.node().preempt(2u), Status::ok);
   CHECK_STATUS(fixture.node().complete(fixture.notification()), Status::ok);
   CHECK_STATUS(fixture.node().submit(3u, &owner, 4u), Status::ok);
-  fixture.platform().advance_time(ExecutionNode::park_deadline - 1u);
+  fixture.platform().advance_time(ExecutionNode::overdue_after - 1u);
   CHECK_EQ(fixture.node().release_overdue(fixture.platform().interrupt_time()), 0u);
   fixture.platform().advance_time(1u);
   CHECK_EQ(fixture.node().release_overdue(fixture.platform().interrupt_time()), 1u);
@@ -417,9 +419,9 @@ TEST(execution_node_report, writes_the_fences_and_each_pending_packet_in_order)
   char expected[512];
   std::snprintf(expected, sizeof expected,
                 "execution_node/0 busy=false pending=2 last_submitted=5 last_completed=1"
-                " preemption_requested=false preemption_fence=0 stopped=false progress_time=0 preempted=0 parked=0\n"
-                "execution_node/0/packet/0 fence=4 owner=0x%016llX awaited=9 parked=false\n"
-                "execution_node/0/packet/1 fence=5 owner=0x0000000000000000 awaited=0 parked=false",
+                " preemption_requested=false preemption_fence=0 stopped=false progress_time=0 preempted=0\n"
+                "execution_node/0/packet/0 fence=4 owner=0x%016llX awaited=9\n"
+                "execution_node/0/packet/1 fence=5 owner=0x0000000000000000 awaited=0",
                 static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(&owner)));
   CHECK(std::strcmp(writer.dump(), expected) == 0);
   CHECK(fixture.node().invariants_hold());
@@ -440,17 +442,17 @@ TEST(execution_node_release_overdue, lets_go_of_a_held_packet_only_once_it_has_w
   CHECK_STATUS(fixture.node().submit(1u, &owner, 9u), Status::ok);
   CHECK_STATUS(fixture.node().submit(2u), Status::ok);
   const std::uint64_t queued = fixture.platform().interrupt_time();
-  CHECK_EQ(fixture.node().release_overdue(queued + ExecutionNode::park_deadline - 1u), 0u);
+  CHECK_EQ(fixture.node().release_overdue(queued + ExecutionNode::overdue_after - 1u), 0u);
   CHECK_STATUS(fixture.node().complete(fixture.notification()), Status::ok);
   CHECK_EQ(fixture.dxgkrnl().interrupts(), 0u);
 
-  CHECK_EQ(fixture.node().release_overdue(queued + ExecutionNode::park_deadline), 1u);
+  CHECK_EQ(fixture.node().release_overdue(queued + ExecutionNode::overdue_after), 1u);
   CHECK(fixture.node().invariants_hold());
   CHECK_STATUS(fixture.node().complete(fixture.notification()), Status::ok);
   CHECK_EQ(fixture.dxgkrnl().interrupts(), 2u);
   CHECK_EQ(fixture.dxgkrnl().interrupt(1u).FenceId, 2u);
   CHECK_EQ(fixture.node().pending(), 0u);
-  CHECK_EQ(fixture.node().release_overdue(queued + 10u * ExecutionNode::park_deadline), 0u); }
+  CHECK_EQ(fixture.node().release_overdue(queued + 10u * ExecutionNode::overdue_after), 0u); }
 
 TEST(execution_node_release_overdue, leaves_plain_packets_and_finished_packets_alone)
 { Fixture fixture;
@@ -458,7 +460,7 @@ TEST(execution_node_release_overdue, leaves_plain_packets_and_finished_packets_a
   CHECK_STATUS(fixture.node().submit(1u), Status::ok);
   CHECK_STATUS(fixture.node().submit(2u, &owner, 4u), Status::ok);
   fixture.node().finish(&owner, 4u);
-  const std::uint64_t later = fixture.platform().interrupt_time() + 2u * ExecutionNode::park_deadline;
+  const std::uint64_t later = fixture.platform().interrupt_time() + 2u * ExecutionNode::overdue_after;
   CHECK_EQ(fixture.node().release_overdue(later), 0u);
   CHECK_STATUS(fixture.node().complete(fixture.notification()), Status::ok);
   CHECK_EQ(fixture.dxgkrnl().interrupts(), 2u); }
@@ -483,9 +485,9 @@ TEST(execution_node_release_overdue, only_the_overdue_packet_goes_a_younger_one_
   int first = 0;
   int second = 0;
   CHECK_STATUS(fixture.node().submit(1u, &first, 3u), Status::ok);
-  fixture.platform().advance_time(ExecutionNode::park_deadline / 2u);
+  fixture.platform().advance_time(ExecutionNode::overdue_after / 2u);
   CHECK_STATUS(fixture.node().submit(2u, &second, 5u), Status::ok);
-  fixture.platform().advance_time(ExecutionNode::park_deadline / 2u);
+  fixture.platform().advance_time(ExecutionNode::overdue_after / 2u);
   CHECK_EQ(fixture.node().release_overdue(fixture.platform().interrupt_time()), 1u);
   CHECK_STATUS(fixture.node().complete(fixture.notification()), Status::ok);
   CHECK_EQ(fixture.dxgkrnl().interrupts(), 1u);
@@ -498,7 +500,7 @@ TEST(execution_node_release_overdue, names_each_owner_once_and_only_as_many_as_t
   CHECK_STATUS(fixture.node().submit(1u, &a, 3u), Status::ok);
   CHECK_STATUS(fixture.node().submit(2u, &a, 4u), Status::ok);
   CHECK_STATUS(fixture.node().submit(3u, &b, 5u), Status::ok);
-  const std::uint64_t late = fixture.platform().interrupt_time() + ExecutionNode::park_deadline;
+  const std::uint64_t late = fixture.platform().interrupt_time() + ExecutionNode::overdue_after;
   void *owners[2] = {};
   std::uint32_t named = 99u;
   CHECK_EQ(fixture.node().release_overdue(late, owners, 1u, &named), 3u);
@@ -509,135 +511,9 @@ TEST(execution_node_release_overdue, names_each_owner_once_and_only_as_many_as_t
   CHECK_STATUS(fixture.node().submit(4u, &a, 6u), Status::ok);
   CHECK_STATUS(fixture.node().submit(5u, &b, 7u), Status::ok);
   CHECK_STATUS(fixture.node().submit(6u, &a, 8u), Status::ok);
-  const std::uint64_t later = fixture.platform().interrupt_time() + ExecutionNode::park_deadline;
+  const std::uint64_t later = fixture.platform().interrupt_time() + ExecutionNode::overdue_after;
   CHECK_EQ(fixture.node().release_overdue(later, owners, 2u, &named), 3u);
   CHECK_EQ(named, 2u);
   CHECK(owners[0] == &a);
   CHECK(owners[1] == &b); }
 
-namespace {
-
-class AlarmedNode {
-public:
-    AlarmedNode() : node_(platform_, &AlarmedNode::rang, this), rang_(0u) { platform_.set_irql(Irql::dispatch); }
-    ~AlarmedNode() { platform_.set_irql(Irql::passive); }
-
-    MockPlatform  &platform() { return platform_; }
-    ExecutionNode &node() { return node_; }
-    std::uint32_t  rang() const { return rang_; }
-
-private:
-    static void rang(void *self) { static_cast<AlarmedNode *>(self)->rang_++; }
-
-    MockPlatform  platform_;
-    ExecutionNode node_;
-    std::uint32_t rang_;
-};
-
-}
-
-TEST(execution_node_park, a_parked_packet_rings_its_deadline_with_nothing_else_running)
-{ AlarmedNode alarmed;
-  int owner = 0;
-  CHECK_STATUS(alarmed.node().submit(1u, &owner, 4u), Status::ok);
-  CHECK_EQ(alarmed.platform().armed_timers(), 0u);
-  const std::uint64_t queued = alarmed.platform().interrupt_time();
-  CHECK_STATUS(alarmed.node().submit(2u, &owner, 5u, ExecutionNode::Hold::parks), Status::ok);
-  CHECK_EQ(alarmed.node().parked(), 1u);
-  CHECK_EQ(alarmed.platform().armed_timers(), 1u);
-  CHECK_EQ(alarmed.platform().timer_due(0u), queued + ExecutionNode::park_deadline);
-  alarmed.platform().advance_time(ExecutionNode::park_deadline - 1u);
-  CHECK_EQ(alarmed.platform().fire_due_timers(), 0u);
-  CHECK_EQ(alarmed.rang(), 0u);
-  alarmed.platform().advance_time(1u);
-  CHECK_EQ(alarmed.platform().fire_due_timers(), 1u);
-  CHECK_EQ(alarmed.rang(), 1u);
-  CHECK_EQ(alarmed.node().release_overdue(alarmed.platform().interrupt_time()), 2u);
-  CHECK_EQ(alarmed.node().parked(), 0u);
-  CHECK_EQ(alarmed.platform().armed_timers(), 0u);
-  CHECK(alarmed.node().invariants_hold()); }
-
-TEST(execution_node_park, a_second_park_keeps_the_first_deadline_and_the_alarm_moves_to_the_next_once_it_passes)
-{ AlarmedNode alarmed;
-  int owner = 0;
-  const std::uint64_t first = alarmed.platform().interrupt_time();
-  CHECK_STATUS(alarmed.node().submit(1u, &owner, 4u, ExecutionNode::Hold::parks), Status::ok);
-  alarmed.platform().advance_time(ExecutionNode::park_deadline / 2u);
-  const std::uint64_t second = alarmed.platform().interrupt_time();
-  CHECK_STATUS(alarmed.node().submit(2u, &owner, 5u, ExecutionNode::Hold::parks), Status::ok);
-  CHECK_EQ(alarmed.platform().armed_timers(), 1u);
-  CHECK_EQ(alarmed.platform().timer_due(0u), first + ExecutionNode::park_deadline);
-  alarmed.platform().advance_time(ExecutionNode::park_deadline / 2u);
-  CHECK_EQ(alarmed.platform().fire_due_timers(), 1u);
-  CHECK_EQ(alarmed.node().release_overdue(alarmed.platform().interrupt_time()), 1u);
-  CHECK_EQ(alarmed.node().parked(), 1u);
-  CHECK_EQ(alarmed.platform().armed_timers(), 1u);
-  CHECK_EQ(alarmed.platform().timer_due(0u), second + ExecutionNode::park_deadline);
-  CHECK(alarmed.node().invariants_hold()); }
-
-TEST(execution_node_park, the_alarm_is_cancelled_when_the_owner_s_held_batches_are_released_or_its_packets_finish)
-{ AlarmedNode alarmed;
-  int owner = 0;
-  int other = 0;
-  CHECK_STATUS(alarmed.node().submit(1u, &owner, 4u, ExecutionNode::Hold::parks), Status::ok);
-  CHECK_STATUS(alarmed.node().submit(2u, &other, 7u, ExecutionNode::Hold::resolves), Status::ok);
-  CHECK_EQ(alarmed.node().parked(), 1u);
-  CHECK_EQ(alarmed.platform().armed_timers(), 1u);
-  CHECK_STATUS(alarmed.node().submit(3u, &owner, 3u, ExecutionNode::Hold::resolves), Status::ok);
-  CHECK_EQ(alarmed.node().parked(), 0u);
-  CHECK_EQ(alarmed.platform().armed_timers(), 0u);
-  CHECK_EQ(alarmed.node().pending(), 3u);
-
-  CHECK_STATUS(alarmed.node().submit(4u, &other, 9u, ExecutionNode::Hold::parks), Status::ok);
-  CHECK_EQ(alarmed.platform().armed_timers(), 1u);
-  alarmed.node().finish(&other, 9u);
-  CHECK_EQ(alarmed.node().parked(), 0u);
-  CHECK_EQ(alarmed.platform().armed_timers(), 0u);
-
-  CHECK_STATUS(alarmed.node().submit(5u, &other, 10u, ExecutionNode::Hold::parks), Status::ok);
-  alarmed.node().unpark(&other);
-  CHECK_EQ(alarmed.platform().armed_timers(), 0u);
-  alarmed.platform().advance_time(2u * ExecutionNode::park_deadline);
-  CHECK_EQ(alarmed.platform().fire_due_timers(), 0u);
-  CHECK_EQ(alarmed.rang(), 0u);
-  CHECK(alarmed.node().invariants_hold()); }
-
-TEST(execution_node_park, a_reset_or_a_preemption_drops_the_parks_and_the_alarm)
-{ AlarmedNode alarmed;
-  int owner = 0;
-  CHECK_STATUS(alarmed.node().submit(1u, &owner, 4u, ExecutionNode::Hold::parks), Status::ok);
-  CHECK_EQ(alarmed.platform().armed_timers(), 1u);
-  alarmed.node().reset();
-  CHECK_EQ(alarmed.node().parked(), 0u);
-  CHECK_EQ(alarmed.platform().armed_timers(), 0u);
-  alarmed.node().restart();
-  CHECK_STATUS(alarmed.node().submit(2u, &owner, 5u, ExecutionNode::Hold::parks), Status::ok);
-  CHECK_EQ(alarmed.node().abort_pending(), 2u);
-  CHECK_EQ(alarmed.platform().armed_timers(), 0u);
-  CHECK(alarmed.node().invariants_hold()); }
-
-TEST(execution_node_park, names_the_owners_of_parked_packets_queued_ahead_of_a_finished_packet)
-{ Fixture fixture;
-  int held = 0;
-  int other = 0;
-  int third = 0;
-  void *owners[4] = {};
-  CHECK_EQ(fixture.node().parked_ahead_of_finished(owners, 4u), 0u);
-  CHECK_STATUS(fixture.node().submit(1u, &held, 4u, ExecutionNode::Hold::parks), Status::ok);
-  CHECK_STATUS(fixture.node().submit(2u, &other, 3u), Status::ok);
-  CHECK_EQ(fixture.node().parked_ahead_of_finished(owners, 4u), 0u);
-  CHECK_STATUS(fixture.node().submit(3u, &third, 9u, ExecutionNode::Hold::parks), Status::ok);
-  fixture.node().finish(&other, 3u);
-  CHECK_EQ(fixture.node().parked_ahead_of_finished(owners, 4u), 1u);
-  CHECK(owners[0] == &held);
-  CHECK_STATUS(fixture.node().submit(4u), Status::ok);
-  CHECK_EQ(fixture.node().parked_ahead_of_finished(owners, 4u), 2u);
-  CHECK(owners[1] == &third);
-  CHECK_EQ(fixture.node().parked_ahead_of_finished(owners, 1u), 1u);
-  CHECK_STATUS(fixture.node().complete(fixture.notification()), Status::ok);
-  CHECK_EQ(fixture.dxgkrnl().interrupts(), 0u);
-  fixture.node().unpark(&held);
-  fixture.node().unpark(&third);
-  CHECK_EQ(fixture.node().parked_ahead_of_finished(owners, 4u), 0u);
-  CHECK_EQ(fixture.node().pending(), 4u);
-  CHECK(fixture.node().invariants_hold()); }

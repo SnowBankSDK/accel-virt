@@ -5,7 +5,8 @@
 namespace av {
 
 ReleaseQueue::ReleaseQueue()
-    : held_{}, after_{}, writers_{}, writer_contexts_{}, count_(0u), next_(0u), active_(false)
+    : held_{}, after_{}, writers_{}, writer_contexts_{}, count_(0u), next_(0u), published_fence_(0u),
+      active_(false)
 {
     AV_SCOPE("ReleaseQueue::ReleaseQueue");
 }
@@ -35,6 +36,7 @@ void ReleaseQueue::released(const SubmissionDescriptor &batch)
 {
     AV_SCOPE("ReleaseQueue::released");
     next_ = batch.end();
+    if (batch.fence_id() > published_fence_) published_fence_ = batch.fence_id();
     drop_passed();
 }
 
@@ -57,18 +59,6 @@ bool ReleaseQueue::next_held(SubmissionDescriptor &batch)
         return true;
     }
     return false;
-}
-
-bool ReleaseQueue::next_forced(SubmissionDescriptor &batch)
-{
-    AV_SCOPE("ReleaseQueue::next_forced");
-    if (count_ == 0u) return false;
-    uint32_t first = 0u;
-    for (uint32_t index = 1u; index < count_; index++)
-        if (held_[index].begin() < held_[first].begin()) first = index;
-    batch = SubmissionDescriptor(held_[first].fence_id(), next_, held_[first].end());
-    take_out(first);
-    return true;
 }
 
 void ReleaseQueue::take_out(uint32_t index)
@@ -135,6 +125,7 @@ void ReleaseQueue::clear()
     AV_SCOPE("ReleaseQueue::clear");
     count_ = 0u;
     next_ = 0u;
+    published_fence_ = 0u;
     for (uint32_t index = 0u; index < most_writers; index++) {
         writers_[index] = 0u;
         writer_contexts_[index] = nullptr;
@@ -146,6 +137,12 @@ uint64_t ReleaseQueue::next() const
 {
     AV_SCOPE("ReleaseQueue::next");
     return next_;
+}
+
+uint64_t ReleaseQueue::awaitable(uint64_t fence) const
+{
+    AV_SCOPE("ReleaseQueue::awaitable");
+    return !active_ || fence <= published_fence_ ? fence : published_fence_;
 }
 
 uint32_t ReleaseQueue::held() const

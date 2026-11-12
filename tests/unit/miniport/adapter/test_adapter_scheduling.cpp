@@ -76,7 +76,6 @@ constexpr std::uint64_t tail_offset = 8u;
 constexpr std::uint64_t head_offset = 16u;
 constexpr std::uint32_t doorbells = 64u;
 constexpr std::uint64_t millisecond = 10000u;
-constexpr std::uint64_t timer_slack = 20u * millisecond;
 constexpr std::uint32_t most_in_node = 48u;
 constexpr std::uint32_t most_live_rings = 20u;
 constexpr std::uint32_t most_outstanding_batches = 40u;
@@ -279,14 +278,13 @@ enum class Kind : std::uint8_t { av, route, plain };
 
 struct Coverage {
     std::uint32_t packets = 0u;
-    std::uint32_t parked = 0u;
-    std::uint32_t forced = 0u;
+    std::uint32_t early = 0u;
     std::uint32_t let_go = 0u;
     std::uint32_t returned = 0u;
     std::uint32_t saturated = 0u;
     std::uint32_t saturated_teardowns = 0u;
-    std::uint32_t timer_dpcs = 0u;
     std::uint32_t losses = 0u;
+    std::uint32_t frames = 0u;
 };
 
 struct Batch {
@@ -305,6 +303,8 @@ struct Packet {
     std::int32_t  batch;
     std::uint32_t fence;
     std::uint64_t at;
+    std::uint64_t awaits;
+    bool          early;
 };
 
 struct KernelContext {
@@ -369,9 +369,7 @@ public:
         for (std::uint32_t index = 0u; index < first && !failed(); index++) create_process();
         for (step_ = 0u; step_ < steps_per_seed && !failed(); step_++) {
             platform_.advance_time(random_.below(static_cast<std::uint32_t>(millisecond)));
-            static_cast<void>(platform_.fire_due_timers());
             act();
-            if (!failed() && platform_.fire_due_timers() != 0u) run_dpc();
             if (!failed()) maybe_run_dpc();
             if (!failed()) check_step();
         }
@@ -435,6 +433,75 @@ public:
         if (!tear_down_process(process)) return fail("a process could not be torn down");
         run_dpc();
         check_empty();
+        return !failed();
+    }
+
+    bool cross_adapter_presents(std::uint32_t presenters, std::uint32_t frames)
+    {
+        if (!start()) return false;
+        std::vector<std::int32_t> plains;
+        std::vector<std::int32_t> presenting;
+        for (std::uint32_t made = 0u; made < presenters; made++) {
+            const std::int32_t process = open_process();
+            if (process < 0) return false;
+            create_ring(static_cast<std::uint32_t>(process), true, 2u);
+            if (failed()) return false;
+            presenting.push_back(static_cast<std::int32_t>(rings_.size() - 1u));
+            void *const plain = create_kernel_context(processes_[static_cast<std::size_t>(process)], nullptr, 0u);
+            if (plain == nullptr) return fail("a plain kernel context was refused");
+            plains.push_back(add_context(static_cast<std::uint32_t>(process), plain, Kind::plain, -1));
+        }
+        for (step_ = 0u; step_ < frames && !failed(); step_++) {
+            platform_.advance_time(28u * millisecond / 10u);
+            for (std::size_t index = 0u; index < presenting.size() && !failed(); index++) {
+                const std::int32_t ring = presenting[index];
+                const std::int32_t copy = rings_[static_cast<std::size_t>(ring)].routes[0];
+                const std::int32_t render = rings_[static_cast<std::size_t>(ring)].routes[1];
+                write_batch_on(ring, copy);
+                write_batch_on(ring, render);
+                submit(contexts_[static_cast<std::size_t>(render)], take_front(render));
+                const std::int32_t plain = plains[(index + 1u) % plains.size()];
+                contexts_[static_cast<std::size_t>(plain)].queue.push_back(Packet{Kind::plain, plain, -1, -1, 0u, 0u, 0u, false});
+                submit(contexts_[static_cast<std::size_t>(plain)], take_front(plain));
+            }
+            run_dpc();
+            if (failed()) break;
+            if (!unreported_.empty()) {
+                describe(unreported_.front());
+                return fail("a batch released before the one ahead of it in its ring kept the node from completing "
+                            "the packets behind it, whose wait lets the batch ahead of it come");
+            }
+            for (std::size_t index = 0u; index < presenting.size() && !failed(); index++) {
+                const std::int32_t copy = rings_[static_cast<std::size_t>(presenting[index])].routes[0];
+                submit(contexts_[static_cast<std::size_t>(copy)], take_front(copy));
+            }
+            run_dpc();
+            for (std::size_t index = 0u; index < presenting.size() && !failed(); index++) {
+                const Ring &ring = rings_[static_cast<std::size_t>(presenting[index])];
+                if (ring.lost || ring.tail != ring.written) return fail("a presenting ring did not publish its frame in ring order");
+            }
+            for (Ring &ring : rings_) {
+                if (!ring.bound) continue;
+                std::uint64_t completed = ring.completed;
+                for (const Batch &batch : ring.batches)
+                    if (batch.end <= ring.tail && batch.fence > completed) completed = batch.fence;
+                std::memcpy(ring_bytes(ring) + head_offset, &ring.tail, sizeof ring.tail);
+                ring.head = ring.tail;
+                ring.completed = completed;
+                write_fence(ring, completed);
+            }
+            static_cast<void>(dxgkrnl_.queue_dpc());
+            run_dpc();
+            if (!failed() && !unreported_.empty()) return fail("a frame's packets were still on the node after the host ran its batches");
+            if (!failed()) check_step();
+            if (!failed()) coverage_.frames++;
+        }
+        if (!failed() && platform_.logged_line("passed its deadline and was let go"))
+            return fail("a frame waited for a deadline");
+        for (std::size_t index = 0u; index < processes_.size() && !failed(); index++)
+            if (!tear_down_process(static_cast<std::int32_t>(index))) fail("a presenting process could not be torn down");
+        run_dpc();
+        if (!failed()) check_empty();
         return !failed();
     }
 
@@ -502,7 +569,7 @@ private:
         if (!satisfied(packet) && !owner_gone(packet)) coverage_.let_go++;
         if (!failed() && !satisfied(packet) && !excused(packet)) {
             describe(packet);
-            fail("a packet completed before the host finished its batch and before its deadline");
+            fail("a packet completed before the host ran the published batches it waits for and before its deadline");
         }
     }
 
@@ -522,17 +589,21 @@ private:
 
     void describe(const Packet &packet)
     {
+        if (packet.kind == Kind::plain) {
+            std::snprintf(detail_, sizeof detail_, "(plain packet %u)", packet.fence);
+            return;
+        }
         const Ring  &ring = ring_of(packet);
         const Batch &batch = ring.batches[static_cast<std::size_t>(packet.batch)];
         std::snprintf(detail_, sizeof detail_,
                       "(packet %u of kind %d, batch %llu [%llu,%llu), ring tail %llu head %llu completed %llu, waited %llu ms, "
-                      "%u timers armed)",
+                      "awaits %llu, early %d)",
                       packet.fence, static_cast<int>(packet.kind), static_cast<unsigned long long>(batch.fence),
                       static_cast<unsigned long long>(batch.begin), static_cast<unsigned long long>(batch.end),
                       static_cast<unsigned long long>(ring.tail), static_cast<unsigned long long>(ring.head),
                       static_cast<unsigned long long>(ring.completed),
                       static_cast<unsigned long long>((platform_.interrupt_time() - packet.at) / millisecond),
-                      platform_.armed_timers());
+                      static_cast<unsigned long long>(packet.awaits), packet.early ? 1 : 0);
     }
 
     std::uint8_t *ring_bytes(const Ring &ring) const
@@ -551,8 +622,15 @@ private:
     bool satisfied(const Packet &packet)
     {
         if (packet.kind == Kind::plain) return true;
-        const Ring &ring = ring_of(packet);
-        return ring.completed >= ring.batches[static_cast<std::size_t>(packet.batch)].fence;
+        return ring_of(packet).completed >= packet.awaits;
+    }
+
+    std::uint64_t published_fence(const Ring &ring) const
+    {
+        std::uint64_t fence = 0u;
+        for (const Batch &batch : ring.batches)
+            if (batch.end <= ring.tail && batch.fence > fence) fence = batch.fence;
+        return fence;
     }
 
     bool owner_gone(const Packet &packet)
@@ -564,23 +642,7 @@ private:
 
     bool excused(const Packet &packet)
     {
-        return owner_gone(packet) || platform_.interrupt_time() - packet.at >= av::ExecutionNode::park_deadline;
-    }
-
-    bool waits_on_held(const Packet &packet)
-    {
-        if (packet.kind == Kind::plain || owner_gone(packet)) return false;
-        const Ring &ring = ring_of(packet);
-        return ring.tail < ring.batches[static_cast<std::size_t>(packet.batch)].end;
-    }
-
-    bool holds_nothing(const Packet &packet)
-    {
-        if (packet.kind == Kind::plain || owner_gone(packet)) return true;
-        const Ring &ring = ring_of(packet);
-        for (const Batch &batch : ring.batches)
-            if (batch.delivered && ring.tail < batch.end) return false;
-        return true;
+        return owner_gone(packet) || platform_.interrupt_time() - packet.at >= av::ExecutionNode::overdue_after;
     }
 
     void maybe_run_dpc()
@@ -601,16 +663,11 @@ private:
         adapter_.dpc_routine();
         platform_.set_irql(av::Irql::passive);
         observe_rings();
-        bool blocked = false;
-        for (const Packet &packet : unreported_) {
-            if (waits_on_held(packet)) {
-                blocked = true;
-                coverage_.parked++;
-                continue;
-            }
-            if (blocked && satisfied(packet) && holds_nothing(packet) && !owner_gone(packet))
-                return static_cast<void>(
-                    fail("a finished packet of an owner holding nothing waits behind another owner's held batch"));
+        if (preempting_ || unreported_.empty()) return;
+        const Packet &head = unreported_.front();
+        if (satisfied(head) || owner_gone(head)) {
+            describe(head);
+            fail("a packet waits on the node though the host ran every batch its ring had published for it");
         }
     }
 
@@ -626,7 +683,8 @@ private:
                 if (!boundary || tail > ring.written)
                     return static_cast<void>(fail("a ring's tail was published inside or past its batches"));
                 for (const Batch &batch : ring.batches)
-                    if (!batch.delivered && batch.end > ring.tail && batch.end <= tail) coverage_.forced++;
+                    if (!batch.delivered && batch.end > ring.tail && batch.end <= tail)
+                        return static_cast<void>(fail("a ring published a batch that no packet released"));
                 ring.tail = tail;
             }
             const std::uint8_t *const bytes = ring_bytes(ring);
@@ -641,11 +699,10 @@ private:
     void check_step()
     {
         observe_rings();
-        const std::uint64_t now = platform_.interrupt_time();
         for (const Packet &packet : unreported_)
-            if (waits_on_held(packet) && now - packet.at > av::ExecutionNode::park_deadline + timer_slack) {
+            if (packet.kind != Kind::plain && !owner_gone(packet) && packet.awaits > published_fence(ring_of(packet))) {
                 describe(packet);
-                return static_cast<void>(fail("a parked packet outlived its deadline"));
+                return static_cast<void>(fail("a packet waits on the node for a batch its ring has not published"));
             }
         if (platform_.unclaimed_violations() != 0u) fail("the driver broke a platform rule");
         if (!adapter_.invariants_hold()) fail("the adapter's invariants broke");
@@ -735,7 +792,7 @@ private:
         }
     }
 
-    void create_ring(std::uint32_t process, bool by_packet)
+    void create_ring(std::uint32_t process, bool by_packet, std::uint32_t route_count = 0u)
     {
         const av::AllocationDescriptor descriptor(av::AllocationKind::context_ring, true, av::SurfaceLayout(), 0x1000u,
                                                   av::ScanoutTarget());
@@ -769,7 +826,7 @@ private:
         rings_.back().context = add_context(process, handle, Kind::av, ring);
         write_fence(rings_.back(), 0u);
         if (!by_packet) return;
-        const std::uint32_t routes = 1u + random_.below(3u);
+        const std::uint32_t routes = route_count != 0u ? route_count : 1u + random_.below(3u);
         for (std::uint32_t route = 0u; route < routes; route++) {
             void *const plain = create_kernel_context(processes_[process], nullptr, 0u);
             if (plain == nullptr) return static_cast<void>(fail("a release route was refused"));
@@ -818,7 +875,7 @@ private:
         if (ring.by_packet) ring.last_writer = writer;
         KernelContext &queued = contexts_[static_cast<std::size_t>(context)];
         queued.queue.push_back(Packet{ring.by_packet ? Kind::route : Kind::av, context, picked,
-                                      static_cast<std::int32_t>(ring.batches.size() - 1u), 0u, 0u});
+                                      static_cast<std::int32_t>(ring.batches.size() - 1u), 0u, 0u, 0u, false});
         if (ring.by_packet && random_.chance(35u)) queued.blocked_until = step_ + 3u + random_.below(60u);
     }
 
@@ -829,7 +886,7 @@ private:
             if (contexts_[index].live && contexts_[index].kind == Kind::plain) plain.push_back(static_cast<std::int32_t>(index));
         if (plain.empty()) return;
         const std::int32_t context = plain[random_.below(static_cast<std::uint32_t>(plain.size()))];
-        contexts_[static_cast<std::size_t>(context)].queue.push_back(Packet{Kind::plain, context, -1, -1, 0u, 0u});
+        contexts_[static_cast<std::size_t>(context)].queue.push_back(Packet{Kind::plain, context, -1, -1, 0u, 0u, 0u, false});
     }
 
     void submit_one()
@@ -875,9 +932,19 @@ private:
         request.DmaBufferPrivateDataSize = size;
         request.SubmissionFenceId = packet.fence;
         unreported_.push_back(packet);
+        const std::size_t   queued = unreported_.size() - 1u;
         const std::uint32_t status = nt(adapter_.submit_command_virtual(&request));
         if (status == success) {
-            if (packet.kind != Kind::plain) ring_of(packet).batches[static_cast<std::size_t>(packet.batch)].delivered = true;
+            if (packet.kind == Kind::plain) return;
+            Ring &ring = ring_of(packet);
+            ring.batches[static_cast<std::size_t>(packet.batch)].delivered = true;
+            observe_rings();
+            if (queued >= unreported_.size() || unreported_[queued].fence != packet.fence) return;
+            const Batch &batch = ring.batches[static_cast<std::size_t>(packet.batch)];
+            Packet      &sent = unreported_[queued];
+            sent.early = ring.tail < batch.end;
+            sent.awaits = sent.early ? published_fence(ring) : batch.fence;
+            if (sent.early) coverage_.early++;
             return;
         }
         for (auto at = unreported_.begin(); at != unreported_.end(); ++at)
@@ -935,11 +1002,7 @@ private:
         const std::uint32_t chunks = 20u + random_.below(200u);
         for (std::uint32_t chunk = 0u; chunk < chunks && !failed(); chunk++) {
             platform_.advance_time(10u * millisecond);
-            static_cast<void>(platform_.fire_due_timers());
-            if (dxgkrnl_.dpcs_queued() != dpcs_run_) {
-                coverage_.timer_dpcs++;
-                run_dpc();
-            }
+            if (dxgkrnl_.dpcs_queued() != dpcs_run_) run_dpc();
             if (!failed()) check_step();
         }
     }
@@ -1074,7 +1137,6 @@ private:
         draining_ = true;
         for (std::uint32_t round = 0u; round < 4000u && !failed() && !settled(); round++) {
             platform_.advance_time(millisecond);
-            static_cast<void>(platform_.fire_due_timers());
             submit_one();
             host_step();
             if (dxgkrnl_.dpcs_queued() != dpcs_run_) run_dpc();
@@ -1111,7 +1173,6 @@ private:
         if (probe.bound_av_contexts() != 0u || probe.live_contexts() != 0u || probe.live_devices() != 0u ||
             probe.pending_packets() != 0u)
             return static_cast<void>(fail("the kernel tables are not empty after everything was destroyed"));
-        if (platform_.armed_timers() != 0u) return static_cast<void>(fail("a park timer is still armed"));
         if (platform_.unclaimed_violations() != 0u) fail("the driver broke a platform rule");
     }
 
@@ -1160,13 +1221,23 @@ TEST(adapter_scheduling, seeded_interleavings_of_processes_contexts_and_a_slow_d
     }
     if (only != nullptr) return;
     CHECK(coverage.packets > 10000u);
-    CHECK(coverage.parked > 0u);
-    CHECK(coverage.forced > 0u);
+    CHECK(coverage.early > 0u);
     CHECK(coverage.let_go > 0u);
     CHECK(coverage.returned > 0u);
     CHECK(coverage.saturated_teardowns > 0u);
-    CHECK(coverage.timer_dpcs > 0u);
     CHECK(coverage.losses > 0u);
+}
+
+TEST(adapter_scheduling, presenters_on_the_display_less_adapter_whose_render_release_comes_before_the_copy_ahead_of_it_hold_no_one_on_the_node)
+{
+    Coverage    coverage;
+    auto *const model = new SchedulingModel(3u, coverage);
+    if (!model->cross_adapter_presents(4u, 64u))
+        ::av::TestRegistry::instance().record_failure(__FILE__, __LINE__, "frame %u: %s %s", model->failed_step(),
+                                                      model->failure(), model->detail());
+    delete model;
+    CHECK_EQ(coverage.frames, 64u);
+    CHECK(coverage.early >= 64u * 4u);
 }
 
 TEST(adapter_scheduling, av_contexts_made_and_torn_down_four_times_past_the_doorbells_with_a_slow_device_and_a_full_control_queue_leave_nothing)

@@ -173,6 +173,7 @@ struct AdapterProbe {
         PresentQueueProbe::put_payload(adapter.presents_.object(), 0u, payload);
     }
     void stop_device_object() { static_cast<void>(adapter.device_.object().stop()); }
+    std::uint32_t pending_packets() { return adapter.node_.pending(); }
     bool window_offered() const { return adapter.window_.offered(); }
     std::uint64_t scanout(std::uint32_t source) { return adapter.sources_.scanout_address(source); }
     void         *primary(std::uint32_t source) { return adapter.sources_.primary(source); }
@@ -3532,7 +3533,7 @@ TEST(adapter_escape, the_trace_escape_answers_the_state_of_the_adapter_without_a
       "adapter/0/context_table/0 busy=false live=0\n"
       "adapter/0/hw_queue_table/0 busy=false live=0\n"
       "adapter/0/execution_node/0 busy=false pending=0 last_submitted=0 last_completed=0"
-      " preemption_requested=false preemption_fence=0 stopped=false progress_time=0 preempted=0 parked=0\n"
+      " preemption_requested=false preemption_fence=0 stopped=false progress_time=0 preempted=0\n"
       "adapter/0/present_waiters/0 busy=false waiting=0 waits=0 timeouts=0\n"
       "adapter/0/av_context_table/0 busy=false bound=0\n"
       "adapter/0/display_sources/0 count=1 vsync=false\n"
@@ -5752,15 +5753,15 @@ TEST(adapter_dpc_routine, lets_a_follower_go_once_it_has_waited_the_deadline)
   CHECK_STATUS(av::FollowRecord(process.ring().kmt_handle(), 1u).encode(follow, sizeof follow), av::Status::ok);
   CHECK_EQ(submit_packet(fixture, queue.hContext, 8u, follow, sizeof follow), success);
   const std::uint32_t before = fixture.dxgkrnl().interrupts();
-  fixture.platform().advance_time(av::ExecutionNode::park_deadline - 1u);
+  fixture.platform().advance_time(av::ExecutionNode::overdue_after - 1u);
   run_dpc(fixture);
   CHECK_EQ(fixture.dxgkrnl().interrupts(), before);
-  CHECK(!fixture.platform().logged_line("a held packet passed its deadline"));
+  CHECK(!fixture.platform().logged_line("passed its deadline and was let go"));
   fixture.platform().advance_time(1u);
   run_dpc(fixture);
   CHECK_EQ(fixture.dxgkrnl().interrupts(), before + 2u);
   CHECK_EQ(fixture.dxgkrnl().interrupt(before + 1u).FenceId, 8u);
-  CHECK(fixture.platform().logged_line("avgpu: a held packet passed its deadline and was let go"));
+  CHECK(fixture.platform().logged_line("avgpu: a packet whose batch the host had not finished passed its deadline and was let go"));
   CHECK_EQ(nt(fixture.adapter().destroy_context(queue.hContext)), success);
   CHECK_EQ(nt(fixture.adapter().destroy_context(context.hContext)), success);
   CHECK_EQ(nt(fixture.adapter().destroy_device(process.device())), success); }
@@ -5836,92 +5837,7 @@ void spend_log_budget(Fixture &fixture) { AdapterProbe(fixture.adapter()).spend_
 
 }
 
-TEST(adapter_dpc_routine, a_release_held_past_the_deadline_lets_its_packet_go_and_publishes_when_its_predecessor_comes)
-{ Fixture fixture; av::FakeHandleTable handles;
-  fixture.function().add_doorbell_region();
-  CHECK_EQ(fixture.start(), success);
-  AvProcess process(fixture, handles);
-  AvProcess other(fixture, handles);
-  av::DxgkargCreateContextRecord context = {};
-  CHECK_EQ(process.create_context(context), success);
-  av::DxgkargCreateContextRecord neighbour = {};
-  CHECK_EQ(other.create_context(neighbour), success);
-  av::DxgkargCreateContextRecord queue = {};
-  queue.Flags = 0x4u;
-  CHECK_EQ(nt(fixture.adapter().create_context(process.device(), &queue)), success);
-  av::DxgkargCreateContextRecord follower = {};
-  follower.Flags = 0x4u;
-  CHECK_EQ(nt(fixture.adapter().create_context(other.device(), &follower)), success);
-
-  std::uint8_t release[av::ReleaseRecord::encoded_size] = {};
-  CHECK_STATUS(av::ReleaseRecord(process.ring().kmt_handle(), av::SubmissionDescriptor(2u, 32u, 64u))
-                   .encode(release, sizeof release),
-               av::Status::ok);
-  CHECK_EQ(submit_packet(fixture, queue.hContext, 5u, release, sizeof release), success);
-  std::uint8_t follow[av::FollowRecord::encoded_size] = {};
-  CHECK_STATUS(av::FollowRecord(other.ring().kmt_handle(), 1u).encode(follow, sizeof follow), av::Status::ok);
-  CHECK_EQ(submit_packet(fixture, follower.hContext, 6u, follow, sizeof follow), success);
-
-  const std::uint32_t before = fixture.dxgkrnl().interrupts();
-  fixture.platform().advance_time(av::ExecutionNode::park_deadline);
-  run_dpc(fixture);
-  CHECK(fixture.platform().logged_line("avgpu: a held packet passed its deadline and was let go: adapter "));
-  CHECK(fixture.platform().logged_line(" batches_held 1"));
-  CHECK(!fixture.platform().logged_line("the context is lost"));
-  CHECK_EQ(fixture.dxgkrnl().interrupts(), before + 2u);
-  const std::uint32_t rings = fixture.function().doorbells().rings(0u);
-  CHECK_STATUS(av::ReleaseRecord(process.ring().kmt_handle(), av::SubmissionDescriptor(1u, 0u, 32u))
-                   .encode(release, sizeof release),
-               av::Status::ok);
-  CHECK_EQ(submit_packet(fixture, queue.hContext, 7u, release, sizeof release), success);
-  CHECK_EQ(fixture.function().doorbells().rings(0u), rings + 2u);
-  CHECK(!fixture.platform().logged_line("the context is lost"));
-  CHECK_EQ(submit_packet(fixture, follower.hContext, 8u, follow, sizeof follow), success);
-  CHECK(fixture.adapter().invariants_hold());
-  CHECK_EQ(nt(fixture.adapter().destroy_context(follower.hContext)), success);
-  CHECK_EQ(nt(fixture.adapter().destroy_context(queue.hContext)), success);
-  CHECK_EQ(nt(fixture.adapter().destroy_context(neighbour.hContext)), success);
-  CHECK_EQ(nt(fixture.adapter().destroy_context(context.hContext)), success);
-  CHECK_EQ(nt(fixture.adapter().destroy_device(other.device())), success);
-  CHECK_EQ(nt(fixture.adapter().destroy_device(process.device())), success); }
-
-TEST(adapter_dpc_routine, a_held_release_is_let_go_at_its_deadline_by_the_park_timer_with_no_other_dpc)
-{ Fixture fixture; av::FakeHandleTable handles;
-  fixture.function().add_doorbell_region();
-  CHECK_EQ(fixture.start(), success);
-  AvProcess process(fixture, handles);
-  av::DxgkargCreateContextRecord context = {};
-  CHECK_EQ(process.create_context(context), success);
-  av::DxgkargCreateContextRecord queue = {};
-  queue.Flags = 0x4u;
-  CHECK_EQ(nt(fixture.adapter().create_context(process.device(), &queue)), success);
-  CHECK_EQ(fixture.platform().armed_timers(), 0u);
-
-  std::uint8_t release[av::ReleaseRecord::encoded_size] = {};
-  CHECK_STATUS(av::ReleaseRecord(process.ring().kmt_handle(), av::SubmissionDescriptor(2u, 32u, 64u))
-                   .encode(release, sizeof release),
-               av::Status::ok);
-  CHECK_EQ(submit_packet(fixture, queue.hContext, 5u, release, sizeof release), success);
-  CHECK_EQ(fixture.platform().armed_timers(), 1u);
-  const std::uint32_t dpcs = fixture.dxgkrnl().dpcs_queued();
-  const std::uint32_t before = fixture.dxgkrnl().interrupts();
-  fixture.platform().advance_time(av::ExecutionNode::park_deadline - 1u);
-  CHECK_EQ(fixture.platform().fire_due_timers(), 0u);
-  CHECK_EQ(fixture.dxgkrnl().dpcs_queued(), dpcs);
-  fixture.platform().advance_time(1u);
-  CHECK_EQ(fixture.platform().fire_due_timers(), 1u);
-  CHECK_EQ(fixture.dxgkrnl().dpcs_queued(), dpcs + 1u);
-  run_dpc(fixture);
-  CHECK_EQ(fixture.dxgkrnl().interrupts(), before + 1u);
-  CHECK_EQ(fixture.dxgkrnl().interrupt(before).FenceId, 5u);
-  CHECK(fixture.platform().logged_line("avgpu: a held packet passed its deadline and was let go"));
-  CHECK_EQ(fixture.platform().armed_timers(), 0u);
-  CHECK(fixture.adapter().invariants_hold());
-  CHECK_EQ(nt(fixture.adapter().destroy_context(queue.hContext)), success);
-  CHECK_EQ(nt(fixture.adapter().destroy_context(context.hContext)), success);
-  CHECK_EQ(nt(fixture.adapter().destroy_device(process.device())), success); }
-
-TEST(adapter_submit_command_virtual, a_held_release_whose_predecessor_comes_cancels_the_park_timer)
+TEST(adapter_dpc_routine, a_release_that_arrives_before_the_batch_before_it_completes_at_once_and_publishes_when_its_predecessor_comes)
 { Fixture fixture; av::FakeHandleTable handles;
   fixture.function().add_doorbell_region();
   CHECK_EQ(fixture.start(), success);
@@ -5935,20 +5851,75 @@ TEST(adapter_submit_command_virtual, a_held_release_whose_predecessor_comes_canc
   second.Flags = 0x4u;
   CHECK_EQ(nt(fixture.adapter().create_context(process.device(), &second)), success);
 
-  std::uint8_t later[av::ReleaseRecord::encoded_size] = {};
+  const std::uint32_t rings = fixture.function().doorbells().rings(0u);
+  const std::uint32_t dpcs = fixture.dxgkrnl().dpcs_queued();
+  const std::uint32_t before = fixture.dxgkrnl().interrupts();
+  std::uint8_t        later[av::ReleaseRecord::encoded_size] = {};
   CHECK_STATUS(av::ReleaseRecord(process.ring().kmt_handle(), av::SubmissionDescriptor(2u, 32u, 64u))
                    .encode(later, sizeof later),
                av::Status::ok);
   CHECK_EQ(submit_packet(fixture, second.hContext, 5u, later, sizeof later), success);
-  CHECK_EQ(fixture.platform().armed_timers(), 1u);
+  CHECK(fixture.dxgkrnl().dpcs_queued() > dpcs);
+  run_dpc(fixture);
+  CHECK_EQ(fixture.dxgkrnl().interrupts(), before + 1u);
+  CHECK_EQ(fixture.dxgkrnl().interrupt(before).FenceId, 5u);
+  CHECK_EQ(fixture.function().doorbells().rings(0u), rings);
+  CHECK_EQ(AdapterProbe(fixture.adapter()).pending_packets(), 0u);
+
   std::uint8_t earlier[av::ReleaseRecord::encoded_size] = {};
   CHECK_STATUS(av::ReleaseRecord(process.ring().kmt_handle(), av::SubmissionDescriptor(1u, 0u, 32u))
                    .encode(earlier, sizeof earlier),
                av::Status::ok);
   CHECK_EQ(submit_packet(fixture, first.hContext, 6u, earlier, sizeof earlier), success);
-  CHECK_EQ(fixture.platform().armed_timers(), 0u);
-  fixture.platform().advance_time(2u * av::ExecutionNode::park_deadline);
-  CHECK_EQ(fixture.platform().fire_due_timers(), 0u);
+  CHECK_EQ(fixture.function().doorbells().rings(0u), rings + 2u);
+  run_dpc(fixture);
+  CHECK_EQ(fixture.dxgkrnl().interrupts(), before + 1u);
+  process.host_completes(1u);
+  run_dpc(fixture);
+  CHECK_EQ(fixture.dxgkrnl().interrupts(), before + 2u);
+  CHECK_EQ(fixture.dxgkrnl().interrupt(before + 1u).FenceId, 6u);
+  CHECK(!fixture.platform().logged_line("the context is lost"));
+  CHECK(!fixture.platform().logged_line("passed its deadline and was let go"));
+  CHECK(fixture.adapter().invariants_hold());
+  CHECK_EQ(nt(fixture.adapter().destroy_context(second.hContext)), success);
+  CHECK_EQ(nt(fixture.adapter().destroy_context(first.hContext)), success);
+  CHECK_EQ(nt(fixture.adapter().destroy_context(context.hContext)), success);
+  CHECK_EQ(nt(fixture.adapter().destroy_device(process.device())), success); }
+
+TEST(adapter_submit_command_virtual, a_follow_waits_only_for_the_batches_its_ring_has_published)
+{ Fixture fixture; av::FakeHandleTable handles;
+  fixture.function().add_doorbell_region();
+  CHECK_EQ(fixture.start(), success);
+  AvProcess process(fixture, handles);
+  av::DxgkargCreateContextRecord context = {};
+  CHECK_EQ(process.create_context(context), success);
+  av::DxgkargCreateContextRecord first = {};
+  first.Flags = 0x4u;
+  CHECK_EQ(nt(fixture.adapter().create_context(process.device(), &first)), success);
+  av::DxgkargCreateContextRecord second = {};
+  second.Flags = 0x4u;
+  CHECK_EQ(nt(fixture.adapter().create_context(process.device(), &second)), success);
+
+  std::uint8_t opening[av::ReleaseRecord::encoded_size] = {};
+  CHECK_STATUS(av::ReleaseRecord(process.ring().kmt_handle(), av::SubmissionDescriptor(1u, 0u, 32u))
+                   .encode(opening, sizeof opening),
+               av::Status::ok);
+  CHECK_EQ(submit_packet(fixture, first.hContext, 5u, opening, sizeof opening), success);
+  std::uint8_t later[av::ReleaseRecord::encoded_size] = {};
+  CHECK_STATUS(av::ReleaseRecord(process.ring().kmt_handle(), av::SubmissionDescriptor(3u, 64u, 96u))
+                   .encode(later, sizeof later),
+               av::Status::ok);
+  CHECK_EQ(submit_packet(fixture, second.hContext, 6u, later, sizeof later), success);
+  std::uint8_t follow[av::FollowRecord::encoded_size] = {};
+  CHECK_STATUS(av::FollowRecord(process.ring().kmt_handle(), 3u).encode(follow, sizeof follow), av::Status::ok);
+  CHECK_EQ(submit_packet(fixture, second.hContext, 7u, follow, sizeof follow), success);
+  const std::uint32_t before = fixture.dxgkrnl().interrupts();
+  run_dpc(fixture);
+  CHECK_EQ(fixture.dxgkrnl().interrupts(), before);
+  process.host_completes(1u);
+  run_dpc(fixture);
+  CHECK_EQ(fixture.dxgkrnl().interrupts(), before + 3u);
+  CHECK_EQ(fixture.dxgkrnl().interrupt(before + 2u).FenceId, 7u);
   CHECK(fixture.adapter().invariants_hold());
   CHECK_EQ(nt(fixture.adapter().destroy_context(second.hContext)), success);
   CHECK_EQ(nt(fixture.adapter().destroy_context(first.hContext)), success);
@@ -5996,36 +5967,32 @@ TEST(adapter_dpc_routine, two_routes_of_one_ring_released_out_of_order_do_not_ke
   CHECK_EQ(third.submit(third_context.hContext, 6u, av::SubmissionDescriptor(1u, 0u, 32u)), success);
   const std::uint32_t before = fixture.dxgkrnl().interrupts();
   run_dpc(fixture);
-  CHECK_EQ(fixture.dxgkrnl().interrupts(), before);
-  CHECK_EQ(fixture.function().doorbells().rings(0u), rings);
+  CHECK_EQ(fixture.dxgkrnl().interrupts(), before + 1u);
+  CHECK_EQ(fixture.dxgkrnl().interrupt(before).FenceId, 5u);
 
   third.host_completes(1u);
   run_dpc(fixture);
-  CHECK_EQ(fixture.function().doorbells().rings(0u), rings + 1u);
-  CHECK(fixture.platform().logged_line("avgpu: held batches were published so a finished packet behind them is not kept waiting"));
-  CHECK(fixture.platform().logged_line(" batches 1"));
-  CHECK_EQ(fixture.platform().armed_timers(), 0u);
-  CHECK_EQ(fixture.dxgkrnl().interrupts(), before);
-  process.host_completes(2u);
-  run_dpc(fixture);
   CHECK_EQ(fixture.dxgkrnl().interrupts(), before + 2u);
-  CHECK_EQ(fixture.dxgkrnl().interrupt(before).FenceId, 5u);
   CHECK_EQ(fixture.dxgkrnl().interrupt(before + 1u).FenceId, 6u);
+  CHECK_EQ(fixture.function().doorbells().rings(0u), rings);
 
   std::uint8_t earlier[av::ReleaseRecord::encoded_size] = {};
   CHECK_STATUS(av::ReleaseRecord(process.ring().kmt_handle(), av::SubmissionDescriptor(1u, 0u, 32u), 1u, 0u)
                    .encode(earlier, sizeof earlier),
                av::Status::ok);
   CHECK_EQ(submit_packet(fixture, first.hContext, 7u, earlier, sizeof earlier), success);
+  CHECK_EQ(fixture.function().doorbells().rings(0u), rings + 2u);
   CHECK_EQ(third.submit(third_context.hContext, 8u, av::SubmissionDescriptor(2u, 32u, 64u)), success);
   third.host_completes(2u);
+  run_dpc(fixture);
+  CHECK_EQ(fixture.dxgkrnl().interrupts(), before + 2u);
+  process.host_completes(2u);
   run_dpc(fixture);
   CHECK_EQ(fixture.dxgkrnl().interrupts(), before + 4u);
   CHECK_EQ(fixture.dxgkrnl().interrupt(before + 2u).FenceId, 7u);
   CHECK_EQ(fixture.dxgkrnl().interrupt(before + 3u).FenceId, 8u);
-  CHECK_EQ(fixture.function().doorbells().rings(0u), rings + 1u);
   CHECK(!fixture.platform().logged_line("the context is lost"));
-  CHECK(!fixture.platform().logged_line("a held packet passed its deadline"));
+  CHECK(!fixture.platform().logged_line("passed its deadline and was let go"));
   CHECK(fixture.adapter().invariants_hold());
   CHECK_EQ(nt(fixture.adapter().destroy_context(second.hContext)), success);
   CHECK_EQ(nt(fixture.adapter().destroy_context(first.hContext)), success);
@@ -6066,8 +6033,6 @@ TEST(adapter_dpc_routine, a_held_release_with_nothing_finished_behind_it_stays_h
                av::Status::ok);
   CHECK_EQ(submit_packet(fixture, first.hContext, 7u, earlier, sizeof earlier), success);
   CHECK_EQ(fixture.function().doorbells().rings(0u), rings + 2u);
-  CHECK(!fixture.platform().logged_line("held batches were published"));
-  CHECK_EQ(fixture.platform().armed_timers(), 0u);
   CHECK(fixture.adapter().invariants_hold());
   CHECK_EQ(nt(fixture.adapter().destroy_context(second.hContext)), success);
   CHECK_EQ(nt(fixture.adapter().destroy_context(first.hContext)), success);
@@ -6257,11 +6222,11 @@ TEST(adapter_destroy_context, a_context_unbound_while_packets_wait_on_it_finishe
   CHECK_EQ(nt(fixture.adapter().create_context(process.device(), &device)), success);
 
   std::uint8_t release[av::ReleaseRecord::encoded_size] = {};
-  CHECK_STATUS(av::ReleaseRecord(process.ring().kmt_handle(), av::SubmissionDescriptor(2u, 32u, 64u))
+  CHECK_STATUS(av::ReleaseRecord(process.ring().kmt_handle(), av::SubmissionDescriptor(1u, 0u, 32u))
                    .encode(release, sizeof release),
                av::Status::ok);
   std::uint8_t follow[av::FollowRecord::encoded_size] = {};
-  CHECK_STATUS(av::FollowRecord(process.ring().kmt_handle(), 2u).encode(follow, sizeof follow), av::Status::ok);
+  CHECK_STATUS(av::FollowRecord(process.ring().kmt_handle(), 1u).encode(follow, sizeof follow), av::Status::ok);
   CHECK_EQ(submit_packet(fixture, device.hContext, 5u, release, sizeof release), success);
   CHECK_EQ(submit_packet(fixture, device.hContext, 6u, follow, sizeof follow), success);
   CHECK_EQ(other.submit(neighbour.hContext, 7u, av::SubmissionDescriptor(1u, 0u, 32u)), success);
@@ -6276,7 +6241,7 @@ TEST(adapter_destroy_context, a_context_unbound_while_packets_wait_on_it_finishe
   run_dpc(fixture);
   CHECK_EQ(fixture.dxgkrnl().interrupts(), before + 3u);
   CHECK_EQ(fixture.dxgkrnl().interrupt(before + 2u).FenceId, 7u);
-  CHECK(!fixture.platform().logged_line("a held packet passed its deadline"));
+  CHECK(!fixture.platform().logged_line("passed its deadline and was let go"));
 
   CHECK_EQ(submit_packet(fixture, device.hContext, 8u, follow, sizeof follow), success);
   run_dpc(fixture);
@@ -6304,7 +6269,7 @@ TEST(adapter_dpc_routine, a_deadline_passed_with_the_log_budget_spent_is_let_go_
   CHECK_STATUS(av::FollowRecord(process.ring().kmt_handle(), 1u).encode(follow, sizeof follow), av::Status::ok);
   CHECK_EQ(submit_packet(fixture, queue.hContext, 8u, follow, sizeof follow), success);
   const std::uint32_t before = fixture.dxgkrnl().interrupts();
-  fixture.platform().advance_time(av::ExecutionNode::park_deadline);
+  fixture.platform().advance_time(av::ExecutionNode::overdue_after);
   spend_log_budget(fixture);
   const std::uint32_t logged_before = fixture.platform().logged();
   run_dpc(fixture);

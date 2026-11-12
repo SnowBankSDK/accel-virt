@@ -176,27 +176,21 @@ TEST(release_queue, a_writer_never_seen_or_pushed_out_of_a_full_table_is_never_t
   CHECK(queue.arrive(batch(4u, 192u, 256u), 0u, 99u) == ReleaseQueue::Turn::held);
   CHECK(!queue.stranded()); }
 
-TEST(release_queue_next_forced, takes_the_held_batches_in_ring_order_each_widened_back_to_where_the_order_stands)
+TEST(release_queue_awaitable, a_fence_past_what_the_ring_has_published_is_awaited_only_as_far_as_the_ring_has_published)
 { ReleaseQueue queue;
-  SubmissionDescriptor next;
-  CHECK(!queue.next_forced(next));
+  CHECK_EQ(queue.awaitable(7u), 7u);
+  CHECK(queue.arrive(batch(2u, 32u, 64u), 0u, 0u) == ReleaseQueue::Turn::held);
+  CHECK_EQ(queue.awaitable(2u), 0u);
   CHECK(queue.arrive(batch(1u, 0u, 32u), 0u, 0u) == ReleaseQueue::Turn::release_now);
   queue.released(batch(1u, 0u, 32u));
-  CHECK(queue.arrive(batch(5u, 160u, 192u), 0u, 0u) == ReleaseQueue::Turn::held);
-  CHECK(queue.arrive(batch(3u, 64u, 96u), 0u, 0u) == ReleaseQueue::Turn::held);
-  CHECK(queue.next_forced(next));
-  CHECK_EQ(next.fence_id(), 3u);
-  CHECK_EQ(next.begin(), 32u);
-  CHECK_EQ(next.end(), 96u);
+  CHECK_EQ(queue.awaitable(1u), 1u);
+  CHECK_EQ(queue.awaitable(2u), 1u);
+  SubmissionDescriptor next;
+  CHECK(queue.next_held(next));
   queue.released(next);
-  CHECK(queue.next_forced(next));
-  CHECK_EQ(next.fence_id(), 5u);
-  CHECK_EQ(next.begin(), 96u);
-  CHECK_EQ(next.end(), 192u);
-  queue.released(next);
-  CHECK(!queue.next_forced(next));
-  CHECK_EQ(queue.held(), 0u);
-  CHECK_EQ(queue.next(), 192u);
-  CHECK(queue.arrive(batch(2u, 32u, 64u), 0u, 0u) == ReleaseQueue::Turn::released_already);
-  CHECK(queue.arrive(batch(4u, 96u, 160u), 0u, 0u) == ReleaseQueue::Turn::released_already);
-  CHECK(queue.arrive(batch(6u, 192u, 224u), 0u, 0u) == ReleaseQueue::Turn::release_now); }
+  CHECK_EQ(queue.awaitable(2u), 2u);
+  CHECK(queue.arrive(batch(4u, 96u, 128u), 0u, 0u) == ReleaseQueue::Turn::held);
+  CHECK_EQ(queue.awaitable(4u), 2u);
+  CHECK_EQ(queue.awaitable(1u), 1u);
+  queue.clear();
+  CHECK_EQ(queue.awaitable(4u), 4u); }
