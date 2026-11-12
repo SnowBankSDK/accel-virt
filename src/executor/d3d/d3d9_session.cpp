@@ -146,9 +146,7 @@ bool D3d9Session::on_Flush9()
 bool D3d9Session::on_SelectDevice9(uint32_t device)
 {
     AV_SCOPE("D3d9Session::on_SelectDevice9");
-    if (devices_.find(device) == nullptr) return false;
-    static_cast<void>(devices_.select(device));
-    return true;
+    return devices_.select(device) != nullptr;
 }
 
 bool D3d9Session::on_Finish9(uint32_t &hresult)

@@ -1345,3 +1345,81 @@ TEST(d3d9_session_device, a_device_the_host_has_no_room_for_is_refused_and_the_s
     CHECK_EQ(pixels.at(size / 2u, size / 2u), blue);
     backend.shut_down();
 }
+
+TEST(d3d9_session_device, a_second_device_whose_create_extends_the_lease_leaves_the_first_drawing)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice *device11 = nullptr;
+    av::D3d9HostDevice  *device9 = nullptr;
+    if (!host_devices(apis, device11, device9)) return;
+    const std::uint32_t index = gpu_of(apis, device9);
+    if (apis.vram_ledger(index) == nullptr) return;
+    av::D3dBackend    backend(rig.log);
+    av::SessionShares unshared;
+    CHECK(backend.initialize(unshared, rig.imports, device11, nullptr, nullptr, device9));
+    av::D3dLoopback wire(backend, rig.imports);
+    const std::uint64_t target_bytes = av::ResourceFootprint(format_a8r8g8b8, size, size, 1u, 1u, 1u, 0u).bytes();
+    constexpr std::uint64_t room = std::uint64_t{96} << 20u;
+    av::LeaseRig lease(apis.vram_ledger(index), apis.host_ram_ledger(), room, av::LeaseRecord::direct3d_initial_bytes);
+    backend.lease_from(&lease.host());
+
+    std::uint32_t hresult = 1u;
+    CHECK(lease.admit(av::ResourceFootprint::direct3d9_device_bytes));
+    CHECK(av_d3d9_CreateDevice9(wire, device, 0u, &hresult));
+    CHECK_EQ(hresult, 0u);
+    CHECK(lease.admit(target_bytes));
+    CHECK(av_d3d9_CreateSurface9(wire, target, kind_render_target, size, size, format_a8r8g8b8, 0u, 0u, 0u));
+    CHECK(av_d3d9_SetRenderTarget9(wire, 0u, target, 0u));
+    CHECK(av_d3d9_Clear9(wire, 0u, nullptr, clear_target, red, 1.0f, 0u));
+
+    const std::uint64_t extended = lease.guest().extensions();
+    CHECK(av_d3d9_SelectDevice9(wire, other_device));
+    CHECK(lease.admit(av::ResourceFootprint::direct3d9_device_bytes));
+    CHECK(lease.guest().extensions() > extended);
+    hresult = 1u;
+    CHECK(av_d3d9_CreateDevice9(wire, other_device, 0u, &hresult));
+    CHECK_EQ(hresult, 0u);
+    CHECK(lease.admit(target_bytes));
+    CHECK(av_d3d9_CreateSurface9(wire, other_target, kind_render_target, size, size, format_a8r8g8b8, 0u, 0u, 0u));
+    CHECK(av_d3d9_SetRenderTarget9(wire, 0u, other_target, 0u));
+    CHECK(av_d3d9_Clear9(wire, 0u, nullptr, clear_target, blue, 1.0f, 0u));
+    Pixels other;
+    CHECK(read(wire, other_target, other));
+    CHECK_EQ(other.hresult, 0u);
+    CHECK_EQ(other.at(size / 2u, size / 2u), blue);
+
+    CHECK(av_d3d9_SelectDevice9(wire, device));
+    CHECK(av_d3d9_Finish9(wire, &hresult));
+    CHECK_EQ(hresult, 0u);
+    Pixels first;
+    CHECK(read(wire, target, first));
+    CHECK_EQ(first.hresult, 0u);
+    CHECK_EQ(first.at(size / 2u, size / 2u), red);
+    const Rect corner = {0, 0, 4, 4};
+    CHECK(av_d3d9_Clear9(wire, 1u, &corner, clear_target, blue, 1.0f, 0u));
+    CHECK(read(wire, target, first));
+    CHECK_EQ(first.at(1u, 1u), blue);
+    CHECK_EQ(first.at(size / 2u, size / 2u), red);
+    CHECK_EQ(wire.refused(), 0u);
+
+    constexpr std::uint32_t never_made = 43u;
+    CHECK(av_d3d9_SelectDevice9(wire, never_made));
+    CHECK(av_d3d9_Clear9(wire, 0u, nullptr, clear_target, red, 1.0f, 0u));
+    CHECK(av_d3d9_SelectDevice9(wire, other_device));
+    CHECK(av_d3d9_Finish9(wire, &hresult));
+    CHECK_EQ(hresult, 0u);
+    CHECK(read(wire, other_target, other));
+    CHECK_EQ(other.at(size / 2u, size / 2u), blue);
+    CHECK_EQ(rig.sink.holding("SelectDevice9 refused; device 43 is removed"), 1u);
+    CHECK_EQ(rig.sink.holding("device 1 is removed"), 0u);
+
+    CHECK(av_d3d9_Destroy9(wire, other_target));
+    lease.credit(target_bytes);
+    CHECK(av_d3d9_Destroy9(wire, other_device));
+    lease.credit(av::ResourceFootprint::direct3d9_device_bytes);
+    CHECK(av_d3d9_SelectDevice9(wire, device));
+    CHECK(av_d3d9_Finish9(wire, &hresult));
+    CHECK_EQ(hresult, 0u);
+    backend.shut_down();
+}
