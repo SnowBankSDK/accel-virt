@@ -27,6 +27,7 @@
 namespace av {
 class BlockSource;
 class KeyedLog;
+class SurfaceLayout;
 }
 
 namespace av::d3d {
@@ -93,6 +94,8 @@ private:
                                               HeapRecord &heap, ResourceRecord *resource, D3D12DDI_HRTRESOURCE runtime);
     HRESULT                  open_existing(const D3D12DDIARG_OPENHEAP_0003 &args, HeapRecord &heap,
                                            ResourceRecord &resource);
+    HRESULT                  adopt_lent_image(const SurfaceLayout &surface, uint32_t format, uint64_t memory,
+                                              HeapRecord &heap, ResourceRecord &resource);
     HRESULT                  make_resource(const D3D12DDIARG_CREATERESOURCE_0109 &args, const D3D12DDI_CLEAR_VALUES *clear,
                                            HeapRecord &heap, uint64_t offset, ResourceRecord &resource);
     void                     record_resource(const d3d12proto::ResourceDesc &desc, ResourceRecord &resource);

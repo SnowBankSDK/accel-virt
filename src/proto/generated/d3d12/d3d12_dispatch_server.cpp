@@ -315,6 +315,26 @@ static bool decode_OpenObject12(ServerDispatch& s, ::av::WireReader& r, ::av::Wi
     return true;
 }
 
+static bool decode_AdoptLentImage12(ServerDispatch& s, ::av::WireReader& r, ::av::WireWriter& reply, ::av::WireArena& arena) {
+    AV_SCOPE("server:d3d12:AdoptLentImage12");
+    (void)s;
+    (void)reply;
+    (void)arena;
+    uint32_t resource{};
+    if (!r.read_pod(resource)) return false;
+    uint64_t memory{};
+    if (!r.read_pod(memory)) return false;
+    ResourceDesc desc{};
+    if (!r.read_pod(desc)) return false;
+    uint32_t row_pitch{};
+    if (!r.read_pod(row_pitch)) return false;
+    uint32_t hresult{};
+    if (r.remaining() != 0u) return false;
+    if (!s.on_AdoptLentImage12(resource, memory, desc, row_pitch, hresult)) return false;
+    reply.write_pod(hresult);
+    return true;
+}
+
 static bool decode_CreatePlacedResource12(ServerDispatch& s, ::av::WireReader& r, ::av::WireWriter& reply, ::av::WireArena& arena) {
     AV_SCOPE("server:d3d12:CreatePlacedResource12");
     (void)s;
@@ -2127,6 +2147,7 @@ bool knows_command(uint32_t cmd_id) {
         case kCmd_ShareResource12:
         case kCmd_ShareObject12:
         case kCmd_OpenObject12:
+        case kCmd_AdoptLentImage12:
         case kCmd_CreatePlacedResource12:
         case kCmd_CreateReservedResource12:
         case kCmd_ResourceTiling12:
@@ -2233,6 +2254,7 @@ bool dispatch_command(ServerDispatch& s, uint32_t cmd_id, ::av::WireReader& r,
         case kCmd_ShareResource12: return decode_ShareResource12(s, r, reply, arena);
         case kCmd_ShareObject12: return decode_ShareObject12(s, r, reply, arena);
         case kCmd_OpenObject12: return decode_OpenObject12(s, r, reply, arena);
+        case kCmd_AdoptLentImage12: return decode_AdoptLentImage12(s, r, reply, arena);
         case kCmd_CreatePlacedResource12: return decode_CreatePlacedResource12(s, r, reply, arena);
         case kCmd_CreateReservedResource12: return decode_CreateReservedResource12(s, r, reply, arena);
         case kCmd_ResourceTiling12: return decode_ResourceTiling12(s, r, reply, arena);

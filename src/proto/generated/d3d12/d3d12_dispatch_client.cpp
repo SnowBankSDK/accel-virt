@@ -277,6 +277,22 @@ bool av_d3d12_OpenObject12(::av::ClientTransport& t, uint32_t object, uint64_t k
     return r.remaining() == 0u;
 }
 
+bool av_d3d12_AdoptLentImage12(::av::ClientTransport& t, uint32_t resource, uint64_t memory, const ResourceDesc& desc, uint32_t row_pitch, uint32_t* hresult) {
+    AV_SCOPE("av_d3d12_AdoptLentImage12");
+    ::av::WireWriter b = t.request_writer();
+    b.write_pod<uint32_t>(resource);
+    b.write_pod<uint64_t>(memory);
+    b.write_pod(desc);
+    b.write_pod<uint32_t>(row_pitch);
+    const ::av::SyncCallScope call{t};
+    ::av::WireReader r{nullptr, 0u};
+    if (t.send_sync(kCmd_AdoptLentImage12, b, r) != ::av::TransportResult::ok) return false;
+    { uint32_t value{};
+      if (!r.read_pod(value)) return false;
+      if (hresult != nullptr) *hresult = value; }
+    return r.remaining() == 0u;
+}
+
 bool av_d3d12_CreatePlacedResource12(::av::ClientTransport& t, uint32_t resource, uint32_t heap, uint64_t offset, const ResourceDesc& desc, uint32_t state, const ClearValue& clear, uint64_t address) {
     AV_SCOPE("av_d3d12_CreatePlacedResource12");
     ::av::WireWriter b = t.request_writer();

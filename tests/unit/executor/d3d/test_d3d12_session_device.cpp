@@ -1349,6 +1349,74 @@ TEST(d3d12_session_device, a_texture_direct3d11_shares_opens_in_direct3d12_over_
     device11->retire_shares();
 }
 
+TEST(d3d12_session_device, rows_another_adapter_lends_become_an_image_whose_copies_land_in_the_lent_pages)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice *device11 = nullptr;
+    av::D3d12HostDevice *device12 = nullptr;
+    av::HostShares      *shares = nullptr;
+    av::HostMemorySource *source = nullptr;
+    if (!host_devices(apis, device11, device12, shares, source)) return;
+    av::D3dBackend    backend(rig.log);
+    av::SessionShares session;
+    CHECK(backend.initialize(*shared_as(session, shares, backend), rig.imports, device11, device12));
+    av::D3dLoopback wire(backend, rig.imports, source, region_bytes, lent_bytes);
+    make_frame(wire);
+    constexpr std::uint32_t lent_image = 80u;
+    constexpr std::uint32_t lent_pitch = 512u;
+    const std::uint64_t     lent = wire.open_memory(readback_memory, std::uint64_t{lent_pitch} * size);
+    CHECK(lent != 0u);
+    std::memset(wire.memory(lent), 0xcd, std::size_t{lent_pitch} * size);
+    ResourceDesc desc = {};
+    desc.dimension = dimension_texture2d;
+    desc.width = size;
+    desc.height = size;
+    desc.depth_or_array = 1u;
+    desc.mip_levels = 1u;
+    desc.format = format_b8g8r8a8;
+    desc.sample_count = 1u;
+    desc.layout = layout_row_major;
+    desc.flags = flag_render_target;
+    std::uint32_t hresult = 1u;
+    CHECK(av_d3d12_AdoptLentImage12(wire, lent_image, lent, desc, lent_pitch, &hresult));
+    CHECK_EQ(hresult, 0u);
+    std::uint32_t refused = 1u;
+    CHECK(av_d3d12_AdoptLentImage12(wire, lent_image + 1u, lent, desc, size * 2u, &refused));
+    CHECK_EQ(refused, 0x80070057u);
+    CHECK(av_d3d12_ClearRenderTargetView12(wire, list, DescriptorRef{rtv_heap, 0u}, Float4{{0.0f, 0.0f, 1.0f, 1.0f}},
+                                            0u, nullptr));
+    const Barrier into_copy[2] = {{0u, 0u, target, 0xffffffffu, state_render_target, state_copy_source, 0u, 0u},
+                                  {0u, 0u, lent_image, 0xffffffffu, 0u, state_copy_dest, 0u, 0u}};
+    CHECK(av_d3d12_ResourceBarrier12(wire, list, 2u, into_copy));
+    CHECK(av_d3d12_CopyResource12(wire, list, lent_image, target));
+    CHECK(av_d3d12_CloseCommandList12(wire, list));
+    const std::uint32_t lists[1] = {list};
+    CHECK(av_d3d12_ExecuteCommandLists12(wire, queue, 1u, lists));
+    std::uint32_t removed = 1u;
+    CHECK(av_d3d12_Finish12(wire, &removed));
+    CHECK_EQ(removed, 0u);
+    std::uint32_t wrong = 0u;
+    for (std::uint32_t y = 0u; y < size; y++)
+        for (std::uint32_t x = 0u; x < size; x++) {
+            std::uint32_t value = 0u;
+            std::memcpy(&value, wire.memory(lent, std::uint64_t{y} * lent_pitch + x * 4u), sizeof value);
+            if (value != 0xff0000ffu) wrong++;
+        }
+    CHECK_EQ(wrong, 0u);
+    std::uint32_t tail = 0u;
+    std::memcpy(&tail, wire.memory(lent, size * 4u), sizeof tail);
+    CHECK_EQ(tail, 0xcdcdcdcdu);
+    CHECK(av_d3d12_CreateCommittedResource12(wire, 81u, heap_of(heap_default), 0u, buffer_of(heap_bytes),
+                                              state_copy_dest, ClearValue{}, 0x900000000ull));
+    CHECK(av_d3d12_Destroy12(wire, lent_image));
+    CHECK(av_d3d12_Finish12(wire, &removed));
+    CHECK_EQ(removed, 0u);
+    CHECK_EQ(wire.refused(), 0u);
+    wire.close_memory(lent);
+    backend.shut_down();
+}
+
 TEST(d3d12_session_device, each_share_or_present_misuse_removes_a_healthy_device)
 {
     av::ExecutorLogRig rig;

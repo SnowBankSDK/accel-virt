@@ -567,6 +567,7 @@ HRESULT D3d12Device::open_existing(const D3D12DDIARG_OPENHEAP_0003 &args, HeapRe
         heap.address = 0u;
         return E_OUTOFMEMORY;
     }
+    if (!rows) return adopt_lent_image(surface, presented.dxgi(), lent->handle(), heap, resource);
     const HRESULT sent_heap = send_heap(heap, buffer_alignment);
     if (FAILED(sent_heap)) {
         release_heap_memory(heap);
@@ -585,13 +586,40 @@ HRESULT D3d12Device::open_existing(const D3D12DDIARG_OPENHEAP_0003 &args, HeapRe
     spanning.SampleDesc.Count = 1u;
     spanning.Layout = D3D12DDI_TL_ROW_MAJOR;
     spanning.Flags = D3D12DDI_RESOURCE_FLAG_0003_SHADER_RESOURCE;
-    const HRESULT made = make_resource(spanning, nullptr, heap, 0u, resource);
-    if (FAILED(made) || rows) return made;
-    resource.row_pitch = surface.pitch();
-    resource.surface_width = surface.width();
-    resource.surface_height = surface.height();
-    resource.surface_format = presented.dxgi();
-    return made;
+    return make_resource(spanning, nullptr, heap, 0u, resource);
+}
+
+HRESULT D3d12Device::adopt_lent_image(const SurfaceLayout &surface, uint32_t format, uint64_t memory, HeapRecord &heap,
+                                      ResourceRecord &resource)
+{
+    AV_SCOPE("D3d12Device::adopt_lent_image");
+    constexpr uint32_t texture2d = 3u;
+    constexpr uint32_t row_major = 1u;
+    d3d12proto::ResourceDesc desc = {};
+    desc.dimension = texture2d;
+    desc.width = surface.width();
+    desc.height = surface.height();
+    desc.depth_or_array = 1u;
+    desc.mip_levels = 1u;
+    desc.format = format;
+    desc.sample_count = 1u;
+    desc.layout = row_major;
+    desc.flags = allow_render_target | allow_cross_adapter;
+    record_resource(desc, resource);
+    uint32_t hresult = 1u;
+    if (!sent(d3d12proto::av_d3d12_AdoptLentImage12(wire(), resource.header.stamp.id(), memory, desc, surface.pitch(),
+                                                    &hresult),
+              "AdoptLentImage12") ||
+        hresult != 0u) {
+        if (hresult != 0u) lines_.write("the host made no image over the rows another adapter lent");
+        resource = ResourceRecord{};
+        release_heap_memory(heap);
+        addresses_.release(heap.address, heap.size);
+        heap = HeapRecord{};
+        return E_OUTOFMEMORY;
+    }
+    resource.placed_in = &heap;
+    return S_OK;
 }
 
 void D3d12Device::give_back(const ResourceRecord &resource)

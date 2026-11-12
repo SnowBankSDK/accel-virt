@@ -26,6 +26,7 @@ inline constexpr uint32_t kCmd_CreateHeapAsync12 = 0x00041107;
 inline constexpr uint32_t kCmd_CreateCommittedResourceAsync12 = 0x00041108;
 inline constexpr uint32_t kCmd_ShareObject12 = 0x00041109;
 inline constexpr uint32_t kCmd_OpenObject12 = 0x0004110a;
+inline constexpr uint32_t kCmd_AdoptLentImage12 = 0x0004110b;
 inline constexpr uint32_t kCmd_CreateDescriptorHeap12 = 0x00041200;
 inline constexpr uint32_t kCmd_CreateShaderResourceView12 = 0x00041201;
 inline constexpr uint32_t kCmd_CreateUnorderedAccessView12 = 0x00041202;

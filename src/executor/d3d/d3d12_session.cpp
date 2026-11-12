@@ -51,6 +51,7 @@ constexpr uint32_t page_not_available = 1u;
 constexpr uint32_t most_heap_type = 4u;
 constexpr uint32_t most_dimension = 4u;
 constexpr uint32_t buffer_dimension = 1u;
+constexpr uint32_t texture2d_dimension = 3u;
 constexpr uint32_t no_object = 0u;
 constexpr uint32_t shared_resource = 1u;
 constexpr uint32_t shared_heap = 2u;
@@ -840,6 +841,38 @@ bool D3d12Session::on_OpenObject12(uint32_t object, uint64_t key, uint64_t addre
     size = heap->GetDesc().SizeInBytes;
     if (!kept(object, D3dObjectKind::heap12, heap)) return false;
     kind = shared_heap;
+    return true;
+}
+
+bool D3d12Session::on_AdoptLentImage12(uint32_t resource, uint64_t memory, const d3d12proto::ResourceDesc &desc,
+                                       uint32_t row_pitch, uint32_t &hresult)
+{
+    AV_SCOPE("D3d12Session::on_AdoptLentImage12");
+    constexpr uint32_t shared_binds = 0x8u | 0x20u;
+    hresult = static_cast<uint32_t>(E_INVALIDARG);
+    if (device_ == nullptr) return false;
+    const SourceMemory *const backing = imports_ != nullptr ? imports_->named(memory) : nullptr;
+    const uint64_t row_bytes = desc.width * DxgiFormatLayout(desc.format).element_bytes();
+    if (backing == nullptr || desc.dimension != texture2d_dimension || desc.mip_levels != 1u ||
+        desc.depth_or_array != 1u || desc.sample_count > 1u || desc.height == 0u || row_bytes == 0u ||
+        desc.width > UINT32_MAX || row_pitch < row_bytes ||
+        uint64_t{desc.height - 1u} * row_pitch + row_bytes > backing->size()) {
+        LogLine(lines_).text("a lent image names no memory that holds it: handle ").hex(memory, 16u).write();
+        return true;
+    }
+    OwnedFd pages;
+    hresult = static_cast<uint32_t>(E_OUTOFMEMORY);
+    if (!backing->share(pages)) return true;
+    const SharedImageShape shape(static_cast<uint32_t>(desc.width), desc.height, desc.format, row_pitch, 0u, 0u,
+                                 shared_binds);
+    ID3D12Resource *const made = device_->adopt_image(pages, shape);
+    if (made == nullptr) {
+        LogLine(lines_).text("the host made no image over lent rows of format ").number(desc.format).text(" pitch ")
+            .number(row_pitch).write();
+        return true;
+    }
+    if (!place(resource, made, 0u, desc.width)) return false;
+    hresult = 0u;
     return true;
 }
 

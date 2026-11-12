@@ -96,6 +96,8 @@ public:
     bool on_ResourceAllocation12(const d3d12proto::ResourceDesc& desc, uint64_t& size, uint64_t& alignment) override;
     bool on_ShareResource12(uint32_t resource, uint64_t key) override;
     bool on_ShareObject12(uint32_t object, uint64_t key) override;
+    bool on_AdoptLentImage12(uint32_t resource, uint64_t memory, const d3d12proto::ResourceDesc &desc,
+                             uint32_t row_pitch, uint32_t &hresult) override;
     bool on_OpenObject12(uint32_t object, uint64_t key, uint64_t address, uint32_t &kind, uint32_t &dimension,
                          uint32_t &height, uint32_t &depth_or_array, uint32_t &mip_levels, uint32_t &format,
                          uint32_t &sample_count, uint32_t &flags, uint64_t &width, uint64_t &size) override;
