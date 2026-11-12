@@ -245,7 +245,7 @@ HRESULT D3d12Device::charge_heap(HeapRecord &heap)
             .text(" the host reports, with ").number(commitment_.committed()).text(" committed").write();
         return E_OUTOFMEMORY;
     }
-    if (!session_.lease().take(wire(), LeaseRecord::Kind::device, heap.size)) {
+    if (!session_.lease().take(heap.size)) {
         commitment_.release(heap.size);
         LogLine(lines_).text("a heap of ").number(heap.size).text(" bytes is past what the host can lease").write();
         return E_OUTOFMEMORY;
@@ -261,7 +261,7 @@ void D3d12Device::uncharge_heap(HeapRecord &heap)
     AV_SCOPE("D3d12Device::uncharge_heap");
     commitment_.release(heap.charged);
     heap.charged = 0u;
-    session_.lease().give(wire(), LeaseRecord::Kind::device, heap.leased);
+    session_.lease().give(heap.leased);
     heap.leased = 0u;
 }
 

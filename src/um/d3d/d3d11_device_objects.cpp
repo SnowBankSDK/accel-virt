@@ -158,7 +158,7 @@ VOID D3d11Device::create_resource(const D3D11DDIARG_CREATERESOURCE *args, D3D10D
     const bool as_rows = interop && !across && rows_.asked_by(caller_.thread_id());
     if (interop && !across) desc.misc_flags |= ResourceMisc::shared_bit | (as_rows ? ResourceMisc::rows_bit : 0u);
     const uint64_t leased = ResourceFootprint(desc).leased(0u);
-    if (!session_.lease().take(wire(), LeaseRecord::Kind::device, leased)) {
+    if (!session_.lease().take(leased)) {
         resource = ResourceRecord{};
         set_error(E_OUTOFMEMORY);
         return;
@@ -171,7 +171,7 @@ VOID D3d11Device::create_resource(const D3D11DDIARG_CREATERESOURCE *args, D3D10D
     if (!kernel_visible) account(resource, runtime);
     const uint64_t lent_name = resource.lent != nullptr ? resource.lent->handle() : 0u;
     if (lent_name != 0u) {
-        session_.lease().give(wire(), LeaseRecord::Kind::device, resource.leased);
+        session_.lease().give(resource.leased);
         resource.leased = 0u;
     }
     const uint32_t lent_pitch = resource.lent != nullptr ? resource.allocation_pitch : 0u;
@@ -324,7 +324,7 @@ VOID D3d11Device::destroy_resource(D3D10DDI_HRESOURCE handle)
     forget_guest_surface(resource);
     forget_maps(resource.stamp.id());
     destroy_object(resource.stamp.id());
-    session_.lease().give(wire(), LeaseRecord::Kind::device, resource.leased);
+    session_.lease().give(resource.leased);
     if (resource.lent != nullptr) lender_.retire(*resource.lent);
     session_.shared_memory().reclaim();
     if (resource.slice.bytes_ != 0u) leave_slice(resource);

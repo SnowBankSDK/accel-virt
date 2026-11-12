@@ -91,7 +91,7 @@ HRESULT D3dSession::open(uint32_t adapter)
     const Status opened = channel_.open(connection_);
     if (opened != Status::ok) return opened == Status::no_memory ? E_OUTOFMEMORY : E_FAIL;
     static_cast<void>(stream_.construct(channel_.transport()));
-    lease_.reset(LeaseRecord::direct3d_initial_bytes);
+    static_cast<void>(lease_.construct(stream_.object(), lock_, LeaseRecord::direct3d_initial_bytes));
     stream_.object().speak_with(select_command_, flush_command_);
     uint8_t *slots = nullptr;
     uint64_t slots_at = 0u;
@@ -134,6 +134,7 @@ void D3dSession::close()
 {
     AV_SCOPE("D3dSession::close");
     shared_memory_.close_streams();
+    lease_.destroy();
     if (stream_.constructed()) {
         static_cast<void>(stream_.object().flush());
         stream_.destroy();
@@ -149,10 +150,10 @@ SessionMemory &D3dSession::shared_memory()
     return shared_memory_;
 }
 
-MemoryLease &D3dSession::lease()
+D3dSessionLease &D3dSession::lease()
 {
     AV_SCOPE("D3dSession::lease");
-    return lease_;
+    return lease_.object();
 }
 
 uint32_t D3dSession::next_id()

@@ -168,12 +168,12 @@ VOID D3d11Device::resize_tile_pool(D3D10DDI_HRESOURCE pool, UINT64 bytes)
     AV_SCOPE("D3d11Device::resize_tile_pool");
     ResourceRecord &resource = record(pool);
     const uint64_t  leased = ResourceFootprint(bytes, ResourceMisc::tile_pool_bit).leased(0u);
-    if (leased > resource.leased && !session_.lease().take(wire(), LeaseRecord::Kind::device, leased - resource.leased)) {
+    if (leased > resource.leased && !session_.lease().take(leased - resource.leased)) {
         set_error(E_OUTOFMEMORY);
         return;
     }
     if (!d3dproto::av_d3d_ResizeTilePool11(wire(), id_of(pool.pDrvPrivate), bytes)) set_error(E_OUTOFMEMORY);
-    if (resource.leased > leased) session_.lease().give(wire(), LeaseRecord::Kind::device, resource.leased - leased);
+    if (resource.leased > leased) session_.lease().give(resource.leased - leased);
     resource.leased = leased;
 }
 

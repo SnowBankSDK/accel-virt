@@ -235,13 +235,13 @@ void D3d9Device::release_resource(D3d9Resource &resource)
 bool D3d9Device::lease(uint64_t bytes)
 {
     AV_SCOPE("D3d9Device::lease");
-    return session_.lease().take(wire(), LeaseRecord::Kind::device, bytes);
+    return session_.lease().take(bytes);
 }
 
 void D3d9Device::give_lease(uint64_t &bytes)
 {
     AV_SCOPE("D3d9Device::give_lease");
-    if (bytes != 0u) session_.lease().give(wire(), LeaseRecord::Kind::device, bytes);
+    if (bytes != 0u) session_.lease().give(bytes);
     bytes = 0u;
 }
 
