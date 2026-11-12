@@ -1,4 +1,6 @@
 #include "executor/d3d/d3d12_session.hpp"
+#include "executor/shim/d3d11_host_device.hpp"
+#include "executor/sharing/shared_image_shape.hpp"
 #include "proto/d3d/descriptor_heap_rules.hpp"
 
 #include "executor/teardown_budget.hpp"
@@ -809,11 +811,11 @@ bool D3d12Session::on_OpenObject12(uint32_t object, uint64_t key, uint64_t addre
     AV_SCOPE("D3d12Session::on_OpenObject12");
     kind = no_object;
     if (shares_ == nullptr || shares_->shares() == nullptr || device_ == nullptr) return true;
-    IUnknown *const opened = D3dShares(*shares_->shares()).resource(shares_->domain(), key);
+    IUnknown *const opened = D3dShares(*shares_->shares()).view(shares_->domain(), key, ShareOrigin::d3d12);
     if (opened == nullptr) return true;
-    ID3D12Resource *resource = nullptr;
+    ID3D12Resource *resource = viewed_by_d3d12(key, opened);
     ID3D12Heap     *heap = nullptr;
-    if (SUCCEEDED(opened->QueryInterface(__uuidof(ID3D12Resource), reinterpret_cast<void **>(&resource)))) {
+    if (resource != nullptr) {
         opened->Release();
         const D3D12_RESOURCE_DESC desc = resource->GetDesc();
         dimension = static_cast<uint32_t>(desc.Dimension);
@@ -839,6 +841,30 @@ bool D3d12Session::on_OpenObject12(uint32_t object, uint64_t key, uint64_t addre
     if (!kept(object, D3dObjectKind::heap12, heap)) return false;
     kind = shared_heap;
     return true;
+}
+
+ID3D12Resource *D3d12Session::viewed_by_d3d12(uint64_t key, IUnknown *opened)
+{
+    AV_SCOPE("D3d12Session::viewed_by_d3d12");
+    ID3D12Resource *resource = nullptr;
+    if (SUCCEEDED(opened->QueryInterface(__uuidof(ID3D12Resource), reinterpret_cast<void **>(&resource))))
+        return resource;
+    ID3D11Texture2D *texture = nullptr;
+    if (shown_by_ == nullptr ||
+        FAILED(opened->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void **>(&texture))))
+        return nullptr;
+    OwnedFd          memory;
+    SharedImageShape shape;
+    const bool       carried = shown_by_->carry_image(texture, memory, shape);
+    texture->Release();
+    resource = carried ? device_->adopt_image(memory, shape) : nullptr;
+    if (resource == nullptr) {
+        LogLine(lines_).text("the Direct3D 11 texture shared under key ").hex(key, 16u)
+            .text(carried ? " was not made a Direct3D 12 resource" : " has no memory another device can open").write();
+        return nullptr;
+    }
+    static_cast<void>(D3dShares(*shares_->shares()).keep_view(shares_->domain(), key, ShareOrigin::d3d12, resource));
+    return resource;
 }
 
 bool D3d12Session::on_ResourceAllocation12(const d3d12proto::ResourceDesc &desc, uint64_t &size,

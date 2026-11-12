@@ -198,6 +198,7 @@ private:
     bool                       written_view(const d3d12proto::DescriptorRef &ref) const;
     bool                       gpu_handle(const d3d12proto::DescriptorRef &ref, uint64_t &handle) const;
     bool                       place(uint32_t id, IUnknown *resource, uint64_t address, uint64_t width);
+    ID3D12Resource            *viewed_by_d3d12(uint64_t key, IUnknown *opened);
     bool                       window_heap(uint32_t heap, uint64_t size, uint64_t memory, uint64_t base, uint32_t &hresult);
     bool                       native_heap(uint32_t heap, uint64_t size, uint64_t alignment, uint32_t &hresult,
                                            uint64_t &placed);

@@ -25,6 +25,7 @@
 #include "executor/shim/host_heap.hpp"
 #include "harness/executor/executor_log_rig.hpp"
 #include "harness/framework/test_registry.hpp"
+#include "proto/generated/d3d/d3d_dispatch_client.h"
 #include "proto/generated/d3d12/d3d12_dispatch_client.h"
 #include "proto/d3d/heap_slice_support.hpp"
 #include "proto/resources/host_memory_request.hpp"
@@ -1242,6 +1243,109 @@ TEST(d3d12_session_device, a_heap_and_a_committed_buffer_shared_in_one_session_o
     backend.shut_down();
     shares->release(1u, key_buffer);
     shares->release(1u, key_heap);
+    device11->retire_shares();
+}
+
+TEST(d3d12_session_device, a_texture_direct3d11_shares_opens_in_direct3d12_over_the_same_memory)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice *device11 = nullptr;
+    av::D3d12HostDevice *device12 = nullptr;
+    av::HostShares      *shares = nullptr;
+    av::HostMemorySource *source = nullptr;
+    if (!host_devices(apis, device11, device12, shares, source)) return;
+    av::D3dBackend    producer(rig.log);
+    av::D3dBackend    consumer(rig.log);
+    av::SessionShares produced;
+    av::SessionShares consumed;
+    CHECK(producer.initialize(*shared_as(produced, shares, producer), rig.imports, device11, device12));
+    CHECK(consumer.initialize(*shared_as(consumed, shares, consumer), rig.imports, device11, device12));
+    av::D3dLoopback eleven(producer, rig.imports, source, region_bytes, lent_bytes);
+    av::D3dLoopback twelve(consumer, rig.imports, source, region_bytes, lent_bytes);
+    if (!imports(*device12, twelve)) {
+        producer.shut_down();
+        consumer.shut_down();
+        return;
+    }
+    constexpr std::uint64_t key = 0x5eed0000000011d2ull;
+    constexpr std::uint32_t texture11 = 70u;
+    constexpr std::uint32_t opened = 71u;
+    std::uint32_t hresult = 1u, level = 0u;
+    CHECK(av::d3dproto::av_d3d_CreateDevice11(eleven, 1u, 0u, 0u, &hresult, &level));
+    CHECK_EQ(hresult, 0u);
+    av::d3dproto::ResourceDesc shared = {};
+    shared.dimension = dimension_texture2d;
+    shared.width = size;
+    shared.height = size;
+    shared.depth_or_array = 1u;
+    shared.mip_levels = 1u;
+    shared.format = format_b8g8r8a8;
+    shared.sample_count = 1u;
+    shared.bind_flags = 0x8u | 0x20u;
+    shared.misc_flags = 0x2u;
+    CHECK(av::d3dproto::av_d3d_CreateResource(eleven, texture11, shared, key, 0u, 0u));
+    static std::uint32_t pattern[size * size];
+    for (std::uint32_t at = 0u; at < size * size; at++) pattern[at] = 0xff000000u | (at * 2654435761u >> 8u);
+    const av::d3dproto::Box whole = {0u, 0u, 0u, size, size, 1u};
+    CHECK(av::d3dproto::av_d3d_UpdateSubresource(eleven, texture11, 0u, 1u, whole, row_pitch, 0u, 0u, pattern,
+                                                 sizeof pattern));
+    CHECK(av::d3dproto::av_d3d_Finish11(eleven, &hresult));
+    CHECK_EQ(hresult, 0u);
+    producer.end_batch();
+    std::uint64_t marked = 0u, reached = 0u;
+    for (std::uint32_t polls = 0u; polls < 5000u; polls++) {
+        static_cast<void>(producer.poll());
+        producer.gpu_progress(marked, reached);
+        if (reached >= marked) break;
+        usleep(1000u);
+    }
+    CHECK(reached >= marked);
+
+    make_frame(twelve);
+    std::uint32_t kind = 9u, dimension = 0u, height = 0u, depth = 0u, mips = 0u, format = 0u, samples = 0u, flags = 0u;
+    std::uint64_t width = 0u, bytes = 0u;
+    CHECK(av_d3d12_OpenObject12(twelve, opened, key, 0u, &kind, &dimension, &height, &depth, &mips, &format, &samples,
+                                &flags, &width, &bytes));
+    CHECK_EQ(kind, 1u);
+    CHECK_EQ(dimension, dimension_texture2d);
+    CHECK_EQ(width, std::uint64_t{size});
+    CHECK_EQ(height, size);
+    CHECK_EQ(format, format_b8g8r8a8);
+    CHECK((flags & flag_render_target) != 0u);
+    const Barrier to_copy = {0u, 0u, opened, 0xffffffffu, 0u, state_copy_source, 0u, 0u};
+    CHECK(av_d3d12_ResourceBarrier12(twelve, list, 1u, &to_copy));
+    CopyLocation into = {};
+    into.resource = readback;
+    into.type = 1u;
+    into.format = format_b8g8r8a8;
+    into.width = size;
+    into.height = size;
+    into.depth = 1u;
+    into.row_pitch = row_pitch;
+    CopyLocation from = {};
+    from.resource = opened;
+    CHECK(av_d3d12_CopyTextureRegion12(twelve, list, into, 0u, 0u, 0u, from, 0u, Box{}));
+    CHECK(av_d3d12_CloseCommandList12(twelve, list));
+    const std::uint32_t lists[1] = {list};
+    CHECK(av_d3d12_ExecuteCommandLists12(twelve, queue, 1u, lists));
+    std::uint32_t removed = 1u;
+    CHECK(av_d3d12_Finish12(twelve, &removed));
+    CHECK_EQ(removed, 0u);
+    std::uint32_t wrong = 0u;
+    for (std::uint32_t y = 0u; y < size; y++)
+        for (std::uint32_t x = 0u; x < size; x++)
+            if (pixel(twelve, x, y) != pattern[y * size + x]) wrong++;
+    CHECK_EQ(wrong, 0u);
+    CHECK_EQ(twelve.refused(), 0u);
+    CHECK(av_d3d12_OpenObject12(twelve, opened + 1u, key, 0u, &kind, &dimension, &height, &depth, &mips, &format,
+                                &samples, &flags, &width, &bytes));
+    CHECK_EQ(kind, 1u);
+    CHECK(av_d3d12_Finish12(twelve, &removed));
+    CHECK_EQ(removed, 0u);
+    consumer.shut_down();
+    producer.shut_down();
+    shares->release(1u, key);
     device11->retire_shares();
 }
 

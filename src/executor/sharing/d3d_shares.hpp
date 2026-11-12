@@ -24,9 +24,9 @@ public:
     IUnknown *open_resource(uint32_t domain, uint64_t id, bool &live_of_presented);
     void      expect_shown(uint32_t domain, uint64_t id);
     IUnknown *resource(uint32_t domain, uint64_t id);
-    IUnknown *view(uint32_t domain, uint64_t id);
+    IUnknown *view(uint32_t domain, uint64_t id, ShareOrigin api);
     IUnknown *shown(uint32_t domain, uint64_t id);
-    bool      keep_view(uint32_t domain, uint64_t id, IUnknown *view);
+    bool      keep_view(uint32_t domain, uint64_t id, ShareOrigin api, IUnknown *view);
     bool      keep_shown(uint32_t domain, uint64_t id, IUnknown *copy);
     void      written(uint32_t domain, uint64_t id);
     bool      writes(uint32_t domain, uint64_t id, uint64_t &count);

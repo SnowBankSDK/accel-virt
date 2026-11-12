@@ -10,7 +10,7 @@ constexpr uint64_t drm_format_mod_invalid = 0x00ffffffffffffffull;
 
 }
 
-ExportableImage::ExportableImage(ExportableImages &owner)
+ExportableImage::ExportableImage(ImageRetirement &owner)
     : TextureHold(owner), image_(), modifier_(drm_format_mod_invalid)
 {
     AV_SCOPE("ExportableImage::ExportableImage");

@@ -6,6 +6,7 @@
 #include "executor/shim/d3d12_capabilities.hpp"
 #include "executor/shim/d3d12_dispatch_limit.hpp"
 #include "executor/shim/d3d12_frame_pool.hpp"
+#include "executor/shim/d3d12_image_imports.hpp"
 #include "executor/shim/host_heap.hpp"
 #include "proto/context/device_uuid.hpp"
 
@@ -24,6 +25,7 @@ namespace av {
 
 class DriverLog;
 class OwnedFd;
+class SharedImageShape;
 class D3d11HostDevice;
 class D3dRuntime;
 class WakeSignal;
@@ -58,6 +60,7 @@ public:
     bool                       exports_heaps() const;
     ID3D12RootSignature       *root_signature(const void *desc) const;
     [[nodiscard]] bool         export_image(ID3D12Resource *resource, Vkd3dImageExport &image) const;
+    ID3D12Resource            *adopt_image(OwnedFd &descriptor, const SharedImageShape &shape);
     bool                       translates_indirect_addresses() const;
     void                       set_indirect_va_table(ID3D12GraphicsCommandList *list, uint64_t table) const;
     [[nodiscard]] bool         export_fence(ID3D12Fence *fence, OwnedFd &descriptor) const;
@@ -79,6 +82,7 @@ private:
     D3d12Capabilities  capabilities_;
     D3d12DispatchLimit dispatch_limit_;
     D3d12FramePool     frames_;
+    D3d12ImageImports  imports_;
 
     friend struct D3d12HostDeviceProbe;
 };

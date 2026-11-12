@@ -1,4 +1,5 @@
 #include "executor/shim/d3d11_host_device.hpp"
+#include "executor/sharing/shared_image_shape.hpp"
 
 #include "executor/shim/vulkan_buffer.hpp"
 #include "executor/shim/dxvk_interop.hpp"
@@ -690,7 +691,7 @@ ID3D11Texture2D *D3d11HostDevice::shared_texture(uint32_t domain, uint64_t id)
 {
     AV_SCOPE("D3d11HostDevice::shared_texture");
     if (shares_ == nullptr) return nullptr;
-    IUnknown *const found = viewed(domain, id, D3dShares(*shares_).view(domain, id));
+    IUnknown *const found = viewed(domain, id, D3dShares(*shares_).view(domain, id, ShareOrigin::d3d11));
     if (found == nullptr) return nullptr;
     ID3D11Texture2D *texture = nullptr;
     const bool cast = SUCCEEDED(found->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void **>(&texture)));
@@ -708,7 +709,7 @@ IUnknown *D3d11HostDevice::viewed(uint32_t domain, uint64_t id, IUnknown *found)
     ID3D11Texture2D *const texture = view_of(resource);
     resource->Release();
     if (texture == nullptr) return nullptr;
-    static_cast<void>(D3dShares(*shares_).keep_view(domain, id, texture));
+    static_cast<void>(D3dShares(*shares_).keep_view(domain, id, ShareOrigin::d3d11, texture));
     retire_locked();
     return texture;
 }
@@ -840,6 +841,23 @@ ID3D11Texture2D *D3d11HostDevice::make_tiled(const D3D11_TEXTURE2D_DESC1 &desc)
 {
     AV_SCOPE("D3d11HostDevice::make_tiled");
     return images_.make_tiled(desc);
+}
+
+bool D3d11HostDevice::carry_image(ID3D11Texture2D *texture, OwnedFd &descriptor, SharedImageShape &shape)
+{
+    AV_SCOPE("D3d11HostDevice::carry_image");
+    if (texture == nullptr || device_ == nullptr) return false;
+    D3D11_TEXTURE2D_DESC desc = {};
+    texture->GetDesc(&desc);
+    if (desc.MipLevels != 1u || desc.ArraySize != 1u || desc.SampleDesc.Count != 1u) return false;
+    uint64_t modifier = 0u, offset = 0u, pitch = 0u;
+    lock(nullptr);
+    const bool carried = images_.carry(texture, descriptor, modifier, offset, pitch);
+    unlock();
+    if (!carried || pitch == 0u || pitch > UINT32_MAX) return false;
+    shape = SharedImageShape(desc.Width, desc.Height, static_cast<uint32_t>(desc.Format), static_cast<uint32_t>(pitch),
+                             modifier, offset, desc.BindFlags);
+    return true;
 }
 
 bool D3d11HostDevice::export_memory(ID3D11Texture2D *texture, OwnedFd &descriptor)

@@ -5,11 +5,11 @@
 
 namespace av {
 
-class ExportableImages;
+class ImageRetirement;
 
 class TextureHold {
 public:
-    explicit TextureHold(ExportableImages &owner);
+    explicit TextureHold(ImageRetirement &owner);
     TextureHold(const TextureHold &) = delete;
     TextureHold &operator=(const TextureHold &) = delete;
 
@@ -23,7 +23,7 @@ protected:
     ~TextureHold() = default;
 
 private:
-    ExportableImages *owner_;
+    ImageRetirement  *owner_;
     uint32_t          references_;
     bool              held_;
 };

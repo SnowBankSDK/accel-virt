@@ -14,7 +14,7 @@ namespace av {
 D3d12HostDevice::D3d12HostDevice(DriverLog &lines)
     : lines_(lines), runtime_(nullptr), uuid_(), tenant_heap_(),
       renewal_(tenant_heap_, lines), shown_by_(nullptr),
-      device_(nullptr), capabilities_(), dispatch_limit_(), frames_()
+      device_(nullptr), capabilities_(), dispatch_limit_(), frames_(), imports_(lines)
 {
     AV_SCOPE("D3d12HostDevice::D3d12HostDevice");
 }
@@ -46,6 +46,7 @@ void D3d12HostDevice::close()
 {
     AV_SCOPE("D3d12HostDevice::close");
     frames_.bind(nullptr);
+    imports_.release();
     if (device_ != nullptr) device_->Release();
     device_ = nullptr;
     runtime_ = nullptr;
@@ -58,6 +59,7 @@ bool D3d12HostDevice::make()
     if (FAILED(runtime_->create_device12(uuid_.raw(), made)) || made == nullptr) return false;
     device_ = static_cast<ID3D12Device *>(made);
     frames_.bind(device_);
+    if (!imports_.connect(device_)) lines_.write("the host Direct3D 12 device takes no image another API shares");
     return true;
 }
 
@@ -116,9 +118,16 @@ bool D3d12HostDevice::remake()
     ID3D12Device *const old = device_;
     device_ = nullptr;
     if (old != nullptr) runtime_->abandon_waits(old);
+    imports_.release();
     const bool made = make();
     if (old != nullptr) old->Release();
     return made;
+}
+
+ID3D12Resource *D3d12HostDevice::adopt_image(OwnedFd &descriptor, const SharedImageShape &shape)
+{
+    AV_SCOPE("D3d12HostDevice::adopt_image");
+    return device_ != nullptr ? imports_.adopt(descriptor, shape) : nullptr;
 }
 
 bool D3d12HostDevice::lose()

@@ -32,6 +32,8 @@ public:
     uint32_t        pitch() const;
     uint64_t        bytes() const;
     uint64_t        key() const;
+    bool            across_adapters() const;
+    uint64_t        opened_bytes() const;
     bool            primary() const;
     uint32_t        source() const;
 

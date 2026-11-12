@@ -89,7 +89,7 @@ private:
     void                     uncharge_heap(HeapRecord &heap);
     void                     release_heap_memory(HeapRecord &heap);
     void                     trim_memory();
-    HRESULT                  open_host_object(const D3D12DDIARG_OPENHEAP_0003 &args, d3d::KernelHeap &opened,
+    HRESULT                  open_host_object(const D3D12DDIARG_OPENHEAP_0003 &args, uint64_t key, uint64_t bytes,
                                               HeapRecord &heap, ResourceRecord *resource, D3D12DDI_HRTRESOURCE runtime);
     HRESULT                  open_existing(const D3D12DDIARG_OPENHEAP_0003 &args, HeapRecord &heap,
                                            ResourceRecord &resource);

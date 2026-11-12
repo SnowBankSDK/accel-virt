@@ -8,11 +8,11 @@
 
 namespace av {
 
-class ExportableImages;
+class ImageRetirement;
 
 class ExportableImage final : public TextureHold {
 public:
-    explicit ExportableImage(ExportableImages &owner);
+    explicit ExportableImage(ImageRetirement &owner);
 
     VulkanImage       &image();
     const VulkanImage &image() const;

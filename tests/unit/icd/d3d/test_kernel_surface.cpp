@@ -197,3 +197,20 @@ TEST(kernel_surface, a_cross_adapter_surface_that_cannot_be_shared_is_refused)
   KernelSurface too_wide(av::d3d::SharedWith::another_adapter, 1u << 30u, 1u, b8g8r8a8);
   CHECK_EQ(too_wide.bytes(), 0u);
   CHECK_STATUS(too_wide.make(), Status::invalid_parameter); }
+
+TEST(kernel_surface, an_opened_surface_names_its_bytes_and_says_whether_it_crosses_adapters)
+{ KernelSurface texture(64u, 32u, b8g8r8a8);
+  CHECK_STATUS(texture.make(), Status::ok);
+  KernelSurface opened;
+  CHECK_STATUS(opened.open(texture.resource_data(), KernelSurface::resource_bytes, texture.allocation_data(),
+                           KernelSurface::allocation_bytes),
+               Status::ok);
+  CHECK_EQ(opened.opened_bytes(), texture.bytes());
+  CHECK(!opened.across_adapters());
+  KernelSurface lent(av::d3d::SharedWith::another_adapter, 64u, 32u, b8g8r8a8);
+  CHECK_STATUS(lent.make(), Status::ok);
+  KernelSurface lent_opened;
+  CHECK_STATUS(lent_opened.open(lent.resource_data(), KernelSurface::resource_bytes, lent.allocation_data(),
+                                KernelSurface::allocation_bytes),
+               Status::ok);
+  CHECK(lent_opened.across_adapters()); }

@@ -6,6 +6,7 @@
 #include "executor/shim/exportable_image.hpp"
 #include "executor/shim/system_memory_twin.hpp"
 #include "executor/shim/host_heap.hpp"
+#include "executor/shim/image_retirement.hpp"
 
 #include <stdint.h>
 #include <vulkan/vulkan.h>
@@ -23,7 +24,7 @@ class ExportableImageInfo;
 class StateWriter;
 class Vkd3dImageExport;
 
-class ExportableImages {
+class ExportableImages final : public ImageRetirement {
 public:
     ExportableImages(DxvkVulkanDevice &vulkan, DriverLog &lines);
     ~ExportableImages();
@@ -45,7 +46,7 @@ public:
     [[nodiscard]] bool refresh_twin(ID3D11DeviceContext4 *context, ID3D11Texture2D *texture, uint64_t writes);
     void             collect();
     void             release();
-    void             retired();
+    void             retired() override;
     void             report(StateWriter &writer) const;
 
 private:

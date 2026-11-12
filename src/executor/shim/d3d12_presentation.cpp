@@ -48,8 +48,7 @@ bool D3d12Presentation::share(ID3D12Resource *resource, uint64_t key)
     if (desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || FAILED(resource->GetHeapProperties(&heap, &heap_flags)) ||
         (heap_flags & D3D12_HEAP_FLAG_SHARED) == 0)
         return false;
-    const bool composable = desc.MipLevels == 1u && desc.DepthOrArraySize == 1u && desc.SampleDesc.Count == 1u;
-    if (composable && shares_->publish_resource(key, resource, ShareOrigin::d3d12) != Status::ok) return false;
+    if (shares_->publish_resource(key, resource, ShareOrigin::d3d12) != Status::ok) return false;
     return SurfaceIdentity(key).mark(resource);
 }
 
