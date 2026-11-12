@@ -742,6 +742,94 @@ TEST(av_context_table_unbind, a_device_that_stopped_answering_still_releases_the
   CHECK_EQ(fixture.platform().process_mappings(), 0u);
   CHECK_EQ(fixture.platform().reclaim_page_blocks(), 3u); }
 
+namespace {
+
+class ContextLedgerHost {
+public:
+    explicit ContextLedgerHost(av::MappedVirtioFunction &mapped) : queue_(mapped.queue_device(0u)), mapped_(mapped)
+    { mapped.platform().on_stall(&ContextLedgerHost::stall, this); }
+    ~ContextLedgerHost() { mapped_.platform().on_stall(nullptr, nullptr); }
+
+    std::uint32_t live() const { return live_count_; }
+    std::uint32_t refused() const { return refused_; }
+    std::uint32_t destroyed() const { return destroyed_; }
+
+private:
+    static constexpr std::uint32_t ledger_size = 1u << 17u;
+
+    static void stall(void *context)
+    {
+        auto *const host = static_cast<ContextLedgerHost *>(context);
+        static_cast<void>(host->queue_.answer_all(host->request_, sizeof host->request_, &ContextLedgerHost::answer,
+                                                  host));
+    }
+    static std::uint32_t answer(void *context, const std::uint8_t *request, std::uint32_t length, std::uint8_t *reply,
+                                std::uint32_t room)
+    {
+        auto *const   host = static_cast<ContextLedgerHost *>(context);
+        std::uint32_t type = 0u;
+        std::uint32_t id = 0u;
+        if (length >= 20u) {
+            std::memcpy(&type, request, sizeof type);
+            std::memcpy(&id, request + 16u, sizeof id);
+        }
+        const std::uint32_t at = id % ledger_size;
+        const bool          conflict = type == ctx_create_type && host->live_[at];
+        if (type == ctx_create_type && !conflict) {
+            host->live_[at] = true;
+            host->live_count_++;
+        }
+        if (type == ctx_destroy_type && host->live_[at]) {
+            host->live_[at] = false;
+            host->live_count_--;
+            host->destroyed_++;
+        }
+        if (conflict) host->refused_++;
+        GpuResponse response;
+        response.set(conflict ? GpuResponse::err_invalid_context_id : GpuResponse::ok_nodata);
+        const std::uint32_t written = room < response.length() ? room : static_cast<std::uint32_t>(response.length());
+        if (reply != nullptr) std::memcpy(reply, response.bytes(), written);
+        return written;
+    }
+
+    av::FakeVirtqueueDevice   queue_;
+    av::MappedVirtioFunction &mapped_;
+    bool                      live_[ledger_size] = {};
+    std::uint32_t             live_count_ = 0u;
+    std::uint32_t             refused_ = 0u;
+    std::uint32_t             destroyed_ = 0u;
+    std::uint8_t              request_[0x10000u] = {};
+};
+
+void fill_requests_sent_without_waiting(av::VirtioGpuDevice &device)
+{
+    std::uint8_t narrow[32] = {0x04u, 0x01u};
+    std::uint8_t wide[200] = {0x04u, 0x01u};
+    for (std::uint32_t slot = 0u; slot < av::GpuCommandQueue::slot_count; slot++)
+        CHECK_STATUS(device.send_control(narrow, sizeof narrow), Status::ok);
+    CHECK_STATUS(device.send_control(wide, sizeof wide), Status::ok);
+    CHECK_STATUS(device.send_control(narrow, sizeof narrow), Status::no_space);
+}
+
+}
+
+TEST(av_context_table_unbind, a_control_queue_full_of_requests_sent_without_waiting_still_destroys_on_the_device)
+{ Fixture fixture;
+  auto *const             host = new ContextLedgerHost(fixture.mapped());
+  constexpr std::uint32_t rounds = 2u * av::AvContextBinding::generations + 8u;
+  for (std::uint32_t round = 0u; round < rounds; round++) {
+      CHECK_STATUS(fixture.bind(&first_context), Status::ok);
+      CHECK_EQ(fixture.table().doorbell_of(&first_context), 0u);
+      fill_requests_sent_without_waiting(fixture.device());
+      CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok);
+      CHECK_EQ(host->live(), 0u);
+  }
+  CHECK_EQ(host->destroyed(), rounds);
+  CHECK_EQ(host->refused(), 0u);
+  CHECK_EQ(fixture.table().bound(), 0u);
+  CHECK(fixture.table().invariants_hold());
+  delete host; }
+
 TEST(av_context_table_abandon_all, a_reset_device_serves_and_accepts_nothing_until_unbound)
 { Fixture fixture;
   Host host(fixture.mapped());

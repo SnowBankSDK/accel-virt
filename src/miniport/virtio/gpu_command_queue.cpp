@@ -35,19 +35,34 @@ size_t GpuCommandQueue::slot_bytes() const
 size_t GpuCommandQueue::slots_bytes() const
 {
     AV_SCOPE("GpuCommandQueue::slots_bytes");
-    return slot_bytes() * slot_count + (wide_bytes_ != 0u ? wide_bytes_ + response_bytes_ : 0u);
+    return slot_bytes() * slot_count + wide_part_bytes() +
+           (response_bytes_ != 0u ? exchange_request_bytes() + response_bytes_ : 0u);
+}
+
+size_t GpuCommandQueue::wide_part_bytes() const
+{
+    AV_SCOPE("GpuCommandQueue::wide_part_bytes");
+    return wide_bytes_ != 0u ? wide_bytes_ + response_bytes_ : 0u;
+}
+
+size_t GpuCommandQueue::exchange_request_bytes() const
+{
+    AV_SCOPE("GpuCommandQueue::exchange_request_bytes");
+    return wide_bytes_ > GpuRequestWriter::max_request_size ? wide_bytes_ : GpuRequestWriter::max_request_size;
 }
 
 size_t GpuCommandQueue::offset_of(uint32_t slot) const
 {
     AV_SCOPE("GpuCommandQueue::offset_of");
-    return slot < slot_count ? slot * slot_bytes() : slot_count * slot_bytes();
+    if (slot < slot_count) return slot * slot_bytes();
+    return slot == wide_slot ? slot_count * slot_bytes() : slot_count * slot_bytes() + wide_part_bytes();
 }
 
 size_t GpuCommandQueue::request_bytes_of(uint32_t slot) const
 {
     AV_SCOPE("GpuCommandQueue::request_bytes_of");
-    return slot < slot_count ? GpuRequestWriter::max_request_size : wide_bytes_;
+    if (slot < slot_count) return GpuRequestWriter::max_request_size;
+    return slot == wide_slot ? wide_bytes_ : exchange_request_bytes();
 }
 
 uint32_t GpuCommandQueue::slot_for(size_t length) const
@@ -80,13 +95,12 @@ Status GpuCommandQueue::activate(uint16_t vector)
     return status;
 }
 
-Status GpuCommandQueue::send_locked(const uint8_t *request, size_t length, const VirtqSegment *payload,
-                                    uint16_t payload_count, uint32_t &slot)
+Status GpuCommandQueue::send_locked(uint32_t slot, const uint8_t *request, size_t length,
+                                    const VirtqSegment *payload, uint16_t payload_count)
 {
     AV_SCOPE("GpuCommandQueue::send_locked");
     InvariantScope<GpuCommandQueue> guard(platform_, *this, "send");
-    slot = slot_for(length);
-    if (slot == no_slot) return Status::no_space;
+    if (slot == no_slot || busy_[slot]) return Status::no_space;
     const size_t   offset = offset_of(slot);
     uint8_t *const bytes = slots_ + offset;
     platform_.copy(bytes, request, length);
@@ -116,8 +130,7 @@ Status GpuCommandQueue::send(const uint8_t *request, size_t length)
     if (length > GpuRequestWriter::max_request_size && length > wide_bytes_) return Status::too_large;
     {
         SpinLockGuard lock(lock_);
-        uint32_t     slot = no_slot;
-        const Status status = send_locked(request, length, nullptr, 0u, slot);
+        const Status  status = send_locked(slot_for(length), request, length, nullptr, 0u);
         if (status != Status::ok) return status;
     }
     transport_.notify(queue_);
@@ -133,8 +146,7 @@ Status GpuCommandQueue::send_carrying(const uint8_t *request, size_t length, con
     if (length > GpuRequestWriter::max_request_size) return Status::too_large;
     {
         SpinLockGuard lock(lock_);
-        uint32_t     slot = no_slot;
-        const Status status = send_locked(request, length, &payload, 1u, slot);
+        const Status  status = send_locked(slot_for(length), request, length, &payload, 1u);
         if (status != Status::ok) return status;
     }
     transport_.notify(queue_);
@@ -176,10 +188,9 @@ Status GpuCommandQueue::exchange_segments(const uint8_t *request, size_t length,
         SpinLockGuard lock(lock_);
         if (awaited_slot_ != no_slot) return Status::conflict;
         if (abandoned_slot_ != no_slot) return Status::not_found;
-        uint32_t     slot = no_slot;
-        const Status status = send_locked(request, length, payload, payload_count, slot);
+        const Status status = send_locked(exchange_slot, request, length, payload, payload_count);
         if (status != Status::ok) return status;
-        awaited_slot_ = slot;
+        awaited_slot_ = exchange_slot;
         awaited_response_ = response;
         awaited_capacity_ = capacity;
         awaited_written_ = 0u;
@@ -283,7 +294,8 @@ bool GpuCommandQueue::invariants_hold() const
     AV_SCOPE("GpuCommandQueue::invariants_hold");
     uint32_t busy = 0u;
     for (bool slot : busy_) busy += slot ? 1u : 0u;
-    return busy == in_flight_ && (awaited_slot_ == no_slot || busy_[awaited_slot_]) &&
+    const bool awaited = awaited_slot_ == no_slot || (awaited_slot_ == exchange_slot && busy_[awaited_slot_]);
+    return busy == in_flight_ && awaited &&
            (abandoned_slot_ == no_slot || (busy_[abandoned_slot_] && abandoned_slot_ != awaited_slot_));
 }
 
