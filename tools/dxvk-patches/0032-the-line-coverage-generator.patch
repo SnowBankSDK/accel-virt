@@ -3,7 +3,7 @@ Subject: [PATCH] the line coverage SPIR-V generator of tools/line-coverage
 
 The geometry stage that draws a line as a quad carrying its distance from the line, and the
 pixel shader change that multiplies the alpha of render target 0 by the coverage of that
-distance, as one header shared by DXVK and vkd3d-proton. tools/line_coverage_patches.py
+distance, as one header shared by DXVK and vkd3d-proton. tools/shared_header_patches.py
 writes this patch from tools/line-coverage/av_line_coverage.h.
 ---
 diff --git a/src/util/av_line_coverage.h b/src/util/av_line_coverage.h

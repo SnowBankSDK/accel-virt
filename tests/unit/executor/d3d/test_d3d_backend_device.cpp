@@ -641,6 +641,104 @@ TEST(d3d_backend_device, a_geometry_shader_streams_each_of_its_four_streams_to_i
     CHECK_EQ(wire.refused(), 0u);
 }
 
+TEST(d3d_backend_device, a_draw_auto_of_each_stream_of_a_four_stream_output_draws_the_vertices_its_stream_wrote)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice *const device = host_device(apis);
+    if (device == nullptr) return;
+    HeldBackend     held(first_backend, rig.log);
+    av::D3dBackend &backend = held.backend();
+    av::SessionShares unshared;
+    CHECK(backend.initialize(unshared, rig.imports, device));
+    av::D3dLoopback wire(backend, rig.imports);
+    std::uint32_t hresult = 1u, level = 0u;
+    CHECK(av_d3d_CreateDevice11(wire, 1u, 0u, 0u, &hresult, &level));
+    make_triangle(wire);
+    SignatureEntry outputs[8] = {};
+    StreamOutEntry streamed[8] = {};
+    for (std::uint32_t stream = 0u; stream < 4u; stream++) {
+        outputs[stream * 2u] = SignatureEntry{1u, 0u, 15u, 3u, 0u, stream};
+        outputs[stream * 2u + 1u] = SignatureEntry{0u, 1u, 7u, 3u, 0u, stream};
+        streamed[stream * 2u] = StreamOutEntry{stream, stream, 0u, 0xFu};
+        streamed[stream * 2u + 1u] = StreamOutEntry{stream, stream, 1u, 0x7u};
+    }
+    const std::uint32_t strides[4] = {28u, 28u, 28u, 28u};
+    constexpr std::uint32_t stage_geometry = 3u, gs = 50u, out = 60u, points = 70u, layout = 71u, statistics = 72u;
+    constexpr std::uint32_t point_count = 24u, stride = 28u, rasterized_stream = 2u, format_r32g32b32 = 6u;
+    CHECK(av_d3d_CreateShader(wire, gs, stage_geometry, triangle_vs::outputs_count, triangle_vs::outputs, 8u, outputs, 0u,
+                              nullptr, 8u, streamed, 4u, strides, rasterized_stream, four_stream_tokens,
+                              sizeof four_stream_tokens));
+    Vertex ring[point_count] = {};
+    for (std::uint32_t index = 0u; index < point_count; index++) {
+        const float radius = 0.8f * (0.4f + static_cast<float>(index) * 0.025f);
+        const float angle = static_cast<float>(index) * 0.9f;
+        ring[index] = Vertex{radius * std::cos(angle), radius * std::sin(angle), static_cast<float>(index) / 24.0f, 0.5f, 1.0f, 1.0f};
+    }
+    ResourceDesc buffer = {};
+    buffer.dimension = 1u;
+    buffer.width = sizeof ring;
+    buffer.bind_flags = bind_vertex;
+    CHECK(av_d3d_CreateResource(wire, points, buffer, 0u, 0u, 0u));
+    CHECK(av_d3d_UpdateSubresource(wire, points, 0u, 0u, Box{}, 0u, 0u, 0u, ring, sizeof ring));
+    buffer.width = 2048u;
+    buffer.bind_flags = 0x10u | bind_vertex;
+    for (std::uint32_t stream = 0u; stream < 4u; stream++) CHECK(av_d3d_CreateResource(wire, out + stream, buffer, 0u, 0u, 0u));
+    const InputElement streamed_layout[2] = {{0u, 0u, format_r32g32, 0u, 0u, 0u}, {0u, 16u, format_r32g32b32, 0u, 0u, 1u}};
+    CHECK(av_d3d_CreateInputLayout(wire, layout, 2u, streamed_layout));
+    constexpr std::uint32_t query_pipeline_statistics = 4u;
+    CHECK(av_d3d_CreateQuery(wire, statistics, query_pipeline_statistics, 0u));
+    CHECK_EQ(wire.refused(), 0u);
+
+    bind_triangle(wire);
+    const VertexBufferBinding from_points = {points, sizeof(Vertex), 0u};
+    CHECK(av_d3d_SetVertexBuffers(wire, 0u, 1u, &from_points));
+    CHECK(av_d3d_SetTopology(wire, 1u));
+    CHECK(av_d3d_SetShader(wire, stage_geometry, gs));
+    const StreamOutTarget targets[4] = {{out, 0u}, {out + 1u, 0u}, {out + 2u, 0u}, {out + 3u, 0u}};
+    CHECK(av_d3d_SetStreamOutTargets(wire, 4u, targets));
+    CHECK(av_d3d_Draw(wire, point_count, 0u));
+    CHECK(av_d3d_SetStreamOutTargets(wire, 0u, nullptr));
+    CHECK(av_d3d_SetShader(wire, stage_geometry, 0u));
+    static std::uint8_t pixels[size * size * 4u];
+    std::uint32_t row_pitch = 0u, depth_pitch = 0u;
+    std::uint64_t read = 0u;
+    CHECK(av_d3d_ReadSubresource(wire, 1u, 0u, &hresult, &row_pitch, &depth_pitch, pixels, sizeof(pixels), &read));
+    CHECK_EQ(hresult, 0u);
+    std::uint32_t drawn = 0u;
+    for (std::uint32_t y = 0u; y < size; y++)
+        for (std::uint32_t x = 0u; x < size; x++) drawn += pixel(pixels, x, y) != 0xff0000ffu ? 1u : 0u;
+    std::fprintf(stderr, "the stream output draw drew %u pixels, the centre is %08x\n", drawn,
+                 pixel(pixels, size / 2u - 1u, size / 2u - 1u));
+    CHECK(drawn >= point_count / 2u);
+    CHECK_EQ(pixel(pixels, size / 2u - 1u, size / 2u - 1u), 0xff0000ffu);
+    CHECK(av_d3d_SetInputLayout(wire, layout));
+    for (std::uint32_t stream = 0u; stream < 4u; stream++) {
+        const VertexBufferBinding from_stream = {out + stream, stride, 0u};
+        CHECK(av_d3d_SetVertexBuffers(wire, 0u, 1u, &from_stream));
+        CHECK(av_d3d_BeginQuery(wire, statistics));
+        CHECK(av_d3d_DrawAuto(wire));
+        CHECK(av_d3d_EndQuery(wire, statistics));
+        std::uint64_t counts[16] = {};
+        std::uint32_t ready = 0u;
+        std::uint64_t answered = 0u;
+        for (int attempt = 0; attempt < 200 && ready == 0u; attempt++)
+            CHECK(av_d3d_GetQueryData(wire, statistics, 0u, &ready, counts, sizeof(counts), &answered));
+        CHECK_EQ(ready, 1u);
+        std::fprintf(stderr, "draw auto of stream %u: %llu vertices\n", stream, static_cast<unsigned long long>(counts[0]));
+        CHECK_EQ(counts[0], static_cast<std::uint64_t>(point_count));
+    }
+    CHECK(av_d3d_ReadSubresource(wire, 1u, 0u, &hresult, &row_pitch, &depth_pitch, pixels, sizeof(pixels), &read));
+    CHECK_EQ(hresult, 0u);
+    std::fprintf(stderr, "after the draws auto the centre is %08x\n", pixel(pixels, size / 2u - 1u, size / 2u - 1u));
+    CHECK_EQ(pixel(pixels, size / 2u - 1u, size / 2u - 1u), 0xff0000ffu);
+    std::uint32_t removed = 1u;
+    CHECK(av_d3d_Finish11(wire, &removed));
+    CHECK_EQ(removed, 0u);
+    CHECK_EQ(wire.refused(), 0u);
+    backend.shut_down();
+}
+
 
 namespace {
 

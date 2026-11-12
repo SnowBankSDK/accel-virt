@@ -1,0 +1,80 @@
+From: accel-virt
+Subject: [PATCH] A host without rasterization stream select rasterizes the stream Direct3D names as stream 0
+
+Vulkan rasterizes a stream other than 0 only with transformFeedbackRasterizationStreamSelect, which RADV and ANV do not report, and DXVK chained rasterizationStream to the pipeline anyway, so stream 0 was rasterized: its vertices carry no position, the position belonging to the named stream, and each was drawn at an undefined place with undefined attributes. On such a host the geometry shader of a pipeline that rasterizes stream N is changed with the shared stream swap so that stream N and stream 0 trade their outputs and the vertices and primitives emitted to them, and the pipeline keeps rasterizing stream 0. The stream output buffers are bound per buffer and keep what they capture. Other shaders pay nothing.
+---
+diff --git a/src/dxvk/dxvk_device.cpp b/src/dxvk/dxvk_device.cpp
+--- a/src/dxvk/dxvk_device.cpp
++++ b/src/dxvk/dxvk_device.cpp
+@@ -820,6 +820,9 @@ namespace dxvk {
+     if (m_features.nvRawAccessChains.shaderRawAccessChains)
+       m_shaderOptions.spirv.set(DxvkShaderSpirvFlag::SupportsNvRawAccessChains);
+ 
++    if (m_properties.extTransformFeedback.transformFeedbackRasterizationStreamSelect)
++      m_shaderOptions.spirv.set(DxvkShaderSpirvFlag::SupportsRasterizationStreamSelect);
++
+     // Mesa drivers generally optimize large constant arrays to a buffer, some other
+     // drivers do not and suffer a significant performance loss. Enable lowering on
+     // those drivers.
+diff --git a/src/dxvk/dxvk_graphics.cpp b/src/dxvk/dxvk_graphics.cpp
+--- a/src/dxvk/dxvk_graphics.cpp
++++ b/src/dxvk/dxvk_graphics.cpp
+@@ -566,7 +566,7 @@ namespace dxvk {
+     // Rasterizing stream 0 is default behaviour in all situations.
+     int32_t streamIndex = shaders.gs ? shaders.gs->metadata().rasterizedStream : 0;
+ 
+-    if (streamIndex > 0) {
++    if (streamIndex > 0 && device->properties().extTransformFeedback.transformFeedbackRasterizationStreamSelect) {
+       rsXfbStreamInfo.pNext = std::exchange(rsInfo.pNext, &rsXfbStreamInfo);
+       rsXfbStreamInfo.rasterizationStream = uint32_t(streamIndex);
+     } else if (streamIndex < 0) {
+diff --git a/src/dxvk/dxvk_shader.h b/src/dxvk/dxvk_shader.h
+--- a/src/dxvk/dxvk_shader.h
++++ b/src/dxvk/dxvk_shader.h
+@@ -114,6 +114,7 @@ namespace dxvk {
+     SupportsResourceIndexing    = 20u,
+     /// Whether descriptor heap is used as the binding model.
+     SupportsDescriptorHeap      = 21u,
++    SupportsRasterizationStreamSelect = 22u,
+   };
+ 
+   using DxvkShaderSpirvFlags = Flags<DxvkShaderSpirvFlag>;
+diff --git a/src/dxvk/dxvk_shader_ir.cpp b/src/dxvk/dxvk_shader_ir.cpp
+--- a/src/dxvk/dxvk_shader_ir.cpp
++++ b/src/dxvk/dxvk_shader_ir.cpp
+@@ -6,6 +6,8 @@
+ 
+ #include "dxvk_shader_ir.h"
+ 
++#include "../util/av_stream_swap.h"
++
+ namespace dxvk {
+ 
+   size_t DxvkIrShaderCreateInfo::hash() const {
+@@ -2144,7 +2146,25 @@ namespace dxvk {
+     dxbc_spv::spirv::SpirvBuilder spirvBuilder(irBuilder, mapping, options);
+     spirvBuilder.buildSpirvBinary();
+ 
+-    return SpirvCodeBuffer(spirvBuilder.getSpirvBinary());
++    auto binary = spirvBuilder.getSpirvBinary();
++
++    if (m_metadata.stage == VK_SHADER_STAGE_GEOMETRY_BIT && m_metadata.rasterizedStream > 0
++     && !m_info.options.spirv.test(DxvkShaderSpirvFlag::SupportsRasterizationStreamSelect)) {
++      uint32_t* swapped = nullptr;
++      size_t swappedCount = 0u;
++
++      if (!av_ss_rasterize_stream_as_zero(binary.data(), binary.size(),
++          uint32_t(m_metadata.rasterizedStream), &swapped, &swappedCount)) {
++        SpirvCodeBuffer code(uint32_t(swappedCount), swapped);
++        free(swapped);
++        return code;
++      }
++
++      Logger::warn(str::format(debugName(), ": stream ", m_metadata.rasterizedStream,
++        " cannot be rasterized as stream 0, stream 0 is rasterized instead"));
++    }
++
++    return SpirvCodeBuffer(std::move(binary));
+   }
+ 
+ 

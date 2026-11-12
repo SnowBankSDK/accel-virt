@@ -388,6 +388,9 @@ foreach(src ${AV_UNIT_TESTS})
   if(name STREQUAL "test_line_coverage_spirv")
     target_include_directories(${name} SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/tools/line-coverage)
   endif()
+  if(name STREQUAL "test_stream_swap_spirv")
+    target_include_directories(${name} SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/tools/stream-swap)
+  endif()
   if(name STREQUAL "test_posix_renderer_host" OR name STREQUAL "test_renderer_process")
     target_link_libraries(${name} PRIVATE ${CMAKE_DL_LIBS})
     add_dependencies(${name} av_echo_executor av-renderer)
@@ -747,8 +750,8 @@ endif()
 add_test(NAME check_spirv
          COMMAND python3 -B ${CMAKE_SOURCE_DIR}/tools/gen_spirv.py --check)
 
-add_test(NAME line_coverage_patches
-         COMMAND python3 -B ${CMAKE_SOURCE_DIR}/tools/line_coverage_patches.py --check)
+add_test(NAME shared_header_patches
+         COMMAND python3 -B ${CMAKE_SOURCE_DIR}/tools/shared_header_patches.py --check)
 
 add_test(NAME extension_policy
          COMMAND python3 -B ${CMAKE_SOURCE_DIR}/tools/check_extension_policy.py ${CMAKE_SOURCE_DIR})
