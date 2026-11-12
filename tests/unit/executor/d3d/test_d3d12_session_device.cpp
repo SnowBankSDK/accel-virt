@@ -33,6 +33,7 @@
 #include "proto/resources/surface_point.hpp"
 
 #include <cstdint>
+#include <initializer_list>
 #include <cstdio>
 #include "proto/d3d/caps12_layout.hpp"
 
@@ -1557,6 +1558,177 @@ TEST(d3d12_session_device, a_copy_queue_moves_and_fills_rows_another_adapter_len
     CHECK_EQ(removed, 0u);
     CHECK_EQ(wire.refused(), 0u);
     wire.close_memory(lent);
+    backend.shut_down();
+}
+
+namespace {
+
+enum class Holder : std::uint32_t { committed, placed, lent, guest_pages };
+
+constexpr std::uint32_t queue_types[] = {0u, 2u, 3u};
+constexpr Holder        holders[] = {Holder::committed, Holder::placed, Holder::lent, Holder::guest_pages};
+
+LayoutBarrier copy_barrier(std::uint32_t resource, std::uint32_t sync_before, std::uint32_t access_before,
+                           std::uint32_t access_after)
+{
+    constexpr std::uint32_t sync_copy = 0x200u;
+    LayoutBarrier barrier = {};
+    barrier.type = 1u;
+    barrier.sync_before = sync_before;
+    barrier.sync_after = sync_copy;
+    barrier.access_before = access_before;
+    barrier.access_after = access_after;
+    barrier.resource = resource;
+    barrier.mip_count = 1u;
+    barrier.slice_count = 1u;
+    barrier.plane_count = 1u;
+    return barrier;
+}
+
+ResourceDesc texture_of(bool row_major)
+{
+    ResourceDesc desc = {};
+    desc.dimension = dimension_texture2d;
+    desc.width = size;
+    desc.height = size;
+    desc.depth_or_array = 1u;
+    desc.mip_levels = 1u;
+    desc.format = format_b8g8r8a8;
+    desc.sample_count = 1u;
+    desc.layout = row_major ? layout_row_major : 0u;
+    desc.flags = flag_render_target;
+    return desc;
+}
+
+CopyLocation rows_in(std::uint32_t buffer)
+{
+    CopyLocation rows = {};
+    rows.resource = buffer;
+    rows.type = 1u;
+    rows.format = format_b8g8r8a8;
+    rows.width = size;
+    rows.height = size;
+    rows.depth = 1u;
+    rows.row_pitch = row_pitch;
+    return rows;
+}
+
+bool make_holder(av::D3dLoopback &wire, Holder holder, std::uint32_t id, std::uint64_t &lent)
+{
+    std::uint32_t hresult = 1u;
+    std::uint64_t placed = 0u;
+    switch (holder) {
+    case Holder::committed:
+        return av_d3d12_CreateCommittedResource12(wire, id, heap_of(heap_default), 0u, texture_of(false), 0u,
+                                                   ClearValue{}, 0u, &hresult) &&
+               hresult == 0u;
+    case Holder::placed:
+        return av_d3d12_CreateHeap12(wire, id + 1u, heap_of(heap_default), 0u, heap_bytes, 0u, 0u, 0u, &hresult,
+                                     &placed) &&
+               hresult == 0u &&
+               av_d3d12_CreatePlacedResource12(wire, id, id + 1u, 0u, texture_of(false), 0u, ClearValue{}, 0u);
+    case Holder::lent:
+        lent = wire.open_memory(readback_memory, std::uint64_t{row_pitch} * size);
+        return lent != 0u && av_d3d12_AdoptLentImage12(wire, id, lent, texture_of(true), row_pitch, &hresult) &&
+               hresult == 0u;
+    case Holder::guest_pages:
+        lent = wire.open_memory(readback_memory, heap_bytes);
+        return lent != 0u &&
+               av_d3d12_CreateHeap12(wire, id + 1u, heap_of(heap_readback), 0u, heap_bytes, 0u, lent, 0u) &&
+               av_d3d12_CreatePlacedResource12(wire, id, id + 1u, 0u, buffer_of(row_pitch * size), state_copy_dest,
+                                               ClearValue{}, readback_address + heap_bytes);
+    }
+    return false;
+}
+
+std::uint32_t wrong_pixels(const av::D3dLoopback &wire, std::uint32_t expected)
+{
+    std::uint32_t wrong = 0u;
+    for (std::uint32_t y = 0u; y < size; y++)
+        for (std::uint32_t x = 0u; x < size; x++) wrong += pixel(wire, x, y) != expected ? 1u : 0u;
+    return wrong;
+}
+
+void copy_through(av::D3dLoopback &wire, std::uint32_t type, Holder holder, std::uint32_t base, std::uint32_t colour)
+{
+    constexpr std::uint32_t access_copy_dest = 0x400u;
+    constexpr std::uint32_t access_copy_source = 0x800u;
+    constexpr std::uint32_t access_none = 0x80000000u;
+    constexpr std::uint32_t sync_copy = 0x200u;
+    const std::uint32_t command_queue = base, command_allocator = base + 1u, command_list = base + 2u;
+    const std::uint32_t pixels = base + 3u, held = base + 4u;
+    for (std::uint32_t at = 0u; at < size * size; at++) std::memcpy(wire.memory(heaps.upload, at * 4u), &colour, 4u);
+    std::memset(wire.memory(heaps.readback), 0xcd, heap_bytes);
+    CHECK(av_d3d12_CreatePlacedResource12(wire, pixels, upload_heap, 0u, buffer_of(row_pitch * size),
+                                           state_generic_read, ClearValue{}, upload_address));
+    std::uint64_t lent = 0u;
+    CHECK(make_holder(wire, holder, held, lent));
+    CHECK(av_d3d12_CreateCommandQueue12(wire, command_queue, type, 0u, 0u));
+    CHECK(av_d3d12_CreateCommandAllocator12(wire, command_allocator, type));
+    CHECK(av_d3d12_CreateCommandList12(wire, command_list, command_allocator, type, 0u));
+    if (holder == Holder::guest_pages) {
+        CHECK(av_d3d12_CopyBufferRegion12(wire, command_list, held, 0u, pixels, 0u, row_pitch * size));
+        LayoutBarrier between = {};
+        between.sync_before = sync_copy;
+        between.sync_after = sync_copy;
+        between.access_before = access_copy_dest;
+        between.access_after = access_copy_source;
+        CHECK(av_d3d12_Barrier12(wire, command_list, 1u, &between));
+        CHECK(av_d3d12_CopyBufferRegion12(wire, command_list, readback, 0u, held, 0u, row_pitch * size));
+    } else {
+        const LayoutBarrier into = copy_barrier(held, 0u, access_none, access_copy_dest);
+        CHECK(av_d3d12_Barrier12(wire, command_list, 1u, &into));
+        CopyLocation texture = {};
+        texture.resource = held;
+        CHECK(av_d3d12_CopyTextureRegion12(wire, command_list, texture, 0u, 0u, 0u, rows_in(pixels), 0u, Box{}));
+        const LayoutBarrier out = copy_barrier(held, sync_copy, access_copy_dest, access_copy_source);
+        CHECK(av_d3d12_Barrier12(wire, command_list, 1u, &out));
+        CHECK(av_d3d12_CopyTextureRegion12(wire, command_list, rows_in(readback), 0u, 0u, 0u, texture, 0u, Box{}));
+    }
+    CHECK(av_d3d12_CloseCommandList12(wire, command_list));
+    const std::uint32_t lists[1] = {command_list};
+    CHECK(av_d3d12_ExecuteCommandLists12(wire, command_queue, 1u, lists));
+    std::uint32_t removed = 1u;
+    CHECK(av_d3d12_Finish12(wire, &removed));
+    CHECK_EQ(removed, 0u);
+    const std::uint32_t wrong = wrong_pixels(wire, colour);
+    if (wrong != 0u) std::fprintf(stderr, "queue type %u holder %u: %u pixels wrong\n", type, static_cast<std::uint32_t>(holder), wrong);
+    CHECK_EQ(wrong, 0u);
+    for (const std::uint32_t id : {command_list, command_allocator, command_queue, held, pixels})
+        CHECK(av_d3d12_Destroy12(wire, id));
+    if (holder == Holder::placed || holder == Holder::guest_pages) CHECK(av_d3d12_Destroy12(wire, held + 1u));
+    CHECK(av_d3d12_Finish12(wire, &removed));
+    CHECK_EQ(removed, 0u);
+    if (lent != 0u) wire.close_memory(lent);
+}
+
+}
+
+TEST(d3d12_session_device, each_kind_of_resource_the_host_holds_is_copied_through_barriers_on_direct_compute_and_copy_queues)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice *device11 = nullptr;
+    av::D3d12HostDevice *device12 = nullptr;
+    av::HostShares      *shares = nullptr;
+    av::HostMemorySource *source = nullptr;
+    if (!host_devices(apis, device11, device12, shares, source)) return;
+    av::D3dBackend    backend(rig.log);
+    av::SessionShares session;
+    CHECK(backend.initialize(*shared_as(session, shares, backend), rig.imports, device11, device12));
+    av::D3dLoopback wire(backend, rig.imports, source, region_bytes, lent_bytes);
+    make_frame(wire);
+    heaps.upload = wire.open_memory(upload_memory, heap_bytes);
+    CHECK(heaps.upload != 0u);
+    CHECK(av_d3d12_CreateHeap12(wire, upload_heap, heap_of(heap_upload), 0u, heap_bytes, 0u, heaps.upload, 0u));
+    std::uint32_t base = 200u;
+    for (const std::uint32_t type : queue_types)
+        for (const Holder holder : holders) {
+            copy_through(wire, type, holder, base, 0xff000000u | (base * 0x010307u));
+            base += 10u;
+        }
+    CHECK_EQ(wire.refused(), 0u);
+    CHECK(backend.invariants_hold());
     backend.shut_down();
 }
 
