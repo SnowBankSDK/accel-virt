@@ -1,0 +1,206 @@
+From: accel-virt
+Subject: [PATCH] Direct3D 9 texture coordinate wrapping applies to the texture coordinates a programmable pixel shader reads
+
+While a WRAPn state is set, a triangle draw with a programmable pixel shader whose inputs
+all sit at the fixed-function locations goes through the geometry stage that moves the
+wrapped components of the second and third vertex to within half a unit of the first. Set n
+is the coordinate the vertex stage writes to TEXCOORDn: the stage's TEXCOORDINDEX when the
+vertex stage is fixed-function, n itself when a vertex shader runs. The runtime turns
+fixed-function texturing into its own ps_2_0 shader, so this is the path applications take.
+The stage is bound only while a wrap is set.
+---
+diff --git a/src/d3d9/d3d9_device.cpp b/src/d3d9/d3d9_device.cpp
+index 5159639..88c22ab 100644
+--- a/src/d3d9/d3d9_device.cpp
++++ b/src/d3d9/d3d9_device.cpp
+@@ -2482,6 +2482,8 @@ namespace dxvk {
+         case D3DRS_WRAP5:
+         case D3DRS_WRAP6:
+         case D3DRS_WRAP7:
++          m_texCoordWrapSets &= ~(1u << (State - D3DRS_WRAP0));
++          m_texCoordWrapSets |= (Value & 0xfu) ? 1u << (State - D3DRS_WRAP0) : 0u;
+           m_dirty.set(D3D9DeviceDirtyFlag::FFPixelShader);
+           break;
+ 
+@@ -4798,7 +4800,7 @@ namespace dxvk {
+ 
+ 
+   bool D3D9DeviceEx::ShiftsTexCoordWrap() {
+-    return !InterpolatesTexCoordWrap() && m_dxvkDevice->features().core.features.geometryShader;
++    return m_dxvkDevice->features().core.features.geometryShader;
+   }
+ 
+ 
+@@ -7615,6 +7617,9 @@ namespace dxvk {
+       }
+     }
+ 
++    if (unlikely(m_texCoordWrapSets || m_ffGsWrapBound))
++      BindWrapGeometryShader(PrimitiveType);
++
+     if (unlikely(m_dirty.test(D3D9DeviceDirtyFlag::DepthBounds))) {
+       m_dirty.clr(D3D9DeviceDirtyFlag::DepthBounds);
+ 
+@@ -7662,9 +7667,6 @@ namespace dxvk {
+                     D3D9DeviceDirtyFlag::PushDataFfps))
+       UpdatePushData();
+ 
+-    if (unlikely(m_ffGsWrapsTexCoords || m_ffGsWrapBound))
+-      BindWrapGeometryShader(PrimitiveType);
+-
+     ApplyPrimitiveType(PrimitiveType);
+   }
+ 
+@@ -8592,19 +8594,9 @@ namespace dxvk {
+     for (uint32_t i = activeTextureStageCount; i < caps::TextureStageCount; i++)
+       dirty |= m_specData.disableTextureStage(i);
+ 
+-    uint32_t texCoordWrap = 0u;
+-
+-    if (SupportsTexCoordWrap()) {
+-      const bool useTexcoordIndex = !UseProgrammableVS();
+-
+-      for (uint32_t i = 0u; i < activeTextureStageCount; i++) {
+-        uint32_t set = useTexcoordIndex
+-          ? m_state.textureStages[i][DXVK_TSS_TEXCOORDINDEX] & 0b111u
+-          : i;
+-
+-        texCoordWrap |= (m_state.renderStates[D3DRS_WRAP0 + set] & 0xfu) << (4u * i);
+-      }
+-    }
++    uint32_t texCoordWrap = SupportsTexCoordWrap()
++      ? TexCoordWrapMask(activeTextureStageCount)
++      : 0u;
+ 
+     dirty |= m_specData.setTexCoordWrap(texCoordWrap);
+ 
+@@ -8644,13 +8636,44 @@ namespace dxvk {
+   }
+ 
+ 
++  uint32_t D3D9DeviceEx::TexCoordWrapMask(uint32_t CoordCount) {
++    const bool useTexcoordIndex = !UseProgrammableVS();
++
++    uint32_t mask = 0u;
++
++    for (uint32_t i = 0u; i < CoordCount; i++) {
++      uint32_t set = useTexcoordIndex
++        ? m_state.textureStages[i][DXVK_TSS_TEXCOORDINDEX] & 0b111u
++        : i;
++
++      mask |= (m_state.renderStates[D3DRS_WRAP0 + set] & 0xfu) << (4u * i);
++    }
++
++    return mask;
++  }
++
++
+   void D3D9DeviceEx::BindWrapGeometryShader(D3DPRIMITIVETYPE PrimType) {
+     const bool triangles = PrimType == D3DPT_TRIANGLELIST
+                         || PrimType == D3DPT_TRIANGLESTRIP
+                         || PrimType == D3DPT_TRIANGLEFAN;
+ 
+-    const bool wanted = m_ffGsWrapsTexCoords && triangles
+-                     && !UseProgrammableVS() && !UseProgrammablePS();
++    bool wanted = false;
++
++    if (triangles && ShiftsTexCoordWrap()) {
++      if (UseProgrammablePS()) {
++        uint32_t texCoordWrap = GetCommonShader(m_state.pixelShader)->ReadsOnlyFixedFunctionInputs()
++          ? TexCoordWrapMask(caps::TextureStageCount)
++          : 0u;
++
++        if (texCoordWrap && m_specData.setTexCoordWrap(texCoordWrap))
++          m_dirty.set(D3D9DeviceDirtyFlag::SpecializationEntries);
++
++        wanted = texCoordWrap != 0u;
++      } else {
++        wanted = m_ffGsWrapsTexCoords;
++      }
++    }
+ 
+     if (wanted == m_ffGsWrapBound)
+       return;
+@@ -8930,6 +8953,7 @@ namespace dxvk {
+     rs[D3DRS_WRAP5]                      = 0;
+     rs[D3DRS_WRAP6]                      = 0;
+     rs[D3DRS_WRAP7]                      = 0;
++    m_texCoordWrapSets                   = 0u;
+     rs[D3DRS_CLIPPING]                   = TRUE;
+     rs[D3DRS_MULTISAMPLEANTIALIAS]       = TRUE;
+     rs[D3DRS_PATCHEDGESTYLE]             = D3DPATCHEDGE_DISCRETE;
+diff --git a/src/d3d9/d3d9_device.h b/src/d3d9/d3d9_device.h
+index a311bec..fe5c108 100644
+--- a/src/d3d9/d3d9_device.h
++++ b/src/d3d9/d3d9_device.h
+@@ -810,6 +810,8 @@ namespace dxvk {
+ 
+     bool ShiftsTexCoordWrap();
+ 
++    uint32_t TexCoordWrapMask(uint32_t CoordCount);
++
+     void BindWrapGeometryShader(D3DPRIMITIVETYPE PrimType);
+ 
+     bool SupportsVCacheQuery() const;
+@@ -1635,6 +1637,7 @@ namespace dxvk {
+     bool                            m_ffPsWrapsTexCoords = false;
+     bool                            m_ffGsWrapsTexCoords = false;
+     bool                            m_ffGsWrapBound      = false;
++    uint8_t                         m_texCoordWrapSets   = 0u;
+     bool                            m_ffZTest          = false;
+ 
+     // the enablement of below features is tracked independently
+diff --git a/src/d3d9/d3d9_shader.h b/src/d3d9/d3d9_shader.h
+index 8428df1..c171619 100644
+--- a/src/d3d9/d3d9_shader.h
++++ b/src/d3d9/d3d9_shader.h
+@@ -118,6 +118,8 @@ namespace dxvk {
+       return m_analysis.GetConstantLayout();
+     }
+ 
++    bool ReadsOnlyFixedFunctionInputs() const { return m_analysis.ReadsOnlyFixedFunctionInputs(); }
++
+     D3D9ShaderMasks GetShaderMask() const { return D3D9ShaderMasks{ m_analysis.GetSamplerMask(), m_analysis.GetRenderTargetMask() }; }
+ 
+     dxbc_spv::sm3::ShaderInfo GetInfo() const { return m_analysis.GetShaderInfo(); }
+diff --git a/src/d3d9/d3d9_shader_analysis.cpp b/src/d3d9/d3d9_shader_analysis.cpp
+index fe94df1..97c5c9f 100644
+--- a/src/d3d9/d3d9_shader_analysis.cpp
++++ b/src/d3d9/d3d9_shader_analysis.cpp
+@@ -312,6 +312,12 @@ namespace dxvk {
+       return true;
+     }
+ 
++    if (registerType == RegisterType::eInput
++     && GetShaderInfo().getType() == ShaderType::ePixel
++     && GetShaderInfo().getVersion().first == 3u
++     && !FindLocationInFixedFunctionIO(Semantic { dcl.getSemanticUsage(), dcl.getSemanticIndex() }))
++      m_readsOnlyFixedFunctionInputs = false;
++
+     if (GetShaderInfo().getType() == ShaderType::ePixel
+      && GetShaderInfo().getVersion().first == 3u
+      && dcl.getSemanticUsage() == SemanticUsage::eColor
+diff --git a/src/d3d9/d3d9_shader_analysis.h b/src/d3d9/d3d9_shader_analysis.h
+index 12d3e7d..4d9190d 100644
+--- a/src/d3d9/d3d9_shader_analysis.h
++++ b/src/d3d9/d3d9_shader_analysis.h
+@@ -221,6 +221,10 @@ public:
+     return m_flatShadingMask;
+   }
+ 
++  bool ReadsOnlyFixedFunctionInputs() const {
++    return m_readsOnlyFixedFunctionInputs;
++  }
++
+   explicit operator bool() const {
+     return m_length != 0u;
+   }
+@@ -265,6 +269,8 @@ private:
+ 
+   uint32_t m_flatShadingMask = 0u;
+ 
++  bool m_readsOnlyFixedFunctionInputs = true;
++
+   D3D9InputSignature m_inputSignature = {};
+ 
+   static void setBit(ConstantMask& mask, uint32_t bit);

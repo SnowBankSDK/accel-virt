@@ -940,6 +940,25 @@ constexpr std::uint32_t stage_texcoord_index = 11u;
 constexpr std::uint32_t wrap_coord_0 = 1u;
 constexpr std::uint32_t wrap_coord_1 = 2u;
 constexpr std::uint32_t texels = 8u;
+constexpr std::uint32_t decl_float2 = 1u;
+constexpr std::uint32_t usage_texcoord = 5u;
+constexpr std::uint32_t usage_positiont = 9u;
+
+constexpr std::uint32_t runtime_texture_ps_t0[] = {
+    0xffff0200u, 0x0002fffeu, 0x54584554u, 0x00464624u, 0x0200001fu, 0x80000000u, 0x900f0000u, 0x0200001fu,
+    0x80000000u, 0xb00f0000u, 0x0200001fu, 0x90000000u, 0xa00f0800u, 0x03000042u, 0x802f0001u, 0xb0e40000u,
+    0xa0e40800u, 0x03000005u, 0x80370005u, 0x80e40001u, 0x90e40000u, 0x02000001u, 0x80380005u, 0x80e40001u,
+    0x02000001u, 0x802f0001u, 0x80e40005u, 0x02000001u, 0x802f0800u, 0x80e40001u, 0x0000ffffu};
+constexpr std::uint32_t texture_ps_t1[] = {
+    0xffff0200u, 0x0200001fu, 0x80000000u, 0x900f0000u, 0x0200001fu, 0x80000000u, 0xb00f0001u, 0x0200001fu,
+    0x90000000u, 0xa00f0800u, 0x03000042u, 0x802f0001u, 0xb0e40001u, 0xa0e40800u, 0x03000005u, 0x80370005u,
+    0x80e40001u, 0x90e40000u, 0x02000001u, 0x80380005u, 0x80e40001u, 0x02000001u, 0x802f0800u, 0x80e40005u,
+    0x0000ffffu};
+constexpr std::uint32_t texcoord_vs[] = {
+    0xfffe0200u, 0x0200001fu, 0x80000000u, 0x900f0000u, 0x0200001fu, 0x8000000au, 0x900f0001u, 0x0200001fu,
+    0x80000005u, 0x900f0002u, 0x0200001fu, 0x80010005u, 0x900f0003u, 0x02000001u, 0xc00f0000u, 0x90e40000u,
+    0x02000001u, 0xd00f0000u, 0x90e40001u, 0x02000001u, 0xe00f0000u, 0x90e40002u, 0x02000001u, 0xe00f0001u,
+    0x90e40003u, 0x0000ffffu};
 
 struct WrapVertex {
     float         x, y, z, rhw;
@@ -957,11 +976,13 @@ struct WrapDraw {
     bool          expect_wrapped;
 };
 
-enum class WrapPath : std::uint8_t { list_point, strip_linear_at_offset };
+enum class WrapPath : std::uint8_t { list_point, strip_linear_at_offset, runtime_pixel_shader, vertex_and_pixel_shader };
 
 void draw_wrapped(av::D3dLoopback &wire, const WrapDraw &draw, WrapPath path)
 {
-    const bool          strip = path == WrapPath::strip_linear_at_offset;
+    const bool          strip = path != WrapPath::list_point;
+    const bool          runtime_shader = path == WrapPath::runtime_pixel_shader;
+    const bool          programmable_vs = path == WrapPath::vertex_and_pixel_shader;
     const std::uint32_t filter = strip ? texf_linear : texf_point;
     CHECK(av_d3d9_CreateTexture9(wire, texture, 1u, texels, texels, 1u, 1u, 0u, format_a8r8g8b8, pool_managed));
     std::uint32_t image[texels * texels];
@@ -973,7 +994,7 @@ void draw_wrapped(av::D3dLoopback &wire, const WrapDraw &draw, WrapPath path)
     const std::uint32_t samplers[] = {0u, sampler_min_filter, filter, 0u, sampler_mag_filter, filter,
                                       0u, sampler_address_u, taddress_wrap, 0u, sampler_address_v, taddress_wrap};
     CHECK(av_d3d9_SetSamplerStates9(wire, 12u, samplers));
-    if (draw.second_set) {
+    if (draw.second_set && !programmable_vs) {
         const std::uint32_t stage[] = {0u, stage_texcoord_index, 1u};
         CHECK(av_d3d9_SetTextureStageStates9(wire, 3u, stage));
     }
@@ -984,7 +1005,9 @@ void draw_wrapped(av::D3dLoopback &wire, const WrapDraw &draw, WrapPath path)
     const float a = draw.along_u ? 0.9f : 0.5f, b = draw.along_u ? 0.1f : 0.5f;
     const float va = draw.along_u ? 0.5f : 0.9f, vb = draw.along_u ? 0.5f : 0.1f;
     const float z = draw.second_set ? 0.0f : 1.0f;
+    const float half = edge / 2.0f;
     const auto  vertex = [&](float x, float y, float u, float v) {
+        if (programmable_vs) return WrapVertex{x / half - 1.0f, 1.0f - y / half, 0.5f, 1.0f, 0xffffffffu, u * z, v * z, u, v};
         return WrapVertex{x, y, 0.5f, 1.0f, 0xffffffffu, u * z, v * z, u, v};
     };
     const WrapVertex quad[6] = {vertex(0.0f, 0.0f, a, va),  vertex(edge, 0.0f, b, va),  vertex(0.0f, edge, a, vb),
@@ -1000,7 +1023,26 @@ void draw_wrapped(av::D3dLoopback &wire, const WrapDraw &draw, WrapPath path)
                                reinterpret_cast<const std::uint8_t *>(strip ? static_cast<const void *>(band)
                                                                             : static_cast<const void *>(quad)),
                                bytes));
-    CHECK(av_d3d9_SetFvf9(wire, draw.second_set ? fvf_xyzrhw_diffuse_tex2 : fvf_xyzrhw_diffuse_tex1));
+    if (runtime_shader || programmable_vs) {
+        const VertexElement elements[4] = {{0u, 0u, decl_float4, 0u, programmable_vs ? usage_position : usage_positiont, 0u},
+                                           {0u, 16u, decl_d3dcolor, 0u, usage_color, 0u},
+                                           {0u, 20u, decl_float2, 0u, usage_texcoord, 0u},
+                                           {0u, 28u, decl_float2, 0u, usage_texcoord, 1u}};
+        CHECK(av_d3d9_CreateVertexDeclaration9(wire, declaration, 4u, elements));
+        CHECK(av_d3d9_SetVertexDeclaration9(wire, declaration));
+        const bool          reads_t1 = programmable_vs && draw.second_set;
+        const std::uint32_t *const code = reads_t1 ? texture_ps_t1 : runtime_texture_ps_t0;
+        const std::uint64_t code_size = reads_t1 ? sizeof(texture_ps_t1) : sizeof(runtime_texture_ps_t0);
+        CHECK(av_d3d9_CreatePixelShader9(wire, pixel_shader, reinterpret_cast<const std::uint8_t *>(code), code_size));
+        CHECK(av_d3d9_SetPixelShader9(wire, pixel_shader));
+        if (programmable_vs) {
+            CHECK(av_d3d9_CreateVertexShader9(wire, vertex_shader, reinterpret_cast<const std::uint8_t *>(texcoord_vs),
+                                              sizeof(texcoord_vs)));
+            CHECK(av_d3d9_SetVertexShader9(wire, vertex_shader));
+        }
+    } else {
+        CHECK(av_d3d9_SetFvf9(wire, draw.second_set ? fvf_xyzrhw_diffuse_tex2 : fvf_xyzrhw_diffuse_tex1));
+    }
     CHECK(av_d3d9_SetStreamSource9(wire, 0u, vertices, offset, sizeof(WrapVertex)));
     CHECK(av_d3d9_DrawPrimitive9(wire, strip ? triangle_strip : triangle_list, 0u, 2u));
 }
@@ -1103,6 +1145,26 @@ TEST(d3d9_session_device, a_wrapped_coordinate_of_a_filtered_strip_drawn_from_a_
     check_wrap({false, false, render_state_wrap0, wrap_coord_1, true}, WrapPath::strip_linear_at_offset);
     check_wrap({true, true, render_state_wrap0 + 1u, wrap_coord_0, true}, WrapPath::strip_linear_at_offset);
     check_wrap({true, false, render_state_wrap0, 0u, false}, WrapPath::strip_linear_at_offset);
+}
+
+TEST(d3d9_session_device, a_wrapped_coordinate_read_by_the_runtimes_texturing_pixel_shader_takes_the_short_way_round)
+{
+    for (const char *const withheld : {static_cast<const char *>(nullptr), "fragmentShaderBarycentric"}) {
+        check_wrap({true, false, render_state_wrap0, wrap_coord_0, true}, WrapPath::runtime_pixel_shader, withheld);
+        check_wrap({false, false, render_state_wrap0, wrap_coord_1, true}, WrapPath::runtime_pixel_shader, withheld);
+        check_wrap({true, true, render_state_wrap0 + 1u, wrap_coord_0, true}, WrapPath::runtime_pixel_shader, withheld);
+        check_wrap({true, false, render_state_wrap0 + 3u, wrap_coord_0, false}, WrapPath::runtime_pixel_shader, withheld);
+        check_wrap({true, false, render_state_wrap0, 0u, false}, WrapPath::runtime_pixel_shader, withheld);
+    }
+}
+
+TEST(d3d9_session_device, a_wrapped_coordinate_a_vertex_shader_writes_takes_the_short_way_round_in_the_pixel_shader)
+{
+    for (const char *const withheld : {static_cast<const char *>(nullptr), "fragmentShaderBarycentric"}) {
+        check_wrap({true, false, render_state_wrap0, wrap_coord_0, true}, WrapPath::vertex_and_pixel_shader, withheld);
+        check_wrap({true, true, render_state_wrap0 + 1u, wrap_coord_0, true}, WrapPath::vertex_and_pixel_shader, withheld);
+        check_wrap({true, false, render_state_wrap0, 0u, false}, WrapPath::vertex_and_pixel_shader, withheld);
+    }
 }
 
 TEST(d3d9_session_device, a_host_without_fragment_shader_barycentrics_wraps_the_coordinate_the_same_way)
