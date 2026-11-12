@@ -16,7 +16,7 @@
 #include "proto/generated/d3d9/d3d9_wire_types.h"
 #include "um/common/performance_clock.hpp"
 #include "um/d3d/present_order.hpp"
-#include "um/d3d/packet_release.hpp"
+#include "um/d3d/kernel_lane.hpp"
 #include "um/d3d/d3d_call_trace.hpp"
 #include "um/d3d/allocation_lender.hpp"
 #include "um/d3d/d3d9_ddi.hpp"
@@ -176,6 +176,7 @@ private:
     Status  send_point(const D3d9Resource &resource, uint32_t point, NextPointRecord::Action action);
     void    withdraw_point(D3d9Resource &resource);
     HRESULT follow_host();
+    void    engage();
 
     d3d::D3dSession                     &session_;
     BlockSource                         &memory_;
@@ -189,7 +190,7 @@ private:
     d3d::ReentrantCallLock                lock_;
     ObjectStorage<d3d::D3dDeviceChannel> channel_;
     ObjectStorage<d3d::PresentOrder>     present_order_;
-    ObjectStorage<d3d::PacketRelease> packets_;
+    ObjectStorage<d3d::KernelLane> lane_;
     d3d::AllocationLender                lender_;
     ObjectPool<D3d9Resource>             resources_;
     ObjectPool<D3d9Query>                queries_;

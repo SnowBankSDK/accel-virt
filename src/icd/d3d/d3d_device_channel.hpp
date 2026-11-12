@@ -10,7 +10,6 @@
 #include <stdint.h>
 
 namespace av {
-class ReleaseRoute;
 class ThreadLock;
 }
 
@@ -20,7 +19,7 @@ class D3dCommandStream;
 
 class D3dDeviceChannel final : public ClientTransport {
 public:
-    D3dDeviceChannel(D3dCommandStream &stream, ThreadLock &lock, uint32_t device, ReleaseRoute *route = nullptr);
+    D3dDeviceChannel(D3dCommandStream &stream, ThreadLock &lock, uint32_t device);
     D3dDeviceChannel(const D3dDeviceChannel &) = delete;
     D3dDeviceChannel &operator=(const D3dDeviceChannel &) = delete;
 
@@ -59,7 +58,6 @@ private:
     D3dCommandStream *stream_;
     ThreadLock       &lock_;
     uint32_t          device_;
-    ReleaseRoute     *route_;
     uint64_t          cleared_at_;
     D3dDeviceSelection selection_;
     icd::LockedTransport locked_;

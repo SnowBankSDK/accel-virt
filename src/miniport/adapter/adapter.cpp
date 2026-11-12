@@ -452,7 +452,6 @@ void Adapter::dpc_routine()
             .number("owners", named)
             .address("owner", overdue_owners[0])
             .number("bound", av_contexts_.holds(overdue_owners[0]) ? 1u : 0u)
-            .number("batches_held", av_contexts_.held_batches(overdue_owners[0]))
             .write();
     uint32_t returned = 0u;
     if (node_.complete(notification_, &returned) != Status::ok && budget_.allows())
@@ -1057,8 +1056,6 @@ int32_t Adapter::destroy_context(void *context)
             .code("status", static_cast<uint32_t>(NtStatus(unbound).value()))
             .write();
     }
-    if (found != nullptr && !found->is_av() && av_contexts_.writer_gone(context))
-        static_cast<void>(dxgkrnl_.queue_dpc());
     return NtStatus(contexts_.destroy(context)).value();
 }
 
@@ -2183,7 +2180,7 @@ Status Adapter::submit_release(const Context &context, const ReleaseRecord &rele
     Context *const released = contexts_.followed(context, release.ring());
     if (released == nullptr) return Status::invalid_parameter;
     owner = released;
-    const Status published = av_contexts_.release_batch(released, release, &context, awaited);
+    const Status published = av_contexts_.release_batch(released, release, awaited);
     if (published != Status::ok) return published;
     return node_.submit(fence, released, awaited);
 }

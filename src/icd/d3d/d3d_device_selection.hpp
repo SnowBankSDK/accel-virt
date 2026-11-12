@@ -5,17 +5,13 @@
 
 #include <stdint.h>
 
-namespace av {
-class ReleaseRoute;
-}
-
 namespace av::d3d {
 
 class D3dCommandStream;
 
 class D3dDeviceSelection final : public ClientTransport {
 public:
-    D3dDeviceSelection(D3dCommandStream &stream, uint32_t device, ReleaseRoute *route);
+    D3dDeviceSelection(D3dCommandStream &stream, uint32_t device);
     D3dDeviceSelection(const D3dDeviceSelection &) = delete;
     void move_to(D3dCommandStream &stream);
     D3dDeviceSelection &operator=(const D3dDeviceSelection &) = delete;
@@ -36,7 +32,6 @@ public:
 private:
     D3dCommandStream *stream_;
     uint32_t          device_;
-    ReleaseRoute     *route_;
 };
 
 }

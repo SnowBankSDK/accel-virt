@@ -211,16 +211,9 @@ void D3dCommandStream::speak_with(uint32_t select_command, uint32_t flush_comman
     flush_command_ = flush_command;
 }
 
-void D3dCommandStream::speak_through(ReleaseRoute *route)
-{
-    AV_SCOPE("D3dCommandStream::speak_through");
-    if (recording_ == nullptr) transport_.speak_through(route);
-}
-
-bool D3dCommandStream::speak_as(uint32_t device, ReleaseRoute *route)
+bool D3dCommandStream::speak_as(uint32_t device)
 {
     AV_SCOPE("D3dCommandStream::speak_as");
-    speak_through(route);
     if (device == 0u || device == speaking_) return !failed_;
     WireWriter selection = request_writer();
     selection.write_pod<uint32_t>(device);

@@ -4,7 +4,10 @@
 #include "miniport/ddi/dxgkarg_create_allocation_record.hpp"
 #include "miniport/ddi/dxgkarg_create_context_record.hpp"
 #include "miniport/ddi/dxgkarg_create_device_record.hpp"
+#include "miniport/ddi/dxgkarg_close_allocation_record.hpp"
 #include "miniport/ddi/dxgkarg_destroy_allocation_record.hpp"
+#include "miniport/ddi/dxgkarg_open_allocation_record.hpp"
+#include "miniport/ddi/dxgk_open_allocation_info_record.hpp"
 #include "miniport/ddi/dxgkarg_preempt_command_record.hpp"
 #include "miniport/ddi/dxgkarg_submit_command_virtual_record.hpp"
 #include "miniport/ddi/dxgkargcb_notify_interrupt_data_record.hpp"
@@ -20,6 +23,9 @@
 #include "proto/context/gpu_identity.hpp"
 #include "proto/context/protocol_version.hpp"
 #include "proto/escape/av_context_record.hpp"
+#include "proto/escape/follow_record.hpp"
+#include "proto/context/context_capacity.hpp"
+#include "proto/context/gl_context_options.hpp"
 #include "proto/escape/release_record.hpp"
 #include "proto/resources/allocation_descriptor.hpp"
 #include "proto/submission/fence_page.hpp"
@@ -47,6 +53,7 @@ struct AdapterProbe {
     std::uint32_t live_contexts() const { return adapter.contexts_.live(); }
     std::uint32_t live_devices() const { return adapter.devices_.devices(); }
     std::uint32_t pending_packets() { return adapter.node_.pending(); }
+    std::uint32_t doorbell_of(const void *context) const { return adapter.av_contexts_.doorbell_of(context); }
     Adapter &adapter;
 };
 
@@ -77,7 +84,7 @@ constexpr std::uint64_t head_offset = 16u;
 constexpr std::uint32_t doorbells = 64u;
 constexpr std::uint64_t millisecond = 10000u;
 constexpr std::uint32_t most_in_node = 48u;
-constexpr std::uint32_t most_live_rings = 20u;
+constexpr std::uint32_t most_live_rings = 40u;
 constexpr std::uint32_t most_outstanding_batches = 40u;
 constexpr std::uint32_t steps_per_seed = 320u;
 constexpr std::uint32_t seeds = 300u;
@@ -187,7 +194,7 @@ private:
     {
         static constexpr std::uint8_t uuid[av::GpuIdentity::uuid_bytes] = {3};
         return av::CapsetInfo(av::ProtocolVersion(av::ProtocolVersion::current_major, av::ProtocolVersion::current_minor),
-                              1u, 64u, 12u, 24u, av::CapsetInfo::feature_host_visible_memory,
+                              0x9u, 64u, 12u, 24u, av::CapsetInfo::feature_host_visible_memory,
                               av::GpuIdentity(1u, 2u, av::GpuIdentity::discrete_gpu, uuid, 0u, 0u, "the host's"));
     }
 
@@ -274,16 +281,19 @@ private:
     std::uint8_t             request_[0x10000u] = {};
 };
 
-enum class Kind : std::uint8_t { av, route, plain };
+enum class Kind : std::uint8_t { av, lane, plain, follow };
 
 struct Coverage {
     std::uint32_t packets = 0u;
-    std::uint32_t early = 0u;
-    std::uint32_t let_go = 0u;
+    std::uint32_t lane_packets = 0u;
+    std::uint32_t follows = 0u;
+    std::uint32_t refused_lanes = 0u;
+    std::uint32_t kicks = 0u;
     std::uint32_t returned = 0u;
     std::uint32_t saturated = 0u;
     std::uint32_t saturated_teardowns = 0u;
-    std::uint32_t losses = 0u;
+    std::uint32_t gone = 0u;
+    std::uint32_t waits = 0u;
     std::uint32_t frames = 0u;
 };
 
@@ -291,8 +301,6 @@ struct Batch {
     std::uint64_t begin;
     std::uint64_t end;
     std::uint64_t fence;
-    std::uint32_t writer;
-    std::uint32_t after;
     bool          delivered;
 };
 
@@ -304,44 +312,42 @@ struct Packet {
     std::uint32_t fence;
     std::uint64_t at;
     std::uint64_t awaits;
-    bool          early;
 };
 
 struct KernelContext {
-    void             *handle;
-    std::uint32_t     process;
-    Kind              kind;
-    std::int32_t      ring;
-    std::uint32_t     writer;
+    void              *handle;
+    std::uint32_t      process;
+    Kind               kind;
+    std::int32_t       ring;
     std::deque<Packet> queue;
-    bool              live;
-    std::uint32_t     blocked_until;
+    bool               live;
+    std::uint32_t      blocked_until;
 };
 
 struct Ring {
-    std::uint32_t              process;
-    std::int32_t               context;
-    void                      *allocation;
-    std::uint32_t              kmt;
-    std::uint32_t              ring_block;
-    std::uint32_t              fence_block;
-    bool                       by_packet;
-    std::vector<std::int32_t>  routes;
-    std::vector<Batch>         batches;
-    std::uint64_t              written;
-    std::uint64_t              tail;
-    std::uint64_t              head;
-    std::uint64_t              completed;
-    std::uint64_t              next_fence;
-    std::uint32_t              last_writer;
-    bool                       bound;
-    bool                       lost;
-    bool                       loss_allowed;
+    std::uint32_t      process;
+    std::int32_t       context;
+    std::int32_t       session;
+    std::int32_t       writer;
+    void              *allocation;
+    void              *opened;
+    std::uint32_t      kmt;
+    std::uint32_t      ring_block;
+    std::uint32_t      fence_block;
+    std::vector<Batch> batches;
+    std::uint64_t      written;
+    std::uint64_t      tail;
+    std::uint64_t      head;
+    std::uint64_t      completed;
+    std::uint64_t      next_fence;
+    bool               bound;
+    bool               lost;
 };
 
 struct Process {
     av::DxgkargCreateDeviceRecord device;
     bool                          live;
+    std::int32_t                  session;
     std::vector<std::int32_t>     contexts;
     std::vector<std::int32_t>     rings;
 };
@@ -364,6 +370,7 @@ public:
 
     bool run()
     {
+        sometimes_follow_ = true;
         if (!start()) return false;
         const std::uint32_t first = 1u + random_.below(3u);
         for (std::uint32_t index = 0u; index < first && !failed(); index++) create_process();
@@ -389,12 +396,14 @@ public:
             device_.slow_to(1u + step_ % 3u);
             const std::int32_t process = open_process();
             if (process < 0) return false;
-            create_ring(static_cast<std::uint32_t>(process), false);
-            if (failed()) return false;
-            Ring &ring = rings_.back();
-            write_batch_on(static_cast<std::int32_t>(rings_.size() - 1u), ring.context);
-            submit(contexts_[static_cast<std::size_t>(ring.context)], take_front(ring.context));
-            host_step();
+            const std::int32_t session = processes_[static_cast<std::size_t>(process)].session;
+            const std::int32_t lane = add_lane(static_cast<std::uint32_t>(process));
+            if (failed() || session < 0 || lane < 0) return fail("a process got no session or no lane");
+            write_batch_on(session);
+            write_batch_on(lane);
+            submit_front(rings_[static_cast<std::size_t>(session)].context);
+            submit_front(rings_[static_cast<std::size_t>(lane)].writer);
+            host_step_all();
             run_dpc();
             fill_control();
             if (!tear_down_process(process)) return fail("a process could not be torn down");
@@ -409,97 +418,142 @@ public:
         return !failed();
     }
 
-    bool churn_routes(std::uint32_t rounds)
+    bool churn_lanes(std::uint32_t rounds)
     {
         if (!start()) return false;
         const std::int32_t process = open_process();
         if (process < 0) return false;
-        create_ring(static_cast<std::uint32_t>(process), true);
-        if (failed()) return false;
-        const auto ring = static_cast<std::int32_t>(rings_.size() - 1u);
+        const std::int32_t session = processes_[static_cast<std::size_t>(process)].session;
+        std::vector<std::int32_t> lanes;
         for (step_ = 0u; step_ < rounds && !failed(); step_++) {
-            void *const plain = create_kernel_context(processes_[static_cast<std::size_t>(process)], nullptr, 0u);
-            if (plain == nullptr) return fail("a release route was refused");
-            const std::int32_t route = add_context(static_cast<std::uint32_t>(process), plain, Kind::route, ring);
-            rings_[static_cast<std::size_t>(ring)].routes.push_back(route);
-            write_batch_on(ring, route);
-            submit(contexts_[static_cast<std::size_t>(route)], take_front(route));
-            host_step();
+            const bool         grow = lanes.size() <= av::ContextCapacity::lanes && random_.chance(70u);
+            const std::int32_t lane = grow ? add_lane(static_cast<std::uint32_t>(process)) : -1;
+            if (failed()) return false;
+            if (grow && lane < 0 && lanes.size() < av::ContextCapacity::lanes)
+                return fail("a lane was refused below the session's bound");
+            if (grow && lane >= 0 && lanes.size() >= av::ContextCapacity::lanes)
+                return fail("a lane was bound past the session's bound");
+            if (lane >= 0) lanes.push_back(lane);
+            write_batch_on(session);
+            submit_front(rings_[static_cast<std::size_t>(session)].context);
+            for (const std::int32_t each : lanes) {
+                write_batch_on(each);
+                submit_front(rings_[static_cast<std::size_t>(each)].writer);
+            }
+            host_step_all();
             run_dpc();
-            if (!destroy_context(route)) return false;
-            const Ring &held = rings_[static_cast<std::size_t>(ring)];
-            if (held.lost || held.tail != held.written) return fail("a ring stopped publishing as its routes came and went");
+            if (!unreported_.empty()) return fail("a packet stayed on the node after the host ran every batch");
+            if (!lanes.empty() && random_.chance(40u)) {
+                const std::size_t picked = random_.below(static_cast<std::uint32_t>(lanes.size()));
+                if (!destroy_lane(lanes[picked])) return false;
+                lanes.erase(lanes.begin() + static_cast<std::ptrdiff_t>(picked));
+            }
+            const Ring &held = rings_[static_cast<std::size_t>(session)];
+            if (held.lost || held.tail != held.written) return fail("the session stopped publishing as its lanes came and went");
         }
+        if (coverage_.refused_lanes == 0u) return fail("no lane past the session's bound was ever asked for");
         if (!tear_down_process(process)) return fail("a process could not be torn down");
         run_dpc();
         check_empty();
         return !failed();
     }
 
-    bool cross_adapter_presents(std::uint32_t presenters, std::uint32_t frames)
+    bool presenters(std::uint32_t lanes, std::uint32_t frames)
     {
         if (!start()) return false;
+        const std::int32_t presenting = open_process();
+        if (presenting < 0) return false;
+        std::vector<std::int32_t> presenter_lanes;
+        for (std::uint32_t made = 0u; made < lanes; made++) {
+            const std::int32_t lane = add_lane(static_cast<std::uint32_t>(presenting));
+            if (lane < 0) return fail("a presenter got no lane");
+            presenter_lanes.push_back(lane);
+        }
         std::vector<std::int32_t> plains;
-        std::vector<std::int32_t> presenting;
-        for (std::uint32_t made = 0u; made < presenters; made++) {
-            const std::int32_t process = open_process();
-            if (process < 0) return false;
-            create_ring(static_cast<std::uint32_t>(process), true, 2u);
-            if (failed()) return false;
-            presenting.push_back(static_cast<std::int32_t>(rings_.size() - 1u));
-            void *const plain = create_kernel_context(processes_[static_cast<std::size_t>(process)], nullptr, 0u);
+        for (std::uint32_t made = 0u; made < 3u; made++) {
+            const std::int32_t other = open_process();
+            if (other < 0) return false;
+            void *const plain = create_kernel_context(processes_[static_cast<std::size_t>(other)], nullptr, 0u);
             if (plain == nullptr) return fail("a plain kernel context was refused");
-            plains.push_back(add_context(static_cast<std::uint32_t>(process), plain, Kind::plain, -1));
+            plains.push_back(add_context(static_cast<std::uint32_t>(other), plain, Kind::plain, -1));
         }
         for (step_ = 0u; step_ < frames && !failed(); step_++) {
             platform_.advance_time(28u * millisecond / 10u);
-            for (std::size_t index = 0u; index < presenting.size() && !failed(); index++) {
-                const std::int32_t ring = presenting[index];
-                const std::int32_t copy = rings_[static_cast<std::size_t>(ring)].routes[0];
-                const std::int32_t render = rings_[static_cast<std::size_t>(ring)].routes[1];
-                write_batch_on(ring, copy);
-                write_batch_on(ring, render);
-                submit(contexts_[static_cast<std::size_t>(render)], take_front(render));
-                const std::int32_t plain = plains[(index + 1u) % plains.size()];
-                contexts_[static_cast<std::size_t>(plain)].queue.push_back(Packet{Kind::plain, plain, -1, -1, 0u, 0u, 0u, false});
-                submit(contexts_[static_cast<std::size_t>(plain)], take_front(plain));
+            std::vector<std::int32_t> order;
+            for (const std::int32_t lane : presenter_lanes) {
+                write_batch_on(lane);
+                write_batch_on(lane);
+                order.push_back(rings_[static_cast<std::size_t>(lane)].writer);
+                order.push_back(rings_[static_cast<std::size_t>(lane)].writer);
             }
+            for (const std::int32_t plain : plains) {
+                contexts_[static_cast<std::size_t>(plain)].queue.push_back(Packet{Kind::plain, plain, -1, -1, 0u, 0u, 0u});
+                order.push_back(plain);
+            }
+            for (std::size_t index = order.size(); index > 1u; index--) {
+                const std::size_t other = random_.below(static_cast<std::uint32_t>(index));
+                std::swap(order[index - 1u], order[other]);
+            }
+            for (const std::int32_t context : order) submit_front(context);
             run_dpc();
-            if (failed()) break;
-            if (!unreported_.empty()) {
-                describe(unreported_.front());
-                return fail("a batch released before the one ahead of it in its ring kept the node from completing "
-                            "the packets behind it, whose wait lets the batch ahead of it come");
+            for (const std::int32_t lane : presenter_lanes) {
+                const Ring &ring = rings_[static_cast<std::size_t>(lane)];
+                if (ring.lost || ring.tail != ring.written) return fail("a presenter's lane did not publish its frame at once");
             }
-            for (std::size_t index = 0u; index < presenting.size() && !failed(); index++) {
-                const std::int32_t copy = rings_[static_cast<std::size_t>(presenting[index])].routes[0];
-                submit(contexts_[static_cast<std::size_t>(copy)], take_front(copy));
-            }
-            run_dpc();
-            for (std::size_t index = 0u; index < presenting.size() && !failed(); index++) {
-                const Ring &ring = rings_[static_cast<std::size_t>(presenting[index])];
-                if (ring.lost || ring.tail != ring.written) return fail("a presenting ring did not publish its frame in ring order");
-            }
-            for (Ring &ring : rings_) {
-                if (!ring.bound) continue;
-                std::uint64_t completed = ring.completed;
-                for (const Batch &batch : ring.batches)
-                    if (batch.end <= ring.tail && batch.fence > completed) completed = batch.fence;
-                std::memcpy(ring_bytes(ring) + head_offset, &ring.tail, sizeof ring.tail);
-                ring.head = ring.tail;
-                ring.completed = completed;
-                write_fence(ring, completed);
-            }
-            static_cast<void>(dxgkrnl_.queue_dpc());
+            host_step_all();
             run_dpc();
             if (!failed() && !unreported_.empty()) return fail("a frame's packets were still on the node after the host ran its batches");
             if (!failed()) check_step();
             if (!failed()) coverage_.frames++;
         }
-        if (!failed() && platform_.logged_line("passed its deadline and was let go"))
-            return fail("a frame waited for a deadline");
+        if (!failed() && platform_.logged_line("passed its deadline and was let go")) return fail("a frame waited for a deadline");
         for (std::size_t index = 0u; index < processes_.size() && !failed(); index++)
-            if (!tear_down_process(static_cast<std::int32_t>(index))) fail("a presenting process could not be torn down");
+            if (!tear_down_process(static_cast<std::int32_t>(index))) fail("a process could not be torn down");
+        run_dpc();
+        if (!failed()) check_empty();
+        return !failed();
+    }
+
+    bool compositor_waits(std::uint32_t lanes, std::uint32_t rounds)
+    {
+        if (!start()) return false;
+        const std::int32_t compositor = open_process();
+        if (compositor < 0) return false;
+        std::vector<std::int32_t> devices;
+        for (std::uint32_t made = 0u; made < lanes; made++) {
+            const std::int32_t lane = add_lane(static_cast<std::uint32_t>(compositor));
+            if (lane < 0) return fail("a compositor device got no lane");
+            devices.push_back(lane);
+        }
+        const std::int32_t other = open_process();
+        if (other < 0) return false;
+        const std::int32_t client = processes_[static_cast<std::size_t>(other)].session;
+        for (step_ = 0u; step_ < rounds && !failed(); step_++) {
+            const std::int32_t waiting = devices[step_ % devices.size()];
+            write_batch_on(waiting);
+            KernelContext &held = contexts_[static_cast<std::size_t>(rings_[static_cast<std::size_t>(waiting)].writer)];
+            held.blocked_until = UINT32_MAX;
+            for (const std::int32_t device : devices) {
+                if (device == waiting) continue;
+                write_batch_on(device);
+                submit_front(rings_[static_cast<std::size_t>(device)].writer);
+            }
+            write_batch_on(client);
+            submit_front(rings_[static_cast<std::size_t>(client)].context);
+            host_step_all();
+            run_dpc();
+            if (!unreported_.empty())
+                return fail("a device or another process waited on the node for a compositor device's wait");
+            coverage_.waits++;
+            held.blocked_until = 0u;
+            submit_front(rings_[static_cast<std::size_t>(waiting)].writer);
+            host_step_all();
+            run_dpc();
+            if (!unreported_.empty()) return fail("the device whose wait was satisfied did not complete");
+            check_step();
+        }
+        for (std::size_t index = 0u; index < processes_.size() && !failed(); index++)
+            if (!tear_down_process(static_cast<std::int32_t>(index))) fail("a process could not be torn down");
         run_dpc();
         if (!failed()) check_empty();
         return !failed();
@@ -521,14 +575,6 @@ private:
         return true;
     }
 
-    Packet take_front(std::int32_t context)
-    {
-        KernelContext &held = contexts_[static_cast<std::size_t>(context)];
-        const Packet   packet = held.queue.front();
-        held.queue.pop_front();
-        return packet;
-    }
-
     bool failed() const { return failure_[0] != '\0'; }
 
     bool fail(const char *why)
@@ -546,6 +592,7 @@ private:
             model->device_.attach(*model->control_);
         }
         model->device_.stall();
+        for (Ring &ring : model->rings_) model->consume(ring, false);
     }
 
     static void interrupted(void *self, const av::DxgkargcbNotifyInterruptDataRecord &data)
@@ -566,10 +613,13 @@ private:
         const Packet packet = unreported_.front();
         unreported_.pop_front();
         observe_rings();
-        if (!satisfied(packet) && !owner_gone(packet)) coverage_.let_go++;
-        if (!failed() && !satisfied(packet) && !excused(packet)) {
+        if (owner_gone(packet)) {
+            coverage_.gone++;
+            return;
+        }
+        if (!failed() && !ran(packet)) {
             describe(packet);
-            fail("a packet completed before the host ran the published batches it waits for and before its deadline");
+            fail("a packet completed before the host ran exactly the batch it carries");
         }
     }
 
@@ -593,17 +643,15 @@ private:
             std::snprintf(detail_, sizeof detail_, "(plain packet %u)", packet.fence);
             return;
         }
-        const Ring  &ring = ring_of(packet);
-        const Batch &batch = ring.batches[static_cast<std::size_t>(packet.batch)];
+        const Ring &ring = ring_of(packet);
+        const std::uint64_t fence =
+            packet.batch >= 0 ? ring.batches[static_cast<std::size_t>(packet.batch)].fence : packet.awaits;
         std::snprintf(detail_, sizeof detail_,
-                      "(packet %u of kind %d, batch %llu [%llu,%llu), ring tail %llu head %llu completed %llu, waited %llu ms, "
-                      "awaits %llu, early %d)",
-                      packet.fence, static_cast<int>(packet.kind), static_cast<unsigned long long>(batch.fence),
-                      static_cast<unsigned long long>(batch.begin), static_cast<unsigned long long>(batch.end),
+                      "(packet %u of kind %d for batch %llu, ring tail %llu head %llu completed %llu, waited %llu ms)",
+                      packet.fence, static_cast<int>(packet.kind), static_cast<unsigned long long>(fence),
                       static_cast<unsigned long long>(ring.tail), static_cast<unsigned long long>(ring.head),
                       static_cast<unsigned long long>(ring.completed),
-                      static_cast<unsigned long long>((platform_.interrupt_time() - packet.at) / millisecond),
-                      static_cast<unsigned long long>(packet.awaits), packet.early ? 1 : 0);
+                      static_cast<unsigned long long>((platform_.interrupt_time() - packet.at) / millisecond));
     }
 
     std::uint8_t *ring_bytes(const Ring &ring) const
@@ -619,18 +667,10 @@ private:
         return value;
     }
 
-    bool satisfied(const Packet &packet)
+    bool ran(const Packet &packet)
     {
         if (packet.kind == Kind::plain) return true;
         return ring_of(packet).completed >= packet.awaits;
-    }
-
-    std::uint64_t published_fence(const Ring &ring) const
-    {
-        std::uint64_t fence = 0u;
-        for (const Batch &batch : ring.batches)
-            if (batch.end <= ring.tail && batch.fence > fence) fence = batch.fence;
-        return fence;
     }
 
     bool owner_gone(const Packet &packet)
@@ -638,11 +678,6 @@ private:
         if (packet.kind == Kind::plain) return false;
         const Ring &ring = ring_of(packet);
         return ring.lost || !ring.bound;
-    }
-
-    bool excused(const Packet &packet)
-    {
-        return owner_gone(packet) || platform_.interrupt_time() - packet.at >= av::ExecutionNode::overdue_after;
     }
 
     void maybe_run_dpc()
@@ -665,9 +700,9 @@ private:
         observe_rings();
         if (preempting_ || unreported_.empty()) return;
         const Packet &head = unreported_.front();
-        if (satisfied(head) || owner_gone(head)) {
+        if (ran(head) || owner_gone(head)) {
             describe(head);
-            fail("a packet waits on the node though the host ran every batch its ring had published for it");
+            fail("a packet waits on the node though the host ran its own batch");
         }
     }
 
@@ -684,28 +719,41 @@ private:
                     return static_cast<void>(fail("a ring's tail was published inside or past its batches"));
                 for (const Batch &batch : ring.batches)
                     if (!batch.delivered && batch.end > ring.tail && batch.end <= tail)
-                        return static_cast<void>(fail("a ring published a batch that no packet released"));
+                        return static_cast<void>(fail("a ring published a batch that no packet carried"));
                 ring.tail = tail;
             }
             const std::uint8_t *const bytes = ring_bytes(ring);
             if (bytes == nullptr || read_u32(bytes, av::RingHeader::lost_at) == 0u) continue;
-            if (!ring.lost && !ring.loss_allowed)
-                return static_cast<void>(fail("a context was lost though its ring refused nothing and its writers live"));
-            if (!ring.lost) coverage_.losses++;
-            ring.lost = true;
+            if (!ring.lost) return static_cast<void>(fail("a context was lost though every packet came in its order"));
         }
     }
 
     void check_step()
     {
         observe_rings();
+        for (const Ring &ring : rings_) {
+            if (!ring.bound || ring.lost) continue;
+            for (const Batch &batch : ring.batches)
+                if (batch.delivered && ring.tail < batch.end)
+                    return static_cast<void>(fail("a batch whose packet the kernel took is held unpublished"));
+        }
         for (const Packet &packet : unreported_)
             if (packet.kind != Kind::plain && !owner_gone(packet) && packet.awaits > published_fence(ring_of(packet))) {
                 describe(packet);
                 return static_cast<void>(fail("a packet waits on the node for a batch its ring has not published"));
             }
+        if (platform_.logged_line("passed its deadline and was let go"))
+            return static_cast<void>(fail("a packet was let go by the deadline instead of completing truthfully"));
         if (platform_.unclaimed_violations() != 0u) fail("the driver broke a platform rule");
         if (!adapter_.invariants_hold()) fail("the adapter's invariants broke");
+    }
+
+    std::uint64_t published_fence(const Ring &ring) const
+    {
+        std::uint64_t fence = 0u;
+        for (const Batch &batch : ring.batches)
+            if (batch.end <= ring.tail && batch.fence > fence) fence = batch.fence;
+        return fence;
     }
 
     void act()
@@ -720,9 +768,10 @@ private:
         if (pick < 80u) return device_.slow_to(random_.below(4u));
         if (pick < 83u) return fill_control();
         if (pick < 86u) return catch_up();
-        if (pick < 89u) return destroy_route();
+        if (pick < 88u) return destroy_some_lane();
+        if (pick < 90u) return grow_some_process();
         if (pick < 91u) return destroy_ring_allocation();
-        if (pick < 93u) return destroy_av_context();
+        if (pick < 93u) return destroy_some_session();
         if (pick < 95u) return static_cast<void>(tear_down_process(pick_process()));
         if (pick < 97u) return create_process();
         host_step();
@@ -755,7 +804,7 @@ private:
 
     std::int32_t add_context(std::uint32_t process, void *handle, Kind kind, std::int32_t ring)
     {
-        contexts_.push_back(KernelContext{handle, process, kind, ring, kind == Kind::route ? ++writers_ : 0u, {}, true, 0u});
+        contexts_.push_back(KernelContext{handle, process, kind, ring, {}, true, 0u});
         const auto index = static_cast<std::int32_t>(contexts_.size() - 1u);
         processes_[process].contexts.push_back(index);
         return index;
@@ -767,24 +816,25 @@ private:
         const auto index = static_cast<std::uint32_t>(processes_.size() - 1u);
         Process   &process = processes_.back();
         process.device.hKmdProcess = &process_names_[index % most_processes];
+        process.session = -1;
         if (nt(adapter_.create_device(&process.device)) != success) {
             fail("CreateDevice was refused");
             return -1;
         }
         process.live = true;
-        return static_cast<std::int32_t>(index);
+        process.session = create_ring(index, -1);
+        return failed() ? -1 : static_cast<std::int32_t>(index);
     }
 
     void create_process()
     {
-        if (live_rings() + 5u > most_live_rings) return;
+        if (live_rings() + 8u > most_live_rings) return;
         const std::int32_t opened = open_process();
         if (opened < 0) return;
         const auto index = static_cast<std::uint32_t>(opened);
         const bool compositor = random_.chance(35u);
-        const std::uint32_t count = compositor ? 2u + random_.below(4u) : 1u + random_.below(2u);
-        for (std::uint32_t made = 0u; made < count && !failed(); made++)
-            create_ring(index, !compositor && random_.chance(75u));
+        const std::uint32_t lanes = compositor ? 3u + random_.below(5u) : random_.below(3u);
+        for (std::uint32_t made = 0u; made < lanes && !failed(); made++) add_lane(index);
         if (random_.chance(60u) && !failed()) {
             void *const plain = create_kernel_context(processes_[index], nullptr, 0u);
             if (plain == nullptr) return static_cast<void>(fail("a plain kernel context was refused"));
@@ -792,7 +842,40 @@ private:
         }
     }
 
-    void create_ring(std::uint32_t process, bool by_packet, std::uint32_t route_count = 0u)
+    void grow_some_process()
+    {
+        const std::int32_t process = pick_process();
+        if (process < 0 || live_rings() + 2u > most_live_rings) return;
+        static_cast<void>(add_lane(static_cast<std::uint32_t>(process)));
+    }
+
+    std::int32_t add_lane(std::uint32_t process)
+    {
+        const std::int32_t session = processes_[process].session;
+        if (session < 0 || !rings_[static_cast<std::size_t>(session)].bound) return -1;
+        void *const writer = create_kernel_context(processes_[process], nullptr, 0u);
+        if (writer == nullptr) {
+            fail("a device's kernel context was refused");
+            return -1;
+        }
+        if (sometimes_follow_ && random_.chance(10u)) {
+            static_cast<void>(add_context(process, writer, Kind::follow, session));
+            return -1;
+        }
+        const std::int32_t lane = create_ring(process, session);
+        if (failed()) return -1;
+        if (lane < 0) {
+            coverage_.refused_lanes++;
+            const std::int32_t follower = add_context(process, writer, Kind::follow, session);
+            static_cast<void>(follower);
+            return -1;
+        }
+        const std::int32_t context = add_context(process, writer, Kind::lane, lane);
+        rings_[static_cast<std::size_t>(lane)].writer = context;
+        return lane;
+    }
+
+    std::int32_t create_ring(std::uint32_t process, std::int32_t session)
     {
         const av::AllocationDescriptor descriptor(av::AllocationKind::context_ring, true, av::SurfaceLayout(), 0x1000u,
                                                   av::ScanoutTarget());
@@ -804,35 +887,57 @@ private:
         av::DxgkargCreateAllocationRecord create = {};
         create.NumAllocations = 1u;
         create.pAllocationInfo = &info;
-        if (nt(adapter_.create_allocation(&create)) != success)
-            return static_cast<void>(fail("a ring allocation was refused"));
+        if (nt(adapter_.create_allocation(&create)) != success) {
+            fail("a ring allocation was refused");
+            return -1;
+        }
         const std::uint32_t kmt = handles_.insert(info.hAllocation);
-        const av::AvContextRecord record(av::SubApi::vulkan, ring_order, kmt, reply_bytes);
+        av::DxgkOpenAllocationInfoRecord opening = {};
+        opening.hAllocation = kmt;
+        av::DxgkargOpenAllocationRecord open = {};
+        open.NumAllocations = 1u;
+        open.pOpenAllocation = &opening;
+        if (nt(adapter_.open_allocation(processes_[process].device.hDevice, &open)) != success) {
+            fail("a ring allocation could not be opened");
+            return -1;
+        }
+        const av::GlContextOptions options =
+            session >= 0 ? av::GlContextOptions().sharing(rings_[static_cast<std::size_t>(session)].kmt)
+                         : av::GlContextOptions();
+        const av::AvContextRecord record(av::SubApi::d3d, ring_order, kmt, reply_bytes, options);
         std::uint8_t              bytes[av::AvContextRecord::encoded_size] = {};
         static_cast<void>(record.encode(bytes, sizeof bytes));
         const std::uint32_t made = platform_.page_blocks_made();
         void *const         handle = create_kernel_context(processes_[process], bytes, sizeof bytes);
-        if (handle == nullptr) {
-            std::snprintf(detail_, sizeof detail_, "(%u refusals by the device, %u rings live)", device_.refusals(), live_rings());
-            return static_cast<void>(fail("an av context was refused with doorbells free and the device answering"));
-        }
-        const std::uint8_t *const ring_page = platform_.page_block(made);
-        if (ring_page == nullptr || read_u32(ring_page, 0u) != ring_magic)
-            return static_cast<void>(fail("the ring of a new av context was not where the model looks"));
-        rings_.push_back(Ring{process, -1, info.hAllocation, kmt, made, made + 1u, by_packet, {}, {}, 0u, 0u, 0u, 0u,
-                              1u, 0u, true, false, false});
+        rings_.push_back(Ring{process, -1, session, -1, info.hAllocation, opening.hDeviceSpecificAllocation, kmt, made,
+                              made + 1u, {}, 0u, 0u, 0u, 0u, 1u, handle != nullptr, false});
         const auto ring = static_cast<std::int32_t>(rings_.size() - 1u);
         processes_[process].rings.push_back(ring);
+        if (handle == nullptr) {
+            if (session >= 0 && lanes_of(session) >= av::ContextCapacity::lanes) return -1;
+            std::snprintf(detail_, sizeof detail_, "(%u refusals by the device, %u rings live)", device_.refusals(), live_rings());
+            fail("an av context was refused with doorbells free and the device answering");
+            return -1;
+        }
+        if (session >= 0 && lanes_of(session) > av::ContextCapacity::lanes) {
+            fail("a session was given a lane past its bound");
+            return -1;
+        }
+        const std::uint8_t *const ring_page = platform_.page_block(made);
+        if (ring_page == nullptr || read_u32(ring_page, 0u) != ring_magic) {
+            fail("the ring of a new av context was not where the model looks");
+            return -1;
+        }
         rings_.back().context = add_context(process, handle, Kind::av, ring);
         write_fence(rings_.back(), 0u);
-        if (!by_packet) return;
-        const std::uint32_t routes = route_count != 0u ? route_count : 1u + random_.below(3u);
-        for (std::uint32_t route = 0u; route < routes; route++) {
-            void *const plain = create_kernel_context(processes_[process], nullptr, 0u);
-            if (plain == nullptr) return static_cast<void>(fail("a release route was refused"));
-            const std::int32_t index = add_context(process, plain, Kind::route, ring);
-            rings_[static_cast<std::size_t>(ring)].routes.push_back(index);
-        }
+        return ring;
+    }
+
+    std::uint32_t lanes_of(std::int32_t session) const
+    {
+        std::uint32_t count = 0u;
+        for (const Ring &ring : rings_) count += ring.bound && ring.session == session ? 1u : 0u;
+        return count;
     }
 
     void write_fence(Ring &ring, std::uint64_t completed)
@@ -853,40 +958,56 @@ private:
     {
         const std::int32_t picked = pick_ring();
         if (picked < 0) return;
-        Ring &ring = rings_[static_cast<std::size_t>(picked)];
+        const Ring &ring = rings_[static_cast<std::size_t>(picked)];
         std::uint32_t outstanding = 0u;
         for (const Batch &batch : ring.batches) outstanding += batch.end > ring.head ? 1u : 0u;
         if (outstanding >= most_outstanding_batches) return;
-        if (ring.by_packet && ring.routes.empty()) return;
-        const std::int32_t context =
-            ring.by_packet ? ring.routes[random_.below(static_cast<std::uint32_t>(ring.routes.size()))] : ring.context;
-        write_batch_on(picked, context);
+        if (ring.session >= 0 && (ring.writer < 0 || !contexts_[static_cast<std::size_t>(ring.writer)].live)) return;
+        write_batch_on(picked);
+        if (ring.session < 0) follow_some(picked);
     }
 
-    void write_batch_on(std::int32_t picked, std::int32_t context)
+    void write_batch_on(std::int32_t picked)
     {
         Ring               &ring = rings_[static_cast<std::size_t>(picked)];
         const std::uint64_t bytes = 32u * (1u + random_.below(8u));
         if (ring.written + bytes - ring.head > ring_capacity) return;
-        const std::uint32_t writer = ring.by_packet ? contexts_[static_cast<std::size_t>(context)].writer : 0u;
-        ring.batches.push_back(Batch{ring.written, ring.written + bytes, ring.next_fence++, writer,
-                                     ring.by_packet ? ring.last_writer : 0u, false});
+        ring.batches.push_back(Batch{ring.written, ring.written + bytes, ring.next_fence++, false});
         ring.written += bytes;
-        if (ring.by_packet) ring.last_writer = writer;
+        const bool          lane = ring.session >= 0;
+        const std::int32_t  context = lane ? ring.writer : ring.context;
+        if (context < 0) return;
         KernelContext &queued = contexts_[static_cast<std::size_t>(context)];
-        queued.queue.push_back(Packet{ring.by_packet ? Kind::route : Kind::av, context, picked,
-                                      static_cast<std::int32_t>(ring.batches.size() - 1u), 0u, 0u, 0u, false});
-        if (ring.by_packet && random_.chance(35u)) queued.blocked_until = step_ + 3u + random_.below(60u);
+        queued.queue.push_back(Packet{lane ? Kind::lane : Kind::av, context, picked,
+                                      static_cast<std::int32_t>(ring.batches.size() - 1u), 0u, 0u, 0u});
+        if (lane && random_.chance(35u)) queued.blocked_until = step_ + 3u + random_.below(60u);
+    }
+
+    void follow_some(std::int32_t session)
+    {
+        for (std::size_t index = 0u; index < contexts_.size(); index++) {
+            KernelContext &context = contexts_[index];
+            if (!context.live || context.kind != Kind::follow || context.ring != session || !random_.chance(50u)) continue;
+            context.queue.push_back(Packet{Kind::follow, static_cast<std::int32_t>(index), session, -1, 0u, 0u, 0u});
+            if (random_.chance(35u)) context.blocked_until = step_ + 3u + random_.below(60u);
+        }
     }
 
     void queue_plain()
     {
-        std::vector<std::int32_t> plain;
-        for (std::size_t index = 0u; index < contexts_.size(); index++)
-            if (contexts_[index].live && contexts_[index].kind == Kind::plain) plain.push_back(static_cast<std::int32_t>(index));
-        if (plain.empty()) return;
-        const std::int32_t context = plain[random_.below(static_cast<std::uint32_t>(plain.size()))];
-        contexts_[static_cast<std::size_t>(context)].queue.push_back(Packet{Kind::plain, context, -1, -1, 0u, 0u, 0u, false});
+        const std::int32_t context = pick_context(Kind::plain);
+        if (context < 0) return;
+        contexts_[static_cast<std::size_t>(context)].queue.push_back(Packet{Kind::plain, context, -1, -1, 0u, 0u, 0u});
+    }
+
+    void submit_front(std::int32_t context)
+    {
+        if (context < 0) return;
+        KernelContext &held = contexts_[static_cast<std::size_t>(context)];
+        if (!held.live || held.queue.empty()) return;
+        const Packet packet = held.queue.front();
+        held.queue.pop_front();
+        submit(held, packet);
     }
 
     void submit_one()
@@ -898,17 +1019,22 @@ private:
                 (draining_ || contexts_[index].blocked_until <= step_))
                 ready.push_back(static_cast<std::int32_t>(index));
         if (ready.empty()) return;
-        KernelContext &context = contexts_[static_cast<std::size_t>(ready[random_.below(static_cast<std::uint32_t>(ready.size()))])];
-        Packet packet = context.queue.front();
-        context.queue.pop_front();
-        submit(context, packet);
+        submit_front(ready[random_.below(static_cast<std::uint32_t>(ready.size()))]);
     }
 
     void submit(KernelContext &context, Packet packet)
     {
-        std::uint8_t data[av::ReleaseRecord::encoded_size] = {};
+        std::uint8_t  data[av::ReleaseRecord::encoded_size] = {};
         std::uint32_t size = 0u;
-        if (packet.kind != Kind::plain) {
+        std::uint32_t session_rings = 0u;
+        bool          session_behind = false;
+        if (packet.kind == Kind::follow) {
+            Ring &ring = ring_of(packet);
+            if (!ring.bound) return;
+            packet.awaits = published_fence(ring);
+            static_cast<void>(av::FollowRecord(ring.kmt, packet.awaits).encode(data, sizeof data));
+            size = av::FollowRecord::encoded_size;
+        } else if (packet.kind != Kind::plain) {
             Ring &ring = ring_of(packet);
             if (!ring.bound) return;
             const Batch &batch = ring.batches[static_cast<std::size_t>(packet.batch)];
@@ -917,12 +1043,20 @@ private:
                 static_cast<void>(descriptor.encode(data, sizeof data));
                 size = av::SubmissionDescriptor::encoded_size;
             } else {
-                static_cast<void>(av::ReleaseRecord(ring.kmt, descriptor, batch.writer, batch.after).encode(data, sizeof data));
+                static_cast<void>(av::ReleaseRecord(ring.kmt, descriptor).encode(data, sizeof data));
                 size = av::ReleaseRecord::encoded_size;
+                const Ring &session = rings_[static_cast<std::size_t>(ring.session)];
+                if (session.bound) {
+                    session_behind = ring_word(session, tail_offset) > ring_word(session, head_offset);
+                    session_rings = doorbell_rings(session);
+                }
             }
+            packet.awaits = batch.fence;
         }
         packet.fence = ++fences_;
         coverage_.packets++;
+        coverage_.lane_packets += packet.kind == Kind::lane ? 1u : 0u;
+        coverage_.follows += packet.kind == Kind::follow ? 1u : 0u;
         packet.at = platform_.interrupt_time();
         av::DxgkargSubmitCommandVirtualRecord request = {};
         request.hContext = context.handle;
@@ -932,19 +1066,20 @@ private:
         request.DmaBufferPrivateDataSize = size;
         request.SubmissionFenceId = packet.fence;
         unreported_.push_back(packet);
-        const std::size_t   queued = unreported_.size() - 1u;
         const std::uint32_t status = nt(adapter_.submit_command_virtual(&request));
         if (status == success) {
-            if (packet.kind == Kind::plain) return;
+            if (packet.kind == Kind::plain || packet.kind == Kind::follow) return;
             Ring &ring = ring_of(packet);
+            const Batch &batch = ring.batches[static_cast<std::size_t>(packet.batch)];
             ring.batches[static_cast<std::size_t>(packet.batch)].delivered = true;
             observe_rings();
-            if (queued >= unreported_.size() || unreported_[queued].fence != packet.fence) return;
-            const Batch &batch = ring.batches[static_cast<std::size_t>(packet.batch)];
-            Packet      &sent = unreported_[queued];
-            sent.early = ring.tail < batch.end;
-            sent.awaits = sent.early ? published_fence(ring) : batch.fence;
-            if (sent.early) coverage_.early++;
+            if (!ring.lost && ring.tail < batch.end)
+                return static_cast<void>(fail("a batch whose packet the kernel took was not published at once"));
+            if (packet.kind != Kind::lane || !session_behind) return;
+            const Ring &session = rings_[static_cast<std::size_t>(ring.session)];
+            if (doorbell_rings(session) == session_rings)
+                return static_cast<void>(fail("a lane batch left its session asleep with work published"));
+            coverage_.kicks++;
             return;
         }
         for (auto at = unreported_.begin(); at != unreported_.end(); ++at)
@@ -953,38 +1088,51 @@ private:
                 break;
             }
         observe_rings();
-        if (packet.kind == Kind::plain || !ring_of(packet).lost) fail("SubmitCommandVirtual refused a packet");
+        if (packet.kind == Kind::plain || !owner_gone(packet)) fail("SubmitCommandVirtual refused a packet");
+    }
+
+    std::uint32_t doorbell_rings(const Ring &ring)
+    {
+        if (ring.context < 0) return 0u;
+        const std::uint32_t slot = av::AdapterProbe(adapter_).doorbell_of(contexts_[static_cast<std::size_t>(ring.context)].handle);
+        return function_.doorbells().rings(slot);
+    }
+
+    void consume(Ring &ring, bool partly)
+    {
+        if (!ring.bound || ring.lost) return;
+        const std::uint64_t tail = ring_word(ring, tail_offset);
+        if (tail <= ring.head) return;
+        std::uint64_t head = tail;
+        if (partly)
+            for (const Batch &batch : ring.batches)
+                if (batch.end > ring.head && batch.end <= tail) {
+                    head = batch.end;
+                    break;
+                }
+        std::uint64_t completed = ring.completed;
+        for (const Batch &batch : ring.batches)
+            if (batch.end <= head && batch.fence > completed) completed = batch.fence;
+        std::uint8_t *const bytes = ring_bytes(ring);
+        std::memcpy(bytes + head_offset, &head, sizeof head);
+        ring.head = head;
+        ring.completed = completed;
+        write_fence(ring, completed);
     }
 
     void host_step()
     {
-        const std::uint32_t all = random_.chance(30u) ? 1u : 0u;
-        const std::int32_t  picked = pick_ring();
-        bool                moved = false;
-        for (std::size_t index = 0u; index < rings_.size(); index++) {
-            if (all == 0u && static_cast<std::int32_t>(index) != picked) continue;
-            Ring &ring = rings_[index];
-            if (!ring.bound || ring.lost) continue;
-            const std::uint64_t tail = ring_word(ring, tail_offset);
-            if (tail <= ring.head) continue;
-            std::uint64_t head = tail;
-            if (random_.chance(30u))
-                for (const Batch &batch : ring.batches)
-                    if (batch.end > ring.head && batch.end <= tail) {
-                        head = batch.end;
-                        break;
-                    }
-            std::uint64_t completed = ring.completed;
-            for (const Batch &batch : ring.batches)
-                if (batch.end <= head && batch.fence > completed) completed = batch.fence;
-            std::uint8_t *const bytes = ring_bytes(ring);
-            std::memcpy(bytes + head_offset, &head, sizeof head);
-            ring.head = head;
-            ring.completed = completed;
-            write_fence(ring, completed);
-            moved = true;
-        }
-        if (moved) static_cast<void>(dxgkrnl_.queue_dpc());
+        const bool         all = random_.chance(30u);
+        const std::int32_t picked = pick_ring();
+        for (std::size_t index = 0u; index < rings_.size(); index++)
+            if (all || static_cast<std::int32_t>(index) == picked) consume(rings_[index], random_.chance(30u));
+        static_cast<void>(dxgkrnl_.queue_dpc());
+    }
+
+    void host_step_all()
+    {
+        for (Ring &ring : rings_) consume(ring, false);
+        static_cast<void>(dxgkrnl_.queue_dpc());
     }
 
     void preempt()
@@ -1002,6 +1150,7 @@ private:
         const std::uint32_t chunks = 20u + random_.below(200u);
         for (std::uint32_t chunk = 0u; chunk < chunks && !failed(); chunk++) {
             platform_.advance_time(10u * millisecond);
+            if (random_.chance(20u)) host_step_all();
             if (dxgkrnl_.dpcs_queued() != dpcs_run_) run_dpc();
             if (!failed()) check_step();
         }
@@ -1044,23 +1193,15 @@ private:
     bool destroy_context(std::int32_t index)
     {
         KernelContext &context = contexts_[static_cast<std::size_t>(index)];
+        if (!context.live) return true;
         if (submitted_by(index)) return false;
-        for (const Packet &packet : context.queue)
-            if (packet.kind == Kind::route && !ring_of(packet).batches[static_cast<std::size_t>(packet.batch)].delivered)
-                ring_of(packet).loss_allowed = true;
         context.queue.clear();
         context.live = false;
-        if (context.kind == Kind::route) {
+        if (context.kind == Kind::av) {
             Ring &ring = rings_[static_cast<std::size_t>(context.ring)];
-            for (std::size_t route = 0u; route < ring.routes.size(); route++)
-                if (ring.routes[route] == index) {
-                    ring.routes.erase(ring.routes.begin() + static_cast<std::ptrdiff_t>(route));
-                    break;
-                }
+            if (ring.bound && saturated_) coverage_.saturated_teardowns++;
+            forget_ring(ring);
         }
-        if (context.kind == Kind::av && rings_[static_cast<std::size_t>(context.ring)].bound && saturated_)
-            coverage_.saturated_teardowns++;
-        if (context.kind == Kind::av) forget_ring(rings_[static_cast<std::size_t>(context.ring)]);
         if (nt(adapter_.destroy_context(context.handle)) != success) return fail("DestroyContext was refused");
         observe_rings();
         return !failed();
@@ -1074,29 +1215,33 @@ private:
                 packet = packet->ring >= 0 && &ring_of(*packet) == &ring ? context.queue.erase(packet) : packet + 1;
     }
 
-    void destroy_route()
+    bool destroy_lane(std::int32_t lane)
     {
-        const std::int32_t route = pick_context(Kind::route);
-        if (route >= 0 && contexts_[static_cast<std::size_t>(route)].queue.empty())
-            static_cast<void>(destroy_context(route));
+        Ring &ring = rings_[static_cast<std::size_t>(lane)];
+        const std::int32_t writer = ring.writer;
+        if (writer >= 0 && submitted_by(writer)) return true;
+        if (ring.context >= 0 && submitted_by(ring.context)) return true;
+        if (writer >= 0 && !destroy_context(writer)) return false;
+        if (random_.chance(50u) || ring.context < 0) return destroy_allocation(ring);
+        return destroy_context(ring.context) && destroy_allocation(ring);
     }
 
-    void destroy_av_context()
+    void destroy_some_lane()
     {
-        const std::int32_t context = pick_context(Kind::av);
-        if (context >= 0) static_cast<void>(destroy_context(context));
+        std::vector<std::int32_t> lanes;
+        for (std::size_t index = 0u; index < rings_.size(); index++)
+            if (rings_[index].bound && rings_[index].session >= 0) lanes.push_back(static_cast<std::int32_t>(index));
+        if (!lanes.empty()) static_cast<void>(destroy_lane(lanes[random_.below(static_cast<std::uint32_t>(lanes.size()))]));
     }
 
-    bool destroy_allocation(Ring &ring)
+    void destroy_some_session()
     {
-        if (ring.allocation == nullptr) return true;
-        forget_ring(ring);
-        av::DxgkargDestroyAllocationRecord destroy = {};
-        destroy.NumAllocations = 1u;
-        destroy.pAllocationList = &ring.allocation;
-        const std::uint32_t status = nt(adapter_.destroy_allocation(&destroy));
-        ring.allocation = nullptr;
-        return status == success || fail("DestroyAllocation of a ring was refused");
+        const std::int32_t process = pick_process();
+        if (process < 0 || !random_.chance(30u)) return;
+        const std::int32_t session = processes_[static_cast<std::size_t>(process)].session;
+        if (session < 0 || !rings_[static_cast<std::size_t>(session)].bound) return;
+        const std::int32_t context = rings_[static_cast<std::size_t>(session)].context;
+        if (context >= 0 && !submitted_by(context)) static_cast<void>(destroy_context(context));
     }
 
     void destroy_ring_allocation()
@@ -1105,13 +1250,35 @@ private:
         if (ring >= 0 && random_.chance(50u)) static_cast<void>(destroy_allocation(rings_[static_cast<std::size_t>(ring)]));
     }
 
+    bool destroy_allocation(Ring &ring)
+    {
+        if (ring.allocation == nullptr) return true;
+        forget_ring(ring);
+        if (ring.opened != nullptr) {
+            void *opened = ring.opened;
+            av::DxgkargCloseAllocationRecord close = {};
+            close.NumAllocations = 1u;
+            close.pOpenHandleList = &opened;
+            if (nt(adapter_.close_allocation(processes_[ring.process].device.hDevice, &close)) != success)
+                return fail("CloseAllocation of a ring was refused");
+            ring.opened = nullptr;
+        }
+        av::DxgkargDestroyAllocationRecord destroy = {};
+        destroy.NumAllocations = 1u;
+        destroy.pAllocationList = &ring.allocation;
+        const std::uint32_t status = nt(adapter_.destroy_allocation(&destroy));
+        ring.allocation = nullptr;
+        return status == success || fail("DestroyAllocation of a ring was refused");
+    }
+
     bool tear_down_process(std::int32_t index)
     {
         if (index < 0) return true;
         Process &process = processes_[static_cast<std::size_t>(index)];
+        if (!process.live) return true;
         for (std::int32_t context : process.contexts)
             if (contexts_[static_cast<std::size_t>(context)].live && submitted_by(context)) return false;
-        for (Kind kind : {Kind::route, Kind::plain, Kind::av})
+        for (Kind kind : {Kind::lane, Kind::follow, Kind::plain, Kind::av})
             for (std::int32_t context : process.contexts)
                 if (contexts_[static_cast<std::size_t>(context)].live && contexts_[static_cast<std::size_t>(context)].kind == kind &&
                     !destroy_context(context))
@@ -1144,12 +1311,6 @@ private:
         }
         if (failed()) return;
         if (!settled()) return static_cast<void>(fail("the node never settled with nothing left to send"));
-        for (const Ring &ring : rings_) {
-            if (!ring.bound || ring.lost) continue;
-            for (const Batch &batch : ring.batches)
-                if (batch.delivered && ring.tail < batch.end)
-                    return static_cast<void>(fail("a delivered batch of a live ring was never published"));
-        }
     }
 
     void tear_down()
@@ -1191,20 +1352,20 @@ private:
     std::deque<Packet>                     unreported_;
     std::uint8_t                           process_names_[most_processes] = {};
     std::uint32_t                          fences_ = 0u;
-    std::uint32_t                          writers_ = 0u;
     std::uint32_t                          dpcs_run_ = 0u;
     std::uint32_t                          dpc_waits_ = 0u;
     std::uint32_t                          step_ = 0u;
     bool                                   preempting_ = false;
     bool                                   saturated_ = false;
     bool                                   draining_ = false;
+    bool                                   sometimes_follow_ = false;
     char                                   failure_[160] = {};
     char                                   detail_[256] = {};
 };
 
 }
 
-TEST(adapter_scheduling, seeded_interleavings_of_processes_contexts_and_a_slow_device_keep_every_scheduling_contract)
+TEST(adapter_scheduling, seeded_interleavings_of_sessions_lanes_and_a_slow_device_complete_every_packet_truthfully)
 {
     std::uint32_t failures = 0u;
     Coverage      coverage;
@@ -1221,41 +1382,54 @@ TEST(adapter_scheduling, seeded_interleavings_of_processes_contexts_and_a_slow_d
     }
     if (only != nullptr) return;
     CHECK(coverage.packets > 10000u);
-    CHECK(coverage.early > 0u);
-    CHECK(coverage.let_go > 0u);
+    CHECK(coverage.lane_packets > 2000u);
+    CHECK(coverage.follows > 0u);
+    CHECK(coverage.kicks > 0u);
     CHECK(coverage.returned > 0u);
     CHECK(coverage.saturated_teardowns > 0u);
-    CHECK(coverage.losses > 0u);
+    CHECK(coverage.gone > 0u);
 }
 
-TEST(adapter_scheduling, presenters_on_the_display_less_adapter_whose_render_release_comes_before_the_copy_ahead_of_it_hold_no_one_on_the_node)
+TEST(adapter_scheduling, four_presenters_whose_lanes_are_released_in_any_order_hold_no_one_on_the_node)
 {
     Coverage    coverage;
     auto *const model = new SchedulingModel(3u, coverage);
-    if (!model->cross_adapter_presents(4u, 64u))
+    if (!model->presenters(4u, 64u))
         ::av::TestRegistry::instance().record_failure(__FILE__, __LINE__, "frame %u: %s %s", model->failed_step(),
                                                       model->failure(), model->detail());
     delete model;
     CHECK_EQ(coverage.frames, 64u);
-    CHECK(coverage.early >= 64u * 4u);
+    CHECK_EQ(coverage.lane_packets, 64u * 4u * 2u);
+}
+
+TEST(adapter_scheduling, a_compositor_device_waiting_on_its_context_keeps_none_of_its_other_devices_or_other_processes_waiting)
+{
+    Coverage    coverage;
+    auto *const model = new SchedulingModel(5u, coverage);
+    if (!model->compositor_waits(12u, 48u))
+        ::av::TestRegistry::instance().record_failure(__FILE__, __LINE__, "round %u: %s %s", model->failed_step(),
+                                                      model->failure(), model->detail());
+    delete model;
+    CHECK_EQ(coverage.waits, 48u);
 }
 
 TEST(adapter_scheduling, av_contexts_made_and_torn_down_four_times_past_the_doorbells_with_a_slow_device_and_a_full_control_queue_leave_nothing)
 {
     Coverage    coverage;
     auto *const model = new SchedulingModel(1u, coverage);
-    if (!model->churn_contexts(4u * doorbells + 8u))
+    if (!model->churn_contexts(2u * doorbells + 8u))
         ::av::TestRegistry::instance().record_failure(__FILE__, __LINE__, "round %u: %s %s", model->failed_step(),
                                                       model->failure(), model->detail());
     delete model;
 }
 
-TEST(adapter_scheduling, release_routes_made_and_destroyed_four_times_past_a_rings_writers_keep_it_publishing_in_order)
+TEST(adapter_scheduling, lanes_made_and_destroyed_past_the_sessions_bound_fall_back_and_keep_the_session_publishing)
 {
     Coverage    coverage;
     auto *const model = new SchedulingModel(2u, coverage);
-    if (!model->churn_routes(4u * 32u + 8u))
+    if (!model->churn_lanes(160u))
         ::av::TestRegistry::instance().record_failure(__FILE__, __LINE__, "round %u: %s %s", model->failed_step(),
                                                       model->failure(), model->detail());
     delete model;
+    CHECK(coverage.refused_lanes > 0u);
 }

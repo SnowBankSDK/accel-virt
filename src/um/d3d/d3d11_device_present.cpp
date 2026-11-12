@@ -38,7 +38,7 @@ HRESULT D3d11Device::allocate(ResourceRecord &resource, const D3D11DDIARG_CREATE
         lines_.write("the device took no cross-adapter texture's pages");
         return E_OUTOFMEMORY;
     }
-    if (across && packets_.constructed()) packets_.object().engage();
+    if (across) engage();
     resource.shared_key = surface.key();
     resource.allocation = allocation;
     resource.allocation_owned = 1u;
@@ -163,6 +163,13 @@ void D3d11Device::log_present(const char *what, uint32_t value, const ResourceRe
         .text(" format ")
         .number(source.format)
         .write();
+}
+
+void D3d11Device::engage()
+{
+    AV_SCOPE("D3d11Device::engage");
+    if (!lane_.constructed() || !lane_.object().open()) return;
+    if (channel_.object().move_to(lane_.object().stream()) != Status::ok) static_cast<void>(lost(__func__));
 }
 
 HRESULT D3d11Device::follow_host()
@@ -449,7 +456,7 @@ bool D3d11Device::open_cross_adapter(ResourceRecord &resource, const D3D10DDIARG
         set_error(E_OUTOFMEMORY);
         return true;
     }
-    if (packets_.constructed()) packets_.object().engage();
+    engage();
     d3dproto::ResourceDesc desc = {};
     desc.dimension = resource.dimension;
     desc.width = resource.width;

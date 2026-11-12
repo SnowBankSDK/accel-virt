@@ -15,6 +15,13 @@
 
 namespace av::d3d9 {
 
+void D3d9Device::engage()
+{
+    AV_SCOPE("D3d9Device::engage");
+    if (!lane_.constructed() || !lane_.object().open()) return;
+    if (channel_.object().move_to(lane_.object().stream()) != Status::ok) static_cast<void>(lost(__func__));
+}
+
 HRESULT D3d9Device::follow_host()
 {
     AV_SCOPE("D3d9Device::follow_host");
@@ -115,11 +122,11 @@ HRESULT D3d9Device::publish_presented(D3d9Resource &resource, uint32_t index)
 {
     AV_SCOPE("D3d9Device::publish_presented");
     if (resource.allocation_resource != nullptr && resource.shared_key != 0u) {
-        if (!packets_.constructed()) return show_primary(resource, index);
-        packets_.object().engage();
-        packets_.object().writing(resource.allocation);
+        engage();
+        if (!lane_.constructed() || !lane_.object().opened()) return show_primary(resource, index);
+        lane_.object().writing(resource.allocation);
         const HRESULT shown = show_primary(resource, index);
-        packets_.object().writing(0u);
+        lane_.object().writing(0u);
         return shown;
     }
     return publish_point(resource, index);

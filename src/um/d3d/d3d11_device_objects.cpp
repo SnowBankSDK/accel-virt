@@ -181,6 +181,9 @@ VOID D3d11Device::create_resource(const D3D11DDIARG_CREATERESOURCE *args, D3D10D
         return;
     }
     if (as_rows && resource.shared_key != 0u) publish_shared(resource);
+    if ((args->MiscFlags & D3D10_DDI_RESOURCE_MISC_SHARED) != 0u && args->pPrimaryDesc == nullptr &&
+        (args->BindFlags & D3D10_DDI_BIND_PRESENT) == 0u)
+        engage();
 
     if (args->Usage == D3D10_DDI_USAGE_DYNAMIC || args->Usage == D3D10_DDI_USAGE_STAGING || args->MapFlags != 0u) {
         size_t bytes = 0u;
@@ -302,6 +305,7 @@ VOID D3d11Device::open_resource(const D3D10DDIARG_OPENRESOURCE *args, D3D10DDI_H
         return;
     }
     resource.shared_key = key;
+    engage();
     resource.dimension = desc.dimension;
     resource.width = desc.width;
     resource.height = desc.height == 0u ? 1u : desc.height;

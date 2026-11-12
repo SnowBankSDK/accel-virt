@@ -7,7 +7,6 @@
 #include "miniport/av_context/chunk_ids.hpp"
 #include "miniport/av_context/context_chunk.hpp"
 #include "miniport/av_context/context_memory.hpp"
-#include "miniport/av_context/release_queue.hpp"
 #include "miniport/av_context/ring_submitter.hpp"
 #include "miniport/av_context/av_context_binding.hpp"
 #include "miniport/av_context/submission_reader.hpp"
@@ -58,11 +57,8 @@ public:
     [[nodiscard]] Status wake_on_raise(void *context, uint64_t handle);
     [[nodiscard]] Status release_shared(uint64_t object_id, VirtioGpuDevice &device);
     [[nodiscard]] Status submit(void *context, const uint8_t *private_data, size_t size, uint64_t &awaited);
-    [[nodiscard]] Status release_batch(void *context, const ReleaseRecord &release, const void *writer,
-                                       uint64_t &awaited);
-    bool                 writer_gone(const void *writer);
+    [[nodiscard]] Status release_batch(void *context, const ReleaseRecord &release, uint64_t &awaited);
     void                 serve(ExecutionNode &node, HwQueueSubmissions &queues);
-    uint32_t             held_batches(const void *context);
     void                 adapter_is(uint64_t adapter);
     bool                 completed_already(void *context, uint64_t fence);
     uint64_t             follow(void *context, uint64_t fence);
@@ -95,7 +91,6 @@ private:
     [[nodiscard]] Status set_up(uint32_t slot, const AvContextRecord &record, VirtioGpuDevice &device,
                                 RegisterWindow &doorbells, const CapsetInfo &capset);
     void                 release(uint32_t slot);
-    uint64_t             in_turn(uint32_t slot, const SubmissionDescriptor &batch, uint32_t after);
     void                 lose(uint32_t slot, const char *why, const SubmissionDescriptor &batch);
     void                 release_chunks(uint32_t slot, VirtioGpuDevice *device, bool host_let_go);
     [[nodiscard]] Status open_window(uint32_t slot, HostWindowRecord &record, VirtioGpuDevice &device);
@@ -115,7 +110,6 @@ private:
     SpinLock                         lock_;
     SubmissionReader                 reader_;
     ObjectStorage<AvContextBinding> bindings_[max_contexts];
-    ReleaseQueue                     releases_[max_contexts];
     void                            *contexts_[max_contexts];
     const Allocation                *names_[max_contexts];
     ObjectStorage<ContextMemory>     memories_[max_contexts];

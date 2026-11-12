@@ -12,8 +12,8 @@ constexpr DWORD bound_ms = 1000u;
 }
 
 PresentOrder::PresentOrder(const D3DDDI_DEVICECALLBACKS &kernel, HANDLE device, HANDLE context,
-                           KmtTransport &transport, KeyedLog &lines)
-    : context_(context), transport_(transport), follower_(kernel, device, transport),
+                           KmtTransport &transport, KeyedLog &lines, const KernelLane &lane)
+    : context_(context), lane_(lane), transport_(transport), follower_(kernel, device, transport),
       gate_(kernel, device, context, lines, bound_ms)
 {
     AV_SCOPE("PresentOrder::PresentOrder");
@@ -28,13 +28,14 @@ PresentOrder::~PresentOrder()
 HRESULT PresentOrder::follow()
 {
     AV_SCOPE("PresentOrder::follow");
+    if (lane_.opened()) return S_OK;
     return follower_.follow(context_);
 }
 
 HRESULT PresentOrder::submitted(HRESULT status, Reuse reuse)
 {
     AV_SCOPE("PresentOrder::submitted");
-    if (SUCCEEDED(status) && reuse == Reuse::after_context && !transport_.releases_by_packet())
+    if (SUCCEEDED(status) && reuse == Reuse::after_context && !lane_.opened())
         transport_.hold(gate_);
     return status;
 }

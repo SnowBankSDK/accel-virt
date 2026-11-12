@@ -5,8 +5,8 @@
 
 namespace av::d3d {
 
-D3dDeviceSelection::D3dDeviceSelection(D3dCommandStream &stream, uint32_t device, ReleaseRoute *route)
-    : stream_(&stream), device_(device), route_(route)
+D3dDeviceSelection::D3dDeviceSelection(D3dCommandStream &stream, uint32_t device)
+    : stream_(&stream), device_(device)
 {
     AV_SCOPE("D3dDeviceSelection::D3dDeviceSelection");
 }
@@ -20,7 +20,7 @@ void D3dDeviceSelection::move_to(D3dCommandStream &stream)
 WireWriter D3dDeviceSelection::request_writer()
 {
     AV_SCOPE("D3dDeviceSelection::request_writer");
-    static_cast<void>(stream_->speak_as(device_, route_));
+    static_cast<void>(stream_->speak_as(device_));
     return stream_->request_writer();
 }
 

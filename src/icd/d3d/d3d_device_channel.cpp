@@ -10,9 +10,9 @@
 
 namespace av::d3d {
 
-D3dDeviceChannel::D3dDeviceChannel(D3dCommandStream &stream, ThreadLock &lock, uint32_t device, ReleaseRoute *route)
-    : stream_(&stream), lock_(lock), device_(device), route_(route), cleared_at_(~uint64_t{0}),
-      selection_(stream, device, route),
+D3dDeviceChannel::D3dDeviceChannel(D3dCommandStream &stream, ThreadLock &lock, uint32_t device)
+    : stream_(&stream), lock_(lock), device_(device), cleared_at_(~uint64_t{0}),
+      selection_(stream, device),
       locked_(selection_, lock)
 {
     AV_SCOPE("D3dDeviceChannel::D3dDeviceChannel");
@@ -67,7 +67,6 @@ Status D3dDeviceChannel::flush()
 {
     AV_SCOPE("D3dDeviceChannel::flush");
     const ThreadLockHold release(lock_);
-    stream_->speak_through(route_);
     return stream_->flush();
 }
 
@@ -75,7 +74,7 @@ Status D3dDeviceChannel::application_flush()
 {
     AV_SCOPE("D3dDeviceChannel::application_flush");
     const ThreadLockHold release(lock_);
-    if (!stream_->speak_as(device_, route_)) return Status::invalid_state;
+    if (!stream_->speak_as(device_)) return Status::invalid_state;
     return stream_->application_flush();
 }
 
@@ -83,7 +82,6 @@ Status D3dDeviceChannel::run_held()
 {
     AV_SCOPE("D3dDeviceChannel::run_held");
     const ThreadLockHold release(lock_);
-    stream_->speak_through(route_);
     return stream_->run_held();
 }
 
@@ -105,7 +103,7 @@ Status D3dDeviceChannel::execute(const uint8_t *commands, size_t length)
 {
     AV_SCOPE("D3dDeviceChannel::execute");
     const ThreadLockHold release(lock_);
-    if (!stream_->speak_as(device_, route_)) return Status::invalid_state;
+    if (!stream_->speak_as(device_)) return Status::invalid_state;
     if (stream_->recorded_total() != cleared_at_ && !d3dproto::av_d3d_ClearState11(*stream_)) return Status::invalid_state;
     const Status appended = stream_->append_recorded(commands, length);
     if (appended != Status::ok) return appended;

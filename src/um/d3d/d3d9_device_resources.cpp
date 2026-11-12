@@ -304,7 +304,7 @@ HRESULT D3d9Device::open_resource(D3DDDIARG_OPENRESOURCE *args)
             static_cast<void>(resources_.destroy(made));
             return E_OUTOFMEMORY;
         }
-        if (packets_.constructed()) packets_.object().engage();
+        engage();
     }
     if (FAILED(allocations_.keep_resident(made->allocation))) {
         release_resource(*made);

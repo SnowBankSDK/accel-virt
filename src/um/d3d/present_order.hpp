@@ -3,6 +3,7 @@
 
 #include "um/d3d/batch_follower.hpp"
 #include "um/d3d/kernel_context_gate.hpp"
+#include "um/d3d/kernel_lane.hpp"
 
 namespace av::d3d {
 
@@ -11,7 +12,7 @@ public:
     enum class Reuse { immediate, after_context };
 
     PresentOrder(const D3DDDI_DEVICECALLBACKS &kernel, HANDLE device, HANDLE context,
-                 KmtTransport &transport, KeyedLog &lines);
+                 KmtTransport &transport, KeyedLog &lines, const KernelLane &lane);
     ~PresentOrder();
     PresentOrder(const PresentOrder &) = delete;
     PresentOrder &operator=(const PresentOrder &) = delete;
@@ -21,6 +22,7 @@ public:
 
 private:
     HANDLE context_;
+    const KernelLane &lane_;
     KmtTransport &transport_;
     BatchFollower follower_;
     KernelContextGate gate_;

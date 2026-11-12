@@ -23,7 +23,7 @@
 #include "um/d3d/d3d11_ddi.hpp"
 #include "um/d3d/present_order.hpp"
 #include "um/d3d/allocation_lender.hpp"
-#include "um/d3d/packet_release.hpp"
+#include "um/d3d/kernel_lane.hpp"
 #include "um/d3d/kernel_device.hpp"
 #include "um/d3d/d3d11_records.hpp"
 #include "um/d3d/watched_shadows.hpp"
@@ -173,6 +173,7 @@ private:
     HRESULT present_to_kernel(ResourceRecord &source, ResourceRecord *destination, void *dxgi_context,
                               uint32_t point);
     HRESULT follow_host();
+    void    engage();
     void    log_present(const char *what, uint32_t value, const ResourceRecord &source);
 
     void set_shader(uint32_t stage, D3D10DDI_HSHADER shader);
@@ -224,7 +225,7 @@ private:
     ObjectStorage<d3d::CommandRecording>  recorded_;
     HANDLE    context_;
     ObjectStorage<d3d::PresentOrder> present_order_;
-    ObjectStorage<d3d::PacketRelease> packets_;
+    ObjectStorage<d3d::KernelLane> lane_;
     uint32_t  feature_level_;
     GrowableArray<ResourceRecord *> guest_surfaces_;
     icd::OnceLatch  guest_lock_refused_;
