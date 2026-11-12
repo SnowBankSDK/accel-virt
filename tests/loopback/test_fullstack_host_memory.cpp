@@ -6,6 +6,7 @@
 #include "guest/transport/host_allocation.hpp"
 #include "guest/transport/host_window_chunk.hpp"
 #include "guest/transport/kmt_transport.hpp"
+#include "harness/host/main_loop_pump.hpp"
 #include "harness/executor/mock_executor_ops.hpp"
 #include "harness/framework/test_registry.hpp"
 #include "harness/fullstack/full_stack_rig.hpp"
@@ -102,6 +103,7 @@ void lands_as_asked(FullStackRig &rig, Process &process, HostMemoryRequest memor
     CHECK_EQ(chunk.view()[0x1000u], 0x33u);
     CHECK_STATUS(chunk.release(), Status::ok);
     CHECK_EQ(rig.device().host().live_placements(), 0u);
+    CHECK(av::settle_device(rig.device().host(), rig.device().device()));
     CHECK_EQ(executor.live_memory(), 0u);
 }
 
@@ -158,6 +160,7 @@ TEST(fullstack_host_memory, a_closed_allocation_leaves_nothing_behind)
     CHECK_STATUS(allocation.close(), Status::ok);
     CHECK(!descriptor_open(device_fd));
     CHECK(!allocation.held()); }
+  CHECK(av::settle_device(rig.device().host(), rig.device().device()));
   CHECK_EQ(executor.live_imports(), 0u);
   CHECK_EQ(executor.held_memory(), 0u);
   CHECK_EQ(executor.live_memory(), 0u);
@@ -190,6 +193,7 @@ TEST(fullstack_host_memory, an_import_keeps_the_memory_after_its_chunk_is_closed
   CHECK(kept != nullptr);
   if (kept != nullptr) CHECK_EQ(kept[0x20u], 0x7Eu);
   CHECK_STATUS(import.release(), Status::ok);
+  CHECK(av::settle_device(rig.device().host(), rig.device().device()));
   CHECK_EQ(executor.live_memory(), 0u); }
 
 TEST(fullstack_host_memory, a_chunk_the_host_refuses_is_refused_with_nothing_left)
@@ -208,10 +212,12 @@ TEST(fullstack_host_memory, a_chunk_the_host_refuses_is_refused_with_nothing_lef
   rig.device().host().fail_placement_at(1u);
   CHECK_STATUS(chunk.open(chunk_bytes, upload), Status::not_supported);
   CHECK_EQ(executor.memory_allocations(), 2u);
+  CHECK(av::settle_device(rig.device().host(), rig.device().device()));
   CHECK_EQ(executor.memory_frees(), 1u);
 
   executor.set_memory_caching(0u);
   CHECK_STATUS(chunk.open(chunk_bytes, upload), Status::not_supported);
+  CHECK(av::settle_device(rig.device().host(), rig.device().device()));
   CHECK_EQ(executor.memory_frees(), 2u);
   executor.set_memory_caching(AV_MEMORY_WRITE_BACK);
 
@@ -244,4 +250,5 @@ TEST(fullstack_host_memory, a_context_importing_another_contexts_blob_is_refused
   CHECK_EQ(executor.imported(), 1u);
   CHECK_STATUS(own.release(), Status::ok);
   CHECK_STATUS(chunk.release(), Status::ok);
+  CHECK(av::settle_device(rig.device().host(), rig.device().device()));
   CHECK_EQ(executor.live_memory(), 0u); }

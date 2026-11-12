@@ -5,6 +5,7 @@
 #include "guest/kmt/memory_segment_group.hpp"
 #include "guest/transport/guest_connection.hpp"
 #include "guest/transport/kmt_transport.hpp"
+#include "harness/host/main_loop_pump.hpp"
 #include "harness/executor/mock_executor_ops.hpp"
 #include "harness/framework/test_registry.hpp"
 #include "harness/fullstack/full_stack_rig.hpp"
@@ -219,6 +220,7 @@ TEST(fullstack_transport, an_escape_opens_a_host_window_chunk_through_the_real_d
   CHECK_STATUS(kmt.escape(adapter, connection.device(), transport.context(), bytes, sizeof bytes), Status::ok);
   CHECK(rig.device().host().placed_at(0u) == nullptr);
   CHECK_EQ(rig.device().host().live_placements(), 0u);
+  CHECK(av::settle_device(rig.device().host(), rig.device().device()));
   CHECK_EQ(executor.held_memory(), 0u);
   CHECK_EQ(executor.live_memory(), 0u);
   CHECK_EQ(rig.platform().process_mappings(), 3u);
