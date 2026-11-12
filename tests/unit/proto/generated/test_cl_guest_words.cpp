@@ -382,6 +382,27 @@ TEST(cl_guest_words, a_32_bit_client_answers_one_word_in_four_bytes)
   CHECK_EQ(size, 256u);
   CHECK_EQ(answered, 4u); }
 
+TEST(cl_guest_words, a_32_bit_guest_asks_free_memory_in_two_host_words_and_reads_both_kibibyte_counts)
+{ MockTransport transport;
+  std::uint8_t  reply[64] = {};
+  const std::uint64_t host[2] = {5072215u, 5072215u};
+  transport.set_reply(reply, host_words(reply, sizeof reply, CL_SUCCESS, host, 2u, true));
+  std::uint32_t kib[2] = {};
+  std::uint32_t answered = 0u;
+  CHECK(av::clproto::word_of_clGetDeviceInfo<std::uint32_t>(0x4039u) == GuestWordKind::unsigned_word);
+  CHECK_EQ(av::clproto::av_clGetDeviceInfo<std::uint32_t>(transport, 7u, 0x4039u, sizeof kib, kib, &answered),
+           CL_SUCCESS);
+  CHECK_EQ(requested_host_bytes(transport), 16u);
+  CHECK_EQ(kib[0], 5072215u);
+  CHECK_EQ(kib[1], 5072215u);
+  CHECK_EQ(answered, 8u);
+  const std::uint64_t huge[2] = {std::uint64_t{1} << 33u, 0u};
+  transport.set_reply(reply, host_words(reply, sizeof reply, CL_SUCCESS, huge, 2u, true));
+  CHECK_EQ(av::clproto::av_clGetDeviceInfo<std::uint32_t>(transport, 7u, 0x4039u, sizeof kib, kib, nullptr),
+           CL_SUCCESS);
+  CHECK_EQ(kib[0], 0xFFFFFFFFu);
+  CHECK_EQ(kib[1], 0u); }
+
 TEST(cl_guest_words, a_buffer_short_of_one_guest_word_is_asked_for_no_host_word_and_refused)
 { MockTransport transport;
   std::uint8_t  reply[16] = {};
