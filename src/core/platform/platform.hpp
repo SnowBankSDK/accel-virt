@@ -16,6 +16,7 @@ class DdiTable;
 
 
 using BugcheckRoutine = void (*)(void *buffer, uint32_t bytes);
+using TimerRoutine = void (*)(void *context);
 
 enum class PageCaching : unsigned { write_back = 0, write_combined = 1 };
 
@@ -72,6 +73,10 @@ public:
     virtual void initialize_wake_event(void *storage) = 0;
     virtual void set_wake_event(void *storage) = 0;
     [[nodiscard]] virtual bool wait_wake_event(void *storage, uint64_t ticks) = 0;
+    virtual void initialize_timer(void *storage, TimerRoutine routine, void *context) = 0;
+    virtual void arm_timer(void *storage, uint64_t ticks) = 0;
+    virtual void cancel_timer(void *storage) = 0;
+    virtual void release_timer(void *storage) = 0;
 
     virtual uint8_t  read_register_u8(void *address) = 0;
     virtual uint16_t read_register_u16(void *address) = 0;

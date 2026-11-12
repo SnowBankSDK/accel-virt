@@ -9,10 +9,12 @@
 
 namespace av {
 
-ExecutionNode::ExecutionNode(Platform &platform)
+ExecutionNode::ExecutionNode(Platform &platform, TimerRoutine deadline_passed, void *context)
     : platform_(platform), lock_(platform, LockRank::execution_node), pending_{}, head_(0u), count_(0u),
       last_submitted_(0u), last_completed_(0u), preemption_fence_(0u), preemption_requested_(false),
-      stopped_(false), progress_time_(0u), owners_{}, awaited_{}, queued_at_{}, preempted_(0u)
+      stopped_(false), progress_time_(0u), owners_{}, awaited_{}, queued_at_{}, parked_{}, parked_count_(0u),
+      alarm_due_(0u), alarmed_(false), alarms_(deadline_passed != nullptr), preempted_(0u),
+      park_alarm_(platform, deadline_passed, context)
       {
           AV_SCOPE("ExecutionNode::ExecutionNode");
       }
@@ -21,32 +23,94 @@ Status ExecutionNode::submit(uint32_t fence)
 {
     AV_SCOPE("ExecutionNode::submit");
     platform_.require_irql_at_most(Irql::dispatch, "ExecutionNode::submit");
-    return queue(fence, nullptr, 0u);
+    return queue(fence, nullptr, 0u, Hold::none);
 }
 
-Status ExecutionNode::submit(uint32_t fence, void *owner, uint64_t awaited)
+Status ExecutionNode::submit(uint32_t fence, void *owner, uint64_t awaited, Hold hold)
 {
     AV_SCOPE("ExecutionNode::submit");
     platform_.require_irql_at_most(Irql::dispatch, "ExecutionNode::submit");
-    return owner == nullptr || awaited == 0u ? Status::invalid_parameter : queue(fence, owner, awaited);
+    return owner == nullptr || awaited == 0u ? Status::invalid_parameter : queue(fence, owner, awaited, hold);
 }
 
-Status ExecutionNode::queue(uint32_t fence, void *owner, uint64_t awaited)
+Status ExecutionNode::queue(uint32_t fence, void *owner, uint64_t awaited, Hold hold)
 {
     AV_SCOPE("ExecutionNode::queue");
     SpinLockGuard lock(lock_);
     InvariantScope<ExecutionNode> guard(platform_, *this, "submit");
     if (stopped_) return Status::invalid_state;
     if (fence <= last_submitted_ || count_ == capacity) return Status::invalid_parameter;
-    if (count_ == 0u) progress_time_ = platform_.interrupt_time();
+    if (hold == Hold::resolves) clear_parked(owner);
+    const uint64_t now = platform_.interrupt_time();
+    if (count_ == 0u) progress_time_ = now;
     const uint32_t tail = (head_ + count_) % capacity;
     pending_[tail] = fence;
     owners_[tail] = owner;
     awaited_[tail] = awaited;
-    queued_at_[tail] = platform_.interrupt_time();
+    queued_at_[tail] = now;
+    parked_[tail] = hold == Hold::parks;
+    if (parked_[tail]) parked_count_++;
     count_++;
     last_submitted_ = fence;
+    watch_parks(now);
     return Status::ok;
+}
+
+void ExecutionNode::clear_parked(const void *owner)
+{
+    AV_SCOPE("ExecutionNode::clear_parked");
+    for (uint32_t index = 0u; index < count_ && parked_count_ != 0u; index++) {
+        const uint32_t slot = (head_ + index) % capacity;
+        if (!parked_[slot] || owners_[slot] != owner) continue;
+        parked_[slot] = false;
+        parked_count_--;
+    }
+}
+
+void ExecutionNode::drop_parks()
+{
+    AV_SCOPE("ExecutionNode::drop_parks");
+    for (bool &parked : parked_) parked = false;
+    parked_count_ = 0u;
+}
+
+void ExecutionNode::watch_parks(uint64_t now)
+{
+    AV_SCOPE("ExecutionNode::watch_parks");
+    if (!alarms_) return;
+    if (parked_count_ == 0u) {
+        if (alarmed_) park_alarm_.cancel();
+        alarmed_ = false;
+        return;
+    }
+    uint64_t due = UINT64_MAX;
+    for (uint32_t index = 0u; index < count_; index++) {
+        const uint32_t slot = (head_ + index) % capacity;
+        if (parked_[slot] && queued_at_[slot] + park_deadline < due) due = queued_at_[slot] + park_deadline;
+    }
+    if (alarmed_ && alarm_due_ == due && due > now) return;
+    park_alarm_.arm(due > now ? due - now : 0u);
+    alarm_due_ = due;
+    alarmed_ = true;
+}
+
+void ExecutionNode::unpark(const void *owner)
+{
+    AV_SCOPE("ExecutionNode::unpark");
+    platform_.require_irql_at_most(Irql::dispatch, "ExecutionNode::unpark");
+    SpinLockGuard lock(lock_);
+    InvariantScope<ExecutionNode> guard(platform_, *this, "unpark");
+    if (parked_count_ == 0u || owner == nullptr) return;
+    clear_parked(owner);
+    watch_parks(platform_.interrupt_time());
+}
+
+uint32_t ExecutionNode::parked()
+{
+    AV_SCOPE("ExecutionNode::parked");
+    platform_.require_irql_at_most(Irql::dispatch, "ExecutionNode::parked");
+    SpinLockGuard lock(lock_);
+    return parked_count_;
 }
 
 void ExecutionNode::finish(const void *owner, uint64_t completed)
@@ -56,10 +120,15 @@ void ExecutionNode::finish(const void *owner, uint64_t completed)
     SpinLockGuard lock(lock_);
     InvariantScope<ExecutionNode> guard(platform_, *this, "finish");
     if (owner == nullptr) return;
+    const uint32_t parked = parked_count_;
     for (uint32_t index = 0u; index < count_; index++) {
         const uint32_t slot = (head_ + index) % capacity;
-        if (owners_[slot] == owner && awaited_[slot] <= completed) awaited_[slot] = 0u;
+        if (owners_[slot] != owner || awaited_[slot] > completed) continue;
+        awaited_[slot] = 0u;
+        if (parked_[slot]) parked_count_--;
+        parked_[slot] = false;
     }
+    if (parked_count_ != parked) watch_parks(platform_.interrupt_time());
 }
 
 uint32_t ExecutionNode::release_overdue(uint64_t now, void **owners, uint32_t room, uint32_t *named)
@@ -74,12 +143,15 @@ uint32_t ExecutionNode::release_overdue(uint64_t now, void **owners, uint32_t ro
         const uint32_t slot = (head_ + index) % capacity;
         if (awaited_[slot] == 0u || now < queued_at_[slot] + park_deadline) continue;
         awaited_[slot] = 0u;
+        if (parked_[slot]) parked_count_--;
+        parked_[slot] = false;
         released++;
         bool listed_already = false;
         for (uint32_t earlier = 0u; earlier < listed; earlier++) listed_already = listed_already || owners[earlier] == owners_[slot];
         if (owners != nullptr && listed < room && !listed_already) owners[listed++] = owners_[slot];
     }
     if (named != nullptr) *named = listed;
+    watch_parks(now);
     return released;
 }
 
@@ -118,6 +190,8 @@ bool ExecutionNode::take_preemption(uint32_t &fence, uint32_t &last_completed, u
     preempted_ += count_;
     head_ = 0u;
     count_ = 0u;
+    drop_parks();
+    watch_parks(platform_.interrupt_time());
     last_submitted_ = last_completed_;
     progress_time_ = platform_.interrupt_time();
     fence = preemption_fence_;
@@ -173,6 +247,8 @@ void ExecutionNode::reset()
     InvariantScope<ExecutionNode> guard(platform_, *this, "reset");
     head_ = 0u;
     count_ = 0u;
+    drop_parks();
+    watch_parks(platform_.interrupt_time());
     preemption_requested_ = false;
     stopped_ = true;
 }
@@ -186,6 +262,17 @@ void ExecutionNode::restart()
     stopped_ = false;
 }
 
+void ExecutionNode::quiesce()
+{
+    AV_SCOPE("ExecutionNode::quiesce");
+    platform_.require_irql_at_most(Irql::passive, "ExecutionNode::quiesce");
+    {
+        SpinLockGuard lock(lock_);
+        alarmed_ = false;
+    }
+    park_alarm_.quiesce();
+}
+
 uint32_t ExecutionNode::abort_pending()
 {
     AV_SCOPE("ExecutionNode::abort_pending");
@@ -195,6 +282,8 @@ uint32_t ExecutionNode::abort_pending()
     const uint32_t executing = count_ != 0u ? pending_[head_] : last_completed_;
     head_ = 0u;
     count_ = 0u;
+    drop_parks();
+    watch_parks(platform_.interrupt_time());
     preemption_requested_ = false;
     return executing;
 }
@@ -223,12 +312,14 @@ void ExecutionNode::report(StateWriter &writer)
         writer.flag("stopped", stopped_);
         writer.number("progress_time", progress_time_);
         writer.number("preempted", preempted_);
+        writer.number("parked", parked_count_);
         for (uint32_t index = 0u; index < count_; index++) {
             const uint32_t slot = (head_ + index) % capacity;
             writer.open("packet", index);
             writer.number("fence", pending_[slot]);
             writer.address("owner", owners_[slot]);
             writer.number("awaited", awaited_[slot]);
+            writer.flag("parked", parked_[slot]);
             writer.close();
         }
     }
@@ -240,13 +331,16 @@ bool ExecutionNode::invariants_hold() const
     AV_SCOPE("ExecutionNode::invariants_hold");
     if (count_ > capacity || last_completed_ > last_submitted_ || (stopped_ && count_ != 0u)) return false;
     uint32_t previous = last_completed_;
+    uint32_t parked = 0u;
     for (uint32_t index = 0u; index < count_; index++) {
         const uint32_t slot = (head_ + index) % capacity;
         const uint32_t fence = pending_[slot];
         if (fence <= previous || (awaited_[slot] != 0u && owners_[slot] == nullptr)) return false;
+        if (parked_[slot] && awaited_[slot] == 0u) return false;
+        if (parked_[slot]) parked++;
         previous = fence;
     }
-    return count_ == 0u || previous == last_submitted_;
+    return parked == parked_count_ && (count_ == 0u || previous == last_submitted_);
 }
 
 }

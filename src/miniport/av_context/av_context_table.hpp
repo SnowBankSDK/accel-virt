@@ -11,6 +11,7 @@
 #include "miniport/av_context/ring_submitter.hpp"
 #include "miniport/av_context/av_context_binding.hpp"
 #include "miniport/av_context/submission_reader.hpp"
+#include "miniport/scheduling/execution_node.hpp"
 #include "core/support/object_pool.hpp"
 #include "core/support/object_storage.hpp"
 #include "core/support/status.hpp"
@@ -28,7 +29,6 @@ class AllocationTable;
 class CapsetInfo;
 class ContextViewsRecord;
 class DxgkrnlInterface;
-class ExecutionNode;
 class HwQueueSubmissions;
 class GuestPageList;
 class HostWindow;
@@ -57,15 +57,16 @@ public:
     [[nodiscard]] Status views(void *context, ContextViewsRecord &record);
     [[nodiscard]] Status wake_on_raise(void *context, uint64_t handle);
     [[nodiscard]] Status release_shared(uint64_t object_id, VirtioGpuDevice &device);
-    [[nodiscard]] Status submit(void *context, const uint8_t *private_data, size_t size, uint64_t &awaited);
+    [[nodiscard]] Status submit(void *context, const uint8_t *private_data, size_t size, uint64_t &awaited,
+                                ExecutionNode::Hold &hold);
     [[nodiscard]] Status release_batch(void *context, const ReleaseRecord &release, const void *writer,
-                                       uint64_t &awaited);
+                                       uint64_t &awaited, ExecutionNode::Hold &hold);
     bool                 writer_gone(const void *writer);
     void                 serve(ExecutionNode &node, HwQueueSubmissions &queues);
     uint32_t             held_batches(const void *context);
     void                 adapter_is(uint64_t adapter);
     bool                 completed_already(void *context, uint64_t fence);
-    void                 kick(void *context);
+    bool                 kick(void *context);
     void                 abandon_all();
     void                *user_of(const Allocation *allocation);
     [[nodiscard]] Status window_chunk(void *context, HostWindowRecord &record, VirtioGpuDevice &device);
@@ -92,7 +93,7 @@ private:
     [[nodiscard]] Status set_up(uint32_t slot, const AvContextRecord &record, VirtioGpuDevice &device,
                                 RegisterWindow &doorbells, const CapsetInfo &capset);
     void                 release(uint32_t slot);
-    void                 in_turn(uint32_t slot, const SubmissionDescriptor &batch, uint32_t after);
+    ExecutionNode::Hold  in_turn(uint32_t slot, const SubmissionDescriptor &batch, uint32_t after);
     void                 lose(uint32_t slot, const char *why, const SubmissionDescriptor &batch);
     void                 release_chunks(uint32_t slot, VirtioGpuDevice *device, bool host_let_go);
     [[nodiscard]] Status open_window(uint32_t slot, HostWindowRecord &record, VirtioGpuDevice &device);

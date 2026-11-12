@@ -3522,7 +3522,7 @@ TEST(adapter_escape, the_trace_escape_answers_the_state_of_the_adapter_without_a
       "adapter/0/context_table/0 busy=false live=0\n"
       "adapter/0/hw_queue_table/0 busy=false live=0\n"
       "adapter/0/execution_node/0 busy=false pending=0 last_submitted=0 last_completed=0"
-      " preemption_requested=false preemption_fence=0 stopped=false progress_time=0 preempted=0\n"
+      " preemption_requested=false preemption_fence=0 stopped=false progress_time=0 preempted=0 parked=0\n"
       "adapter/0/present_waiters/0 busy=false waiting=0 waits=0 timeouts=0\n"
       "adapter/0/av_context_table/0 busy=false bound=0\n"
       "adapter/0/display_sources/0 count=1 vsync=false\n"
@@ -5873,6 +5873,90 @@ TEST(adapter_dpc_routine, a_release_held_past_the_deadline_lets_its_packet_go_an
   CHECK_EQ(nt(fixture.adapter().destroy_context(neighbour.hContext)), success);
   CHECK_EQ(nt(fixture.adapter().destroy_context(context.hContext)), success);
   CHECK_EQ(nt(fixture.adapter().destroy_device(other.device())), success);
+  CHECK_EQ(nt(fixture.adapter().destroy_device(process.device())), success); }
+
+TEST(adapter_dpc_routine, a_held_release_is_let_go_at_its_deadline_by_the_park_timer_with_no_other_dpc)
+{ Fixture fixture; av::FakeHandleTable handles;
+  fixture.function().add_doorbell_region();
+  CHECK_EQ(fixture.start(), success);
+  AvProcess process(fixture, handles);
+  av::DxgkargCreateContextRecord context = {};
+  CHECK_EQ(process.create_context(context), success);
+  av::DxgkargCreateContextRecord queue = {};
+  queue.Flags = 0x4u;
+  CHECK_EQ(nt(fixture.adapter().create_context(process.device(), &queue)), success);
+  CHECK_EQ(fixture.platform().armed_timers(), 0u);
+
+  std::uint8_t release[av::ReleaseRecord::encoded_size] = {};
+  CHECK_STATUS(av::ReleaseRecord(process.ring().kmt_handle(), av::SubmissionDescriptor(2u, 32u, 64u))
+                   .encode(release, sizeof release),
+               av::Status::ok);
+  CHECK_EQ(submit_packet(fixture, queue.hContext, 5u, release, sizeof release), success);
+  CHECK_EQ(fixture.platform().armed_timers(), 1u);
+  const std::uint32_t dpcs = fixture.dxgkrnl().dpcs_queued();
+  const std::uint32_t before = fixture.dxgkrnl().interrupts();
+  fixture.platform().advance_time(av::ExecutionNode::park_deadline - 1u);
+  CHECK_EQ(fixture.platform().fire_due_timers(), 0u);
+  CHECK_EQ(fixture.dxgkrnl().dpcs_queued(), dpcs);
+  fixture.platform().advance_time(1u);
+  CHECK_EQ(fixture.platform().fire_due_timers(), 1u);
+  CHECK_EQ(fixture.dxgkrnl().dpcs_queued(), dpcs + 1u);
+  run_dpc(fixture);
+  CHECK_EQ(fixture.dxgkrnl().interrupts(), before + 1u);
+  CHECK_EQ(fixture.dxgkrnl().interrupt(before).FenceId, 5u);
+  CHECK(fixture.platform().logged_line("avgpu: a held packet passed its deadline and was let go"));
+  CHECK_EQ(fixture.platform().armed_timers(), 0u);
+  CHECK(fixture.adapter().invariants_hold());
+  CHECK_EQ(nt(fixture.adapter().destroy_context(queue.hContext)), success);
+  CHECK_EQ(nt(fixture.adapter().destroy_context(context.hContext)), success);
+  CHECK_EQ(nt(fixture.adapter().destroy_device(process.device())), success); }
+
+TEST(adapter_submit_command_virtual, a_held_release_whose_predecessor_comes_cancels_the_park_timer)
+{ Fixture fixture; av::FakeHandleTable handles;
+  fixture.function().add_doorbell_region();
+  CHECK_EQ(fixture.start(), success);
+  AvProcess process(fixture, handles);
+  av::DxgkargCreateContextRecord context = {};
+  CHECK_EQ(process.create_context(context), success);
+  av::DxgkargCreateContextRecord first = {};
+  first.Flags = 0x4u;
+  CHECK_EQ(nt(fixture.adapter().create_context(process.device(), &first)), success);
+  av::DxgkargCreateContextRecord second = {};
+  second.Flags = 0x4u;
+  CHECK_EQ(nt(fixture.adapter().create_context(process.device(), &second)), success);
+
+  std::uint8_t later[av::ReleaseRecord::encoded_size] = {};
+  CHECK_STATUS(av::ReleaseRecord(process.ring().kmt_handle(), av::SubmissionDescriptor(2u, 32u, 64u))
+                   .encode(later, sizeof later),
+               av::Status::ok);
+  CHECK_EQ(submit_packet(fixture, second.hContext, 5u, later, sizeof later), success);
+  CHECK_EQ(fixture.platform().armed_timers(), 1u);
+  std::uint8_t earlier[av::ReleaseRecord::encoded_size] = {};
+  CHECK_STATUS(av::ReleaseRecord(process.ring().kmt_handle(), av::SubmissionDescriptor(1u, 0u, 32u))
+                   .encode(earlier, sizeof earlier),
+               av::Status::ok);
+  CHECK_EQ(submit_packet(fixture, first.hContext, 6u, earlier, sizeof earlier), success);
+  CHECK_EQ(fixture.platform().armed_timers(), 0u);
+  fixture.platform().advance_time(2u * av::ExecutionNode::park_deadline);
+  CHECK_EQ(fixture.platform().fire_due_timers(), 0u);
+  CHECK(fixture.adapter().invariants_hold());
+  CHECK_EQ(nt(fixture.adapter().destroy_context(second.hContext)), success);
+  CHECK_EQ(nt(fixture.adapter().destroy_context(first.hContext)), success);
+  CHECK_EQ(nt(fixture.adapter().destroy_context(context.hContext)), success);
+  CHECK_EQ(nt(fixture.adapter().destroy_device(process.device())), success); }
+
+TEST(adapter_destroy_allocation, destroying_the_ring_of_a_bound_av_context_unbinds_it_and_says_so)
+{ Fixture fixture; av::FakeHandleTable handles;
+  fixture.function().add_doorbell_region();
+  CHECK_EQ(fixture.start(), success);
+  AvProcess process(fixture, handles);
+  av::DxgkargCreateContextRecord context = {};
+  CHECK_EQ(process.create_context(context), success);
+  CHECK(!fixture.platform().logged_line("av context unbound"));
+  CHECK_EQ(process.ring().destroy(), success);
+  CHECK(fixture.platform().logged_line("avgpu: av context unbound with the allocation it uses: adapter "));
+  CHECK(fixture.platform().logged_line(" doorbell 0"));
+  CHECK_EQ(nt(fixture.adapter().destroy_context(context.hContext)), success);
   CHECK_EQ(nt(fixture.adapter().destroy_device(process.device())), success); }
 
 TEST(adapter_submit_command_virtual, batches_of_one_ring_released_through_two_contexts_are_published_in_ring_order)

@@ -15,6 +15,7 @@ extern "C" {
 
 #include "miniport/driver/ddi_table.hpp"
 #include "core/platform/mutex.hpp"
+#include "core/platform/one_shot_timer.hpp"
 #include "core/platform/wait_mutex.hpp"
 #include "core/platform/wake_event.hpp"
 #include "core/support/scope_exit.hpp"
@@ -27,6 +28,26 @@ static_assert(sizeof(KMUTEX) <= WaitMutex::storage_bytes, "WaitMutex storage too
 static_assert(sizeof(KEVENT) <= WakeEvent::storage_bytes && alignof(KEVENT) <= 8u,
               "WakeEvent storage too small for KEVENT");
 static_assert(alignof(FAST_MUTEX) <= 8u, "Mutex storage alignment too weak for FAST_MUTEX");
+
+namespace {
+
+struct KernelTimer {
+    KTIMER       timer;
+    KDPC         dpc;
+    TimerRoutine routine;
+    void        *context;
+};
+
+static_assert(sizeof(KernelTimer) <= OneShotTimer::storage_bytes && alignof(KernelTimer) <= 16u,
+              "OneShotTimer storage too small for a KTIMER and its KDPC");
+
+VOID timer_expired(PKDPC, PVOID context, PVOID, PVOID)
+{
+    const KernelTimer *const timer = static_cast<const KernelTimer *>(context);
+    if (timer->routine != nullptr) timer->routine(timer->context);
+}
+
+}
 static_assert(sizeof(KSPIN_LOCK) == sizeof(uintptr_t), "SpinLock word is not a KSPIN_LOCK");
 static_assert(static_cast<unsigned>(Pool::non_paged) == 0u && static_cast<unsigned>(Pool::paged) == 1u,
               "pool_flags_ is indexed by Pool");
@@ -472,6 +493,38 @@ bool KernelPlatform::wait_wake_event(void *storage, uint64_t ticks)
     LARGE_INTEGER timeout = {};
     timeout.QuadPart = -static_cast<LONGLONG>(ticks);
     return KeWaitForSingleObject(storage, Executive, KernelMode, FALSE, &timeout) == STATUS_SUCCESS;
+}
+
+void KernelPlatform::initialize_timer(void *storage, TimerRoutine routine, void *context)
+{
+    AV_SCOPE("KernelPlatform::initialize_timer");
+    KernelTimer *const timer = static_cast<KernelTimer *>(storage);
+    timer->routine = routine;
+    timer->context = context;
+    KeInitializeTimer(&timer->timer);
+    KeInitializeDpc(&timer->dpc, timer_expired, timer);
+}
+
+void KernelPlatform::arm_timer(void *storage, uint64_t ticks)
+{
+    AV_SCOPE("KernelPlatform::arm_timer");
+    KernelTimer *const timer = static_cast<KernelTimer *>(storage);
+    LARGE_INTEGER      due = {};
+    due.QuadPart = -static_cast<LONGLONG>(ticks != 0u ? ticks : 1u);
+    static_cast<void>(KeSetTimer(&timer->timer, due, &timer->dpc));
+}
+
+void KernelPlatform::cancel_timer(void *storage)
+{
+    AV_SCOPE("KernelPlatform::cancel_timer");
+    static_cast<void>(KeCancelTimer(&static_cast<KernelTimer *>(storage)->timer));
+}
+
+void KernelPlatform::release_timer(void *storage)
+{
+    AV_SCOPE("KernelPlatform::release_timer");
+    static_cast<void>(KeCancelTimer(&static_cast<KernelTimer *>(storage)->timer));
+    KeFlushQueuedDpcs();
 }
 
 uint8_t KernelPlatform::read_register_u8(void *address)

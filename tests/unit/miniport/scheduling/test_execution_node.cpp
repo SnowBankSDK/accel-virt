@@ -417,9 +417,9 @@ TEST(execution_node_report, writes_the_fences_and_each_pending_packet_in_order)
   char expected[512];
   std::snprintf(expected, sizeof expected,
                 "execution_node/0 busy=false pending=2 last_submitted=5 last_completed=1"
-                " preemption_requested=false preemption_fence=0 stopped=false progress_time=0 preempted=0\n"
-                "execution_node/0/packet/0 fence=4 owner=0x%016llX awaited=9\n"
-                "execution_node/0/packet/1 fence=5 owner=0x0000000000000000 awaited=0",
+                " preemption_requested=false preemption_fence=0 stopped=false progress_time=0 preempted=0 parked=0\n"
+                "execution_node/0/packet/0 fence=4 owner=0x%016llX awaited=9 parked=false\n"
+                "execution_node/0/packet/1 fence=5 owner=0x0000000000000000 awaited=0 parked=false",
                 static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(&owner)));
   CHECK(std::strcmp(writer.dump(), expected) == 0);
   CHECK(fixture.node().invariants_hold());
@@ -514,3 +514,104 @@ TEST(execution_node_release_overdue, names_each_owner_once_and_only_as_many_as_t
   CHECK_EQ(named, 2u);
   CHECK(owners[0] == &a);
   CHECK(owners[1] == &b); }
+
+namespace {
+
+class AlarmedNode {
+public:
+    AlarmedNode() : node_(platform_, &AlarmedNode::rang, this), rang_(0u) { platform_.set_irql(Irql::dispatch); }
+    ~AlarmedNode() { platform_.set_irql(Irql::passive); }
+
+    MockPlatform  &platform() { return platform_; }
+    ExecutionNode &node() { return node_; }
+    std::uint32_t  rang() const { return rang_; }
+
+private:
+    static void rang(void *self) { static_cast<AlarmedNode *>(self)->rang_++; }
+
+    MockPlatform  platform_;
+    ExecutionNode node_;
+    std::uint32_t rang_;
+};
+
+}
+
+TEST(execution_node_park, a_parked_packet_rings_its_deadline_with_nothing_else_running)
+{ AlarmedNode alarmed;
+  int owner = 0;
+  CHECK_STATUS(alarmed.node().submit(1u, &owner, 4u), Status::ok);
+  CHECK_EQ(alarmed.platform().armed_timers(), 0u);
+  const std::uint64_t queued = alarmed.platform().interrupt_time();
+  CHECK_STATUS(alarmed.node().submit(2u, &owner, 5u, ExecutionNode::Hold::parks), Status::ok);
+  CHECK_EQ(alarmed.node().parked(), 1u);
+  CHECK_EQ(alarmed.platform().armed_timers(), 1u);
+  CHECK_EQ(alarmed.platform().timer_due(0u), queued + ExecutionNode::park_deadline);
+  alarmed.platform().advance_time(ExecutionNode::park_deadline - 1u);
+  CHECK_EQ(alarmed.platform().fire_due_timers(), 0u);
+  CHECK_EQ(alarmed.rang(), 0u);
+  alarmed.platform().advance_time(1u);
+  CHECK_EQ(alarmed.platform().fire_due_timers(), 1u);
+  CHECK_EQ(alarmed.rang(), 1u);
+  CHECK_EQ(alarmed.node().release_overdue(alarmed.platform().interrupt_time()), 2u);
+  CHECK_EQ(alarmed.node().parked(), 0u);
+  CHECK_EQ(alarmed.platform().armed_timers(), 0u);
+  CHECK(alarmed.node().invariants_hold()); }
+
+TEST(execution_node_park, a_second_park_keeps_the_first_deadline_and_the_alarm_moves_to_the_next_once_it_passes)
+{ AlarmedNode alarmed;
+  int owner = 0;
+  const std::uint64_t first = alarmed.platform().interrupt_time();
+  CHECK_STATUS(alarmed.node().submit(1u, &owner, 4u, ExecutionNode::Hold::parks), Status::ok);
+  alarmed.platform().advance_time(ExecutionNode::park_deadline / 2u);
+  const std::uint64_t second = alarmed.platform().interrupt_time();
+  CHECK_STATUS(alarmed.node().submit(2u, &owner, 5u, ExecutionNode::Hold::parks), Status::ok);
+  CHECK_EQ(alarmed.platform().armed_timers(), 1u);
+  CHECK_EQ(alarmed.platform().timer_due(0u), first + ExecutionNode::park_deadline);
+  alarmed.platform().advance_time(ExecutionNode::park_deadline / 2u);
+  CHECK_EQ(alarmed.platform().fire_due_timers(), 1u);
+  CHECK_EQ(alarmed.node().release_overdue(alarmed.platform().interrupt_time()), 1u);
+  CHECK_EQ(alarmed.node().parked(), 1u);
+  CHECK_EQ(alarmed.platform().armed_timers(), 1u);
+  CHECK_EQ(alarmed.platform().timer_due(0u), second + ExecutionNode::park_deadline);
+  CHECK(alarmed.node().invariants_hold()); }
+
+TEST(execution_node_park, the_alarm_is_cancelled_when_the_owner_s_held_batches_are_released_or_its_packets_finish)
+{ AlarmedNode alarmed;
+  int owner = 0;
+  int other = 0;
+  CHECK_STATUS(alarmed.node().submit(1u, &owner, 4u, ExecutionNode::Hold::parks), Status::ok);
+  CHECK_STATUS(alarmed.node().submit(2u, &other, 7u, ExecutionNode::Hold::resolves), Status::ok);
+  CHECK_EQ(alarmed.node().parked(), 1u);
+  CHECK_EQ(alarmed.platform().armed_timers(), 1u);
+  CHECK_STATUS(alarmed.node().submit(3u, &owner, 3u, ExecutionNode::Hold::resolves), Status::ok);
+  CHECK_EQ(alarmed.node().parked(), 0u);
+  CHECK_EQ(alarmed.platform().armed_timers(), 0u);
+  CHECK_EQ(alarmed.node().pending(), 3u);
+
+  CHECK_STATUS(alarmed.node().submit(4u, &other, 9u, ExecutionNode::Hold::parks), Status::ok);
+  CHECK_EQ(alarmed.platform().armed_timers(), 1u);
+  alarmed.node().finish(&other, 9u);
+  CHECK_EQ(alarmed.node().parked(), 0u);
+  CHECK_EQ(alarmed.platform().armed_timers(), 0u);
+
+  CHECK_STATUS(alarmed.node().submit(5u, &other, 10u, ExecutionNode::Hold::parks), Status::ok);
+  alarmed.node().unpark(&other);
+  CHECK_EQ(alarmed.platform().armed_timers(), 0u);
+  alarmed.platform().advance_time(2u * ExecutionNode::park_deadline);
+  CHECK_EQ(alarmed.platform().fire_due_timers(), 0u);
+  CHECK_EQ(alarmed.rang(), 0u);
+  CHECK(alarmed.node().invariants_hold()); }
+
+TEST(execution_node_park, a_reset_or_a_preemption_drops_the_parks_and_the_alarm)
+{ AlarmedNode alarmed;
+  int owner = 0;
+  CHECK_STATUS(alarmed.node().submit(1u, &owner, 4u, ExecutionNode::Hold::parks), Status::ok);
+  CHECK_EQ(alarmed.platform().armed_timers(), 1u);
+  alarmed.node().reset();
+  CHECK_EQ(alarmed.node().parked(), 0u);
+  CHECK_EQ(alarmed.platform().armed_timers(), 0u);
+  alarmed.node().restart();
+  CHECK_STATUS(alarmed.node().submit(2u, &owner, 5u, ExecutionNode::Hold::parks), Status::ok);
+  CHECK_EQ(alarmed.node().abort_pending(), 2u);
+  CHECK_EQ(alarmed.platform().armed_timers(), 0u);
+  CHECK(alarmed.node().invariants_hold()); }

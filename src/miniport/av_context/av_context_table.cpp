@@ -430,11 +430,13 @@ void AvContextTable::take_down(ContextChunk &chunk, VirtioGpuDevice *device, boo
     held_chunks_[slot]--;
 }
 
-Status AvContextTable::submit(void *context, const uint8_t *private_data, size_t size, uint64_t &awaited)
+Status AvContextTable::submit(void *context, const uint8_t *private_data, size_t size, uint64_t &awaited,
+                              ExecutionNode::Hold &hold)
 {
     AV_SCOPE("AvContextTable::submit");
     platform_.require_irql_at_most(Irql::dispatch, "AvContextTable::submit");
     awaited = 0u;
+    hold = ExecutionNode::Hold::none;
     SpinLockGuard  locked(lock_);
     const uint32_t slot = slot_of(context);
     if (slot == no_slot || !live_[slot] || lost(slot)) return Status::invalid_parameter;
@@ -447,7 +449,7 @@ Status AvContextTable::submit(void *context, const uint8_t *private_data, size_t
     }
     Status status = Status::ok;
     if (releases_[slot].active())
-        in_turn(slot, submission, 0u);
+        hold = in_turn(slot, submission, 0u);
     else
         status = bindings_[slot].object().submit(submission);
     if (status == Status::ok) awaited = submission.fence_id();
@@ -455,11 +457,12 @@ Status AvContextTable::submit(void *context, const uint8_t *private_data, size_t
 }
 
 Status AvContextTable::release_batch(void *context, const ReleaseRecord &release, const void *writer,
-                                     uint64_t &awaited)
+                                     uint64_t &awaited, ExecutionNode::Hold &hold)
 {
     AV_SCOPE("AvContextTable::release_batch");
     platform_.require_irql_at_most(Irql::dispatch, "AvContextTable::release_batch");
     awaited = 0u;
+    hold = ExecutionNode::Hold::none;
     SpinLockGuard  locked(lock_);
     const uint32_t slot = slot_of(context);
     if (slot == no_slot || !live_[slot] || lost(slot)) return Status::invalid_parameter;
@@ -469,7 +472,7 @@ Status AvContextTable::release_batch(void *context, const ReleaseRecord &release
         return Status::invalid_parameter;
     }
     releases_[slot].written_by(release.writer(), writer);
-    in_turn(slot, batch, release.after());
+    hold = in_turn(slot, batch, release.after());
     awaited = batch.fence_id();
     return Status::ok;
 }
@@ -488,31 +491,33 @@ bool AvContextTable::writer_gone(const void *writer)
     return lost_any;
 }
 
-void AvContextTable::in_turn(uint32_t slot, const SubmissionDescriptor &batch, uint32_t after)
+ExecutionNode::Hold AvContextTable::in_turn(uint32_t slot, const SubmissionDescriptor &batch, uint32_t after)
 {
     AV_SCOPE("AvContextTable::in_turn");
     ReleaseQueue &queue = releases_[slot];
     AvContextBinding &binding = bindings_[slot].object();
     const ReleaseQueue::Turn turn = queue.arrive(batch, binding.next_begin(), after);
-    if (turn == ReleaseQueue::Turn::released_already) return;
+    if (turn == ReleaseQueue::Turn::released_already) return ExecutionNode::Hold::none;
     if (turn == ReleaseQueue::Turn::held) {
-        if (queue.stranded()) lose(slot, stranded, batch);
-        return;
+        if (!queue.stranded()) return ExecutionNode::Hold::parks;
+        lose(slot, stranded, batch);
+        return ExecutionNode::Hold::resolves;
     }
     if (turn == ReleaseQueue::Turn::refused || binding.submit(batch) != Status::ok) {
         lose(slot, cannot_order, batch);
-        return;
+        return ExecutionNode::Hold::resolves;
     }
     queue.released(batch);
     SubmissionDescriptor next;
     while (queue.next_held(next)) {
         if (binding.submit(next) != Status::ok) {
             lose(slot, cannot_order, next);
-            return;
+            return ExecutionNode::Hold::resolves;
         }
         queue.released(next);
     }
     if (queue.stranded()) lose(slot, stranded, batch);
+    return queue.held() == 0u ? ExecutionNode::Hold::resolves : ExecutionNode::Hold::none;
 }
 
 void AvContextTable::lose(uint32_t slot, const char *why, const SubmissionDescriptor &batch)
@@ -545,14 +550,15 @@ void AvContextTable::adapter_is(uint64_t adapter)
     adapter_ = adapter;
 }
 
-void AvContextTable::kick(void *context)
+bool AvContextTable::kick(void *context)
 {
     AV_SCOPE("AvContextTable::kick");
     platform_.require_irql_at_most(Irql::dispatch, "AvContextTable::kick");
     SpinLockGuard  locked(lock_);
     const uint32_t slot = slot_of(context);
-    if (slot == no_slot || !live_[slot] || lost(slot)) return;
+    if (slot == no_slot || !live_[slot] || lost(slot)) return false;
     bindings_[slot].object().kick();
+    return releases_[slot].held() != 0u;
 }
 
 bool AvContextTable::completed_already(void *context, uint64_t fence)

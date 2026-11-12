@@ -68,6 +68,10 @@ public:
     void     initialize_wake_event(void *storage) override;
     void     set_wake_event(void *storage) override;
     bool     wait_wake_event(void *storage, std::uint64_t ticks) override;
+    void     initialize_timer(void *storage, TimerRoutine routine, void *context) override;
+    void     arm_timer(void *storage, std::uint64_t ticks) override;
+    void     cancel_timer(void *storage) override;
+    void     release_timer(void *storage) override;
     std::uint8_t  read_register_u8(void *address) override;
     std::uint16_t read_register_u16(void *address) override;
     std::uint32_t read_register_u32(void *address) override;
@@ -112,6 +116,9 @@ public:
     void advance_time(std::uint64_t ticks);
     std::uint64_t stalled_ticks() const;
     std::uint64_t slept_ticks() const;
+    std::uint32_t fire_due_timers();
+    std::uint32_t armed_timers() const;
+    std::uint64_t timer_due(std::uint32_t ordinal) const;
 
     void          attach_register_window(void *base, RegisterWindow &window);
     void          detach_register_windows(void *base, std::uint64_t length);
@@ -203,6 +210,16 @@ private:
         std::uint32_t signals = 0u;
         bool          open = false;
     };
+
+    struct MockTimer {
+        void         *storage = nullptr;
+        TimerRoutine  routine = nullptr;
+        void         *context = nullptr;
+        std::uint64_t due = 0u;
+        bool          armed = false;
+    };
+    static constexpr std::uint32_t max_timers = 16u;
+    MockTimer *timer_of(void *storage);
 
     MockEvent *referenced(void *event);
     const MockEvent *event_of(std::uint64_t handle) const;
@@ -304,6 +321,7 @@ private:
     bool          holding_elsewhere_ = false;
     LockRank      held_elsewhere_ = LockRank::log_budget;
     MockEvent     events_[max_events] = {};
+    MockTimer     timers_[max_timers] = {};
     std::uint32_t event_count_ = 0u;
     bool          refuse_bugcheck_ = false;
     void         *bugcheck_buffer_ = nullptr;

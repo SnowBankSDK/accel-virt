@@ -146,7 +146,7 @@ Adapter::Adapter(Platform &platform, void *physical_device_object)
       render_km_(platform, devices_),
       av_contexts_(platform, dxgkrnl_, allocations_, window_),
       hw_queues_(platform, contexts_), hw_submissions_(platform), hw_queue_contexts_(platform),
-      native_fences_(platform), hardware_scheduling_(false), user_mode_submission_(false), node_(platform), present_waiters_(platform), progress_(platform, node_), transition_(), identity_(platform), description_(platform), notification_(platform, dxgkrnl_), dpc_lock_(platform, LockRank::dpc), clock_origin_(platform), vsync_(platform, dxgkrnl_, sources_),
+      native_fences_(platform), hardware_scheduling_(false), user_mode_submission_(false), node_(platform, &Adapter::park_deadline_passed, this), present_waiters_(platform), progress_(platform, node_), transition_(), identity_(platform), description_(platform), notification_(platform, dxgkrnl_), dpc_lock_(platform, LockRank::dpc), clock_origin_(platform), vsync_(platform, dxgkrnl_, sources_),
       cursor_(platform, sources_, device_), scanout_(platform, budget_, device_), presented_fence_(0u), presents_made_(0u), presents_shown_(0u), refreshes_owed_(0u), refreshed_at_(0u), refresh_waiting_(false), present_rows_(0u), presents_unmoved_(0u), presents_unticketed_(0u), presents_ticketed_(0u), presents_parked_(0u), presents_refused_(0u), presents_unpointed_(0u), last_present_flags_(0u), last_present_status_(0), last_present_destination_kind_(0u),
       display_changed_(0u), display_announced_(0u), scanout_period_(DisplayMode().period()), started_(false), luid_(0u), present_(true)
       {
@@ -157,6 +157,12 @@ Adapter::~Adapter()
 {
     AV_SCOPE("Adapter::~Adapter");
     static_cast<void>(stop_device());
+}
+
+void Adapter::park_deadline_passed(void *adapter)
+{
+    AV_SCOPE("Adapter::park_deadline_passed");
+    static_cast<void>(static_cast<Adapter *>(adapter)->dxgkrnl_.queue_dpc());
 }
 
 void *Adapter::physical_device_object() const
@@ -385,6 +391,7 @@ int32_t Adapter::stop_device()
     platform_.require_irql_at_most(Irql::passive, "Adapter::stop_device");
     InvariantScope<Adapter> guard(platform_, *this, "stop_device");
     const Status status = power_down();
+    node_.quiesce();
     vsync_.destroy();
     scanout_.release();
     cursor_.release();
@@ -891,7 +898,14 @@ int32_t Adapter::destroy_allocation(const DxgkargDestroyAllocationRecord *reques
         for (uint32_t index = 0u; index < request->NumAllocations; index++) {
             sources_.forget_primary(request->pAllocationList[index]);
             void *const user = av_contexts_.user_of(allocations_.find(request->pAllocationList[index]));
-            if (user != nullptr) static_cast<void>(unbind_av(user));
+            if (user == nullptr) continue;
+            const uint32_t doorbell = av_contexts_.doorbell_of(user);
+            const Status   unbound = unbind_av(user);
+            StampedLine(platform_, luid_, "avgpu: av context unbound with the allocation it uses")
+                .number("doorbell", doorbell)
+                .address("context", user)
+                .code("status", static_cast<uint32_t>(NtStatus(unbound).value()))
+                .write();
         }
     scanout_.wait_for_refresh();
     const Status destroyed = allocations_.destroy(*request);
@@ -2115,6 +2129,7 @@ int32_t Adapter::submit_command_virtual(const DxgkargSubmitCommandVirtualRecord 
     if (identity_.changed()) return NtStatus(Status::invalid_parameter).value();
     uint64_t     awaited = 0u;
     void        *owner = request->hContext;
+    ExecutionNode::Hold hold = ExecutionNode::Hold::none;
     FollowRecord follow;
     const bool   follows =
         !context->is_av() && follow.decode(static_cast<const uint8_t *>(request->pDmaBufferPrivateData),
@@ -2127,9 +2142,9 @@ int32_t Adapter::submit_command_virtual(const DxgkargSubmitCommandVirtualRecord 
     Status       status = Status::ok;
     const bool   presented = submit_present(*request, status, owner, awaited);
     if (!presented)
-        status = context->is_av() ? submit_av(*request, awaited)
-                 : releases        ? submit_release(*context, release, request->SubmissionFenceId, owner, awaited)
-                 : follows         ? submit_follow(*context, follow, request->SubmissionFenceId, owner, awaited)
+        status = context->is_av() ? submit_av(*request, awaited, hold)
+                 : releases        ? submit_release(*context, release, request->SubmissionFenceId, owner, awaited, hold)
+                 : follows         ? submit_follow(*context, follow, request->SubmissionFenceId, owner, awaited, hold)
                                    : node_.submit(request->SubmissionFenceId);
     if (status == Status::ok) {
         const bool done = presented ? presents_.object().completed() >= awaited
@@ -2148,41 +2163,41 @@ int32_t Adapter::submit_command_virtual(const DxgkargSubmitCommandVirtualRecord 
     return NtStatus(Status::invalid_parameter).value();
 }
 
-Status Adapter::submit_av(const DxgkargSubmitCommandVirtualRecord &request, uint64_t &awaited)
+Status Adapter::submit_av(const DxgkargSubmitCommandVirtualRecord &request, uint64_t &awaited,
+                          ExecutionNode::Hold &hold)
 {
     AV_SCOPE("Adapter::submit_av");
     const Status published = av_contexts_.submit(request.hContext,
                                                   static_cast<const uint8_t *>(request.pDmaBufferPrivateData),
-                                                  request.DmaBufferPrivateDataSize, awaited);
+                                                  request.DmaBufferPrivateDataSize, awaited, hold);
     if (published != Status::ok) return published;
-    return node_.submit(request.SubmissionFenceId, request.hContext, awaited);
+    return node_.submit(request.SubmissionFenceId, request.hContext, awaited, hold);
 }
 
 Status Adapter::submit_follow(const Context &context, const FollowRecord &follow, uint32_t fence, void *&owner,
-                              uint64_t &awaited)
+                              uint64_t &awaited, ExecutionNode::Hold &hold)
 {
     AV_SCOPE("Adapter::submit_follow");
     Context *const followed = contexts_.followed(context, follow.ring());
     if (followed == nullptr) return Status::invalid_parameter;
     owner = followed;
     awaited = follow.fence();
-    const Status queued = node_.submit(fence, followed, awaited);
-    if (queued == Status::ok) av_contexts_.kick(followed);
-    return queued;
+    hold = av_contexts_.kick(followed) ? ExecutionNode::Hold::parks : ExecutionNode::Hold::none;
+    return node_.submit(fence, followed, awaited, hold);
 }
 
 Status Adapter::submit_release(const Context &context, const ReleaseRecord &release, uint32_t fence, void *&owner,
-                               uint64_t &awaited)
+                               uint64_t &awaited, ExecutionNode::Hold &hold)
 {
     AV_SCOPE("Adapter::submit_release");
     Context *const released = contexts_.followed(context, release.ring());
     if (released == nullptr) return Status::invalid_parameter;
     owner = released;
     uint64_t     batch_fence = 0u;
-    const Status published = av_contexts_.release_batch(released, release, &context, batch_fence);
+    const Status published = av_contexts_.release_batch(released, release, &context, batch_fence, hold);
     if (published != Status::ok) return published;
     awaited = batch_fence;
-    return node_.submit(fence, released, awaited);
+    return node_.submit(fence, released, awaited, hold);
 }
 
 bool Adapter::submit_present(const DxgkargSubmitCommandVirtualRecord &request, Status &status, void *&owner,
@@ -2328,10 +2343,11 @@ int32_t Adapter::submit_command_to_hw_queue(const DxgkargSubmitCommandToHwQueueR
     Context *const context = hw_queue_contexts_.context_of(request->hHwQueue);
     if (context == nullptr) return NtStatus(Status::invalid_parameter).value();
     uint64_t             awaited = 0u;
+    ExecutionNode::Hold  hold = ExecutionNode::Hold::none;
     if (request->DmaBufferPrivateDataSize != 0u) {
         const Status published = av_contexts_.submit(context,
                                                       static_cast<const uint8_t *>(request->pDmaBufferPrivateData),
-                                                      request->DmaBufferPrivateDataSize, awaited);
+                                                      request->DmaBufferPrivateDataSize, awaited, hold);
         if (published != Status::ok) return NtStatus(published).value();
     }
     const Status status = hw_submissions_.submit(request->hHwQueue, request->HwQueueProgressFenceId,
