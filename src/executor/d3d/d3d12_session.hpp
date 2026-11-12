@@ -1,6 +1,7 @@
 #ifndef AV_D3D12_SESSION_HPP
 #define AV_D3D12_SESSION_HPP
 
+#include "core/log/log_cadence.hpp"
 #include "core/trace/function_scope.hpp"
 #include "executor/d3d/command_refusal.hpp"
 #include "executor/gpu_work_window.hpp"
@@ -302,6 +303,8 @@ private:
     uint64_t               drain_commands_;
     uint64_t               drain_mark_;
     bool                   drain_marked_;
+    LogCadence             oversized_heaps_;
+    LogCadence             refused_heaps_;
 
     friend struct D3d12SessionProbe;
 };

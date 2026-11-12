@@ -1,3 +1,4 @@
+#include "core/log/log_cadence.hpp"
 #include "executor/d3d/shared_surfaces.hpp"
 #include "fixtures/d3d12/triangle_ps.hpp"
 #include "fixtures/d3d12/triangle_vs.hpp"
@@ -546,6 +547,47 @@ TEST(d3d12_session_device, a_session_on_a_host_that_imports_no_heap_refuses_a_he
     CHECK(av_d3d12_Finish12(wire, &removed));
     CHECK_EQ(removed, 0u);
     CHECK_EQ(wire.refused(), 0u);
+    backend.shut_down();
+    readback_native = nullptr;
+    upload_native = nullptr;
+}
+
+TEST(d3d12_session_device, a_guest_that_keeps_asking_for_heaps_the_host_refuses_is_logged_a_few_times_and_then_rarely)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice *device11 = nullptr;
+    av::D3d12HostDevice *device12 = nullptr;
+    av::HostShares      *shares = nullptr;
+    av::HostMemorySource *source = nullptr;
+    if (!host_devices(apis, device11, device12, shares, source)) return;
+    if (!device12->exports_heaps()) return;
+    setenv("AV_HEAP_PLACEMENT", "native", 1);
+    av::D3dBackend backend(rig.log);
+    av::SessionShares session;
+    CHECK(backend.initialize(*shared_as(session, shares, backend), rig.imports, device11, device12, nullptr, nullptr, source));
+    unsetenv("AV_HEAP_PLACEMENT");
+    av::D3dLoopback wire(backend, rig.imports, source, region_bytes, lent_bytes);
+    readback_native = nullptr;
+    upload_native = nullptr;
+    make_frame(wire, true);
+    const std::uint64_t memory = wire.open_memory(readback_memory, heap_bytes);
+    CHECK(memory != 0u);
+    constexpr std::uint32_t asks = 300u;
+    const std::uint32_t     before = rig.sink.lines();
+    for (std::uint32_t ask = 0u; ask < asks; ask++) {
+        std::uint32_t hresult = 1u;
+        std::uint64_t placed = 9u;
+        CHECK(av_d3d12_CreateHeap12(wire, 600u + ask, heap_of(heap_readback), 0u, heap_bytes, 0u, memory, 0u,
+                                    &hresult, &placed));
+        CHECK_EQ(hresult, static_cast<std::uint32_t>(E_OUTOFMEMORY));
+    }
+    const std::uint32_t told = rig.sink.lines() - before;
+    CHECK(told >= av::LogCadence::spoken_first);
+    CHECK(told <= av::LogCadence::spoken_first + asks / av::LogCadence::then_every);
+    std::uint32_t removed = 1u;
+    CHECK(av_d3d12_Finish12(wire, &removed));
+    CHECK_EQ(removed, 0u);
     backend.shut_down();
     readback_native = nullptr;
     upload_native = nullptr;

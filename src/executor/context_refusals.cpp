@@ -6,7 +6,7 @@
 
 namespace av {
 
-ContextRefusals::ContextRefusals(DriverLog &log) : log_(log), seen_{}
+ContextRefusals::ContextRefusals(DriverLog &log) : log_(log), seen_()
 {
     AV_SCOPE("ContextRefusals::ContextRefusals");
 }
@@ -16,8 +16,8 @@ void ContextRefusals::refuse(Reason reason, const char *api, uint64_t detail)
     AV_SCOPE("ContextRefusals::refuse");
     const uint32_t index = static_cast<uint32_t>(reason);
     if (index >= static_cast<uint32_t>(Reason::count)) return;
-    const uint64_t seen = __atomic_add_fetch(&seen_[index], 1u, __ATOMIC_RELAXED);
-    if (seen > spoken_each && seen % then_every != 0u) return;
+    if (!seen_[index].speaks()) return;
+    const uint64_t seen = seen_[index].seen();
     LogLine(log_)
         .text("the ")
         .text(api)
@@ -36,7 +36,7 @@ uint64_t ContextRefusals::refused(Reason reason) const
     AV_SCOPE("ContextRefusals::refused");
     const uint32_t index = static_cast<uint32_t>(reason);
     if (index >= static_cast<uint32_t>(Reason::count)) return 0u;
-    return __atomic_load_n(&seen_[index], __ATOMIC_RELAXED);
+    return seen_[index].seen();
 }
 
 const char *ContextRefusals::describe(Reason reason) const

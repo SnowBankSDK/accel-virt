@@ -1,6 +1,8 @@
 #ifndef AV_CONTEXT_REFUSALS_HPP
 #define AV_CONTEXT_REFUSALS_HPP
 
+#include "core/log/log_cadence.hpp"
+
 #include <stdint.h>
 
 namespace av {
@@ -29,13 +31,10 @@ public:
     uint64_t refused(Reason reason) const;
 
 private:
-    static constexpr uint64_t spoken_each = 4u;
-    static constexpr uint64_t then_every = 128u;
-
     const char *describe(Reason reason) const;
 
     DriverLog &log_;
-    uint64_t   seen_[static_cast<uint32_t>(Reason::count)];
+    LogCadence seen_[static_cast<uint32_t>(Reason::count)];
 };
 
 }

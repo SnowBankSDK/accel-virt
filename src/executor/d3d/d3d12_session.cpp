@@ -148,7 +148,7 @@ D3d12Session::D3d12Session(const GuestBytes &guest, D3dObjectTable &objects, Wak
     : d3d12proto::ServerDispatch(guest), imports_(nullptr), source_(nullptr), placing_(false), device_(nullptr), shown_by_(nullptr), shares_(nullptr), tenant_(tenant),
       joined_(false), surfaces_(nullptr), objects_(objects), blocks_(blocks), addresses_(blocks), indirect_table_(addresses_),
       progress_(fence_wake, blocks), block_heaps_(blocks, progress_, lines), holds_(blocks), descriptors_(blocks, holds_), allocators_(blocks), queries_(blocks), refused_creates_(), views_(objects_, addresses_),
-      pipelines_(objects_), compiles_(blocks), presentation_(lines), tile_update_(), retained_(), state_builder_(blocks, objects_), inputs_(blocks, addresses_), sizes_(blocks), removed_(0u), lines_(lines), refusal_(lines_), clock_(), hang_ns_(hung_after), commands_(0u), polled_at_(0u), drain_commands_(0u), drain_mark_(0u), drain_marked_(false)
+      pipelines_(objects_), compiles_(blocks), presentation_(lines), tile_update_(), retained_(), state_builder_(blocks, objects_), inputs_(blocks, addresses_), sizes_(blocks), removed_(0u), lines_(lines), refusal_(lines_), clock_(), hang_ns_(hung_after), commands_(0u), polled_at_(0u), drain_commands_(0u), drain_mark_(0u), drain_marked_(false), oversized_heaps_(), refused_heaps_()
 {
     AV_SCOPE("D3d12Session::D3d12Session");
 }
@@ -711,7 +711,16 @@ bool D3d12Session::create_heap(uint32_t heap, const d3d12proto::HeapProperties &
     if (properties.type == 0u || properties.type > most_heap_type || size == 0u || D3d12HeapFlags(flags).refused())
         return false;
     if (size > max_heap_bytes) {
-        LogLine(lines_).text("a heap of ").number(size).text(" bytes is past the ").number(max_heap_bytes).text(" the host makes").write();
+        if (oversized_heaps_.speaks())
+            LogLine(lines_)
+                .text("a heap of ")
+                .number(size)
+                .text(" bytes is past the ")
+                .number(max_heap_bytes)
+                .text(" the host makes, refusal ")
+                .number(oversized_heaps_.seen())
+                .text(" of this kind")
+                .write();
         hresult = static_cast<uint32_t>(E_OUTOFMEMORY);
         return true;
     }
@@ -720,7 +729,14 @@ bool D3d12Session::create_heap(uint32_t heap, const d3d12proto::HeapProperties &
         if (placing_ && memory == 0u && (properties.type == heap_upload || properties.type == heap_readback))
             return native_heap(heap, size, alignment, hresult, placed);
         if (placing_) {
-            LogLine(lines_).text("a heap of ").number(size).text(" bytes over guest memory is refused: this host imports no heap").write();
+            if (refused_heaps_.speaks())
+                LogLine(lines_)
+                    .text("a heap of ")
+                    .number(size)
+                    .text(" bytes over guest memory is refused: this host imports no heap, refusal ")
+                    .number(refused_heaps_.seen())
+                    .text(" of this kind")
+                    .write();
             hresult = static_cast<uint32_t>(E_OUTOFMEMORY);
             return true;
         }
