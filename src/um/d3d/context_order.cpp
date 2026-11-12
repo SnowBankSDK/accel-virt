@@ -8,23 +8,25 @@ namespace av::d3d {
 
 ContextOrder::ContextOrder(const D3DDDI_DEVICECALLBACKS &kernel, HANDLE device, HANDLE context, D3dSession &session,
                            KeyedLog &lines, uint32_t channel_device)
-    : context_(context), route_(kernel, device, session.transport(), session.lock(), lines, context),
+    : context_(context), lane_(kernel, device, context, session, lines),
       follower_(kernel, device, session.transport()),
-      channel_(session.stream(), session.lock(), channel_device, &route_)
+      channel_(session.stream(), session.lock(), channel_device)
 {
     AV_SCOPE("ContextOrder::ContextOrder");
 }
 
-void ContextOrder::engage()
+bool ContextOrder::engage()
 {
     AV_SCOPE("ContextOrder::engage");
-    if (!route_.engaged()) route_.engage();
+    if (engaged()) return true;
+    if (!lane_.open()) return false;
+    return channel_.move_to(lane_.stream()) == Status::ok;
 }
 
 bool ContextOrder::engaged() const
 {
     AV_SCOPE("ContextOrder::engaged");
-    return route_.engaged();
+    return lane_.opened();
 }
 
 D3dDeviceChannel &ContextOrder::wire()
@@ -33,10 +35,16 @@ D3dDeviceChannel &ContextOrder::wire()
     return channel_;
 }
 
+KernelLane &ContextOrder::lane()
+{
+    AV_SCOPE("ContextOrder::lane");
+    return lane_;
+}
+
 HRESULT ContextOrder::settle()
 {
     AV_SCOPE("ContextOrder::settle");
-    if (route_.engaged() && route_.routes()) return S_OK;
+    if (engaged()) return S_OK;
     return follower_.follow(context_);
 }
 

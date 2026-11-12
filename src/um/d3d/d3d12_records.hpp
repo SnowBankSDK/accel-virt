@@ -192,9 +192,11 @@ struct StateObjectRecord {
 struct ListRecord {
     static constexpr uint32_t tag = 0x00495641u;
 
-    RecordHeader header;
-    uint32_t     type;
-    uint32_t     made;
+    RecordHeader       header;
+    uint32_t           type;
+    uint32_t           made;
+    d3d::ContextOrder *order;
+    uint64_t           fence;
 };
 
 }

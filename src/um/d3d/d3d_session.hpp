@@ -61,6 +61,10 @@ public:
     uint64_t               arena_bytes() const;
     ClientBlobArena       &blobs();
     KmtTransport          &transport();
+    GuestConnection       &connection();
+    BlockSource           &memory();
+    uint32_t               select_command() const;
+    uint32_t               flush_command() const;
     Kmt                   &kmt() const;
     ObjectPool<d3d11::D3d11Device> &contexts();
     SessionMemory                  &shared_memory();
@@ -83,6 +87,7 @@ private:
     void    close();
 
     DriverLog                      &lines_;
+    BlockSource                    &memory_;
     SrwLock                              lock_;
     SrwLock                              placement_lock_;
     GuestConnection                      connection_;

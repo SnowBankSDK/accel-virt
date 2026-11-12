@@ -3,7 +3,7 @@
 
 #include "icd/d3d/d3d_device_channel.hpp"
 #include "um/d3d/batch_follower.hpp"
-#include "um/d3d/packet_release.hpp"
+#include "um/d3d/kernel_lane.hpp"
 
 #include <stdint.h>
 
@@ -24,14 +24,15 @@ public:
     ContextOrder(const ContextOrder &) = delete;
     ContextOrder &operator=(const ContextOrder &) = delete;
 
-    void              engage();
+    bool              engage();
     bool              engaged() const;
     D3dDeviceChannel &wire();
+    KernelLane       &lane();
     [[nodiscard]] HRESULT settle();
 
 private:
     HANDLE           context_;
-    PacketRelease    route_;
+    KernelLane       lane_;
     BatchFollower    follower_;
     D3dDeviceChannel channel_;
 };

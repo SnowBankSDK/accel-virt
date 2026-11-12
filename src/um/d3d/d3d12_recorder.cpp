@@ -87,7 +87,7 @@ VOID D3d12Recorder::reset_command_list(D3D12DDI_HCOMMANDLIST handle, const D3D12
              "CreateCommandList12");
         return;
     }
-    sent(av_d3d12_ResetCommandList12(device_.wire(), made.header.stamp.id(), pool->header.stamp.id(), 0u), "ResetCommandList12");
+    device_.reset_list(made, pool->header.stamp.id(), made.type);
 }
 
 VOID D3d12Recorder::clear_root_arguments(D3D12DDI_HCOMMANDLIST)

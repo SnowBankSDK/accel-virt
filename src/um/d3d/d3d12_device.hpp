@@ -60,6 +60,8 @@ public:
 #include "um/d3d/generated/d3d12_device_ddi.inc"
 
     d3d::D3dDeviceChannel    &wire();
+    d3d::D3dDeviceChannel    &queue_wire(const QueueRecord &queue);
+    void                      reset_list(ListRecord &list, uint32_t pool, uint32_t type);
     BlockSource              &memory();
     d3d12proto::DescriptorRef descriptor(D3D12DDI_CPU_DESCRIPTOR_HANDLE handle) const;
     d3d12proto::DescriptorRef descriptor(D3D12DDI_GPU_DESCRIPTOR_HANDLE handle) const;
@@ -154,7 +156,6 @@ private:
     d3d::D3dCallTrace                    &trace_;
     uint32_t                              context_number_;
     bool                                  placed_heaps_;
-    bool                                  shares_;
 };
 
 template <typename... Arguments>

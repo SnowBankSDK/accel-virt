@@ -460,19 +460,15 @@ HRESULT D3d12Device::open_heap_and_resource(const D3D12DDIARG_OPENHEAP_0003 *arg
     HeapRecord                      &heap = *static_cast<HeapRecord *>(heap_handle.pDrvPrivate);
     d3d::KernelHeap                  host;
     if (host.open(args->pPrivateDriverData, args->PrivateDriverDataSize, opened.pPrivateDriverData,
-                  opened.PrivateDriverDataSize) == Status::ok) {
-        shares_ = true;
+                  opened.PrivateDriverDataSize) == Status::ok)
         return open_host_object(*args, host.key(), host.bytes(), heap, static_cast<ResourceRecord *>(handle.pDrvPrivate),
                                 runtime);
-    }
     d3d::KernelSurface surface;
     if (surface.open(args->pPrivateDriverData, args->PrivateDriverDataSize, opened.pPrivateDriverData,
                      opened.PrivateDriverDataSize) == Status::ok &&
-        !surface.across_adapters()) {
-        shares_ = true;
+        !surface.across_adapters())
         return open_host_object(*args, surface.key(), surface.opened_bytes(), heap,
                                 static_cast<ResourceRecord *>(handle.pDrvPrivate), runtime);
-    }
     if (handle.pDrvPrivate == nullptr) return E_INVALIDARG;
     ResourceRecord &resource = *static_cast<ResourceRecord *>(handle.pDrvPrivate);
     const HRESULT   existing = open_existing(*args, heap, resource);

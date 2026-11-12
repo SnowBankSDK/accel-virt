@@ -13,7 +13,7 @@ namespace av::d3d {
 
 D3dSession::D3dSession(Kmt &kmt, BlockSource &memory, DriverLog &log, uint64_t arena_size, uint32_t select_command,
                        uint32_t flush_command, const SliceOffer *offer)
-    : lines_(log), lock_(), placement_lock_(), connection_(kmt),
+    : lines_(log), memory_(memory), lock_(), placement_lock_(), connection_(kmt),
       channel_(memory, log,
                icd::ChannelShape(SubApi::d3d, ring_order, reply_bytes, staging_bytes, batch_bytes, arena_size), lock_),
       stream_(), shared_memory_(memory, channel_, lock_, log, offer, this), lease_(), query_results_(), contexts_(memory), members_(0u), ids_(),
@@ -160,6 +160,30 @@ uint32_t D3dSession::next_id()
 {
     AV_SCOPE("D3dSession::next_id");
     return ids_.next();
+}
+
+GuestConnection &D3dSession::connection()
+{
+    AV_SCOPE("D3dSession::connection");
+    return connection_;
+}
+
+BlockSource &D3dSession::memory()
+{
+    AV_SCOPE("D3dSession::memory");
+    return memory_;
+}
+
+uint32_t D3dSession::select_command() const
+{
+    AV_SCOPE("D3dSession::select_command");
+    return select_command_;
+}
+
+uint32_t D3dSession::flush_command() const
+{
+    AV_SCOPE("D3dSession::flush_command");
+    return flush_command_;
 }
 
 d3d::D3dCommandStream &D3dSession::stream()
