@@ -455,6 +455,32 @@ TEST(vram_budget, an_integrated_gpus_heap_budget_is_bounded_by_the_host_ram_it_t
   budget.report(report);
   CHECK_EQ(report.heapBudget[0], gib + gib / 2u); }
 
+TEST(vram_budget, an_integrated_gpus_budget_is_what_a_take_is_granted_after_a_reading_that_does_not_show_its_takes)
+{ av::FailingBlocks blocks;
+  HostRamLedger host;
+  av::FakeMemoryGauge gauge;
+  gauge.free_bytes = 10 * gib;
+  host.watch(&gauge);
+  host.floor(4 * gib);
+  VramLedger ledger;
+  ledger.learn(16 * gib);
+  ledger.share_host_ram(&host);
+  VramBudget budget(blocks);
+  budget.bind(&ledger, &host);
+  budget.learn(guest_view());
+  CHECK(budget.admit(0u, 2 * gib));
+  gauge.now += HostRamLedger::refresh_ms;
+  CHECK(budget.admit(0u, gib));
+  VkPhysicalDeviceMemoryBudgetPropertiesEXT report = {};
+  budget.report(report);
+  CHECK_EQ(report.heapUsage[0], 3 * gib);
+  CHECK_EQ(report.heapBudget[0], 6 * gib);
+  gauge.now += HostRamLedger::refresh_ms;
+  CHECK(!budget.admit(0u, report.heapBudget[0] - report.heapUsage[0] + 1u));
+  CHECK(budget.admit(0u, report.heapBudget[0] - report.heapUsage[0]));
+  budget.report(report);
+  CHECK_EQ(report.heapBudget[0], report.heapUsage[0]); }
+
 namespace {
 
 constexpr std::uint32_t vulkan_kill_steps = 10u;
