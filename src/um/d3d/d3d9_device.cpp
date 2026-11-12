@@ -101,7 +101,8 @@ HRESULT D3d9Device::initialize(uint32_t kmt_adapter, const D3DDDIARG_CREATEDEVIC
     if (FAILED(joined)) return joined;
     static_cast<void>(present_order_.construct(kernel_.callbacks(), kernel_.runtime(), context_, session_.transport(), lines_));
     static_cast<void>(packets_.construct(kernel_.callbacks(), kernel_.runtime(), session_.transport(), session_.lock(), lines_, context_));
-    static_cast<void>(channel_.construct(session_.stream(), session_.lock(), session_.next_id()));
+    static_cast<void>(channel_.construct(session_.stream(), session_.lock(), session_.next_id(),
+                                         packets_.constructed() ? &packets_.object() : nullptr));
     uint32_t hresult = 1u;
     if (!channel_.object().open9(hresult) || hresult != 0u) {
         lines_.write("the host made no Direct3D 9 device");

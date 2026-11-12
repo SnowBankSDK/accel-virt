@@ -449,9 +449,11 @@ HRESULT D3d12Device::open_heap_and_resource(const D3D12DDIARG_OPENHEAP_0003 *arg
         return E_INVALIDARG;
     d3d::KernelHeap host;
     if (host.open(args->pPrivateDriverData, args->PrivateDriverDataSize, args->pOpenAllocationInfo[0].pPrivateDriverData,
-                  args->pOpenAllocationInfo[0].PrivateDriverDataSize) == Status::ok)
+                  args->pOpenAllocationInfo[0].PrivateDriverDataSize) == Status::ok) {
+        shares_ = true;
         return open_host_object(*args, host, *static_cast<HeapRecord *>(heap_handle.pDrvPrivate),
                                 static_cast<ResourceRecord *>(handle.pDrvPrivate), runtime);
+    }
     if (handle.pDrvPrivate == nullptr) return E_INVALIDARG;
     ResourceRecord &resource = *static_cast<ResourceRecord *>(handle.pDrvPrivate);
     const HRESULT   opened = open_existing(*args, *static_cast<HeapRecord *>(heap_handle.pDrvPrivate), resource);

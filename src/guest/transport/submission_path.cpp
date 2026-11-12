@@ -10,28 +10,29 @@
 namespace av {
 
 SubmissionPath::SubmissionPath(Kmt &kmt, GuestDoorbell &doorbell, TransportRing &ring)
-    : kmt_(kmt), doorbell_(doorbell), ring_(ring), doorbell_submissions_(0u), kernel_submissions_(0u), publishes_tail_(false), user_submissions_(0u), route_(nullptr), route_ring_(0u), release_submissions_(0u)
+    : kmt_(kmt), doorbell_(doorbell), ring_(ring), doorbell_submissions_(0u), kernel_submissions_(0u), publishes_tail_(false), user_submissions_(0u), ordered_ring_(0u), release_submissions_(0u)
 {
     AV_SCOPE("SubmissionPath::SubmissionPath");
 }
 
 Status SubmissionPath::submit(uint32_t context, uint64_t dma_address, const uint8_t *descriptor, uint32_t size,
-                              uint64_t fence)
+                              uint64_t fence, ReleaseRoute *route)
 {
     AV_SCOPE("SubmissionPath::submit");
-    if (route_ != nullptr) {
+    const bool ordered = ordered_ring_ != 0u;
+    if (ordered && route != nullptr) {
         SubmissionDescriptor batch;
         uint8_t              record[ReleaseRecord::encoded_size] = {};
         if (batch.decode(descriptor, size) != Status::ok) return Status::invalid_parameter;
-        static_cast<void>(ReleaseRecord(route_ring_, batch).encode(record, sizeof record));
-        const Status released = route_->release(record, sizeof record);
+        static_cast<void>(ReleaseRecord(ordered_ring_, batch).encode(record, sizeof record));
+        const Status released = route->release(record, sizeof record);
         if (released == Status::ok) {
             release_submissions_++;
             return Status::ok;
         }
         if (released != Status::not_supported) return released;
     }
-    if (route_ == nullptr && doorbell_.established()) {
+    if (!ordered && doorbell_.established()) {
         const Status published = ring_.publish_tail();
         if (published != Status::ok) return published;
         if (doorbell_.ring(fence)) {
@@ -40,7 +41,7 @@ Status SubmissionPath::submit(uint32_t context, uint64_t dma_address, const uint
         }
         static_cast<void>(doorbell_.recover());
     }
-    if (route_ == nullptr && publishes_tail_ && doorbell_.queue() == 0u) {
+    if (!ordered && publishes_tail_ && doorbell_.queue() == 0u) {
         const Status published = ring_.publish_tail();
         if (published != Status::ok) return published;
         if (ring_.consumer_awake()) {
@@ -75,17 +76,16 @@ uint64_t SubmissionPath::submitted() const
     return doorbell_submissions_ + kernel_submissions_ + user_submissions_ + release_submissions_;
 }
 
-void SubmissionPath::release_through(ReleaseRoute *route, uint32_t ring)
+void SubmissionPath::keep_order_of(uint32_t ring)
 {
-    AV_SCOPE("SubmissionPath::release_through");
-    route_ = route;
-    route_ring_ = route != nullptr ? ring : 0u;
+    AV_SCOPE("SubmissionPath::keep_order_of");
+    ordered_ring_ = ring;
 }
 
 bool SubmissionPath::releases() const
 {
     AV_SCOPE("SubmissionPath::releases");
-    return route_ != nullptr;
+    return ordered_ring_ != 0u;
 }
 
 uint64_t SubmissionPath::through_release() const

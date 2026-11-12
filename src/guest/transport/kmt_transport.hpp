@@ -70,6 +70,7 @@ public:
     void                 release_directly(const ReleaseRoute &route);
     bool                 releases_by_packet() const;
     bool                 routed_by(const ReleaseRoute &route) const;
+    void                 speak_through(ReleaseRoute *route);
     void                 hold_in(uint8_t *block, size_t capacity);
     [[nodiscard]] TransportResult flush();
     size_t                        held() const;
@@ -184,10 +185,14 @@ private:
     uint64_t         fence_ends_[TransportFence::max_outstanding];
     bool             faulted_;
     static constexpr uint32_t most_gates = 4u;
+    static constexpr uint32_t most_routes = 32u;
     PublishGate     *held_[most_gates];
-    const ReleaseRoute *route_;
-    const ReleaseRoute *standby_;
+    ReleaseRoute    *routes_[most_routes];
+    uint32_t         route_count_;
+    ReleaseRoute    *speaker_;
     uint32_t         gates_busy_;
+
+    ReleaseRoute    *speaking_route() const;
 
     void             lock_gates();
     void             unlock_gates();

@@ -11,6 +11,7 @@
 
 namespace av {
 class KmtTransport;
+class ReleaseRoute;
 class StateWriter;
 }
 
@@ -39,7 +40,8 @@ public:
     size_t               recorded_bytes() const;
     uint64_t             recorded_total() const;
     [[nodiscard]] Status append_recorded(const uint8_t *bytes, size_t length);
-    [[nodiscard]] bool   speak_as(uint32_t device);
+    [[nodiscard]] bool   speak_as(uint32_t device, ReleaseRoute *route = nullptr);
+    void                 speak_through(ReleaseRoute *route);
     void                 selected(uint32_t device);
     void                 forget(uint32_t device);
     bool                 failed() const;

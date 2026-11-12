@@ -27,6 +27,7 @@ public:
     void engage();
     void writing(D3DKMT_HANDLE allocation);
     bool engaged() const;
+    bool routes() const;
     Status release(const uint8_t *record, uint32_t size) override;
     void   waited_long() override;
 

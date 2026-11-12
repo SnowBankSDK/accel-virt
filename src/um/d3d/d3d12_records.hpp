@@ -9,6 +9,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+namespace av::d3d {
+class ContextOrder;
+}
+
 namespace av::d3d12 {
 
 class HeapMemory;
@@ -144,6 +148,7 @@ struct QueueRecord {
     RecordHeader             header;
     D3D12DDI_HRTCOMMANDQUEUE runtime;
     HANDLE                   context;
+    d3d::ContextOrder       *order;
     uint32_t                 type;
     uint32_t                 reserved;
     uint64_t                 executed;

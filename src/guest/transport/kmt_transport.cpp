@@ -38,7 +38,7 @@ KmtTransport::KmtTransport(GuestConnection &connection, BlockSource &memory, Sub
       staging_(staging), staging_bytes_(staging != nullptr ? staging_bytes : 0u),
       room_(staging != nullptr ? staging_bytes : 0u, reply_bytes), allocations_{},
       dma_address_(0u), context_(0u), hardware_scheduled_(false), ring_(), newest_end_(0u), newest_fence_(0u), previous_end_(0u), doorbell_(connection.kmt()),
-      path_(connection.kmt(), doorbell_, ring_), reply_(), watch_(connection.kmt(), ring_), fences_(), fence_ends_{}, faulted_(false), held_{}, route_(nullptr), standby_(nullptr), gates_busy_(0u), pending_(nullptr, 0u), unpublished_(0u), answered_(false), answered_fence_(0u),
+      path_(connection.kmt(), doorbell_, ring_), reply_(), watch_(connection.kmt(), ring_), fences_(), fence_ends_{}, faulted_(false), held_{}, routes_{}, route_count_(0u), speaker_(nullptr), gates_busy_(0u), pending_(nullptr, 0u), unpublished_(0u), answered_(false), answered_fence_(0u),
       decode_arena_(nullptr, 0u), blobs_(), arena_(nullptr), room_pressure_(0u), room_wait_ticks_(0u), window_began_(0u), windowed_(false), calls_sent_(0u), spill_(memory), answer_(memory)
 {
     AV_SCOPE("KmtTransport::KmtTransport");
@@ -50,7 +50,7 @@ KmtTransport::KmtTransport(GuestConnection &connection, SubApi sub_api, uint8_t 
       staging_(staging), staging_bytes_(staging != nullptr ? staging_bytes : 0u),
       room_(staging != nullptr ? staging_bytes : 0u, reply_bytes), allocations_{},
       dma_address_(0u), context_(0u), hardware_scheduled_(false), ring_(), newest_end_(0u), newest_fence_(0u), previous_end_(0u), doorbell_(connection.kmt()),
-      path_(connection.kmt(), doorbell_, ring_), reply_(), watch_(connection.kmt(), ring_), fences_(), fence_ends_{}, faulted_(false), held_{}, route_(nullptr), standby_(nullptr), gates_busy_(0u), pending_(nullptr, 0u), unpublished_(0u), answered_(false), answered_fence_(0u),
+      path_(connection.kmt(), doorbell_, ring_), reply_(), watch_(connection.kmt(), ring_), fences_(), fence_ends_{}, faulted_(false), held_{}, routes_{}, route_count_(0u), speaker_(nullptr), gates_busy_(0u), pending_(nullptr, 0u), unpublished_(0u), answered_(false), answered_fence_(0u),
       decode_arena_(nullptr, 0u), blobs_(), arena_(nullptr), room_pressure_(0u), room_wait_ticks_(0u), window_began_(0u), windowed_(false), calls_sent_(0u), spill_(), answer_()
 {
     AV_SCOPE("KmtTransport::KmtTransport");
@@ -281,36 +281,51 @@ Status KmtTransport::release_by(ReleaseRoute &route)
     AV_SCOPE("KmtTransport::release_by");
     if (!established() || faulted_ || !watch_.reads_page()) return watch_.reads_page() ? Status::invalid_state : Status::not_supported;
     if (routed_by(route)) return Status::ok;
-    if (route_ != nullptr) {
-        if (standby_ != nullptr) return Status::no_space;
-        standby_ = &route;
-        return Status::ok;
-    }
-    path_.release_through(&route, ring());
-    route_ = &route;
+    if (route_count_ == most_routes) return Status::no_space;
+    if (route_count_ == 0u && pending_.used() != 0u && flush() != TransportResult::ok) return Status::invalid_state;
+    routes_[route_count_++] = &route;
+    path_.keep_order_of(ring());
     return Status::ok;
 }
 
 void KmtTransport::release_directly(const ReleaseRoute &route)
 {
     AV_SCOPE("KmtTransport::release_directly");
-    if (standby_ == &route) standby_ = nullptr;
-    if (route_ != &route) return;
-    if (standby_ != nullptr) {
-        route_ = standby_;
-        standby_ = nullptr;
-        path_.release_through(const_cast<ReleaseRoute *>(route_), ring());
+    if (speaker_ == &route) {
+        if (routed_by(route) && pending_.used() != 0u) static_cast<void>(flush());
+        speaker_ = nullptr;
+    }
+    for (uint32_t index = 0u; index < route_count_; index++) {
+        if (routes_[index] != &route) continue;
+        routes_[index] = routes_[--route_count_];
+        routes_[route_count_] = nullptr;
+        if (route_count_ != 0u) return;
+        if (!faulted_) static_cast<void>(await_gpu(newest_fence_));
+        path_.keep_order_of(0u);
         return;
     }
-    if (!faulted_) static_cast<void>(await_gpu(newest_fence_));
-    path_.release_through(nullptr, 0u);
-    route_ = nullptr;
 }
 
 bool KmtTransport::routed_by(const ReleaseRoute &route) const
 {
     AV_SCOPE("KmtTransport::routed_by");
-    return route_ == &route || standby_ == &route;
+    for (uint32_t index = 0u; index < route_count_; index++)
+        if (routes_[index] == &route) return true;
+    return false;
+}
+
+void KmtTransport::speak_through(ReleaseRoute *route)
+{
+    AV_SCOPE("KmtTransport::speak_through");
+    if (route == speaker_) return;
+    if (route_count_ != 0u && pending_.used() != 0u) static_cast<void>(flush());
+    speaker_ = route;
+}
+
+ReleaseRoute *KmtTransport::speaking_route() const
+{
+    AV_SCOPE("KmtTransport::speaking_route");
+    return speaker_ != nullptr && routed_by(*speaker_) ? speaker_ : nullptr;
 }
 
 bool KmtTransport::releases_by_packet() const
@@ -479,9 +494,10 @@ void KmtTransport::teardown()
     fences_ = TransportFence();
     faulted_ = false;
     for (PublishGate *&held : held_) held = nullptr;
-    path_.release_through(nullptr, 0u);
-    route_ = nullptr;
-    standby_ = nullptr;
+    path_.keep_order_of(0u);
+    for (ReleaseRoute *&route : routes_) route = nullptr;
+    route_count_ = 0u;
+    speaker_ = nullptr;
     pending_.clear();
     __atomic_store_n(&unpublished_, 0u, __ATOMIC_RELEASE);
     answered_ = false;
@@ -749,7 +765,9 @@ Status KmtTransport::wait_on_page(uint64_t fence)
         if (!told &&
             connection_.kmt().performance_counter(frequency) - began > frequency * slow_wait_seconds) {
             told = true;
-            const_cast<ReleaseRoute *>(route_)->waited_long();
+            ReleaseRoute *const told_route = speaking_route();
+            if (told_route != nullptr) told_route->waited_long();
+            else if (route_count_ != 0u) routes_[0]->waited_long();
         }
         if (spin.lasts()) spin_once();
         else connection_.kmt().sleep_briefly();
@@ -849,7 +867,7 @@ TransportResult KmtTransport::submit_written(uint64_t begin, uint64_t end, uint6
     uint8_t      descriptor[SubmissionDescriptor::encoded_size] = {};
     static_cast<void>(SubmissionDescriptor(fence, begin, end).encode(descriptor, sizeof descriptor));
     const Status submitted = path_.submit(context_, dma_address_, descriptor, SubmissionDescriptor::encoded_size,
-                                          fence);
+                                          fence, speaking_route());
     if (submitted != Status::ok) {
         faulted_ = true;
         return TransportResult::failed;

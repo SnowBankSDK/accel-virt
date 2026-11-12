@@ -45,6 +45,12 @@ bool PacketRelease::engaged() const
     return engaged_;
 }
 
+bool PacketRelease::routes() const
+{
+    AV_SCOPE("PacketRelease::routes");
+    return transport_.routed_by(*this);
+}
+
 void PacketRelease::waited_long()
 {
     AV_SCOPE("PacketRelease::waited_long");

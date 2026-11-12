@@ -155,6 +155,9 @@ VOID D3d11Device::create_resource(const D3D11DDIARG_CREATERESOURCE *args, D3D10D
             .write();
     const bool as_rows = interop && !across && rows_.asked_by(caller_.thread_id());
     if (interop && !across) desc.misc_flags |= ResourceMisc::shared_bit | (as_rows ? ResourceMisc::rows_bit : 0u);
+    if ((args->MiscFlags & D3D10_DDI_RESOURCE_MISC_SHARED) != 0u && args->pPrimaryDesc == nullptr &&
+        (args->BindFlags & D3D10_DDI_BIND_PRESENT) == 0u && packets_.constructed())
+        packets_.object().engage();
     if (kernel_visible) {
         const HRESULT allocated = allocate(resource, *args, runtime);
         if (FAILED(allocated)) set_error(allocated);
@@ -261,6 +264,7 @@ VOID D3d11Device::open_resource(const D3D10DDIARG_OPENRESOURCE *args, D3D10DDI_H
         opened.open(args->pPrivateDriverData, args->PrivateDriverDataSize, args->pOpenAllocationInfo2[0].pPrivateDriverData,
                     args->pOpenAllocationInfo2[0].PrivateDriverDataSize) == Status::ok;
     const uint64_t key = surface ? opened.key() : 0u;
+    if (key != 0u && packets_.constructed()) packets_.object().engage();
     uint32_t found = 0u;
     d3dproto::ResourceDesc desc = {};
     if (key == 0u && open_cross_adapter(resource, *args)) return;

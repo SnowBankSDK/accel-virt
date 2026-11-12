@@ -5875,6 +5875,46 @@ TEST(adapter_dpc_routine, a_release_held_past_the_deadline_lets_its_packet_go_an
   CHECK_EQ(nt(fixture.adapter().destroy_device(other.device())), success);
   CHECK_EQ(nt(fixture.adapter().destroy_device(process.device())), success); }
 
+TEST(adapter_submit_command_virtual, batches_of_one_ring_released_through_two_contexts_are_published_in_ring_order)
+{ Fixture fixture; av::FakeHandleTable handles;
+  fixture.function().add_doorbell_region();
+  CHECK_EQ(fixture.start(), success);
+  AvProcess process(fixture, handles);
+  av::DxgkargCreateContextRecord context = {};
+  CHECK_EQ(process.create_context(context), success);
+  av::DxgkargCreateContextRecord first = {};
+  first.Flags = 0x4u;
+  CHECK_EQ(nt(fixture.adapter().create_context(process.device(), &first)), success);
+  av::DxgkargCreateContextRecord second = {};
+  second.Flags = 0x4u;
+  CHECK_EQ(nt(fixture.adapter().create_context(process.device(), &second)), success);
+
+  const std::uint32_t rings = fixture.function().doorbells().rings(0u);
+  std::uint8_t        later[av::ReleaseRecord::encoded_size] = {};
+  CHECK_STATUS(av::ReleaseRecord(process.ring().kmt_handle(), av::SubmissionDescriptor(2u, 32u, 64u))
+                   .encode(later, sizeof later),
+               av::Status::ok);
+  CHECK_EQ(submit_packet(fixture, second.hContext, 5u, later, sizeof later), success);
+  CHECK_EQ(fixture.function().doorbells().rings(0u), rings);
+  std::uint8_t earlier[av::ReleaseRecord::encoded_size] = {};
+  CHECK_STATUS(av::ReleaseRecord(process.ring().kmt_handle(), av::SubmissionDescriptor(1u, 0u, 32u))
+                   .encode(earlier, sizeof earlier),
+               av::Status::ok);
+  CHECK_EQ(submit_packet(fixture, first.hContext, 6u, earlier, sizeof earlier), success);
+  CHECK_EQ(fixture.function().doorbells().rings(0u), rings + 2u);
+  std::uint8_t next[av::ReleaseRecord::encoded_size] = {};
+  CHECK_STATUS(av::ReleaseRecord(process.ring().kmt_handle(), av::SubmissionDescriptor(3u, 64u, 96u))
+                   .encode(next, sizeof next),
+               av::Status::ok);
+  CHECK_EQ(submit_packet(fixture, first.hContext, 7u, next, sizeof next), success);
+  CHECK_EQ(fixture.function().doorbells().rings(0u), rings + 3u);
+  CHECK(!fixture.platform().logged_line("the context is lost"));
+  CHECK(fixture.adapter().invariants_hold());
+  CHECK_EQ(nt(fixture.adapter().destroy_context(second.hContext)), success);
+  CHECK_EQ(nt(fixture.adapter().destroy_context(first.hContext)), success);
+  CHECK_EQ(nt(fixture.adapter().destroy_context(context.hContext)), success);
+  CHECK_EQ(nt(fixture.adapter().destroy_device(process.device())), success); }
+
 namespace {
 
 std::uint32_t preempt(Fixture &fixture, std::uint32_t fence)

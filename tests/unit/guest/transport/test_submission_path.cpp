@@ -284,12 +284,13 @@ TEST(submission_path, a_release_route_takes_the_submission_as_a_record_naming_th
 { Submitting submitting;
   RecordingReleaseRoute route;
   CHECK(!submitting.path().releases());
-  submitting.path().release_through(&route, 7u);
+  submitting.path().keep_order_of(7u);
   CHECK(submitting.path().releases());
   std::uint8_t descriptor[SubmissionDescriptor::encoded_size] = {};
   describe(descriptor, 5u, 64u, 192u);
   CHECK_STATUS(submitting.write_batch(5u), Status::ok);
-  CHECK_STATUS(submitting.path().submit(submitting.context(), submitting.dma_address(), descriptor, sizeof descriptor, 5u),
+  CHECK_STATUS(submitting.path().submit(submitting.context(), submitting.dma_address(), descriptor, sizeof descriptor, 5u,
+                                        &route),
                Status::ok);
   CHECK_EQ(route.releases(), 1u);
   CHECK_EQ(route.last().ring(), 7u);
@@ -306,11 +307,12 @@ TEST(submission_path, a_route_that_does_not_support_the_submission_leaves_it_to_
 { Submitting submitting;
   RecordingReleaseRoute route;
   route.answer(Status::not_supported);
-  submitting.path().release_through(&route, 1u);
+  submitting.path().keep_order_of(1u);
   std::uint8_t descriptor[SubmissionDescriptor::encoded_size] = {};
   describe(descriptor, 1u, 0u, 32u);
   CHECK_STATUS(submitting.write_batch(1u), Status::ok);
-  CHECK_STATUS(submitting.path().submit(submitting.context(), submitting.dma_address(), descriptor, sizeof descriptor, 1u),
+  CHECK_STATUS(submitting.path().submit(submitting.context(), submitting.dma_address(), descriptor, sizeof descriptor, 1u,
+                                        &route),
                Status::ok);
   CHECK_EQ(route.releases(), 1u);
   CHECK_EQ(submitting.path().through_release(), 0u);
@@ -321,30 +323,48 @@ TEST(submission_path, a_route_that_does_not_support_the_submission_leaves_it_to_
 TEST(submission_path, a_route_that_fails_stops_the_submission_and_a_bad_descriptor_never_reaches_it)
 { Submitting submitting;
   RecordingReleaseRoute route;
-  submitting.path().release_through(&route, 1u);
+  submitting.path().keep_order_of(1u);
   std::uint8_t descriptor[SubmissionDescriptor::encoded_size] = {};
   describe(descriptor, 1u, 0u, 32u);
   route.answer(Status::conflict);
-  CHECK_STATUS(submitting.path().submit(submitting.context(), submitting.dma_address(), descriptor, sizeof descriptor, 1u),
+  CHECK_STATUS(submitting.path().submit(submitting.context(), submitting.dma_address(), descriptor, sizeof descriptor, 1u,
+                                        &route),
                Status::conflict);
   CHECK_EQ(submitting.path().submitted(), 0u);
   const std::uint8_t garbage[24] = {};
   route.answer(Status::ok);
   const std::uint32_t asked = route.releases();
-  CHECK_STATUS(submitting.path().submit(submitting.context(), submitting.dma_address(), garbage, sizeof garbage, 2u),
+  CHECK_STATUS(submitting.path().submit(submitting.context(), submitting.dma_address(), garbage, sizeof garbage, 2u,
+                                        &route),
                Status::invalid_parameter);
   CHECK_EQ(route.releases(), asked);
   CHECK_EQ(submitting.kmt().calls(MockKmt::Call::submit), 0u); }
 
-TEST(submission_path, releasing_through_nothing_returns_the_path_to_the_doorbell_and_the_kernel)
+TEST(submission_path, a_batch_without_a_route_while_the_ring_is_ordered_goes_through_the_kernel_never_the_doorbell)
+{ Submitting submitting;
+  CHECK_STATUS(submitting.open_doorbell(), Status::ok);
+  submitting.path().keep_order_of(3u);
+  std::uint8_t descriptor[SubmissionDescriptor::encoded_size] = {};
+  describe(descriptor, 1u, 0u, 32u);
+  CHECK_STATUS(submitting.write_batch(1u), Status::ok);
+  CHECK_STATUS(submitting.path().submit(submitting.context(), submitting.dma_address(), descriptor, sizeof descriptor, 1u),
+               Status::ok);
+  CHECK_EQ(submitting.path().through_doorbell(), 0u);
+  CHECK_EQ(submitting.path().through_release(), 0u);
+  CHECK_EQ(submitting.path().through_kernel(), 1u);
+  CHECK_EQ(submitting.path().submitted(), 1u);
+  CHECK(submitting.path().invariants_hold()); }
+
+TEST(submission_path, an_unordered_ring_ignores_the_route_and_submits_directly)
 { Submitting submitting;
   RecordingReleaseRoute route;
-  submitting.path().release_through(&route, 3u);
-  submitting.path().release_through(nullptr, 3u);
+  submitting.path().keep_order_of(3u);
+  submitting.path().keep_order_of(0u);
   CHECK(!submitting.path().releases());
   const std::uint8_t descriptor[24] = {};
   CHECK_STATUS(submitting.write_batch(1u), Status::ok);
-  CHECK_STATUS(submitting.path().submit(submitting.context(), submitting.dma_address(), descriptor, sizeof descriptor, 1u),
+  CHECK_STATUS(submitting.path().submit(submitting.context(), submitting.dma_address(), descriptor, sizeof descriptor, 1u,
+                                        &route),
                Status::ok);
   CHECK_EQ(route.releases(), 0u);
   CHECK_EQ(submitting.path().through_release(), 0u);

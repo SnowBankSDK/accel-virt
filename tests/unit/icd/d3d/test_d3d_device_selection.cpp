@@ -3,6 +3,7 @@
 #include "guest/transport/kmt_transport.hpp"
 #include "harness/framework/test_registry.hpp"
 #include "harness/guest/mock_kmt.hpp"
+#include "harness/transport/recording_release_route.hpp"
 #include "icd/d3d/d3d_command_stream.hpp"
 #include "icd/d3d/d3d_device_selection.hpp"
 #include "proto/context/sub_api.hpp"
@@ -16,6 +17,7 @@ using av::GuestConnection;
 using av::KmtTransport;
 using av::MockKmt;
 using av::PciIdentity;
+using av::RecordingReleaseRoute;
 using av::Status;
 using av::SubApi;
 using av::d3d::D3dCommandStream;
@@ -34,7 +36,7 @@ class Fixture {
 public:
     Fixture()
         : connection_(kmt_), transport_(connection_, SubApi::d3d, 16u, 4096u, staging_, staging_bytes),
-          stream_(transport_), a_(stream_, device_a), b_(stream_, device_b), twelve_(stream_, 0u)
+          stream_(transport_), a_(stream_, device_a, &route_a_), b_(stream_, device_b, &route_b_), twelve_(stream_, 0u, nullptr)
     {
         kmt_.add_adapter(avgpu, 3200u);
         std::uint32_t adapters[1] = {};
@@ -52,6 +54,8 @@ public:
     D3dDeviceSelection &a() { return a_; }
     D3dDeviceSelection &b() { return b_; }
     D3dDeviceSelection &twelve() { return twelve_; }
+    RecordingReleaseRoute &route_a() { return route_a_; }
+    RecordingReleaseRoute &route_b() { return route_b_; }
 
 private:
     MockKmt            kmt_;
@@ -59,6 +63,8 @@ private:
     std::uint8_t       staging_[staging_bytes] = {};
     KmtTransport       transport_;
     std::uint8_t       block_[block_bytes] = {};
+    RecordingReleaseRoute route_a_;
+    RecordingReleaseRoute route_b_;
     D3dCommandStream   stream_;
     D3dDeviceSelection a_;
     D3dDeviceSelection b_;
@@ -93,3 +99,30 @@ TEST(d3d_device_selection, an_answered_call_and_the_arenas_are_the_streams)
   CHECK_EQ(fixture.kmt().command_id(1u), static_cast<std::uint32_t>(kCmd_Finish11));
   CHECK(&fixture.a().blobs() == &fixture.transport().blobs());
   CHECK(&fixture.a().decode_arena() == &fixture.transport().decode_arena()); }
+
+TEST(d3d_device_selection, each_devices_commands_are_released_through_its_own_route_once_the_ring_is_ordered)
+{ Fixture fixture;
+  CHECK_STATUS(fixture.transport().release_by(fixture.route_a()), Status::ok);
+  CHECK_STATUS(fixture.transport().release_by(fixture.route_b()), Status::ok);
+  CHECK(av_d3d_Draw(fixture.a(), 3u, 0u));
+  CHECK(av_d3d_Draw(fixture.a(), 4u, 0u));
+  CHECK(av_d3d_Draw(fixture.b(), 5u, 0u));
+  CHECK_EQ(fixture.route_a().releases(), 1u);
+  CHECK_EQ(fixture.route_b().releases(), 0u);
+  CHECK(av_d3d_Draw(fixture.twelve(), 6u, 0u));
+  CHECK_EQ(fixture.route_b().releases(), 1u);
+  CHECK_STATUS(fixture.stream().flush(), Status::ok);
+  CHECK_EQ(fixture.route_a().releases(), 1u);
+  CHECK_EQ(fixture.route_b().releases(), 1u);
+  CHECK_EQ(fixture.transport().submissions_through_kernel(), 1u);
+  CHECK(fixture.route_b().last().batch().begin() >= fixture.route_a().last().batch().end());
+  fixture.transport().teardown(); }
+
+TEST(d3d_device_selection, an_unordered_ring_keeps_every_devices_commands_in_one_batch)
+{ Fixture fixture;
+  CHECK(av_d3d_Draw(fixture.a(), 3u, 0u));
+  CHECK(av_d3d_Draw(fixture.b(), 5u, 0u));
+  CHECK_STATUS(fixture.stream().flush(), Status::ok);
+  CHECK_EQ(fixture.route_a().releases(), 0u);
+  CHECK_EQ(fixture.route_b().releases(), 0u);
+  CHECK_EQ(fixture.transport().submissions(), 1u); }

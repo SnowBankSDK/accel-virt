@@ -2229,31 +2229,29 @@ TEST(kmt_transport_release, a_transport_that_is_not_established_or_reads_no_fenc
   CHECK(!transport.releases_by_packet());
   transport.teardown(); }
 
-TEST(kmt_transport_release, a_route_is_taken_once_a_second_waits_and_a_third_is_refused)
+TEST(kmt_transport_release, every_context_keeps_its_own_route_and_a_route_past_the_table_is_refused)
 { Fixture fixture;
   CHECK_STATUS(fixture.open(), Status::ok);
   std::uint8_t transport_staging[staging_bytes] = {};
   KmtTransport transport(fixture.connection(), SubApi::opengl, 12u, reply_bytes, transport_staging,
                          sizeof transport_staging);
   CHECK_STATUS(transport.initialize(), Status::ok);
-  RecordingReleaseRoute first;
-  RecordingReleaseRoute second;
-  RecordingReleaseRoute third;
-  CHECK_STATUS(transport.release_by(first), Status::ok);
-  CHECK(transport.routed_by(first));
+  constexpr std::uint32_t table = 32u;
+  RecordingReleaseRoute   routes[table + 1u];
+  for (std::uint32_t index = 0u; index < table; index++) {
+      CHECK_STATUS(transport.release_by(routes[index]), Status::ok);
+      CHECK_STATUS(transport.release_by(routes[index]), Status::ok);
+  }
+  for (std::uint32_t index = 0u; index < table; index++) CHECK(transport.routed_by(routes[index]));
   CHECK(transport.releases_by_packet());
-  CHECK_STATUS(transport.release_by(first), Status::ok);
-  CHECK_STATUS(transport.release_by(second), Status::ok);
-  CHECK(transport.routed_by(second));
-  CHECK_STATUS(transport.release_by(second), Status::ok);
-  CHECK_STATUS(transport.release_by(third), Status::no_space);
-  CHECK(!transport.routed_by(third));
+  CHECK_STATUS(transport.release_by(routes[table]), Status::no_space);
+  CHECK(!transport.routed_by(routes[table]));
   CHECK(transport.invariants_hold());
   transport.teardown();
   CHECK(!transport.releases_by_packet());
-  CHECK(!transport.routed_by(first)); }
+  CHECK(!transport.routed_by(routes[0])); }
 
-TEST(kmt_transport_release, a_routed_submission_reaches_the_route_and_not_the_kernel)
+TEST(kmt_transport_release, a_routed_submission_reaches_the_speaking_route_and_not_the_kernel)
 { Fixture fixture;
   CHECK_STATUS(fixture.open(), Status::ok);
   std::uint8_t transport_staging[staging_bytes] = {};
@@ -2262,6 +2260,7 @@ TEST(kmt_transport_release, a_routed_submission_reaches_the_route_and_not_the_ke
   CHECK_STATUS(transport.initialize(), Status::ok);
   RecordingReleaseRoute route;
   CHECK_STATUS(transport.release_by(route), Status::ok);
+  transport.speak_through(&route);
   const std::uint32_t submitted = fixture.kmt().calls(MockKmt::Call::submit);
   WireWriter          writer = transport.request_writer();
   writer.write_u32(3u);
@@ -2274,7 +2273,7 @@ TEST(kmt_transport_release, a_routed_submission_reaches_the_route_and_not_the_ke
   CHECK(transport.invariants_hold());
   transport.teardown(); }
 
-TEST(kmt_transport_release, letting_go_of_the_standby_keeps_the_route_and_letting_go_of_the_route_promotes_the_standby)
+TEST(kmt_transport_release, a_batch_is_released_by_the_context_that_spoke_it_and_never_by_another_route)
 { Fixture fixture;
   CHECK_STATUS(fixture.open(), Status::ok);
   std::uint8_t transport_staging[staging_bytes] = {};
@@ -2285,20 +2284,70 @@ TEST(kmt_transport_release, letting_go_of_the_standby_keeps_the_route_and_lettin
   RecordingReleaseRoute second;
   CHECK_STATUS(transport.release_by(first), Status::ok);
   CHECK_STATUS(transport.release_by(second), Status::ok);
-  transport.release_directly(second);
-  CHECK(!transport.routed_by(second));
-  CHECK(transport.routed_by(first));
-  CHECK(transport.releases_by_packet());
-  CHECK_STATUS(transport.release_by(second), Status::ok);
+  transport.speak_through(&second);
+  WireWriter spoken = transport.request_writer();
+  spoken.write_u32(3u);
+  CHECK(transport.send_async(0x30001u, spoken) == TransportResult::ok);
+  CHECK_EQ(second.releases(), 1u);
+  CHECK_EQ(first.releases(), 0u);
+  CHECK_EQ(second.last().batch().fence_id(), transport.published_fence());
+  transport.speak_through(&first);
+  WireWriter answered = transport.request_writer();
+  answered.write_u32(4u);
+  CHECK(transport.send_async(0x30001u, answered) == TransportResult::ok);
+  CHECK_EQ(first.releases(), 1u);
+  CHECK_EQ(second.releases(), 1u);
+  CHECK(first.last().batch().begin() >= second.last().batch().end());
   transport.release_directly(first);
   CHECK(!transport.routed_by(first));
   CHECK(transport.routed_by(second));
   CHECK(transport.releases_by_packet());
+  WireWriter after = transport.request_writer();
+  after.write_u32(5u);
+  CHECK(transport.send_async(0x30001u, after) == TransportResult::ok);
+  CHECK_EQ(first.releases(), 1u);
+  CHECK_EQ(second.releases(), 1u);
+  CHECK_EQ(transport.submissions_through_kernel(), 1u);
+  transport.teardown(); }
+
+TEST(kmt_transport_release, a_context_without_an_engaged_route_goes_through_the_kernel_while_another_orders_the_ring)
+{ Fixture fixture;
+  CHECK_STATUS(fixture.open(), Status::ok);
+  std::uint8_t transport_staging[staging_bytes] = {};
+  KmtTransport transport(fixture.connection(), SubApi::opengl, 12u, reply_bytes, transport_staging,
+                         sizeof transport_staging);
+  CHECK_STATUS(transport.initialize(), Status::ok);
+  RecordingReleaseRoute engaged;
+  RecordingReleaseRoute idle;
+  CHECK_STATUS(transport.release_by(engaged), Status::ok);
+  transport.speak_through(&idle);
+  const std::uint32_t submitted = fixture.kmt().calls(MockKmt::Call::submit);
+  WireWriter          writer = transport.request_writer();
+  writer.write_u32(3u);
+  CHECK(transport.send_async(0x30001u, writer) == TransportResult::ok);
+  CHECK_EQ(engaged.releases(), 0u);
+  CHECK_EQ(idle.releases(), 0u);
+  CHECK_EQ(fixture.kmt().calls(MockKmt::Call::submit), submitted + 1u);
+  CHECK_EQ(transport.submissions_through_kernel(), 1u);
+  CHECK_EQ(transport.submissions_through_doorbell(), 0u);
+  transport.teardown(); }
+
+TEST(kmt_transport_release, an_unengaged_transport_publishes_whoever_speaks)
+{ Fixture fixture;
+  CHECK_STATUS(fixture.open(), Status::ok);
+  std::uint8_t transport_staging[staging_bytes] = {};
+  KmtTransport transport(fixture.connection(), SubApi::opengl, 12u, reply_bytes, transport_staging,
+                         sizeof transport_staging);
+  CHECK_STATUS(transport.initialize(), Status::ok);
+  RecordingReleaseRoute route;
+  transport.speak_through(&route);
   WireWriter writer = transport.request_writer();
   writer.write_u32(3u);
   CHECK(transport.send_async(0x30001u, writer) == TransportResult::ok);
-  CHECK_EQ(second.releases(), 1u);
-  CHECK_EQ(first.releases(), 0u);
+  CHECK_EQ(route.releases(), 0u);
+  CHECK(!transport.releases_by_packet());
+  CHECK_EQ(transport.submissions(), 1u);
+  transport.release_directly(route);
   transport.teardown(); }
 
 TEST(kmt_transport_release, the_last_route_is_let_go_after_the_published_work_completed_and_submission_returns_to_the_kernel)
@@ -2321,6 +2370,64 @@ TEST(kmt_transport_release, the_last_route_is_let_go_after_the_published_work_co
   CHECK_EQ(transport.submissions_through_kernel(), 1u);
   CHECK(transport.invariants_hold());
   transport.teardown(); }
+
+TEST(kmt_transport_holding, a_new_speaker_on_an_ordered_ring_sends_the_held_batch_so_no_batch_carries_two_contexts)
+{ Fixture fixture;
+  CHECK_STATUS(fixture.open(), Status::ok);
+  av::MockPlatform memory;
+  std::uint8_t     block[4096] = {};
+  Holding          holding(fixture, memory, 16u, block, sizeof block);
+  KmtTransport    &transport = holding.transport();
+  RecordingReleaseRoute first;
+  RecordingReleaseRoute second;
+  CHECK_STATUS(transport.release_by(first), Status::ok);
+  CHECK_STATUS(transport.release_by(second), Status::ok);
+  transport.speak_through(&first);
+  CHECK(holding.send(0x30001u, 4u) == TransportResult::ok);
+  CHECK_EQ(first.releases(), 0u);
+  transport.speak_through(&second);
+  CHECK_EQ(first.releases(), 1u);
+  CHECK_EQ(transport.held(), 0u);
+  CHECK(holding.send(0x30002u, 4u) == TransportResult::ok);
+  transport.speak_through(&second);
+  CHECK(transport.flush() == TransportResult::ok);
+  CHECK_EQ(second.releases(), 1u);
+  CHECK_EQ(first.releases(), 1u);
+  CHECK(second.last().batch().begin() >= first.last().batch().end()); }
+
+TEST(kmt_transport_holding, a_new_speaker_on_an_unordered_ring_keeps_holding)
+{ Fixture fixture;
+  CHECK_STATUS(fixture.open(), Status::ok);
+  av::MockPlatform memory;
+  std::uint8_t     block[4096] = {};
+  Holding          holding(fixture, memory, 16u, block, sizeof block);
+  KmtTransport    &transport = holding.transport();
+  RecordingReleaseRoute first;
+  RecordingReleaseRoute second;
+  transport.speak_through(&first);
+  CHECK(holding.send(0x30001u, 4u) == TransportResult::ok);
+  transport.speak_through(&second);
+  CHECK(transport.held() != 0u);
+  CHECK_EQ(transport.submissions(), 0u);
+  transport.speak_through(nullptr); }
+
+TEST(kmt_transport_holding, engaging_the_first_route_sends_what_was_held_directly_first)
+{ Fixture fixture;
+  CHECK_STATUS(fixture.open(), Status::ok);
+  av::MockPlatform memory;
+  std::uint8_t     block[4096] = {};
+  Holding          holding(fixture, memory, 16u, block, sizeof block);
+  KmtTransport    &transport = holding.transport();
+  RecordingReleaseRoute route;
+  transport.speak_through(&route);
+  CHECK(holding.send(0x30001u, 4u) == TransportResult::ok);
+  CHECK_STATUS(transport.release_by(route), Status::ok);
+  CHECK_EQ(transport.held(), 0u);
+  CHECK_EQ(route.releases(), 0u);
+  CHECK_EQ(transport.submissions(), 1u);
+  CHECK(holding.send(0x30002u, 4u) == TransportResult::ok);
+  CHECK(transport.flush() == TransportResult::ok);
+  CHECK_EQ(route.releases(), 1u); }
 
 TEST(kmt_transport_holding, the_covering_fence_counts_the_batch_a_flush_would_publish)
 { Fixture fixture;

@@ -1,6 +1,7 @@
 #ifndef AV_UM_D3D12_DEVICE_HPP
 #define AV_UM_D3D12_DEVICE_HPP
 
+#include "core/support/object_pool.hpp"
 #include "core/support/object_storage.hpp"
 #include "core/trace/function_scope.hpp"
 #include "icd/common/loss_latch.hpp"
@@ -12,6 +13,7 @@
 #include "proto/generated/d3d12/d3d12_wire_types.h"
 #include "um/d3d/allocation_lender.hpp"
 #include "um/d3d/batch_follower.hpp"
+#include "um/d3d/context_order.hpp"
 #include "um/d3d/d3d_call_trace.hpp"
 #include "um/d3d/d3d12_clock_origin.hpp"
 #include "um/d3d/d3d12_ddi.hpp"
@@ -137,6 +139,7 @@ private:
     D3d12ClockOrigin                      clock_origin_;
     HeapMemories                          memories_;
     ObjectStorage<d3d::BatchFollower>     follower_;
+    ObjectPool<d3d::ContextOrder>         orders_;
     ObjectStorage<D3d12Residency>         residency_;
     ObjectStorage<d3d::D3dDeviceChannel>  channel_;
     d3d::D3d12AddressSpace                addresses_;
@@ -148,6 +151,7 @@ private:
     d3d::D3dCallTrace                    &trace_;
     uint32_t                              context_number_;
     bool                                  placed_heaps_;
+    bool                                  shares_;
 };
 
 template <typename... Arguments>

@@ -89,7 +89,8 @@ HRESULT D3d11Device::initialize(uint32_t adapter, const D3D10DDIARG_CREATEDEVICE
     if (FAILED(joined)) return joined;
     static_cast<void>(present_order_.construct(kernel_.callbacks(), kernel_.runtime(), context_, session_.transport(), lines_));
     static_cast<void>(packets_.construct(kernel_.callbacks(), kernel_.runtime(), session_.transport(), session_.lock(), lines_, context_));
-    static_cast<void>(channel_.construct(session_.stream(), session_.lock(), session_.next_id()));
+    static_cast<void>(channel_.construct(session_.stream(), session_.lock(), session_.next_id(),
+                                         packets_.constructed() ? &packets_.object() : nullptr));
     uint32_t hresult = 1u, made = 0u;
     if (!channel_.object().open(feature_level_, hresult, made) || hresult != 0u) {
         lines_.write("the host made no Direct3D 11 device");
