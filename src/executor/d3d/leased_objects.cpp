@@ -28,6 +28,26 @@ void LeasedObjects::charge(uint32_t id, uint64_t bytes)
     owed_ += bytes;
 }
 
+void LeasedObjects::recharge(uint32_t id, uint64_t bytes)
+{
+    AV_SCOPE("LeasedObjects::recharge");
+    if (lease_ == nullptr) return;
+    uint64_t *const held = charges_.find(id);
+    const uint64_t  before = held != nullptr ? *held : 0u;
+    if (bytes > before) {
+        drawn_ += lease_->of(LeaseRecord::Kind::device).draw(UINT64_MAX);
+        owed_ += bytes - before;
+    } else if (before > bytes) {
+        lease_->of(LeaseRecord::Kind::device).restore(before - bytes);
+    }
+    if (held != nullptr) {
+        *held = bytes;
+        return;
+    }
+    uint32_t slot = 0u;
+    if (bytes != 0u) static_cast<void>(charges_.insert(id, bytes, slot));
+}
+
 void LeasedObjects::settle()
 {
     AV_SCOPE("LeasedObjects::settle");

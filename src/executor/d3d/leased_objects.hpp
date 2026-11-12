@@ -18,6 +18,7 @@ public:
 
     void     draw_from(SessionLease *lease);
     void     charge(uint32_t id, uint64_t bytes);
+    void     recharge(uint32_t id, uint64_t bytes);
     void     settle();
     void     release(uint32_t id);
     void     clear();

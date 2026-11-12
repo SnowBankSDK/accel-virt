@@ -86,8 +86,7 @@ uint64_t ResourceFootprint::bytes() const
 uint64_t ResourceFootprint::leased(uint64_t lent_memory) const
 {
     AV_SCOPE("ResourceFootprint::leased");
-    constexpr uint32_t unleased = ResourceMisc::tiled_bit | ResourceMisc::tile_pool_bit;
-    if (lent_memory != 0u || (misc_ & unleased) != 0u) return 0u;
+    if (lent_memory != 0u || (misc_ & ResourceMisc::tiled_bit) != 0u) return 0u;
     return bytes();
 }
 

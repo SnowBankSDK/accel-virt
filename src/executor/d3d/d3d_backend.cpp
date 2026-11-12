@@ -2372,7 +2372,10 @@ bool D3dBackend::on_UpdateTiles11(uint32_t resource, const d3dproto::TileCoordin
 bool D3dBackend::on_ResizeTilePool11(uint32_t pool, uint64_t bytes)
 {
     AV_SCOPE("D3dBackend::on_ResizeTilePool11");
-    return ready() && tiles_.resize(*device11_->context(), pool, bytes);
+    if (!ready()) return false;
+    leased_.recharge(pool, ResourceFootprint(bytes, ResourceMisc::tile_pool_bit).leased(0u));
+    const ScopeExit settled([this] { leased_.settle(); });
+    return tiles_.resize(*device11_->context(), pool, bytes);
 }
 
 bool D3dBackend::on_TiledResourceBarrier11(uint32_t before, uint32_t after)
