@@ -1089,7 +1089,9 @@ TEST(d3d_backend_device, a_resource_the_host_cannot_create_is_destroyed_without_
     CHECK_EQ(removed, 0u);
     CHECK_EQ(wire.refused(), 0u);
     CHECK(av_d3d_DestroyObject(wire, 10u));
-    CHECK_EQ(wire.refused(), 1u);
+    CHECK(av_d3d_Finish11(wire, &removed));
+    CHECK_EQ(removed, driver_internal_error);
+    CHECK_EQ(wire.refused(), 0u);
     CHECK(backend.invariants_hold());
     backend.shut_down();
 }

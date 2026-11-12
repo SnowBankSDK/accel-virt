@@ -868,7 +868,7 @@ TEST(d3d12_session_device, each_cpu_visible_heap_over_memory_it_cannot_have_remo
     }
 }
 
-TEST(d3d12_session_device, a_heap_over_memory_vkd3d_cannot_open_removes_the_device)
+TEST(d3d12_session_device, a_heap_over_memory_vkd3d_cannot_open_answers_out_of_memory_and_keeps_the_device)
 {
     av::ExecutorLogRig rig;
     av::LoaderHostApis apis(rig.log);
@@ -894,9 +894,13 @@ TEST(d3d12_session_device, a_heap_over_memory_vkd3d_cannot_open_removes_the_devi
     std::uint32_t removed = 1u;
     CHECK(av_d3d12_Finish12(wire, &removed));
     CHECK_EQ(removed, 0u);
-    CHECK(av_d3d12_CreateHeap12(wire, named_heap, heap_of(heap_upload), 0u, heap_bytes, 0u, unexported_handle, 0u));
+    hresult = 1u;
+    CHECK(av_d3d12_CreateHeap12(wire, named_heap, heap_of(heap_upload), 0u, heap_bytes, 0u, unexported_handle, 0u,
+                                &hresult));
+    CHECK_EQ(hresult, static_cast<std::uint32_t>(E_OUTOFMEMORY));
     CHECK(av_d3d12_Finish12(wire, &removed));
-    CHECK_EQ(removed, driver_internal_error);
+    CHECK_EQ(removed, 0u);
+    CHECK_EQ(wire.refused(), 0u);
     backend.abandon(unexported.memory(), unexported_handle);
     CHECK(rig.imports.forget(99u) == &unexported.memory());
     backend.shut_down();
