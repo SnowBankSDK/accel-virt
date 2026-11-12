@@ -51,6 +51,15 @@ void ByteLedger::give(uint64_t bytes)
     }
 }
 
+void ByteLedger::hold(uint64_t bytes)
+{
+    AV_SCOPE("ByteLedger::hold");
+    uint64_t used = __atomic_load_n(&used_, __ATOMIC_RELAXED);
+    while (!__atomic_compare_exchange_n(&used_, &used, bytes > UINT64_MAX - used ? UINT64_MAX : used + bytes, true,
+                                        __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) {
+    }
+}
+
 void ByteLedger::relieve_by(LedgerRelief *relief)
 {
     AV_SCOPE("ByteLedger::relieve_by");

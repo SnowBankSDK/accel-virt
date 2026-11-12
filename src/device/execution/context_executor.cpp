@@ -170,6 +170,23 @@ void ContextExecutor::channel_stats(const uint8_t *body, size_t size)
     if (executor_ != nullptr) library_.channel_stats(executor_, id_, body, size);
 }
 
+Status ContextExecutor::extend_lease(uint32_t kind, uint64_t bytes, uint64_t least, uint64_t &granted)
+{
+    AV_SCOPE("ContextExecutor::extend_lease");
+    host_.require_worker("ContextExecutor::extend_lease");
+    granted = 0u;
+    if (executor_ == nullptr) return Status::invalid_state;
+    granted = library_.extend_lease(executor_, kind, bytes, least);
+    return Status::ok;
+}
+
+void ContextExecutor::return_lease(uint32_t kind, uint64_t bytes)
+{
+    AV_SCOPE("ContextExecutor::return_lease");
+    host_.require_worker("ContextExecutor::return_lease");
+    if (executor_ != nullptr) library_.return_lease(executor_, kind, bytes);
+}
+
 size_t ContextExecutor::answer_part(uint64_t offset, uint8_t *out, size_t capacity, uint64_t &length)
 {
     AV_SCOPE("ContextExecutor::answer_part");

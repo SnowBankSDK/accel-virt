@@ -474,6 +474,12 @@ bool ExecutorRoot::bind(uint32_t slot, uint32_t sub_api, const HostGpu &gpu, con
         started = true;
         break;
     }
+    if (started) {
+        SessionLease &lease = sessions_[slot].object().lease();
+        lease.bind(apis_->vram_ledger(gpu.index()), apis_->host_ram_ledger());
+        backend_in(slot, sub_api)->lease_from(&lease);
+        lease.open();
+    }
     if (!started) {
         const HostRamLedger *const ram = apis_->host_ram_ledger();
         refusals_.refuse(ContextRefusals::Reason::bind, api_name(sub_api), ram != nullptr ? ram->tight_refusals() : 0u);
@@ -770,6 +776,19 @@ void ExecutorRoot::set_signal(ContextSession *session, void (*signal)(void *cont
 {
     AV_SCOPE("ExecutorRoot::set_signal");
     if (owns(session)) session->bind_signal(signal, context);
+}
+
+uint64_t ExecutorRoot::extend_lease(ContextSession *session, uint32_t kind, uint64_t bytes, uint64_t least)
+{
+    AV_SCOPE("ExecutorRoot::extend_lease");
+    if (!owns(session)) return 0u;
+    return session->lease().extend(kind, bytes, least);
+}
+
+void ExecutorRoot::return_lease(ContextSession *session, uint32_t kind, uint64_t bytes)
+{
+    AV_SCOPE("ExecutorRoot::return_lease");
+    if (owns(session)) session->lease().surrender(kind, bytes);
 }
 
 uint32_t ExecutorRoot::lose_device(ContextSession *session)

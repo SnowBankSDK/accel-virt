@@ -16,6 +16,7 @@ public:
     [[nodiscard]] virtual bool take(uint64_t bytes);
     [[nodiscard]] virtual bool take_session(uint64_t bytes);
     virtual void       give(uint64_t bytes);
+    virtual void       hold(uint64_t bytes);
     void               relieve_by(LedgerRelief *relief);
     LedgerRelief      *relief() const;
 

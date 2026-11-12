@@ -17,6 +17,13 @@ void VramBudget::bind(ByteLedger *vram, ByteLedger *host)
     host_account_.bind(host);
 }
 
+void VramBudget::reserve_from(SessionLease *lease)
+{
+    AV_SCOPE("VramBudget::reserve_from");
+    account_.reserve_from(lease);
+    host_account_.reserve_from(lease);
+}
+
 void VramBudget::learn(const VkPhysicalDeviceMemoryProperties &host)
 {
     AV_SCOPE("VramBudget::learn");

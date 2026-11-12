@@ -5,6 +5,7 @@
 #include "executor/channel_stats_latest.hpp"
 #include "executor/import_table.hpp"
 #include "executor/budgeted_heap.hpp"
+#include "executor/session_lease.hpp"
 #include "proto/resources/host_memory_request.hpp"
 #include "proto/client/client_blob_arena.hpp"
 #include "proto/submission/blob_role.hpp"
@@ -63,6 +64,7 @@ public:
     [[nodiscard]] Status place_memory(uint64_t size, HostMemoryRequest request, AvHostMemory &memory);
     uint64_t             placement_owner();
     ImportTable &imports();
+    SessionLease &lease();
     uint32_t lose_device();
     void     channel_stats(uint32_t context_id, const uint8_t *body, size_t size);
     void     report_channel(StateWriter &writer) const;
@@ -93,6 +95,7 @@ private:
     SpillBlock      answer_;
     size_t          answer_length_;
     ImportTable     imports_;
+    SessionLease    lease_;
     size_t          starved_;
     ChannelStatsLatest channel_;
     bool            faulted_;

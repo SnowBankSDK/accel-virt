@@ -19,6 +19,7 @@ public:
     [[nodiscard]] bool take(uint64_t bytes) override;
     [[nodiscard]] bool take_session(uint64_t bytes) override;
     void               give(uint64_t bytes) override;
+    void               hold(uint64_t bytes) override;
     uint64_t           admissible() const override;
 
     void     budget(uint64_t bytes);

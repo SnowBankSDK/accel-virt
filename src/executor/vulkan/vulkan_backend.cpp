@@ -1414,6 +1414,12 @@ void VulkanBackend::use_host_ram(ByteLedger *ledger, uint64_t limit)
     heap_.bind(ledger, limit);
 }
 
+void VulkanBackend::lease_from(SessionLease *lease)
+{
+    AV_SCOPE("VulkanBackend::lease_from");
+    vram_.reserve_from(lease);
+}
+
 void VulkanBackend::shut_down()
 {
     AV_SCOPE("VulkanBackend::shut_down");

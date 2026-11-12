@@ -92,6 +92,13 @@ void VramLedger::give(uint64_t bytes)
     if (host_ != nullptr) host_->give(bytes < held ? bytes : held);
 }
 
+void VramLedger::hold(uint64_t bytes)
+{
+    AV_SCOPE("VramLedger::hold");
+    ByteLedger::hold(bytes);
+    if (host_ != nullptr) host_->hold(bytes);
+}
+
 uint64_t VramLedger::admissible() const
 {
     AV_SCOPE("VramLedger::admissible");

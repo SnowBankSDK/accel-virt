@@ -338,6 +338,18 @@ uint32_t place_memory(void *, AvExecutor *executor, uint64_t size, uint32_t requ
     return library.root().place_memory(session_of(executor), size, request, *memory) == av::Status::ok ? 0u : 1u;
 }
 
+uint64_t extend_lease(void *, AvExecutor *executor, uint32_t kind, uint64_t bytes, uint64_t least)
+{
+    AV_SCOPE("extend_lease");
+    return library.root().extend_lease(session_of(executor), kind, bytes, least);
+}
+
+void return_lease(void *, AvExecutor *executor, uint32_t kind, uint64_t bytes)
+{
+    AV_SCOPE("return_lease");
+    library.root().return_lease(session_of(executor), kind, bytes);
+}
+
 const AvExecutorOps table = {AV_EXECUTOR_ABI_VERSION,
                               nullptr,
                               sub_apis,
@@ -373,7 +385,9 @@ const AvExecutorOps table = {AV_EXECUTOR_ABI_VERSION,
                               lose_device,
                               answer_part,
                               channel_stats,
-                              place_memory};
+                              place_memory,
+                              extend_lease,
+                              return_lease};
 
 }
 

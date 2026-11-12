@@ -3,15 +3,17 @@
 #include "core/trace/function_scope.hpp"
 #include "executor/byte_ledger.hpp"
 #include "executor/ledger_relief.hpp"
+#include "executor/session_lease.hpp"
+#include "executor/session_reservation.hpp"
 
 namespace av {
 
-VramAccount::VramAccount() : ledger_(nullptr), held_(0u)
+VramAccount::VramAccount() : ledger_(nullptr), reservation_(nullptr), held_(0u)
 {
     AV_SCOPE("VramAccount::VramAccount");
 }
 
-VramAccount::VramAccount(ByteLedger &ledger) : ledger_(&ledger), held_(0u)
+VramAccount::VramAccount(ByteLedger &ledger) : ledger_(&ledger), reservation_(nullptr), held_(0u)
 {
     AV_SCOPE("VramAccount::VramAccount");
 }
@@ -21,6 +23,13 @@ void VramAccount::bind(ByteLedger *ledger)
     AV_SCOPE("VramAccount::bind");
     static_cast<void>(close());
     ledger_ = ledger;
+    reservation_ = nullptr;
+}
+
+void VramAccount::reserve_from(SessionLease *lease)
+{
+    AV_SCOPE("VramAccount::reserve_from");
+    reservation_ = lease != nullptr ? lease->reservation_for(ledger_) : nullptr;
 }
 
 bool VramAccount::bound() const
@@ -38,7 +47,7 @@ bool VramAccount::bound_to(const ByteLedger *ledger) const
 bool VramAccount::take(uint64_t bytes)
 {
     AV_SCOPE("VramAccount::take");
-    if (ledger_ != nullptr && !ledger_->take(bytes) && !retake(bytes, false)) return false;
+    if (ledger_ != nullptr && !charge(bytes, false) && !retake(bytes, false)) return false;
     __atomic_fetch_add(&held_, bytes, __ATOMIC_RELAXED);
     return true;
 }
@@ -46,7 +55,7 @@ bool VramAccount::take(uint64_t bytes)
 bool VramAccount::take_session(uint64_t bytes)
 {
     AV_SCOPE("VramAccount::take_session");
-    if (ledger_ != nullptr && !ledger_->take_session(bytes) && !retake(bytes, true)) return false;
+    if (ledger_ != nullptr && !charge(bytes, true) && !retake(bytes, true)) return false;
     __atomic_fetch_add(&held_, bytes, __ATOMIC_RELAXED);
     return true;
 }
@@ -57,7 +66,22 @@ bool VramAccount::retake(uint64_t bytes, bool session)
     LedgerRelief *const relief = ledger_->relief();
     if (relief == nullptr) return false;
     relief->relieve(*ledger_, this);
+    return charge(bytes, session);
+}
+
+bool VramAccount::charge(uint64_t bytes, bool session)
+{
+    AV_SCOPE("VramAccount::charge");
+    if (reservation_ != nullptr) return reservation_->take(bytes, session);
     return session ? ledger_->take_session(bytes) : ledger_->take(bytes);
+}
+
+void VramAccount::refund(uint64_t bytes)
+{
+    AV_SCOPE("VramAccount::refund");
+    if (ledger_ == nullptr) return;
+    if (reservation_ != nullptr) reservation_->give(bytes);
+    else ledger_->give(bytes);
 }
 
 void VramAccount::give(uint64_t bytes)
@@ -68,14 +92,14 @@ void VramAccount::give(uint64_t bytes)
     do {
         returned = bytes < held ? bytes : held;
     } while (!__atomic_compare_exchange_n(&held_, &held, held - returned, true, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED));
-    if (ledger_ != nullptr) ledger_->give(returned);
+    refund(returned);
 }
 
 uint64_t VramAccount::close()
 {
     AV_SCOPE("VramAccount::close");
     const uint64_t left = __atomic_exchange_n(&held_, 0u, __ATOMIC_ACQ_REL);
-    if (ledger_ != nullptr) ledger_->give(left);
+    refund(left);
     return left;
 }
 
@@ -106,6 +130,7 @@ uint64_t VramAccount::free_bytes() const
 uint64_t VramAccount::admissible() const
 {
     AV_SCOPE("VramAccount::admissible");
+    if (reservation_ != nullptr) return reservation_->admissible();
     return ledger_ != nullptr ? ledger_->admissible() : UINT64_MAX;
 }
 

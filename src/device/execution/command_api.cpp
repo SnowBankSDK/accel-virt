@@ -93,6 +93,8 @@ const char *CommandApi::command_name(uint32_t id) const
         if (id == CommandHeader::import_blob_id) return "import_blob";
         if (id == CommandHeader::release_blob_id) return "release_blob";
         if (id == CommandHeader::channel_stats_id) return "channel_stats";
+        if (id == CommandHeader::extend_lease_id) return "extend_lease";
+        if (id == CommandHeader::return_lease_id) return "return_lease";
         return unknown;
     case vulkan_commands: return vkproto::cmd_id_to_string(id);
     case opencl_commands: return clproto::cmd_id_to_string(id);

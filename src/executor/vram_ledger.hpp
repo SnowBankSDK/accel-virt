@@ -18,6 +18,7 @@ public:
     [[nodiscard]] bool take(uint64_t bytes) override;
     [[nodiscard]] bool take_session(uint64_t bytes) override;
     void               give(uint64_t bytes) override;
+    void               hold(uint64_t bytes) override;
 
     void learn(uint64_t total);
     void share_host_ram(HostRamLedger *host);

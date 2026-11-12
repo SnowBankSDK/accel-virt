@@ -29,6 +29,13 @@ void ClDeviceMemory::bind(ByteLedger *vram, ByteLedger *host)
     host_.bind(host);
 }
 
+void ClDeviceMemory::reserve_from(SessionLease *lease)
+{
+    AV_SCOPE("ClDeviceMemory::reserve_from");
+    account_.reserve_from(lease);
+    host_.reserve_from(lease);
+}
+
 cl_int ClDeviceMemory::claim(cl_mem_flags flags, uint64_t bytes, uint64_t &claimed)
 {
     AV_SCOPE("ClDeviceMemory::claim");

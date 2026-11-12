@@ -39,6 +39,8 @@
 
 namespace av {
 
+class SessionLease;
+
 class ByteLedger;
 
 class DriverLog;
@@ -352,6 +354,7 @@ public:
     void               release_object(uint32_t kind, uint64_t wire_handle, uint64_t detail) override;
 
     void use_host_ram(ByteLedger *ledger, uint64_t limit) override;
+    void lease_from(SessionLease *lease) override;
 
     void     shut_down() override;
     void     let_go_of_thread() override;

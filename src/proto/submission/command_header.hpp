@@ -27,6 +27,8 @@ public:
     static constexpr uint32_t piece_id                 = 0x00000008u;
     static constexpr uint32_t answer_piece_id          = 0x00000009u;
     static constexpr uint32_t channel_stats_id         = 0x0000000Au;
+    static constexpr uint32_t extend_lease_id          = 0x0000000Bu;
+    static constexpr uint32_t return_lease_id          = 0x0000000Cu;
 
     CommandHeader();
     CommandHeader(uint32_t id, uint32_t size, uint8_t flags);

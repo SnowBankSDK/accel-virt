@@ -12,6 +12,7 @@ namespace av {
 class BlockSource;
 class GlErrorQueue;
 class ByteLedger;
+class SessionLease;
 
 class GlVramGuard {
 public:
@@ -20,6 +21,7 @@ public:
     GlVramGuard &operator=(const GlVramGuard &) = delete;
 
     void bind(ByteLedger *vram, ByteLedger *host);
+    void reserve_from(SessionLease *lease);
     void install();
     void clear();
 

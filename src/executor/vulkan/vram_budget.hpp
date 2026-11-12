@@ -13,6 +13,7 @@ namespace av {
 
 class BlockSource;
 class ByteLedger;
+class SessionLease;
 
 class VramBudget {
 public:
@@ -21,6 +22,7 @@ public:
     VramBudget &operator=(const VramBudget &) = delete;
 
     void     bind(ByteLedger *vram, ByteLedger *host);
+    void     reserve_from(SessionLease *lease);
     void     learn(const VkPhysicalDeviceMemoryProperties &host);
     void     clamp(VkPhysicalDeviceMemoryProperties &answer) const;
     void     clamp(VkPhysicalDeviceProperties2 &answer) const;

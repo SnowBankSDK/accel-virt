@@ -105,6 +105,20 @@ void HostRamLedger::give(uint64_t bytes)
     restore(returned);
 }
 
+void HostRamLedger::hold(uint64_t bytes)
+{
+    AV_SCOPE("HostRamLedger::hold");
+    ByteLedger::hold(bytes);
+    uint64_t left = __atomic_load_n(&available_, __ATOMIC_ACQUIRE);
+    while (left < unread) {
+        const uint64_t next = left > bytes ? left - bytes : 0u;
+        if (__atomic_compare_exchange_n(&available_, &left, next, true, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+            __atomic_fetch_add(&unseen_, bytes - spend(bytes), __ATOMIC_RELAXED);
+            return;
+        }
+    }
+}
+
 bool HostRamLedger::admit(uint64_t bytes)
 {
     AV_SCOPE("HostRamLedger::admit");

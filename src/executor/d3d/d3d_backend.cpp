@@ -123,7 +123,7 @@ D3dObjectKind D3dBackend::shader_kind(uint32_t stage) const
 D3dBackend::D3dBackend(ExecutorLog &log)
     : d3dproto::ServerDispatch(guest_), device11_(nullptr), surfaces_(nullptr), shares_(nullptr), wake_(), fence_wake_(), clock_(), admitted_(false), held_(false), heap_(),
       blocks_(heap_), remade_(blocks_, Pool::paged), states_(blocks_),
-      lines_(log.d3d11()), refusal_(lines_), arena_(nullptr), objects_(blocks_), refused_creates_(blocks_), guest_(),
+      lines_(log.d3d11()), refusal_(lines_), arena_(nullptr), objects_(blocks_), refused_creates_(blocks_), lease_(nullptr), guest_(),
       region_(guest_, lines_), imports_(nullptr), slices_(blocks_, lines_), d3d12_(guest_, objects_, wake_, fence_wake_, blocks_, log.d3d12()),
       d3d9_(guest_, objects_, blocks_, slices_, fence_wake_, log.d3d9()), tiles_(objects_),
       published_(blocks_, guest_), progress11_(fence_wake_), constants_(blocks_),
@@ -177,6 +177,12 @@ void D3dBackend::use_host_ram(ByteLedger *ledger, uint64_t limit)
 {
     AV_SCOPE("D3dBackend::use_host_ram");
     heap_.bind(ledger, limit);
+}
+
+void D3dBackend::lease_from(SessionLease *lease)
+{
+    AV_SCOPE("D3dBackend::lease_from");
+    lease_ = lease;
 }
 
 void D3dBackend::shut_down()

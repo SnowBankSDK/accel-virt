@@ -41,6 +41,11 @@ public:
     void              lose_host_device();
     void              set_losable(bool losable);
     std::uint32_t     losses();
+    void              set_lease_room(std::uint64_t bytes);
+    std::uint32_t     lease_extensions();
+    std::uint64_t     lease_returned();
+    std::uint32_t     last_lease_kind();
+    std::uint64_t     last_lease_least();
     AvContextOptions last_options();
     AvExecutor      *last_share();
     bool              last_share_live();
@@ -198,6 +203,11 @@ private:
     std::atomic<bool>          host_lost_{false};
     std::atomic<bool>          losable_{true};
     std::atomic<std::uint32_t> losses_{0u};
+    std::atomic<std::uint64_t> lease_room_{UINT64_MAX};
+    std::atomic<std::uint32_t> lease_extensions_{0u};
+    std::atomic<std::uint64_t> lease_returned_{0u};
+    std::atomic<std::uint32_t> last_lease_kind_{0u};
+    std::atomic<std::uint64_t> last_lease_least_{0u};
     std::uint32_t              signals_set_;
     void                     (*signal_)(void *context);
     void                      *signal_context_;

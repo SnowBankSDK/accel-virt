@@ -91,6 +91,13 @@ void GlVramGuard::bind(ByteLedger *vram, ByteLedger *host)
     host_.bind(host);
 }
 
+void GlVramGuard::reserve_from(SessionLease *lease)
+{
+    AV_SCOPE("GlVramGuard::reserve_from");
+    account_.reserve_from(lease);
+    host_.reserve_from(lease);
+}
+
 void GlVramGuard::install()
 {
     AV_SCOPE("GlVramGuard::install");

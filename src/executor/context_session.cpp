@@ -16,7 +16,7 @@ namespace av {
 
 ContextSession::ContextSession(DriverLog &lines)
     : backend_(nullptr), clocks_(nullptr), source_(nullptr), domain_(0u), heap_(), arena_(nullptr, 0u), answer_(heap_),
-      answer_length_(0u), imports_(heap_), starved_(0u), channel_(), faulted_(false), drained_(false), parked_{}, parked_count_(0u),
+      answer_length_(0u), imports_(heap_), lease_(), starved_(0u), channel_(), faulted_(false), drained_(false), parked_{}, parked_count_(0u),
       lines_(lines)
 {
     AV_SCOPE("ContextSession::ContextSession");
@@ -55,6 +55,7 @@ bool ContextSession::release(TeardownBudget &budget)
     for (ImportedBlob *blob = imports_.any(); blob != nullptr; blob = imports_.any()) retire_blob(blob->id());
     parked_count_ = 0u;
     if (backend_ != nullptr) backend_->shut_down();
+    static_cast<void>(lease_.close());
     if (source_ != nullptr) source_->drop_placed_of(placement_owner());
     clocks_ = nullptr;
     source_ = nullptr;
@@ -354,6 +355,12 @@ ImportTable &ContextSession::imports()
 {
     AV_SCOPE("ContextSession::imports");
     return imports_;
+}
+
+SessionLease &ContextSession::lease()
+{
+    AV_SCOPE("ContextSession::lease");
+    return lease_;
 }
 
 size_t ContextSession::starved() const

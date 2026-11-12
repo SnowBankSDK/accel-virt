@@ -45,6 +45,8 @@ public:
     void                 release(uint64_t blob_id);
     [[nodiscard]] Status place(uint64_t size, uint32_t request, AvHostMemory &memory);
     void                 channel_stats(const uint8_t *body, size_t size);
+    [[nodiscard]] Status extend_lease(uint32_t kind, uint64_t bytes, uint64_t least, uint64_t &granted);
+    void                 return_lease(uint32_t kind, uint64_t bytes);
     size_t               answer_part(uint64_t offset, uint8_t *out, size_t capacity, uint64_t &length);
 
     [[nodiscard]] Status share_object(uint64_t object_id, uint32_t kind, uint64_t size, uint64_t wire_handle);

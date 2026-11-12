@@ -38,6 +38,8 @@
 
 namespace av {
 
+class SessionLease;
+
 class DriverLog;
 class OwnedFd;
 class SharedImageShape;
@@ -227,6 +229,7 @@ public:
     void bind_signal(void (*signal)(void *context), void *context) override;
 
     void use_host_ram(ByteLedger *ledger, uint64_t limit) override;
+    void lease_from(SessionLease *lease) override;
 
     void     shut_down() override;
     void     let_go_of_thread() override;

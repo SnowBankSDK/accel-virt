@@ -6,6 +6,8 @@
 namespace av {
 
 class ByteLedger;
+class SessionLease;
+class SessionReservation;
 
 class VramAccount {
 public:
@@ -15,6 +17,7 @@ public:
     VramAccount &operator=(const VramAccount &) = delete;
 
     void               bind(ByteLedger *ledger);
+    void               reserve_from(SessionLease *lease);
     bool               bound() const;
     bool               bound_to(const ByteLedger *ledger) const;
     [[nodiscard]] bool take(uint64_t bytes);
@@ -30,10 +33,13 @@ public:
     uint64_t used() const;
 
 private:
+    bool charge(uint64_t bytes, bool session);
     bool retake(uint64_t bytes, bool session);
+    void refund(uint64_t bytes);
 
-    ByteLedger *ledger_;
-    uint64_t    held_;
+    ByteLedger         *ledger_;
+    SessionReservation *reservation_;
+    uint64_t            held_;
 };
 
 }

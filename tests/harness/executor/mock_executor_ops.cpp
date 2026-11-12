@@ -268,6 +268,22 @@ MockExecutorOps::MockExecutorOps(std::uint32_t sub_apis)
         mock.lose_host_device();
         return AV_EXECUTED;
     };
+    table_.extend_lease = [](void *opaque, AvExecutor *, std::uint32_t kind, std::uint64_t bytes,
+                             std::uint64_t least) -> std::uint64_t {
+        MockExecutorOps &mock = mock_of(opaque);
+        mock.lease_extensions_++;
+        mock.last_lease_kind_.store(kind);
+        mock.last_lease_least_.store(least);
+        const std::uint64_t room = mock.lease_room_.load();
+        const std::uint64_t granted = bytes <= room ? bytes : least <= room ? least : 0u;
+        mock.lease_room_.store(room == UINT64_MAX ? room : room - granted);
+        return granted;
+    };
+    table_.return_lease = [](void *opaque, AvExecutor *, std::uint32_t kind, std::uint64_t bytes) {
+        MockExecutorOps &mock = mock_of(opaque);
+        mock.last_lease_kind_.store(kind);
+        mock.lease_returned_ += bytes;
+    };
     table_.gpu_progress = [](void *, AvExecutor *, std::uint64_t *marked, std::uint64_t *reached) {
         *marked = 0u;
         *reached = 0u;
@@ -618,6 +634,12 @@ void MockExecutorOps::lose_host_device()
 void MockExecutorOps::set_losable(bool losable) { losable_.store(losable); }
 
 std::uint32_t MockExecutorOps::losses() { return losses_.load(); }
+
+void          MockExecutorOps::set_lease_room(std::uint64_t bytes) { lease_room_.store(bytes); }
+std::uint32_t MockExecutorOps::lease_extensions() { return lease_extensions_.load(); }
+std::uint64_t MockExecutorOps::lease_returned() { return lease_returned_.load(); }
+std::uint32_t MockExecutorOps::last_lease_kind() { return last_lease_kind_.load(); }
+std::uint64_t MockExecutorOps::last_lease_least() { return last_lease_least_.load(); }
 
 bool MockExecutorOps::fire_signal()
 {

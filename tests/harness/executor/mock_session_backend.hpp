@@ -71,6 +71,7 @@ public:
     void               release_object(std::uint32_t kind, std::uint64_t wire_handle, std::uint64_t detail) override;
 
     void          use_host_ram(ByteLedger *ledger, std::uint64_t limit) override;
+    void          lease_from(SessionLease *lease) override;
     ByteLedger   *host_ram_ledger() const;
     std::uint64_t host_ram_limit() const;
     void          shut_down() override;

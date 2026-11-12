@@ -165,6 +165,8 @@ void MockSessionBackend::use_host_ram(ByteLedger *ledger, std::uint64_t limit)
     host_ram_limit_ = limit;
 }
 
+void MockSessionBackend::lease_from(SessionLease *) {}
+
 ByteLedger *MockSessionBackend::host_ram_ledger() const { return host_ram_ledger_; }
 
 std::uint64_t MockSessionBackend::host_ram_limit() const { return host_ram_limit_; }

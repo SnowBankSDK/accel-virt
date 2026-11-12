@@ -180,6 +180,19 @@ void ExecutorLibrary::channel_stats(AvExecutor *executor, uint32_t context, cons
     if (ops_->channel_stats != nullptr) ops_->channel_stats(ops_->opaque, executor, context, body, size);
 }
 
+uint64_t ExecutorLibrary::extend_lease(AvExecutor *executor, uint32_t kind, uint64_t bytes, uint64_t least) const
+{
+    AV_SCOPE("ExecutorLibrary::extend_lease");
+    if (ops_->extend_lease == nullptr) return bytes;
+    return ops_->extend_lease(ops_->opaque, executor, kind, bytes, least);
+}
+
+void ExecutorLibrary::return_lease(AvExecutor *executor, uint32_t kind, uint64_t bytes) const
+{
+    AV_SCOPE("ExecutorLibrary::return_lease");
+    if (ops_->return_lease != nullptr) ops_->return_lease(ops_->opaque, executor, kind, bytes);
+}
+
 size_t ExecutorLibrary::answer_part(AvExecutor *executor, uint64_t offset, uint8_t *out, size_t capacity,
                                     uint64_t &length) const
 {

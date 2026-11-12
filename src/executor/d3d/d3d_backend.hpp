@@ -36,6 +36,8 @@ struct D3D11_BOX;
 
 namespace av {
 
+class SessionLease;
+
 class ByteLedger;
 class DxgiFormatLayout;
 
@@ -65,6 +67,7 @@ public:
                                   D3d12HostDevice *device12 = nullptr, SharedSurfaces *surfaces = nullptr,
                                   D3d9HostDevice *device9 = nullptr, HostMemorySource *source = nullptr);
     void use_host_ram(ByteLedger *ledger, uint64_t limit) override;
+    void lease_from(SessionLease *lease) override;
     void               shut_down() override;
     void               let_go_of_thread() override;
     void               leave_device() override;
@@ -276,6 +279,7 @@ private:
     WireArena              *arena_;
     D3dObjectTable          objects_;
     D3dRefusedCreates       refused_creates_;
+    SessionLease           *lease_;
     GuestBytes              guest_;
     GuestRegion             region_;
     ImportTable            *imports_;
