@@ -8,8 +8,8 @@
 
 namespace av::icd {
 
-JointTimeline::JointTimeline(GpuTimeline &session, ThreadLock &lock, Kmt &kmt)
-    : session_(session), lock_(lock), kmt_(kmt), lanes_{}, generations_{}, joined_(0u), marks_{}, stamped_(0u), reached_(0u)
+JointTimeline::JointTimeline(GpuTimeline &session, ThreadLock &lock, ThreadLock &lanes_lock, Kmt &kmt)
+    : session_(session), lock_(lock), lanes_lock_(lanes_lock), kmt_(kmt), lanes_{}, generations_{}, joined_(0u), marks_{}, stamped_(0u), reached_(0u)
 {
     AV_SCOPE("JointTimeline::JointTimeline");
 }
@@ -108,6 +108,27 @@ uint64_t JointTimeline::completed() const
     return reached_;
 }
 
+void JointTimeline::publish_lanes(uint64_t mark)
+{
+    AV_SCOPE("JointTimeline::publish_lanes");
+    const ThreadLockHold lanes_held(lanes_lock_);
+    LaneProgress        *owing[most_lanes] = {};
+    uint64_t             fences[most_lanes] = {};
+    {
+        const ThreadLockHold held(lock_);
+        advance();
+        if (mark <= reached_ || mark > stamped_) return;
+        const Mark &owed = marks_[mark % marks];
+        for (uint32_t index = 0u; index < most_lanes; index++) {
+            if (owed.lanes_[index] == 0u || generations_[index] != owed.generations_[index]) continue;
+            owing[index] = lanes_[index];
+            fences[index] = owed.lanes_[index];
+        }
+    }
+    for (uint32_t index = 0u; index < most_lanes; index++)
+        if (owing[index] != nullptr) owing[index]->publish(fences[index]);
+}
+
 bool JointTimeline::wait(uint64_t mark)
 {
     AV_SCOPE("JointTimeline::wait");
@@ -120,6 +141,7 @@ bool JointTimeline::wait(uint64_t mark)
         session = marks_[mark % marks].session_;
     }
     if (!session_.wait(session)) return false;
+    publish_lanes(mark);
     uint64_t       frequency = 0u;
     const uint64_t began = kmt_.performance_counter(frequency);
     for (;;) {

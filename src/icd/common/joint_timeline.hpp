@@ -21,7 +21,7 @@ public:
     static constexpr uint32_t marks = 256u;
     static constexpr uint64_t patience_seconds = 30u;
 
-    JointTimeline(GpuTimeline &session, ThreadLock &lock, Kmt &kmt);
+    JointTimeline(GpuTimeline &session, ThreadLock &lock, ThreadLock &lanes_lock, Kmt &kmt);
     JointTimeline(const JointTimeline &) = delete;
     JointTimeline &operator=(const JointTimeline &) = delete;
 
@@ -43,9 +43,11 @@ private:
     uint64_t mark(uint64_t session) const;
     bool     reached(const Mark &mark) const;
     void     advance() const;
+    void     publish_lanes(uint64_t mark);
 
     GpuTimeline        &session_;
     ThreadLock         &lock_;
+    ThreadLock         &lanes_lock_;
     Kmt                &kmt_;
     LaneProgress       *lanes_[most_lanes];
     uint32_t            generations_[most_lanes];

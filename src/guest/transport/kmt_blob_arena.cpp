@@ -11,7 +11,13 @@
 namespace av {
 
 KmtBlobArena::KmtBlobArena(GuestConnection &connection, KmtTransport &transport, DriverLog &lines)
-    : connection_(connection), transport_(transport), lines_(lines), slots_(), control_(), rings_(), regions_(), slots_taken_(false), idle_since_{}, refusals_logged_(0u), failed_step_(nullptr), failed_status_(Status::ok)
+    : connection_(connection), transport_(transport), lines_(lines), own_slots_(), slots_(own_slots_), member_(false), control_(), rings_(), regions_(), slots_taken_(false), idle_since_{}, refusals_logged_(0u), failed_step_(nullptr), failed_status_(Status::ok)
+{
+    AV_SCOPE("KmtBlobArena::KmtBlobArena");
+}
+
+KmtBlobArena::KmtBlobArena(GuestConnection &connection, KmtTransport &transport, DriverLog &lines, KmtBlobArena &session)
+    : connection_(connection), transport_(transport), lines_(lines), own_slots_(), slots_(session.slots_), member_(true), control_(), rings_(), regions_(), slots_taken_(false), idle_since_{}, refusals_logged_(0u), failed_step_(nullptr), failed_status_(Status::ok)
 {
     AV_SCOPE("KmtBlobArena::KmtBlobArena");
 }
@@ -25,7 +31,7 @@ KmtBlobArena::~KmtBlobArena()
 Status KmtBlobArena::open_control()
 {
     AV_SCOPE("KmtBlobArena::open_control");
-    if (control_.constructed()) return Status::ok;
+    if (member_ || control_.constructed()) return Status::ok;
     static_cast<void>(control_.construct(connection_, transport_, slots_));
     const Status opened = control_.object().open_at(0u, PublishedSlotLayout::control_bytes);
     if (opened != Status::ok) {
@@ -306,12 +312,13 @@ uint64_t KmtBlobArena::host_errors() const
 bool KmtBlobArena::invariants_hold() const
 {
     AV_SCOPE("KmtBlobArena::invariants_hold");
-    if (!control_.constructed()) {
+    if (member_ && control_.constructed()) return false;
+    if (!member_ && !control_.constructed()) {
         for (const ObjectStorage<ArenaSegment> &storage : rings_)
             if (storage.constructed()) return false;
         return !transport_.blobs().ready();
     }
-    if (!control_.object().invariants_hold() || control_.object().base() != 0u) return false;
+    if (!member_ && (!control_.object().invariants_hold() || control_.object().base() != 0u)) return false;
     uint32_t rings = 0u;
     for (const ObjectStorage<ArenaSegment> &storage : rings_) {
         if (!storage.constructed()) continue;

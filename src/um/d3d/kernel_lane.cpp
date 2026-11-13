@@ -12,7 +12,7 @@ namespace av::d3d {
 KernelLane::KernelLane(const D3DDDI_DEVICECALLBACKS &kernel, HANDLE device, HANDLE context, D3dSession &session,
                        KeyedLog &lines)
     : kernel_(kernel), device_(device), context_(context), session_(session), lines_(lines), transport_(),
-      stream_(), staging_(nullptr), batch_(nullptr), written_(0u), tried_(false)
+      arena_(), stream_(), staging_(nullptr), batch_(nullptr), written_(0u), tried_(false)
 {
     AV_SCOPE("KernelLane::KernelLane");
 }
@@ -58,6 +58,14 @@ bool KernelLane::open()
         lines_.once("a context's work stays on its session's ring: the kernel gave it no lane of its own");
         return false;
     }
+    KmtBlobArena *const shared = session_.arena();
+    if (shared != nullptr) {
+        static_cast<void>(arena_.construct(session_.connection(), transport_.object(), session_.log(), *shared));
+        if (arena_.object().open_small(arena_bytes) != Status::ok) {
+            arena_.destroy();
+            lines_.once("a lane has no blob arena of its own: its bulk data crosses inline");
+        }
+    }
     transport_.object().hold_in(batch_, batch_bytes);
     static_cast<void>(stream_.construct(transport_.object()));
     stream_.object().speak_with(session_.select_command(), session_.flush_command());
@@ -70,6 +78,11 @@ void KernelLane::close()
     AV_SCOPE("KernelLane::close");
     if (stream_.constructed()) session_.shared_memory().leave(*this);
     stream_.destroy();
+    if (arena_.constructed()) {
+        const bool lost = transport_.object().faulted() || transport_.object().host_faulted();
+        static_cast<void>(lost ? arena_.object().abandon() : arena_.object().close());
+        arena_.destroy();
+    }
     transport_.destroy();
     BlockSource &memory = session_.memory();
     if (staging_ != nullptr) memory.release(staging_);
@@ -94,6 +107,12 @@ bool KernelLane::ran(uint64_t fence) const
 {
     AV_SCOPE("KernelLane::ran");
     return !opened() || transport_.object().faulted() || transport_.object().gpu_completed() >= fence;
+}
+
+void KernelLane::publish(uint64_t fence)
+{
+    AV_SCOPE("KernelLane::publish");
+    if (opened() && transport_.object().published_fence() < fence) static_cast<void>(stream_.object().flush());
 }
 
 uint64_t KernelLane::covering() const

@@ -31,7 +31,7 @@ void SessionMemory::make_timeline()
     AV_SCOPE("SessionMemory::make_timeline");
     if (timeline_.constructed()) return;
     static_cast<void>(session_timeline_.construct(channel_, channel_lock_));
-    static_cast<void>(timeline_.construct(session_timeline_.object(), timeline_lock_, kmt_));
+    static_cast<void>(timeline_.construct(session_timeline_.object(), timeline_lock_, channel_lock_, kmt_));
 }
 
 void SessionMemory::join(icd::LaneProgress &lane)

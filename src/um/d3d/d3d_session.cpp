@@ -216,6 +216,18 @@ ClientBlobArena &D3dSession::blobs()
     return channel_.transport().blobs();
 }
 
+KmtBlobArena *D3dSession::arena()
+{
+    AV_SCOPE("D3dSession::arena");
+    return channel_.arena();
+}
+
+DriverLog &D3dSession::log()
+{
+    AV_SCOPE("D3dSession::log");
+    return lines_;
+}
+
 ThreadLock &D3dSession::lock()
 {
     AV_SCOPE("D3dSession::lock");

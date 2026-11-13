@@ -72,6 +72,7 @@ public:
     [[nodiscard]] Status          run_held();
     [[nodiscard]] TransportResult send_command(uint32_t command_id, WireWriter &writer);
     bool              has_arena() const;
+    KmtBlobArena     *arena();
     [[nodiscard]] bool   take_query_slots(uint32_t count, uint8_t *&view, uint64_t &offset);
     uint64_t          arena_bytes() const;
     uint64_t          host_errors() const;

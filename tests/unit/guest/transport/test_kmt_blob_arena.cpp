@@ -1031,3 +1031,40 @@ TEST(kmt_blob_arena, a_small_ring_is_whole_pages_from_the_minimum_up)
       CHECK_STATUS(rig.arena().close(), Status::ok);
       rig.check_nothing_is_held();
   } }
+
+TEST(kmt_blob_arena, a_member_arena_takes_slots_its_session_left_free_opens_no_control_segment_and_gives_its_transport_blob_room)
+{ Rig rig;
+  rig.host_takes_the_imports();
+  CHECK_STATUS(rig.arena().open_small(mib), Status::ok);
+  KmtTransport lane(rig.connection(), SubApi::opengl, 12u, reply_bytes, rig.spare_staging(), 1024u);
+  CHECK_STATUS(lane.initialize(), Status::ok);
+  const std::uint64_t wanted[1] = {65536u};
+  CHECK(!lane.blobs().ready());
+  CHECK(!lane.make_room_for_blobs(wanted, 1u));
+  { av::RecordingLog sink;
+    av::DriverLog    lines(sink, "test");
+    KmtBlobArena     member(rig.connection(), lane, lines, rig.arena());
+    CHECK(member.invariants_hold());
+    rig.host_takes_the_imports(1u);
+    CHECK_STATUS(member.open_small(mib), Status::ok);
+    CHECK(member.invariants_hold());
+    CHECK(member.lending());
+    CHECK(!KmtBlobArenaProbe::control(member).constructed());
+    const std::uint64_t session_ring = KmtBlobArenaProbe::ring(rig.arena(), 0u).object().base();
+    const std::uint64_t member_ring = KmtBlobArenaProbe::ring(member, 0u).object().base();
+    CHECK(member_ring != 0u);
+    CHECK(member_ring != session_ring);
+    CHECK(lane.blobs().ready());
+    CHECK(lane.make_room_for_blobs(wanted, 1u));
+    CHECK(rig.transport().make_room_for_blobs(wanted, 1u));
+    rig.host_takes_the_releases(1u);
+    CHECK_STATUS(member.close(), Status::ok);
+    CHECK(!lane.blobs().ready());
+    rig.host_takes_the_imports(1u);
+    CHECK_STATUS(member.open_small(mib), Status::ok);
+    CHECK_EQ(KmtBlobArenaProbe::ring(member, 0u).object().base(), member_ring);
+    rig.host_takes_the_releases(1u);
+    CHECK_STATUS(member.close(), Status::ok); }
+  lane.teardown();
+  rig.host_takes_the_releases(2u);
+  CHECK_STATUS(rig.arena().close(), Status::ok); }

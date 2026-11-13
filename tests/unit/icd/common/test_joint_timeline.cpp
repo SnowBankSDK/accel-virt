@@ -16,6 +16,17 @@ class FakeLane final : public av::icd::LaneProgress {
 public:
     std::uint64_t covering() const override { return covering_; }
     bool          ran(std::uint64_t fence) const override { return ran_ >= fence; }
+    void          publish(std::uint64_t fence) override
+    {
+        asked_ = fence;
+        locked_when_asked_ = lanes_lock_ != nullptr && lanes_lock_->held();
+        if (runs_what_it_publishes_ && fence > ran_) ran_ = fence;
+    }
+
+    std::uint64_t                  asked_ = 0u;
+    bool                           runs_what_it_publishes_ = false;
+    bool                           locked_when_asked_ = false;
+    const av::RecordingThreadLock *lanes_lock_ = nullptr;
 
     std::uint64_t covering_ = 0u;
     std::uint64_t ran_ = 0u;
@@ -23,16 +34,18 @@ public:
 
 class Fixture {
 public:
-    Fixture() : lock_(trace_, 'j'), joint_(session_, lock_, kmt_) {}
+    Fixture() : lock_(trace_, 'j'), lanes_lock_(trace_, 's'), joint_(session_, lock_, lanes_lock_, kmt_) {}
 
     av::ScriptedGpuTimeline &session() { return session_; }
     JointTimeline           &joint() { return joint_; }
-    bool                     unlocked() const { return !lock_.held(); }
+    bool                     unlocked() const { return !lock_.held() && !lanes_lock_.held(); }
+    const av::RecordingThreadLock &lanes_lock() const { return lanes_lock_; }
 
 private:
     av::MockKmt             kmt_;
     av::LockTrace           trace_;
     av::RecordingThreadLock lock_;
+    av::RecordingThreadLock lanes_lock_;
     av::ScriptedGpuTimeline session_;
     JointTimeline           joint_;
 };
@@ -117,6 +130,32 @@ TEST(joint_timeline, a_wait_drives_the_session_and_then_waits_for_the_lanes)
   CHECK(fixture.session().waits() != 0u);
   CHECK(fixture.joint().completed() >= mark);
   CHECK(!fixture.joint().wait(mark + 5u));
+  fixture.joint().leave(lane); }
+
+TEST(joint_timeline, a_wait_for_work_a_lane_still_holds_has_the_lane_publish_it_under_the_sessions_lock_instead_of_waiting_it_out)
+{ Fixture fixture;
+  FakeLane lane;
+  lane.lanes_lock_ = &fixture.lanes_lock();
+  lane.runs_what_it_publishes_ = true;
+  fixture.joint().join(lane);
+  fixture.session().send();
+  lane.covering_ = 6u;
+  lane.ran_ = 5u;
+  const std::uint64_t mark = fixture.joint().recording();
+  CHECK(fixture.joint().completed() < mark);
+  CHECK(fixture.joint().wait(mark));
+  CHECK_EQ(lane.asked_, 6u);
+  CHECK(lane.locked_when_asked_);
+  CHECK(fixture.joint().completed() >= mark);
+  CHECK(fixture.unlocked());
+  FakeLane idle;
+  fixture.joint().join(idle);
+  idle.covering_ = 0u;
+  lane.covering_ = 6u;
+  const std::uint64_t settled = fixture.joint().covering();
+  CHECK(fixture.joint().wait(settled));
+  CHECK_EQ(idle.asked_, 0u);
+  fixture.joint().leave(idle);
   fixture.joint().leave(lane); }
 
 TEST(joint_timeline, past_its_marks_a_new_mark_folds_into_the_last_and_never_completes_early)

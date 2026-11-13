@@ -406,6 +406,12 @@ const KmtTransport &HostChannel::transport() const
     return transport_.object();
 }
 
+KmtBlobArena *HostChannel::arena()
+{
+    AV_SCOPE("HostChannel::arena");
+    return arena_.constructed() ? &arena_.object() : nullptr;
+}
+
 bool HostChannel::has_arena() const
 {
     AV_SCOPE("HostChannel::has_arena");

@@ -25,6 +25,7 @@ public:
     static constexpr uint64_t idle_release_ticks = uint64_t{100000000};
 
     KmtBlobArena(GuestConnection &connection, KmtTransport &transport, DriverLog &lines);
+    KmtBlobArena(GuestConnection &connection, KmtTransport &transport, DriverLog &lines, KmtBlobArena &session);
     ~KmtBlobArena();
     KmtBlobArena(const KmtBlobArena &) = delete;
     KmtBlobArena &operator=(const KmtBlobArena &) = delete;
@@ -57,7 +58,9 @@ private:
     GuestConnection               &connection_;
     KmtTransport                  &transport_;
     DriverLog                     &lines_;
-    ArenaSlots                     slots_;
+    ArenaSlots                     own_slots_;
+    ArenaSlots                    &slots_;
+    bool                           member_;
     ObjectStorage<ArenaSegment>    control_;
     ObjectStorage<ArenaSegment>    rings_[ClientBlobArena::max_segments];
     ObjectStorage<ArenaSegment>    regions_[max_regions];

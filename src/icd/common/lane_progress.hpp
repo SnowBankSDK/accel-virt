@@ -12,6 +12,7 @@ public:
 
     virtual uint64_t covering() const = 0;
     virtual bool     ran(uint64_t fence) const = 0;
+    virtual void     publish(uint64_t fence) = 0;
 
 protected:
     LaneProgress() = default;

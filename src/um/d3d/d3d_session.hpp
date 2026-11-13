@@ -56,6 +56,8 @@ public:
     uint32_t               next_id();
     d3d::D3dCommandStream &stream();
     ThreadLock            &lock();
+    DriverLog             &log();
+    KmtBlobArena          *arena();
     d3d11::QueryResults   &query_results();
     bool                   has_arena() const;
     uint64_t               arena_bytes() const;
