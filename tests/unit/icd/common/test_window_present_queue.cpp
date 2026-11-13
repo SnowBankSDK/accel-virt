@@ -6,6 +6,7 @@
 #include "harness/framework/test_registry.hpp"
 #include "harness/icd/counted_wake_signal.hpp"
 #include "harness/icd/lock_trace.hpp"
+#include "harness/icd/paced_display.hpp"
 #include "harness/icd/recording_log.hpp"
 #include "harness/icd/recording_thread_lock.hpp"
 #include "harness/icd/scripted_thread.hpp"
@@ -141,39 +142,9 @@ struct WindowPresentQueueProbe {
 
 using av::icd::WindowPresentQueueProbe;
 
-namespace {
-
-class PacedDisplay {
-public:
-    PacedDisplay()
-    { kmt.add_adapter(av::PciIdentity(av::PciIdentity::virtio_vendor, av::AvgpuAdapters::virtio_gpu_device,
-                                      av::PciIdentity::virtio_vendor, av::AvgpuAdapters::av_subsystem),
-                      av::AdapterScenario::wddm_3_2);
-      std::uint32_t adapters[4] = {};
-      std::uint32_t found = 0u;
-      CHECK_STATUS(kmt.enumerate_adapters(adapters, 4u, found), av::Status::ok);
-      std::uint32_t device = 0u;
-      CHECK_STATUS(kmt.create_device(adapters[0], device), av::Status::ok);
-      kmt.set_blank_period(period);
-      kmt.blank_on_boundaries();
-      kmt.reads_clock(nullptr, 1u);
-      CHECK_STATUS(pacing.bind(kmt, lines, adapters[0], device), av::Status::ok); }
-
-    static constexpr std::uint64_t period = av::MockKmt::ticks_per_second / 60u;
-
-    std::uint32_t blanks_waited() const { return kmt.calls(av::MockKmt::Call::wait_for_vertical_blank); }
-
-    av::MockKmt                kmt;
-    av::RecordingLog           log;
-    av::DriverLog              lines{log, "avtest: "};
-    av::icd::PresentPacing     pacing;
-};
-
-}
-
 TEST(window_present_queue, a_fifo_frame_with_a_free_slot_is_handed_without_waiting_and_the_thread_shows_one_frame_per_blank)
 { Rig          rig;
-  PacedDisplay display;
+  av::PacedDisplay display;
   CHECK(rig.queue.start());
   for (std::uint32_t slot = 0u; slot < 2u; slot++) {
       CHECK_EQ(rig.queue.try_slot(rig.owner, 2u, 2u), slot);
@@ -188,7 +159,7 @@ TEST(window_present_queue, a_fifo_frame_with_a_free_slot_is_handed_without_waiti
   CHECK(rig.thread.step());
   CHECK_EQ(display.blanks_waited(), 1u);
   CHECK_EQ(rig.surface.blits(), 2u);
-  display.kmt.advance(PacedDisplay::period + PacedDisplay::period / 2u);
+  display.kmt.advance(av::PacedDisplay::period + av::PacedDisplay::period / 2u);
   Frame late = rig.frame(0u, 3u);
   late.paced_by(&display.pacing);
   CHECK(rig.queue.hand(late));
@@ -200,7 +171,7 @@ TEST(window_present_queue, a_fifo_frame_with_a_free_slot_is_handed_without_waiti
 
 TEST(window_present_queue, a_frame_nothing_paces_is_shown_without_waiting_for_a_blank)
 { Rig          rig;
-  PacedDisplay display;
+  av::PacedDisplay display;
   CHECK(display.pacing.ask(0));
   CHECK(rig.queue.start());
   for (std::uint32_t mark = 1u; mark <= 3u; mark++) {

@@ -34,7 +34,7 @@ static_assert(BackBufferPresenter::max_edge * 4u + TransferRoom::command_bytes <
 BackBufferPresenter::BackBufferPresenter(BlockSource &memory, DriverLog &log)
     : memory_(memory), lines_(log), window_(nullptr), format_(0u, 0u, false, false, 0u), width_(0u), height_(0u),
       framebuffers_{}, texture_(0u), renderbuffers_{}, pixels_(nullptr), front_(), capacity_(0u), refusal_logged_(),
-      loop_(nullptr), room_(), pending_(no_slot), pending_chained_(false), held_(false), held_mark_(), pacing_(nullptr), chained_(),
+      loop_(nullptr), room_(), pending_(no_slot), undrawn_(false), pending_chained_(false), held_(false), held_mark_(), pacing_(nullptr), chained_(),
       chain_refused_(false), current_(no_slot), rotation_refused_(false)
 {
     AV_SCOPE("BackBufferPresenter::BackBufferPresenter");
@@ -136,6 +136,7 @@ bool BackBufferPresenter::present(ClientTransport &wire, const ClientArrayState 
     if (framebuffers_[draw] == 0u) return false;
     if (width_ == 0u || height_ == 0u) return true;
     drop_held();
+    __atomic_store_n(&undrawn_, false, __ATOMIC_RELEASE);
     static_cast<void>(resolved(wire));
     if (loop != nullptr && draw_chained(wire, *loop, luid)) return true;
     if (loop != nullptr && queue_read(wire, state, *loop)) return true;
@@ -234,6 +235,7 @@ uint32_t BackBufferPresenter::flush_held()
 void BackBufferPresenter::done(const GlFrame &frame, bool drawn)
 {
     AV_SCOPE("BackBufferPresenter::done");
+    if (!drawn) __atomic_store_n(&undrawn_, true, __ATOMIC_RELEASE);
     if (!drawn || frame.chained()) return;
     const size_t bytes = static_cast<size_t>(frame.width()) * frame.height() * bytes_per_pixel;
     if (pixels_ == nullptr || bytes > capacity_) return;
@@ -432,10 +434,23 @@ bool BackBufferPresenter::draw_chained(ClientTransport &wire, GlPresentQueue &lo
     return true;
 }
 
+bool BackBufferPresenter::lost() const
+{
+    AV_SCOPE("BackBufferPresenter::lost");
+    return __atomic_load_n(&undrawn_, __ATOMIC_ACQUIRE);
+}
+
+uint32_t BackBufferPresenter::slot_to_fill(GlPresentQueue &loop, uint32_t slots, uint32_t reserved, bool newest_wins)
+{
+    AV_SCOPE("BackBufferPresenter::slot_to_fill");
+    if (pacing_ != nullptr && pacing_->blanks() != 0u) return loop.wait_slot(*this, slots, reserved);
+    return newest_wins ? loop.reclaim_slot(*this, slots, reserved) : loop.free_slot(*this, slots, reserved);
+}
+
 void BackBufferPresenter::copy_chained(ClientTransport &wire, GlPresentQueue &loop)
 {
     AV_SCOPE("BackBufferPresenter::copy_chained");
-    const uint32_t slot = loop.free_slot(*this, ChainedFrames::slot_count, pending_);
+    const uint32_t slot = slot_to_fill(loop, ChainedFrames::slot_count, pending_, false);
     if (slot == ChainedFrames::slot_count) return;
     chained_.draw(wire, texture_, slot);
     pending_ = slot;
@@ -445,7 +460,7 @@ void BackBufferPresenter::copy_chained(ClientTransport &wire, GlPresentQueue &lo
 void BackBufferPresenter::begin_rotation(ClientTransport &wire, GlPresentQueue &loop)
 {
     AV_SCOPE("BackBufferPresenter::begin_rotation");
-    const uint32_t next = loop.reclaim_slot(*this, ChainedFrames::slot_count, pending_);
+    const uint32_t next = slot_to_fill(loop, ChainedFrames::slot_count, pending_, true);
     if (next == ChainedFrames::slot_count) return;
     chained_.attach(wire, sampled_framebuffer(), next);
     if (!chained_.renders_into(wire, sampled_framebuffer())) {
@@ -462,7 +477,7 @@ void BackBufferPresenter::rotate_chained(ClientTransport &wire, GlPresentQueue &
 {
     AV_SCOPE("BackBufferPresenter::rotate_chained");
     const uint32_t swapped = current_;
-    const uint32_t next = loop.reclaim_slot(*this, ChainedFrames::slot_count, swapped);
+    const uint32_t next = slot_to_fill(loop, ChainedFrames::slot_count, swapped, true);
     if (next == ChainedFrames::slot_count) return;
     chained_.finish(wire);
     chained_.attach(wire, sampled_framebuffer(), next);
@@ -487,7 +502,7 @@ bool BackBufferPresenter::queue_read(ClientTransport &wire, const ClientArraySta
 {
     AV_SCOPE("BackBufferPresenter::queue_read");
     if (!loop.start() || !reserve_room(wire, loop)) return false;
-    const uint32_t slot = loop.free_slot(*this, slot_count, pending_);
+    const uint32_t slot = slot_to_fill(loop, slot_count, pending_, false);
     if (slot == slot_count) return true;
     const bool plain = pack_is_plain(state);
     if (!plain) set_pack(wire, state, true);

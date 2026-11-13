@@ -77,6 +77,7 @@ public:
     bool     present(ClientTransport &wire, const ClientArrayState &state, void *dc, icd::WindowSurface &surface,
                      GlPresentQueue *loop, uint64_t luid);
     void     hand_over(const BatchMark &mark);
+    bool     lost() const;
     void     hold_over(const BatchMark &mark, icd::PresentPacing &pacing);
     void     paced_by(icd::PresentPacing &pacing);
     void     show_held_now();
@@ -101,6 +102,7 @@ private:
     void                 set_pack(ClientTransport &wire, const ClientArrayState &state, bool plain);
     void                 read_back(ClientTransport &wire);
     bool                 draw_chained(ClientTransport &wire, GlPresentQueue &loop, uint64_t luid);
+    uint32_t             slot_to_fill(GlPresentQueue &loop, uint32_t slots, uint32_t reserved, bool newest_wins);
     void                 copy_chained(ClientTransport &wire, GlPresentQueue &loop);
     void                 begin_rotation(ClientTransport &wire, GlPresentQueue &loop);
     void                 rotate_chained(ClientTransport &wire, GlPresentQueue &loop);
@@ -132,6 +134,7 @@ private:
     GlPresentQueue  *loop_;
     icd::ArenaRegion room_;
     uint32_t         pending_;
+    bool             undrawn_;
     bool             pending_chained_;
     bool             held_;
     BatchMark        held_mark_;

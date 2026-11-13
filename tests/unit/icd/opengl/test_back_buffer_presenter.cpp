@@ -1,6 +1,7 @@
 #include "core/support/status.hpp"
 #include "core/trace/state_writer.hpp"
 #include "harness/framework/test_registry.hpp"
+#include "harness/icd/paced_display.hpp"
 #include "harness/icd/counted_wake_signal.hpp"
 #include "harness/icd/gl_context_rig.hpp"
 #include "harness/icd/lock_trace.hpp"
@@ -906,6 +907,60 @@ TEST(back_buffer_presenter, a_swap_with_every_other_image_queued_drops_the_older
   CHECK_EQ(last_attached(rig), 200u);
   rig.presenter.hand_over(rig.context.mark());
   CHECK_EQ(presents.loop.queued(), 1u);
+  CHECK(rig.presenter.invariants_hold()); }
+
+namespace {
+
+struct ShownWhileWaiting {
+    Presents     *presents;
+    std::uint32_t shown;
+};
+
+void show_one_frame(void *context)
+{
+    auto *const waiting = static_cast<ShownWhileWaiting *>(context);
+    if (waiting->presents->thread.step()) waiting->shown++;
+}
+
+}
+
+TEST(back_buffer_presenter, swaps_with_an_interval_wait_for_a_present_slot_so_every_frame_is_shown_a_blank_apart_and_none_is_dropped)
+{ constexpr std::uint32_t frames = 12u;
+  Rig              rig;
+  Presents         presents(rig);
+  av::PacedDisplay display;
+  CHECK(display.pacing.ask(1));
+  rig.presenter.paced_by(display.pacing);
+  chained_rig(rig, presents);
+  ShownWhileWaiting waiting{&presents, 0u};
+  presents.shown.on_wait(show_one_frame, &waiting);
+  for (std::uint32_t frame = 0u; frame < frames; frame++) {
+      CHECK(rig.presenter.present(rig.wire(), rig.state, &rig.dc, rig.surface, &presents.loop, 0x1234u));
+      rig.presenter.hand_over(rig.context.mark());
+      CHECK(presents.loop.queued() <= 2u);
+  }
+  CHECK(waiting.shown >= frames - 3u);
+  static_cast<void>(presents.thread.run_until_done());
+  CHECK_EQ(presents.loop.dropped_frames(), 0u);
+  CHECK_EQ(presents.loop.shown_frames(), std::uint64_t{frames});
+  CHECK(display.blanks_waited() >= frames - 2u);
+  CHECK(rig.presenter.invariants_hold()); }
+
+TEST(back_buffer_presenter, swaps_with_interval_zero_never_wait_for_a_present_slot_and_the_newest_frame_replaces_a_queued_one)
+{ constexpr std::uint32_t frames = 8u;
+  Rig              rig;
+  Presents         presents(rig);
+  av::PacedDisplay display;
+  CHECK(display.pacing.ask(0));
+  rig.presenter.paced_by(display.pacing);
+  chained_rig(rig, presents);
+  for (std::uint32_t frame = 0u; frame < frames; frame++) {
+      CHECK(rig.presenter.present(rig.wire(), rig.state, &rig.dc, rig.surface, &presents.loop, 0x1234u));
+      rig.presenter.hand_over(rig.context.mark());
+  }
+  CHECK_EQ(presents.shown.waits(), 0u);
+  CHECK(presents.loop.dropped_frames() != 0u);
+  CHECK_EQ(display.blanks_waited(), 0u);
   CHECK(rig.presenter.invariants_hold()); }
 
 TEST(back_buffer_presenter, a_host_that_cannot_render_into_the_slots_gets_every_frame_copied)
