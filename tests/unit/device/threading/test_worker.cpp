@@ -48,7 +48,7 @@ struct DoorbellProbe {
 struct WorkerReaperProbe {
     static void fill(WorkerReaper &reaper, Worker &worker)
     {
-        for (WorkerReaper::Entry &entry : reaper.entries_) entry = WorkerReaper::Entry{&worker, 0u, WorkerReaper::State::waiting, false};
+        for (WorkerReaper::Entry &entry : reaper.entries_) entry = WorkerReaper::Entry{&worker, 0u, WorkerReaper::State::waiting, false, false, false};
         reaper.held_ = WorkerReaper::capacity;
     }
     static void empty(WorkerReaper &reaper)

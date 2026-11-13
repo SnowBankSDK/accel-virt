@@ -200,6 +200,9 @@ TEST(device_context_table_destroy, a_busy_context_is_destroyed_at_once_and_its_p
   CHECK(table.retiring_pins(1u));
   CHECK(table.retiring_pins(2u));
   CHECK(!table.retiring_pins(3u));
+  CHECK(table.awaits_retiring_writer(1u));
+  CHECK(table.awaits_retiring_writer(2u));
+  CHECK(!table.awaits_retiring_writer(3u));
   CHECK_STATUS(blobs.release(1u), Status::invalid_state);
   CHECK_STATUS(blobs.retire(1u), Status::ok);
   CHECK(blobs.contains(1u));
@@ -207,10 +210,11 @@ TEST(device_context_table_destroy, a_busy_context_is_destroyed_at_once_and_its_p
   CHECK(table.invariants_hold());
   CHECK_EQ(host.run_main_loop(), 0u);
   host.signal_event(gate.event);
-  CHECK(host.wait_for_main_loop_work(1u, 5000u));
-  CHECK_EQ(host.run_main_loop(), 1u);
+  for (int round = 0; round < 5000 && table.reaping() != 0u; round++)
+      if (host.wait_for_main_loop_work(1u, 1u)) static_cast<void>(host.run_main_loop());
   CHECK_EQ(table.reaping(), 0u);
   CHECK(!table.retiring_pins(1u));
+  CHECK(!table.awaits_retiring_writer(1u));
   CHECK(!blobs.contains(1u));
   CHECK_STATUS(blobs.release(2u), Status::ok);
   CHECK_EQ(table.live(), 1u);

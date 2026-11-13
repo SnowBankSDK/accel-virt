@@ -33,6 +33,7 @@ public:
     void                 stop();
     void                 watch_exit(void *event);
     bool                 exited() const;
+    bool                 parted() const;
     void                 join();
     bool                 running() const;
     uint32_t             pending();
@@ -49,6 +50,7 @@ private:
     void serve();
     void forgo_queued();
     bool work_within_spin();
+    void part();
     void release();
 
     Host          &host_;
@@ -64,6 +66,7 @@ private:
     bool           stopping_;
     void          *exit_watch_;
     bool           exited_;
+    bool           parted_;
     bool           joined_;
     void          *left_;
 

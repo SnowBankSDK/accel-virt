@@ -53,6 +53,7 @@ private:
     void     map(ControlRequest &request, GpuResponse &response);
     uint32_t unmap(ControlRequest &request);
     bool     unref(ControlRequest &request, GpuResponse &response);
+    void     answer_once_unwritten(ControlRequest &request, uint32_t resource, GpuResponse &response);
     uint32_t named_resource(ControlRequest &request);
 
     Host         &host_;

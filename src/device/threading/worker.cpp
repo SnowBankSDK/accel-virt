@@ -11,7 +11,7 @@ namespace av {
 
 Worker::Worker(Host &host, RingConsumer &ring)
     : host_(host), ring_(ring), signal_(nullptr), doorbell_(host), thread_(nullptr), wake_(nullptr), lock_(nullptr), queue_{}, head_(0u), count_(0u),
-      stopping_(false), exit_watch_(nullptr), exited_(false), joined_(false), left_(nullptr)
+      stopping_(false), exit_watch_(nullptr), exited_(false), parted_(false), joined_(false), left_(nullptr)
       {
           AV_SCOPE("Worker::Worker");
       }
@@ -33,6 +33,7 @@ Status Worker::start()
     stopping_ = false;
     exit_watch_ = nullptr;
     exited_ = false;
+    parted_ = false;
     joined_ = false;
     Status status = host_.create_event(wake_);
     if (status == Status::ok) status = host_.create_mutex(lock_);
@@ -112,6 +113,20 @@ bool Worker::exited() const
 {
     AV_SCOPE("Worker::exited");
     return __atomic_load_n(&exited_, __ATOMIC_SEQ_CST);
+}
+
+bool Worker::parted() const
+{
+    AV_SCOPE("Worker::parted");
+    return __atomic_load_n(&parted_, __ATOMIC_SEQ_CST);
+}
+
+void Worker::part()
+{
+    AV_SCOPE("Worker::part");
+    __atomic_store_n(&parted_, true, __ATOMIC_SEQ_CST);
+    void *const watch = __atomic_load_n(&exit_watch_, __ATOMIC_SEQ_CST);
+    if (watch != nullptr) host_.signal_event(watch);
 }
 
 void Worker::join()
@@ -204,6 +219,7 @@ void Worker::run()
     AV_SCOPE("Worker::run");
     host_.require_worker("Worker::run");
     serve();
+    __atomic_store_n(&parted_, true, __ATOMIC_SEQ_CST);
     __atomic_store_n(&exited_, true, __ATOMIC_SEQ_CST);
     void *const watch = __atomic_load_n(&exit_watch_, __ATOMIC_SEQ_CST);
     if (watch != nullptr) host_.signal_event(watch);
@@ -226,6 +242,7 @@ void Worker::serve()
         WorkItem item;
         for (Step step = next(item); step != Step::idle; step = next(item)) {
             if (step == Step::stop) {
+                part();
                 forgo_queued();
                 return ring_.detach();
             }

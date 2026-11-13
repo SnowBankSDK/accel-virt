@@ -45,6 +45,7 @@ public:
     [[nodiscard]] Status bind(uint32_t id, const ContextSetup &setup, const CapsetInfo &capset) override;
     bool                 holds_doorbell(uint32_t index) override;
     bool                 retiring_pins(uint32_t resource) override;
+    bool                 awaits_retiring_writer(uint32_t resource) override;
     bool                 can_share(uint32_t asking, uint32_t share) override;
     uint32_t             live() const override;
     uint32_t             reaping() const override;

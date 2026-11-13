@@ -163,6 +163,12 @@ bool LocalContextPlane::retiring_pins(uint32_t resource)
     return contexts_.retiring_pins(resource);
 }
 
+bool LocalContextPlane::awaits_retiring_writer(uint32_t resource)
+{
+    AV_SCOPE("LocalContextPlane::awaits_retiring_writer");
+    return contexts_.awaits_retiring_writer(resource);
+}
+
 bool LocalContextPlane::can_share(uint32_t asking, uint32_t share)
 {
     AV_SCOPE("LocalContextPlane::can_share");

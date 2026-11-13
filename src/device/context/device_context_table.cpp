@@ -6,6 +6,7 @@
 #include "device/context/context_binding.hpp"
 #include "device/abi/entry_points.hpp"
 #include "device/host/host.hpp"
+#include "device/memory/blob_table.hpp"
 #include "proto/context/sub_api.hpp"
 
 namespace av {
@@ -99,9 +100,23 @@ void DeviceContextTable::finish_reaped()
     host_.require_main_loop("DeviceContextTable::finish_reaped");
     uint32_t       reaped[max_contexts] = {};
     const uint32_t count = reaper_.collect(reaped, max_contexts);
+    release_parted();
     for (uint32_t at = 0u; at < count; at++) {
         slots_[reaped[at]].destroy();
         retired_[reaped[at]] = false;
+    }
+}
+
+void DeviceContextTable::release_parted()
+{
+    AV_SCOPE("DeviceContextTable::release_parted");
+    for (uint32_t index = 0u; index < max_contexts; index++) {
+        if (!retired_[index] || !slots_[index].object().worker().parted()) continue;
+        const ContextBinding &binding = slots_[index].object().binding();
+        if (!binding.bound()) continue;
+        blobs_.writer_left(binding.ring_resource());
+        blobs_.writer_left(binding.fence_resource());
+        if (binding.reply_resource() != 0u) blobs_.writer_left(binding.reply_resource());
     }
 }
 
@@ -192,6 +207,18 @@ bool DeviceContextTable::retiring_pins(uint32_t resource)
     for (uint32_t at = 0u; at < max_contexts; at++)
         if (retired_[at] && slots_[at].object().binding().pins(resource)) return true;
     return false;
+}
+
+bool DeviceContextTable::awaits_retiring_writer(uint32_t resource)
+{
+    AV_SCOPE("DeviceContextTable::awaits_retiring_writer");
+    host_.require_main_loop("DeviceContextTable::awaits_retiring_writer");
+    bool writes = false;
+    for (uint32_t at = 0u; at < max_contexts; at++)
+        if (retired_[at] && slots_[at].object().binding().pins(resource) &&
+            reaper_.tell_when_parted(slots_[at].object().worker()))
+            writes = true;
+    return writes;
 }
 
 bool DeviceContextTable::holds_doorbell(uint32_t index)

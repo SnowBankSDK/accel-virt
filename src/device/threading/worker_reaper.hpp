@@ -23,6 +23,7 @@ public:
 
     [[nodiscard]] Status start();
     [[nodiscard]] Status take(Worker &worker, uint32_t token);
+    bool                 tell_when_parted(const Worker &worker);
     uint32_t             collect(uint32_t *tokens, uint32_t room);
     uint32_t             drain(uint64_t deadline, uint32_t &newly_overdue);
     void                 resume();
@@ -43,10 +44,13 @@ private:
         uint32_t token_;
         State    state_;
         bool     overdue_;
+        bool     watched_;
+        bool     parted_;
     };
 
     Worker  *exited_at(uint32_t index);
     void     join_exited();
+    bool     note_parted();
     uint32_t waiting() const;
     void     release();
 

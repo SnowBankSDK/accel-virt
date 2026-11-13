@@ -8,6 +8,8 @@
 #include "device/module/driver_status.hpp"
 #include "harness/executor/mock_executor_ops.hpp"
 #include "harness/framework/test_registry.hpp"
+#include "harness/host/mock_host.hpp"
+#include "harness/host/mock_request.hpp"
 #include "harness/loopback/loopback_rig.hpp"
 #include "harness/context/guest_ring.hpp"
 #include "proto/context/capset_info.hpp"
@@ -272,6 +274,64 @@ TEST(loopback_reset, after_a_device_reset_serving_finds_nothing_more_and_a_new_c
   CHECK_STATUS(rig.submit(0u, 1u, 0u, fresh.tail()), Status::ok);
   CHECK(rig.driver().serve_until(rig.context(0u), rig.line(0u), 1u));
   CHECK(rig.context(0u).invariants_hold()); }
+
+TEST(loopback_teardown, the_pages_of_a_context_destroyed_while_the_host_runs_its_batch_are_given_back_only_once_the_host_writes_them_no_more)
+{ constexpr std::uint32_t context_id = 1u;
+  constexpr std::uint32_t ring_resource = 10u;
+  constexpr std::uint32_t fence_resource = 11u;
+  constexpr std::uint32_t reply_resource = 12u;
+  constexpr std::size_t   page = 4096u;
+  LoopbackRig rig;
+  CHECK(rig.read_capset());
+  CHECK(rig.establish(0u));
+  GuestRing ring(rig.context(0u).ring(), LoopbackRig::ring_order);
+  rig.device().executor().hold();
+  ring.write_batch(1u, 64u);
+  CHECK_STATUS(rig.submit(0u, 1u, 0u, ring.tail()), Status::ok);
+  CHECK(rig.device().holding(1u));
+  std::uint8_t    bytes[4][AvRequestWriter::max_request_size] = {};
+  AvRequestWriter destroying(bytes[0], sizeof bytes[0]);
+  CHECK_STATUS(destroying.destroy_context(context_id), Status::ok);
+  av::MockRequest destroyed(bytes[0], destroying.length());
+  CHECK(rig.device().device().control(&destroyed, 0x0201u));
+  CHECK(destroyed.answered());
+  CHECK_EQ(destroyed.response_type(), GpuResponse::ok_nodata);
+  AvRequestWriter ring_back(bytes[1], sizeof bytes[1]);
+  CHECK_STATUS(ring_back.unref(ring_resource), Status::ok);
+  av::MockRequest ring_given(bytes[1], ring_back.length());
+  CHECK(rig.device().device().control(&ring_given, 0x0102u));
+  CHECK(!ring_given.answered());
+  CHECK_EQ(ring.head(), 0u);
+  rig.device().executor().release();
+  av::MockHost &host = rig.device().host();
+  for (int round = 0; round < 5000 && !ring_given.answered(); round++)
+      if (host.wait_for_main_loop_work(1u, 1u)) static_cast<void>(host.run_main_loop());
+  CHECK(ring_given.answered());
+  CHECK_EQ(ring_given.response_type(), GpuResponse::ok_nodata);
+  AvRequestWriter fence_back(bytes[2], sizeof bytes[2]);
+  CHECK_STATUS(fence_back.unref(fence_resource), Status::ok);
+  av::MockRequest fence_given(bytes[2], fence_back.length());
+  CHECK(rig.device().device().control(&fence_given, 0x0102u));
+  CHECK(fence_given.answered());
+  CHECK_EQ(fence_given.response_type(), GpuResponse::ok_nodata);
+  AvRequestWriter reply_back(bytes[3], sizeof bytes[3]);
+  CHECK_STATUS(reply_back.unref(reply_resource), Status::ok);
+  av::MockRequest reply_given(bytes[3], reply_back.length());
+  CHECK(rig.device().device().control(&reply_given, 0x0102u));
+  CHECK(reply_given.answered());
+  CHECK_EQ(reply_given.response_type(), GpuResponse::ok_nodata);
+  std::uint8_t ring_then[page];
+  std::uint8_t fence_then[page];
+  std::uint8_t reply_then[page];
+  std::memcpy(ring_then, ring.bytes(), page);
+  std::memcpy(fence_then, rig.context(0u).fence_page(), page);
+  std::memcpy(reply_then, rig.reply(0u), page);
+  rig.settle();
+  CHECK_EQ(rig.device().device().reaping(), 0u);
+  CHECK(std::memcmp(ring_then, ring.bytes(), page) == 0);
+  CHECK(std::memcmp(fence_then, rig.context(0u).fence_page(), page) == 0);
+  CHECK(std::memcmp(reply_then, rig.reply(0u), page) == 0);
+  CHECK(rig.device().device().invariants_hold()); }
 
 TEST(loopback_status, a_fence_raised_after_driver_ok_is_cleared_reaches_no_notifier)
 { LoopbackRig rig;

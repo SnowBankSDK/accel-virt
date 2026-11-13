@@ -46,7 +46,7 @@ Status WorkerReaper::take(Worker &worker, uint32_t token)
     for (uint32_t index = 0u; index < capacity && at == capacity; index++)
         if (entries_[index].state_ == State::free) at = index;
     if (at != capacity) {
-        entries_[at] = Entry{&worker, token, State::waiting, false};
+        entries_[at] = Entry{&worker, token, State::waiting, false, false, false};
         held_++;
     }
     host_.unlock_mutex(lock_);
@@ -54,6 +54,23 @@ Status WorkerReaper::take(Worker &worker, uint32_t token)
     worker.watch_exit(wake_);
     host_.signal_event(wake_);
     return Status::ok;
+}
+
+bool WorkerReaper::tell_when_parted(const Worker &worker)
+{
+    AV_SCOPE("WorkerReaper::tell_when_parted");
+    host_.require_main_loop("WorkerReaper::tell_when_parted");
+    if (thread_ == nullptr || worker.parted()) return false;
+    bool watched = false;
+    host_.lock_mutex(lock_);
+    for (Entry &entry : entries_) {
+        if (entry.state_ != State::waiting || entry.worker_ != &worker) continue;
+        entry.watched_ = true;
+        watched = true;
+    }
+    host_.unlock_mutex(lock_);
+    if (watched) host_.signal_event(wake_);
+    return watched;
 }
 
 uint32_t WorkerReaper::collect(uint32_t *tokens, uint32_t room)
@@ -185,6 +202,18 @@ Worker *WorkerReaper::exited_at(uint32_t index)
     return exited;
 }
 
+bool WorkerReaper::note_parted()
+{
+    AV_SCOPE("WorkerReaper::note_parted");
+    bool parted = false;
+    for (Entry &entry : entries_) {
+        if (entry.state_ != State::waiting || !entry.watched_ || entry.parted_ || !entry.worker_->parted()) continue;
+        entry.parted_ = true;
+        parted = true;
+    }
+    return parted;
+}
+
 void WorkerReaper::join_exited()
 {
     AV_SCOPE("WorkerReaper::join_exited");
@@ -213,7 +242,9 @@ void WorkerReaper::run()
         const bool settled = waiting() == 0u;
         const bool over = stopping_ && settled;
         bool       owed = false;
+        const bool parted = !quiet_ && !stopping_ && note_parted();
         if (!quiet_ && !stopping_ && !scheduled_) {
+            owed = parted;
             for (const Entry &entry : entries_) owed = owed || entry.state_ == State::joined;
             scheduled_ = owed;
         }

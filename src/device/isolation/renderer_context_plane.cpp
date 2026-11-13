@@ -287,6 +287,12 @@ bool RendererContextPlane::retiring_pins(uint32_t)
     return false;
 }
 
+bool RendererContextPlane::awaits_retiring_writer(uint32_t)
+{
+    AV_SCOPE("RendererContextPlane::awaits_retiring_writer");
+    return false;
+}
+
 bool RendererContextPlane::holds_doorbell(uint32_t index)
 {
     AV_SCOPE("RendererContextPlane::holds_doorbell");

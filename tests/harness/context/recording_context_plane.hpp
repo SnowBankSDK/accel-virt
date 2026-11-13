@@ -52,6 +52,7 @@ public:
     Status        bind(std::uint32_t, const ContextSetup &, const CapsetInfo &) override { return Status::not_supported; }
     bool          holds_doorbell(std::uint32_t) override { return false; }
     bool          retiring_pins(std::uint32_t) override { return false; }
+    bool          awaits_retiring_writer(std::uint32_t) override { return false; }
     bool          can_share(std::uint32_t, std::uint32_t) override { return false; }
     std::uint32_t live() const override { return 0u; }
     std::uint32_t reaping() const override { return 0u; }

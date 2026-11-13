@@ -44,6 +44,7 @@ public:
     DeviceContext       *find(uint32_t id);
     bool                 holds_doorbell(uint32_t index);
     bool                 retiring_pins(uint32_t resource);
+    bool                 awaits_retiring_writer(uint32_t resource);
     bool                 can_share(uint32_t asking, uint32_t share);
     uint32_t             live() const;
     void                 report(StateWriter &writer);
@@ -54,6 +55,7 @@ private:
     ObjectStorage<DeviceContext> *slot_of(uint32_t id);
     bool                          live_at(uint32_t index) const;
     void                          retire(uint32_t index);
+    void                          release_parted();
     uint32_t                      retire_all();
 
     Host                        &host_;

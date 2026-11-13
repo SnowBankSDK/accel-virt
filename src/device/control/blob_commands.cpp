@@ -59,15 +59,28 @@ bool BlobCommands::unref(ControlRequest &request, GpuResponse &response)
         return true;
     }
     Status released = blobs_.release(resource);
-    if (released == Status::invalid_state && contexts_.retiring_pins(resource)) released = blobs_.retire(resource);
+    const bool retiring = released == Status::invalid_state && contexts_.retiring_pins(resource);
+    if (retiring) released = blobs_.retire(resource);
     switch (released) {
     case Status::ok:
         recorder_.record_blob(0u, BlobAction::released, 0u, resource, 0u, 0u);
         contexts_.blob_released(resource);
+        if (retiring && contexts_.awaits_retiring_writer(resource)) answer_once_unwritten(request, resource, response);
         return true;
     case Status::invalid_state: response.set(GpuResponse::err_invalid_parameter); return true;
     default: return false;
     }
+}
+
+void BlobCommands::answer_once_unwritten(ControlRequest &request, uint32_t resource, GpuResponse &response)
+{
+    AV_SCOPE("BlobCommands::answer_once_unwritten");
+    uint32_t ticket = HeldRequests::no_ticket;
+    if (held_.hold(request, &BlobCommands::host_answer, ticket) != Status::ok) {
+        response.set(GpuResponse::err_out_of_memory);
+        return;
+    }
+    blobs_.answer_when_left(resource, held_, ticket);
 }
 
 uint32_t BlobCommands::named_resource(ControlRequest &request)

@@ -1,6 +1,7 @@
 #include "device/memory/blob_table.hpp"
 
 #include "core/trace/function_scope.hpp"
+#include "device/control/held_requests.hpp"
 #include "device/host/host.hpp"
 #include "core/support/scope_exit.hpp"
 #include "device/memory/blob_window.hpp"
@@ -48,7 +49,7 @@ Status BlobTable::create_guest(uint32_t id, uint64_t size, ControlRequest &reque
     if (blobs_.create(blob, host_, id) != Status::ok) return Status::no_memory;
     const Status backed = blob->back_with_guest(request, offset, entries, size);
     uint32_t     slot = 0u;
-    if (backed == Status::ok) return ids_.insert(id, Entry{blob, false}, slot);
+    if (backed == Status::ok) return ids_.insert(id, Entry{blob, false, nullptr, HeldRequests::no_ticket}, slot);
     static_cast<void>(blobs_.destroy(blob));
     return backed;
 }
@@ -137,11 +138,40 @@ Status BlobTable::retire(uint32_t id)
     return Status::ok;
 }
 
+void BlobTable::answer_when_left(uint32_t id, HeldRequests &held, uint32_t ticket)
+{
+    AV_SCOPE("BlobTable::answer_when_left");
+    host_.require_main_loop("BlobTable::answer_when_left");
+    Entry *const entry = entry_of(id);
+    if (entry == nullptr || !entry->retiring_) return held.conclude(ticket, Status::ok);
+    answer(*entry);
+    entry->held_ = &held;
+    entry->ticket_ = ticket;
+}
+
+void BlobTable::writer_left(uint32_t id)
+{
+    AV_SCOPE("BlobTable::writer_left");
+    host_.require_main_loop("BlobTable::writer_left");
+    Entry *const entry = entry_of(id);
+    if (entry != nullptr) answer(*entry);
+}
+
+void BlobTable::answer(Entry &entry)
+{
+    AV_SCOPE("BlobTable::answer");
+    HeldRequests *const held = entry.held_;
+    entry.held_ = nullptr;
+    if (held != nullptr) held->conclude(entry.ticket_, Status::ok);
+    entry.ticket_ = HeldRequests::no_ticket;
+}
+
 void BlobTable::sweep_retired()
 {
     AV_SCOPE("BlobTable::sweep_retired");
     ids_.erase_if([this](uint32_t, Entry &entry) {
         if (!entry.retiring_ || entry.blob_->pinned()) return false;
+        answer(entry);
         static_cast<void>(blobs_.destroy(entry.blob_));
         return true;
     });
