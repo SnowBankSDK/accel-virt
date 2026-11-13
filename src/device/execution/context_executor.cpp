@@ -151,7 +151,7 @@ void ContextExecutor::withdraw()
     AV_SCOPE("ContextExecutor::withdraw");
     const AvExecutor *const made = __atomic_load_n(&executor_, __ATOMIC_ACQUIRE);
     if (made == nullptr || lane()) return;
-    own_gate_.close();
+    own_gate_.withdraw();
     shares_.withdraw(id_, made);
 }
 

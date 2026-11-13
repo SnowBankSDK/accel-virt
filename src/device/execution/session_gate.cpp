@@ -13,7 +13,7 @@ extern "C" void av_session_gate_raised(void *gate)
 
 SessionGate::SessionGate(Host &host)
     : host_(host), run_(nullptr), listeners_lock_(nullptr), runner_(nullptr), consumed_(0u),
-      waiting_(0u), closed_(false), listeners_{}, listening_(0u), waiters_{}, attending_(0u)
+      waiting_(0u), closed_(false), listeners_{}, listening_(0u), waiters_{}
 {
     AV_SCOPE("SessionGate::SessionGate");
 }
@@ -47,6 +47,15 @@ void SessionGate::close()
     if (!ready()) return;
     __atomic_store_n(&closed_, true, __ATOMIC_SEQ_CST);
     wake_waiters();
+}
+
+void SessionGate::withdraw()
+{
+    AV_SCOPE("SessionGate::withdraw");
+    host_.require_main_loop("SessionGate::withdraw");
+    if (!ready()) return;
+    __atomic_store_n(&closed_, true, __ATOMIC_SEQ_CST);
+    signal_waiters();
 }
 
 bool SessionGate::closed() const
@@ -100,10 +109,11 @@ Status SessionGate::attend(void *wake)
     AV_SCOPE("SessionGate::attend");
     if (!ready() || wake == nullptr) return Status::invalid_state;
     host_.lock_mutex(listeners_lock_);
-    const bool room = attending_ < ContextCapacity::lanes;
-    if (room) waiters_[attending_++] = wake;
+    uint32_t slot = 0u;
+    while (slot < ContextCapacity::lanes && waiters_[slot] != nullptr) slot++;
+    if (slot < ContextCapacity::lanes) __atomic_store_n(&waiters_[slot], wake, __ATOMIC_SEQ_CST);
     host_.unlock_mutex(listeners_lock_);
-    return room ? Status::ok : Status::no_space;
+    return slot < ContextCapacity::lanes ? Status::ok : Status::no_space;
 }
 
 void SessionGate::depart(const void *wake)
@@ -111,10 +121,9 @@ void SessionGate::depart(const void *wake)
     AV_SCOPE("SessionGate::depart");
     if (!ready()) return;
     host_.lock_mutex(listeners_lock_);
-    for (uint32_t index = 0u; index < attending_; index++) {
-        if (waiters_[index] != wake) continue;
-        waiters_[index] = waiters_[--attending_];
-        waiters_[attending_] = nullptr;
+    for (void *&waiter : waiters_) {
+        if (waiter != wake) continue;
+        __atomic_store_n(&waiter, static_cast<void *>(nullptr), __ATOMIC_SEQ_CST);
         break;
     }
     host_.unlock_mutex(listeners_lock_);
@@ -124,8 +133,17 @@ void SessionGate::wake_waiters()
 {
     AV_SCOPE("SessionGate::wake_waiters");
     host_.lock_mutex(listeners_lock_);
-    for (uint32_t index = 0u; index < attending_; index++) host_.signal_event(waiters_[index]);
+    signal_waiters();
     host_.unlock_mutex(listeners_lock_);
+}
+
+void SessionGate::signal_waiters()
+{
+    AV_SCOPE("SessionGate::signal_waiters");
+    for (void *&waiter : waiters_) {
+        void *const wake = __atomic_load_n(&waiter, __ATOMIC_SEQ_CST);
+        if (wake != nullptr) host_.signal_event(wake);
+    }
 }
 
 Status SessionGate::listen(ContextSignal &signal)
@@ -166,9 +184,7 @@ bool SessionGate::invariants_hold() const
     AV_SCOPE("SessionGate::invariants_hold");
     for (uint32_t index = 0u; index < most_listeners; index++)
         if ((index < listening_) != (listeners_[index] != nullptr)) return false;
-    for (uint32_t index = 0u; index < ContextCapacity::lanes; index++)
-        if ((index < attending_) != (waiters_[index] != nullptr)) return false;
-    return listening_ <= most_listeners && attending_ <= ContextCapacity::lanes;
+    return listening_ <= most_listeners;
 }
 
 }

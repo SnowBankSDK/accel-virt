@@ -24,6 +24,7 @@ public:
     [[nodiscard]] Status initialize();
     bool                 ready() const;
     void                 close();
+    void                 withdraw();
     bool                 closed() const;
     [[nodiscard]] bool   enter(const void *runner);
     void                 leave();
@@ -40,6 +41,7 @@ public:
 
 private:
     void wake_waiters();
+    void signal_waiters();
 
     Host          &host_;
     void          *run_;
@@ -51,7 +53,6 @@ private:
     ContextSignal *listeners_[most_listeners];
     uint32_t       listening_;
     void          *waiters_[ContextCapacity::lanes];
-    uint32_t       attending_;
 
     friend struct SessionGateProbe;
 };
