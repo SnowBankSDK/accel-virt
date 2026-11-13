@@ -99,9 +99,9 @@ TEST(blob_import_command_run, an_import_of_a_host_blob_answers_status_0_and_the_
   CHECK_STATUS(run.status(), Status::ok);
   CHECK_EQ(run.produced(), BlobImportAnswer::encoded_size);
   CHECK_EQ(run.answer().status(), BlobImportAnswer::imported);
-  CHECK_EQ(run.answer().device_memory(), 1u | MockExecutorOps::handle_bit);
+  CHECK_EQ(run.answer().device_memory(), ((std::uint64_t{ImportRig::context} << 32u) | 1u) | MockExecutorOps::handle_bit);
   std::uint64_t key = 0u;
-  CHECK(rig.ops().import_of(1u, key));
+  CHECK(rig.ops().import_of((std::uint64_t{ImportRig::context} << 32u) | 1u, key));
   CHECK_EQ(key, rig.blob(0u));
   CHECK_EQ(rig.imports().imports(), 1u);
   CHECK_STATUS(release(rig, run.answer().device_memory()).status(), Status::ok);

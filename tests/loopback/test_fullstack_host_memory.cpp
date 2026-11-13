@@ -153,7 +153,10 @@ TEST(fullstack_host_memory, a_closed_allocation_leaves_nothing_behind)
     CHECK_EQ(executor.live_imports(), 1u);
     resource = HostBlobId::first;
     std::uint64_t key = 0u;
-    CHECK(executor.import_of(1u, key));
+    bool imported = false;
+    for (std::uint64_t context = 1u; context <= 256u && !imported; context++)
+        imported = executor.import_of((context << 32u) | 1u, key);
+    CHECK(imported);
     CHECK_EQ(key, std::uint64_t{resource});
     const int device_fd = executor.answered_descriptor(executor.last_opened_domain(), resource);
     CHECK(descriptor_open(device_fd));
