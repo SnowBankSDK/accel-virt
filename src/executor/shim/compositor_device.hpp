@@ -8,7 +8,7 @@
 
 namespace av {
 
-class PipelineTeardownOrder;
+class HostLifecycleGate;
 
 class CompositorDevice {
 public:
@@ -17,15 +17,18 @@ public:
     CompositorDevice(const CompositorDevice &) = delete;
     CompositorDevice &operator=(const CompositorDevice &) = delete;
 
-    [[nodiscard]] bool       open(const uint8_t *uuid, PipelineTeardownOrder &order);
+    [[nodiscard]] bool       open(const uint8_t *uuid, HostLifecycleGate *gate);
     bool                     opened() const;
     void                     close();
     const VulkanDeviceTable &table() const;
 
 private:
+    [[nodiscard]] bool create(VkPhysicalDevice physical, const VkDeviceCreateInfo &created);
+    [[nodiscard]] bool destroy();
+
     VkInstance        instance_;
     VkDevice          device_;
-    PipelineTeardownOrder *order_;
+    HostLifecycleGate *gate_;
     VulkanDeviceTable table_;
 };
 

@@ -16,13 +16,12 @@
 #include "executor/d3d/shared_surfaces.hpp"
 #include "executor/sharing/host_shares.hpp"
 #include "executor/shim/host_heap.hpp"
-#include "executor/host_lifecycle_gate.hpp"
+#include "executor/host_lifecycle_gates.hpp"
 #include "executor/shim/gl_display.hpp"
 #include "executor/opencl/cl_freed_memory.hpp"
 #include "executor/shim/opencl_device.hpp"
 #include "executor/host_ram_ledger.hpp"
 #include "executor/proc_memory_gauge.hpp"
-#include "executor/pipeline_teardown_order.hpp"
 #include "executor/vram_gate.hpp"
 #include "executor/vram_ledger.hpp"
 #include "proto/context/device_uuid.hpp"
@@ -57,7 +56,7 @@ public:
     VramLedger         *vram_ledger(uint32_t index) override;
     ClFreedMemory      *cl_freed(uint32_t index) override;
     HostRamLedger      *host_ram_ledger() override;
-    PipelineTeardownOrder &teardown_order() override;
+    HostLifecycleGate  *lifecycle_gate(uint32_t index) override;
 
 private:
     void enumerate();
@@ -67,7 +66,7 @@ private:
     uint32_t sub_apis_[HostGpuSet::max_gpus];
     int32_t  render_minors_[HostGpuSet::max_gpus];
     OpenClDevice opencl_devices_[HostGpuSet::max_gpus];
-    HostLifecycleGate lifecycles_[HostGpuSet::max_gpus];
+    HostLifecycleGates lifecycles_;
     GlDisplay    gl_displays_[HostGpuSet::max_gpus];
     D3dRuntime      d3d_runtime_;
     ObjectStorage<D3d11HostDevice> d3d11_devices_[HostGpuSet::max_gpus];
@@ -85,7 +84,6 @@ private:
     ProcMemoryGauge gauge_;
     HostRamLedger host_ram_;
     VramGate    vram_gate_;
-    PipelineTeardownOrder teardown_order_;
     PosixLock   reopen_lock_;
     uint32_t    reopened_[HostGpuSet::max_gpus];
     uint32_t count_;

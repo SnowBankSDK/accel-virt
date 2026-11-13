@@ -22,15 +22,12 @@ public:
     VkResult            shader_refusal() const;
     void                enable_placement(bool enabled);
     bool                placement() const;
-    void                order_teardown(bool ordered);
-    bool                orders_teardown() const;
 
 private:
     VulkanDeviceTable  table_;
     VulkanMemoryImport memory_;
     bool               invalid_shader_extension_;
     bool               placement_;
-    bool               ordered_teardown_;
 };
 
 }

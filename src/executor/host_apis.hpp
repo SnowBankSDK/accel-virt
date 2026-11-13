@@ -11,7 +11,7 @@ class D3d9HostDevice;
 class ClFreedMemory;
 class GlDisplay;
 class OpenClDevice;
-class PipelineTeardownOrder;
+class HostLifecycleGate;
 class HostMemorySource;
 class HostRamLedger;
 class HostShares;
@@ -39,7 +39,7 @@ public:
     virtual VramLedger         *vram_ledger(uint32_t index) = 0;
     virtual ClFreedMemory      *cl_freed(uint32_t index) = 0;
     virtual HostRamLedger      *host_ram_ledger() = 0;
-    virtual PipelineTeardownOrder &teardown_order() = 0;
+    virtual HostLifecycleGate  *lifecycle_gate(uint32_t index) = 0;
 
 protected:
     HostApis() = default;

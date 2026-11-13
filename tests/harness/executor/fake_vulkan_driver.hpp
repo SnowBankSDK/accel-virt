@@ -45,6 +45,7 @@ struct FakeVulkanDriver {
     std::uint32_t fences_destroyed = 0u;
     std::uint32_t idles = 0u;
     std::uint32_t device_destroys = 0u;
+    void        (*destroying_device)() = nullptr;
     VkResult      idle_result = VK_SUCCESS;
     VkResult      fence_status = VK_SUCCESS;
     VkResult      wait_result = VK_SUCCESS;
@@ -191,6 +192,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkWaitForFences(VkDevice, uint32_t, const VkFence
 VKAPI_ATTR void VKAPI_CALL vkDestroyDevice(VkDevice, const VkAllocationCallbacks *)
 {
     av::fake_vulkan.device_destroys++;
+    if (av::fake_vulkan.destroying_device != nullptr) av::fake_vulkan.destroying_device();
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL vkBeginCommandBuffer(VkCommandBuffer, const VkCommandBufferBeginInfo *)

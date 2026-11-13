@@ -123,24 +123,24 @@ void D3dRuntime::give_vram_gate(const AvVramGate &gate) const
     if (set12 != nullptr) set12(&gate);
 }
 
-uint32_t D3dRuntime::give_teardown_order(const AvTeardownOrder &order) const
+uint32_t D3dRuntime::give_lifecycle_gates(const AvLifecycleGates &gates) const
 {
-    AV_SCOPE("D3dRuntime::give_teardown_order");
+    AV_SCOPE("D3dRuntime::give_lifecycle_gates");
     uint32_t taken = 0u;
     void *const libraries[] = {d3d11_, d3d9_};
     for (void *library : libraries) {
         if (library == nullptr) continue;
-        const SetTeardownOrder set =
-            reinterpret_cast<SetTeardownOrder>(dlsym(library, "dxvk_proton_set_teardown_order"));
+        const SetLifecycleGates set =
+            reinterpret_cast<SetLifecycleGates>(dlsym(library, "dxvk_proton_set_lifecycle_gates"));
         if (set == nullptr) continue;
-        set(&order);
+        set(&gates);
         taken++;
     }
     if (d3d12core_ == nullptr) return taken;
-    const SetTeardownOrder set12 =
-        reinterpret_cast<SetTeardownOrder>(dlsym(d3d12core_, "vkd3d_proton_set_teardown_order"));
+    const SetLifecycleGates set12 =
+        reinterpret_cast<SetLifecycleGates>(dlsym(d3d12core_, "vkd3d_proton_set_lifecycle_gates"));
     if (set12 == nullptr) return taken;
-    set12(&order);
+    set12(&gates);
     return taken + 1u;
 }
 

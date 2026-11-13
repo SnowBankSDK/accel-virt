@@ -469,7 +469,7 @@ bool ExecutorRoot::bind(uint32_t slot, uint32_t sub_api, const HostGpu &gpu, con
     }
     default:
         vulkan_[slot].object().use_vram(apis_->vram_ledger(gpu.index()), apis_->host_ram_ledger());
-        vulkan_[slot].object().order_teardown(&apis_->teardown_order());
+        vulkan_[slot].object().gate_lifecycle(apis_->lifecycle_gate(gpu.index()));
         vulkan_[slot].object().initialize(gpu, apis_->memory_source(gpu.index()), sessions_[slot].object().imports());
         started = true;
         break;

@@ -1,0 +1,179 @@
+From: accel-virt
+Subject: [PATCH] vulkan: a device is created and destroyed inside the embedder's lifecycle gate of its GPU
+
+The embedder registers one table (dxvk_proton_set_lifecycle_gates) in place of
+the teardown order. A device asks it for the gate of its physical device by
+UUID; vkCreateDevice and vkDestroyDevice run between enter and leave of that
+gate, so they never overlap another device or context lifecycle call the
+embedder makes on the same GPU. A create the gate refuses fails, a destroy it
+refuses leaks the device and logs it: the driver is never entered ungated.
+---
+diff --git a/src/d3d11/d3d11.sym b/src/d3d11/d3d11.sym
+index ea52189..a08d652 100644
+--- a/src/d3d11/d3d11.sym
++++ b/src/d3d11/d3d11.sym
+@@ -5,7 +5,7 @@
+     D3D11CreateDeviceAndSwapChain;
+     D3D11On12CreateDevice;
+     dxvk_proton_set_vram_gate;
+-    dxvk_proton_set_teardown_order;
++    dxvk_proton_set_lifecycle_gates;
+     dxvk_take_out_of_memory;
+ 
+   local:
+diff --git a/src/d3d11/d3d11_main.cpp b/src/d3d11/d3d11_main.cpp
+index 118e3b4..54693f2 100644
+--- a/src/d3d11/d3d11_main.cpp
++++ b/src/d3d11/d3d11_main.cpp
+@@ -224,8 +224,8 @@ extern "C" {
+     }
+ 
+ 
+-    DLLEXPORT void dxvk_proton_set_teardown_order(const dxvk::vk::TeardownOrder* order) {
+-      dxvk::vk::g_teardownOrder = order && order->size >= sizeof(dxvk::vk::TeardownOrder) ? order : nullptr;
++    DLLEXPORT void dxvk_proton_set_lifecycle_gates(const dxvk::vk::LifecycleGates* gates) {
++      dxvk::vk::g_lifecycleGates = gates && gates->size >= sizeof(dxvk::vk::LifecycleGates) ? gates : nullptr;
+     }
+ 
+ 
+diff --git a/src/d3d9/d3d9.sym b/src/d3d9/d3d9.sym
+index 3310e89..4d679cc 100644
+--- a/src/d3d9/d3d9.sym
++++ b/src/d3d9/d3d9.sym
+@@ -21,7 +21,7 @@
+     Direct3DCreate9On12;
+     Direct3DCreate9On12Ex;
+     dxvk_proton_set_vram_gate;
+-    dxvk_proton_set_teardown_order;
++    dxvk_proton_set_lifecycle_gates;
+     dxvk_take_out_of_memory;
+ 
+   local:
+diff --git a/src/d3d9/d3d9_main.cpp b/src/d3d9/d3d9_main.cpp
+index 1502bbf..08d72a4 100644
+--- a/src/d3d9/d3d9_main.cpp
++++ b/src/d3d9/d3d9_main.cpp
+@@ -33,8 +33,8 @@ extern "C" {
+     dxvk::g_vramGate = gate;
+   }
+ 
+-  DLLEXPORT void dxvk_proton_set_teardown_order(const dxvk::vk::TeardownOrder* order) {
+-    dxvk::vk::g_teardownOrder = order && order->size >= sizeof(dxvk::vk::TeardownOrder) ? order : nullptr;
++  DLLEXPORT void dxvk_proton_set_lifecycle_gates(const dxvk::vk::LifecycleGates* gates) {
++    dxvk::vk::g_lifecycleGates = gates && gates->size >= sizeof(dxvk::vk::LifecycleGates) ? gates : nullptr;
+   }
+ 
+   DLLEXPORT IDirect3D9* __stdcall Direct3DCreate9(UINT nSDKVersion) {
+diff --git a/src/dxvk/dxvk_adapter.cpp b/src/dxvk/dxvk_adapter.cpp
+index ce45ebf..a9410a7 100644
+--- a/src/dxvk/dxvk_adapter.cpp
++++ b/src/dxvk/dxvk_adapter.cpp
+@@ -328,6 +328,16 @@ namespace dxvk {
+       deviceInfo.ppEnabledExtensionNames = extensionNames.data();
+     }
+ 
++    const vk::LifecycleGates* lifecycleGates = vk::g_lifecycleGates;
++    void* lifecycleGate = lifecycleGates
++      ? lifecycleGates->gateOf(lifecycleGates->self, m_capabilities.getProperties().vk11.deviceUUID)
++      : nullptr;
++
++    if (lifecycleGate && !lifecycleGates->enter(lifecycleGate)) {
++      Logger::err("Failed to create Vulkan device: the embedder's lifecycle gate stayed held");
++      return nullptr;
++    }
++
+     VkDevice device = VK_NULL_HANDLE;
+     VkResult vr = vk->vkCreateDevice(m_handle, &deviceInfo, nullptr, &device);
+ 
+@@ -338,6 +348,9 @@ namespace dxvk {
+       vr = vk->vkCreateDevice(m_handle, &deviceInfo, nullptr, &device);
+     }
+ 
++    if (lifecycleGate)
++      lifecycleGates->leave(lifecycleGate);
++
+     if (vr) {
+       Logger::err(str::format("Failed to create Vulkan device: ", vr,
+         safeMode ? "" : ", retrying 'safe mode'."));
+@@ -345,7 +358,7 @@ namespace dxvk {
+     }
+ 
+     Rc<vk::DeviceFn> vkd = new vk::DeviceFn(vk, true, device);
+-    vkd->orderTeardown(m_capabilities.getProperties().vk12.driverID);
++    vkd->gateLifecycle(lifecycleGates, lifecycleGate);
+ 
+     DxvkDeviceQueueSet deviceQueues = { };
+     deviceQueues.graphics = getDeviceQueue(vkd, caps, queueMapping.graphics);
+diff --git a/src/vulkan/vulkan_loader.cpp b/src/vulkan/vulkan_loader.cpp
+index a3f4437..90812eb 100644
+--- a/src/vulkan/vulkan_loader.cpp
++++ b/src/vulkan/vulkan_loader.cpp
+@@ -104,19 +104,21 @@ namespace dxvk::vk {
+     if (!m_owned)
+       return;
+ 
+-    if (m_teardownOrder)
+-      m_teardownOrder->destroying(m_teardownOrder->self);
++    if (m_lifecycleGate && !m_lifecycleGates->enter(m_lifecycleGate)) {
++      Logger::err("Vulkan: device leaked instead of destroyed, the embedder's lifecycle gate stayed held");
++      return;
++    }
+ 
+     this->vkDestroyDevice(m_device, nullptr);
+ 
+-    if (m_teardownOrder)
+-      m_teardownOrder->destroyed(m_teardownOrder->self);
++    if (m_lifecycleGate)
++      m_lifecycleGates->leave(m_lifecycleGate);
+   }
+ 
+ 
+-  void DeviceFn::orderTeardown(VkDriverId driver) {
+-    const TeardownOrder* order = g_teardownOrder;
+-    m_teardownOrder = order && order->neededBy(order->self, uint32_t(driver)) ? order : nullptr;
++  void DeviceFn::gateLifecycle(const LifecycleGates* gates, void* gate) {
++    m_lifecycleGates = gates;
++    m_lifecycleGate = gate;
+   }
+   
+ }
+diff --git a/src/vulkan/vulkan_loader.h b/src/vulkan/vulkan_loader.h
+index 40a31b2..411da39 100644
+--- a/src/vulkan/vulkan_loader.h
++++ b/src/vulkan/vulkan_loader.h
+@@ -184,25 +184,26 @@ namespace dxvk::vk {
+    * Vulkan functions for a specific Vulkan device.
+    * This ensures that no slow dispatch code is executed.
+    */
+-  struct TeardownOrder {
++  struct LifecycleGates {
+     uint32_t size;
+     void*    self;
+-    int      (*neededBy)(void* self, uint32_t driverId);
+-    void     (*compiling)(void* self);
+-    void     (*compiled)(void* self);
+-    void     (*destroying)(void* self);
+-    void     (*destroyed)(void* self);
++    void*    (*gateOf)(void* self, const uint8_t* deviceUuid);
++    int      (*enter)(void* gate);
++    void     (*leave)(void* gate);
++    int      (*share)(void* gate);
++    void     (*unshare)(void* gate);
+   };
+ 
+-  inline const TeardownOrder* g_teardownOrder = nullptr;
++  inline const LifecycleGates* g_lifecycleGates = nullptr;
+ 
+   struct DeviceFn : DeviceLoader {
+     DeviceFn(const Rc<InstanceLoader>& library, bool owned, VkDevice device);
+     ~DeviceFn();
+ 
+-    void orderTeardown(VkDriverId driver);
++    void gateLifecycle(const LifecycleGates* gates, void* gate);
+ 
+-    const TeardownOrder* m_teardownOrder = nullptr;
++    const LifecycleGates* m_lifecycleGates = nullptr;
++    void*                 m_lifecycleGate  = nullptr;
+     
+     VULKAN_FN(vkDestroyDevice);
+     VULKAN_FN(vkGetDeviceQueue);

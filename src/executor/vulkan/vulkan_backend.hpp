@@ -52,7 +52,7 @@ class HostMemorySource;
 class ImportTable;
 class SourceMemory;
 class VramLedger;
-class PipelineTeardownOrder;
+class HostLifecycleGate;
 class VulkanSubmitSet;
 
 class VulkanBackend final : public vkproto::RealVulkanDispatch, public SessionBackend, private VulkanDestroyer, private VulkanParkHost {
@@ -61,7 +61,7 @@ public:
     VulkanBackend(BlockSource &blocks, DriverLog &lines);
 
     void use_vram(ByteLedger *vram, ByteLedger *host);
-    void order_teardown(PipelineTeardownOrder *order);
+    void gate_lifecycle(HostLifecycleGate *gate);
     void initialize(const HostGpu &gpu, HostMemorySource *source, ImportTable &imports);
 
     bool knows(uint32_t command_id) const override;
@@ -432,8 +432,6 @@ private:
     [[nodiscard]] bool kept_on(const GuestDevice &device, uint64_t made);
     GuestDevice       *forgot(uint64_t made);
     GuestDevice       *device_of(uint64_t device);
-    bool               orders_teardown(VkPhysicalDevice physical);
-    PipelineTeardownOrder *ordered_compile(VkDevice device);
     GuestDevice       *owner_of(uint64_t made);
     [[nodiscard]] bool import_memory(GuestDevice &device, int fd, uint64_t size, uint64_t &wire_handle);
     [[nodiscard]] bool import_payload(int fd, uint64_t into, uint64_t &wire_handle, uint64_t &detail);
@@ -479,7 +477,7 @@ private:
     VkApplicationInfo  application_;
     ObjectPool<GuestDevice> devices_;
     GuestDevice     *adopting_;
-    PipelineTeardownOrder *teardown_order_;
+    HostLifecycleGate *lifecycle_;
     VkPhysicalDevice physical_;
     bool             memory_import_;
     HostObjectRegistry<uint64_t, VulkanObjectKind, uint64_t> handles_;

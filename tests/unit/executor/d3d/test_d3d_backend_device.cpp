@@ -7,8 +7,8 @@
 #include "executor/host_memory_source.hpp"
 #include "executor/shim/d3d11_host_device.hpp"
 #include "executor/shim/d3d_runtime.hpp"
-#include "executor/av_teardown_order.h"
-#include "executor/pipeline_teardown_order.hpp"
+#include "executor/av_lifecycle_gates.h"
+#include "executor/host_lifecycle_gates.hpp"
 #include "executor/shim/d3d_headers.hpp"
 #include "executor/sharing/d3d_shares.hpp"
 #include "executor/sharing/host_shares.hpp"
@@ -1429,65 +1429,84 @@ TEST(d3d_backend_device, predicated_clears_copies_and_resolves_run_when_the_pred
 
 namespace {
 
-struct CountedOrder {
+struct CountedGate {
+    std::uint8_t               uuid[16] = {};
     std::atomic<std::uint32_t> held{0u};
-    std::atomic<std::uint32_t> destroys{0u};
+    std::atomic<std::uint32_t> entries{0u};
     std::atomic<std::uint32_t> unbalanced{0u};
+    std::atomic<bool>          refuses{false};
 };
 
-int counted_needed_by(void *, std::uint32_t) { return 1; }
-void counted_compiling(void *) {}
-void counted_compiled(void *) {}
-
-void counted_destroying(void *self)
+void *counted_gate_of(void *self, const std::uint8_t *uuid)
 {
-    CountedOrder &order = *static_cast<CountedOrder *>(self);
-    if (order.held.fetch_add(1u) != 0u) order.unbalanced++;
+    CountedGate &gate = *static_cast<CountedGate *>(self);
+    return std::memcmp(uuid, gate.uuid, sizeof gate.uuid) == 0 ? &gate : nullptr;
 }
 
-void counted_destroyed(void *self)
+int counted_enter(void *self)
 {
-    CountedOrder &order = *static_cast<CountedOrder *>(self);
-    if (order.held.fetch_sub(1u) != 1u) order.unbalanced++;
-    order.destroys++;
+    CountedGate &gate = *static_cast<CountedGate *>(self);
+    if (gate.refuses.load()) return 0;
+    if (gate.held.fetch_add(1u) != 0u) gate.unbalanced++;
+    return 1;
 }
+
+void counted_leave(void *self)
+{
+    CountedGate &gate = *static_cast<CountedGate *>(self);
+    if (gate.held.fetch_sub(1u) != 1u) gate.unbalanced++;
+    gate.entries++;
+}
+
+int  counted_share(void *) { return 1; }
+void counted_unshare(void *) {}
 
 }
 
-TEST(d3d_backend_device, every_host_d3d_runtime_destroys_its_vulkan_devices_inside_the_embedder_teardown_order)
+TEST(d3d_backend_device, every_host_d3d_runtime_creates_and_destroys_its_vulkan_devices_inside_the_lifecycle_gate_of_their_gpu)
 {
     av::ExecutorLogRig rig;
     av::LoaderHostApis apis(rig.log);
     if (host_device(apis) == nullptr) return;
     std::uint32_t index = 0u;
     while (apis.d3d11_device(index) == nullptr) index++;
-    std::uint8_t uuid[16] = {};
-    apis.gpu_uuid(index, uuid);
     av::D3dRuntime runtime;
     CHECK(runtime.open());
-    CountedOrder         counted;
-    const AvTeardownOrder table = {sizeof(AvTeardownOrder), &counted, counted_needed_by, counted_compiling,
-                                   counted_compiled, counted_destroying, counted_destroyed};
-    CHECK_EQ(runtime.give_teardown_order(table), 3u);
-    IDXGIAdapter1 *const adapter = runtime.adapter_for(uuid);
+    CountedGate counted;
+    apis.gpu_uuid(index, counted.uuid);
+    const AvLifecycleGates table = {sizeof(AvLifecycleGates), &counted, counted_gate_of, counted_enter,
+                                    counted_leave, counted_share, counted_unshare};
+    CHECK_EQ(runtime.give_lifecycle_gates(table), 3u);
+    IDXGIAdapter1 *const adapter = runtime.adapter_for(counted.uuid);
     CHECK(adapter != nullptr);
     ID3D11Device        *device = nullptr;
     ID3D11DeviceContext *context = nullptr;
     std::uint32_t        level = 0u;
     CHECK(adapter != nullptr && SUCCEEDED(runtime.create_device11(adapter, device, context, level)));
+    CHECK_EQ(counted.entries.load(), 1u);
     if (context != nullptr) context->Release();
     if (device != nullptr) device->Release();
-    if (adapter != nullptr) adapter->Release();
-    const std::uint32_t after11 = counted.destroys.load();
-    CHECK(after11 >= 1u);
+    const std::uint32_t after11 = counted.entries.load();
+    CHECK_EQ(after11, 2u);
     void *device12 = nullptr;
-    if (SUCCEEDED(runtime.create_device12(uuid, device12)) && device12 != nullptr) {
+    if (SUCCEEDED(runtime.create_device12(counted.uuid, device12)) && device12 != nullptr) {
+        CHECK_EQ(counted.entries.load(), after11 + 1u);
         static_cast<IUnknown *>(device12)->Release();
-        CHECK(counted.destroys.load() > after11);
+        CHECK_EQ(counted.entries.load(), after11 + 2u);
     }
+    const std::uint32_t before_refusal = counted.entries.load();
+    counted.refuses = true;
+    ID3D11Device        *refused = nullptr;
+    ID3D11DeviceContext *refused_context = nullptr;
+    CHECK(adapter != nullptr && FAILED(runtime.create_device11(adapter, refused, refused_context, level)));
+    CHECK(refused == nullptr);
+    counted.refuses = false;
+    CHECK_EQ(counted.entries.load(), before_refusal);
+    if (adapter != nullptr) adapter->Release();
     CHECK_EQ(counted.held.load(), 0u);
     CHECK_EQ(counted.unbalanced.load(), 0u);
-    CHECK_EQ(runtime.give_teardown_order(apis.teardown_order().abi()), 3u);
+    static av::HostLifecycleGates none;
+    CHECK_EQ(runtime.give_lifecycle_gates(none.abi()), 3u);
 }
 
 TEST(d3d_backend_device, creates_past_the_leased_room_are_refused_up_front_and_the_device_keeps_drawing_its_earlier_objects)

@@ -11,7 +11,7 @@
 #include "core/log/driver_log.hpp"
 #include "core/support/untestable.hpp"
 #include "core/trace/function_scope.hpp"
-#include "executor/pipeline_teardown_order.hpp"
+#include "executor/host_lifecycle_gate.hpp"
 #include "proto/submission/blob_role.hpp"
 #include "device/abi/av_executor.h"
 #include "executor/host_gpu.hpp"
@@ -88,7 +88,7 @@ VulkanBackend::VulkanBackend(DriverLog &lines) : VulkanBackend(heap_, lines)
 
 VulkanBackend::VulkanBackend(BlockSource &blocks, DriverLog &lines)
     : heap_(), blocks_(blocks), gpu_(nullptr), source_(nullptr), listed_(), extensions_(blocks, Pool::paged),
-      application_(), devices_(blocks), adopting_(nullptr), teardown_order_(nullptr), physical_(VK_NULL_HANDLE),
+      application_(), devices_(blocks), adopting_(nullptr), lifecycle_(nullptr), physical_(VK_NULL_HANDLE),
       memory_import_(false), handles_(blocks), buffer_device_(), imports_(nullptr), types_(), types_learnt_(false), timing_(lines),
       templates_(blocks), layouts_(blocks), families_(blocks), host_waits_(blocks), park_clock_(), parked_(blocks, *this, park_clock_), frame_(nullptr, 0u),
       frame_command_(0u), framed_(false), replaying_(false), last_submit_(VK_SUCCESS), lines_(lines), fence_watch_(), spirv_(), issued_(), addresses_(blocks), copies_(blocks), vram_(blocks), progress_(blocks),
@@ -111,26 +111,10 @@ void VulkanBackend::use_vram(ByteLedger *vram, ByteLedger *host)
     vram_.bind(vram, host);
 }
 
-void VulkanBackend::order_teardown(PipelineTeardownOrder *order)
+void VulkanBackend::gate_lifecycle(HostLifecycleGate *gate)
 {
-    AV_SCOPE("VulkanBackend::order_teardown");
-    teardown_order_ = order;
-}
-
-bool VulkanBackend::orders_teardown(VkPhysicalDevice physical)
-{
-    AV_SCOPE("VulkanBackend::orders_teardown");
-    if (teardown_order_ == nullptr) return false;
-    VkPhysicalDeviceProperties properties = {};
-    RealVulkanDispatch::on_vkGetPhysicalDeviceProperties(physical, &properties);
-    if (properties.apiVersion < ((1u << 22) | (2u << 12))) return false;
-    VkPhysicalDeviceDriverProperties driver = {};
-    driver.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES;
-    VkPhysicalDeviceProperties2 asked = {};
-    asked.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
-    asked.pNext = &driver;
-    RealVulkanDispatch::on_vkGetPhysicalDeviceProperties2(physical, &asked);
-    return teardown_order_->needed_by(driver.driverID);
+    AV_SCOPE("VulkanBackend::gate_lifecycle");
+    lifecycle_ = gate;
 }
 
 VkPhysicalDevice VulkanBackend::bound_device(VkInstance instance)
@@ -575,6 +559,11 @@ VkResult VulkanBackend::on_vkCreateDevice(VkPhysicalDevice physicalDevice,
     VkDeviceCreateInfo    guarded = *pCreateInfo;
     static_cast<void>(robust_.apply(physicalDevice, guarded));
     pCreateInfo = &guarded;
+    const HostLifecycleHold hold(lifecycle_);
+    if (!hold.held()) {
+        lines_.write("a device was not created: the GPU's lifecycle gate stayed held");
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
     VulkanTimelineFeature timeline;
     VkDeviceCreateInfo    timed = *pCreateInfo;
     bool                  timelines = timeline.offered_by(physicalDevice) && timeline.apply(timed);
@@ -598,7 +587,6 @@ VkResult VulkanBackend::on_vkCreateDevice(VkPhysicalDevice physicalDevice,
         adopting_ = made;
         made->note_invalid_shader_extension(enables(pCreateInfo, VK_NV_GLSL_SHADER_EXTENSION_NAME));
         made->enable_placement(enables(pCreateInfo, VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME));
-        made->order_teardown(orders_teardown(physicalDevice));
         memory_import_ = made->memory().imports();
     } else {
         static_cast<void>(devices_.destroy(made));
@@ -973,15 +961,18 @@ void VulkanBackend::on_vkDestroyDevice(VkDevice device, const VkAllocationCallba
         adopting_ = nullptr;
         memory_import_ = false;
     }
-    const bool ordered = ending != nullptr && ending->orders_teardown() && teardown_order_ != nullptr;
     if (ending != nullptr) static_cast<void>(devices_.destroy(ending));
     if (!idle) {
         devices_leaked_ = true;
         return;
     }
-    if (ordered) teardown_order_->destroying();
+    const HostLifecycleHold hold(lifecycle_);
+    if (!hold.held()) {
+        devices_leaked_ = true;
+        lines_.write("a device was leaked instead of destroyed: the GPU's lifecycle gate stayed held");
+        return;
+    }
     RealVulkanDispatch::on_vkDestroyDevice(device, nullptr);
-    if (ordered) teardown_order_->destroyed();
 }
 
 void VulkanBackend::on_vkFreeMemory(VkDevice device, VkDeviceMemory memory, const VkAllocationCallbacks *)

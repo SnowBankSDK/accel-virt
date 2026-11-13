@@ -1,7 +1,7 @@
 #include "executor/vulkan/vulkan_backend.hpp"
 
 #include "core/trace/function_scope.hpp"
-#include "executor/pipeline_teardown_order.hpp"
+#include "executor/host_lifecycle_gate.hpp"
 
 namespace av {
 
@@ -85,30 +85,21 @@ VkResult VulkanBackend::on_vkCreateRayTracingPipelinesKHR(VkDevice device, VkDef
         for (uint32_t clear = 0u; clear < createInfoCount; clear++) pPipelines[clear] = VK_NULL_HANDLE;
         return verdict;
     }
-    PipelineTeardownOrder *const order = ordered_compile(device);
-    if (order != nullptr) order->compiling();
-    const VkResult made = RealVulkanDispatch::on_vkCreateRayTracingPipelinesKHR(
-        device, deferredOperation, pipelineCache, createInfoCount, pCreateInfos, nullptr, pPipelines);
-    if (order != nullptr) order->compiled();
-    return made;
+    const HostLifecycleShare share(lifecycle_);
+    if (!share.held()) {
+        for (uint32_t clear = 0u; clear < createInfoCount; clear++) pPipelines[clear] = VK_NULL_HANDLE;
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+    return RealVulkanDispatch::on_vkCreateRayTracingPipelinesKHR(device, deferredOperation, pipelineCache,
+                                                                 createInfoCount, pCreateInfos, nullptr, pPipelines);
 }
 
 VkResult VulkanBackend::on_vkDeferredOperationJoinKHR(VkDevice device, VkDeferredOperationKHR operation)
 {
     AV_SCOPE("VulkanBackend::on_vkDeferredOperationJoinKHR");
-    PipelineTeardownOrder *const order = ordered_compile(device);
-    if (order != nullptr) order->compiling();
-    const VkResult joined = RealVulkanDispatch::on_vkDeferredOperationJoinKHR(device, operation);
-    if (order != nullptr) order->compiled();
-    return joined;
-}
-
-PipelineTeardownOrder *VulkanBackend::ordered_compile(VkDevice device)
-{
-    AV_SCOPE("VulkanBackend::ordered_compile");
-    if (teardown_order_ == nullptr) return nullptr;
-    const GuestDevice *const owner = device_of(reinterpret_cast<uint64_t>(device));
-    return owner != nullptr && owner->orders_teardown() ? teardown_order_ : nullptr;
+    const HostLifecycleShare share(lifecycle_);
+    if (!share.held()) return VK_ERROR_OUT_OF_HOST_MEMORY;
+    return RealVulkanDispatch::on_vkDeferredOperationJoinKHR(device, operation);
 }
 
 }

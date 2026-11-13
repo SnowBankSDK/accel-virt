@@ -10,7 +10,7 @@
 #include "executor/shim/host_heap.hpp"
 #include "executor/host_memory_source.hpp"
 #include "executor/host_ram_ledger.hpp"
-#include "executor/pipeline_teardown_order.hpp"
+#include "executor/host_lifecycle_gate.hpp"
 #include "executor/opencl/cl_freed_memory.hpp"
 #include "executor/vram_ledger.hpp"
 #include "harness/executor/mock_memory_exporter.hpp"
@@ -55,7 +55,7 @@ public:
     ClFreedMemory      &freed();
     HostRamLedger      *host_ram_ledger() override;
     HostRamLedger      &host_ram();
-    PipelineTeardownOrder &teardown_order() override;
+    HostLifecycleGate  *lifecycle_gate(uint32_t index) override;
 
 private:
     struct Gpu {
@@ -80,7 +80,7 @@ private:
     VramLedger         ledger_;
     ClFreedMemory      freed_;
     HostRamLedger      host_ram_;
-    PipelineTeardownOrder teardown_order_;
+    HostLifecycleGate  lifecycle_;
     bool               memory_withheld_;
 };
 

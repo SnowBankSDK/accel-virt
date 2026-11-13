@@ -1,0 +1,212 @@
+From: accel-virt
+Subject: [PATCH] device: creation, destruction and ray tracing compiles take the embedder's lifecycle gate of their GPU
+
+The embedder registers one table (vkd3d_proton_set_lifecycle_gates) in place
+of the teardown order. A device asks it for the gate of its physical device by
+UUID; vkCreateDevice and vkDestroyDevice run between enter and leave of that
+gate and vkCreateRayTracingPipelinesKHR between share and unshare, so a device
+lifecycle call never overlaps another on the same GPU and compiles stay side
+by side. A create or compile the gate refuses fails, a destroy it refuses
+leaks the device and logs it: the driver is never entered ungated.
+---
+diff --git a/include/vkd3d.h b/include/vkd3d.h
+index 59b0584..b8bbb8e 100644
+--- a/include/vkd3d.h
++++ b/include/vkd3d.h
+@@ -195,7 +195,7 @@ ULONG vkd3d_resource_incref(ID3D12Resource *resource);
+ /* The embedder's cap on device-local memory: a table of callbacks, kept by pointer. */
+ void vkd3d_set_vram_gate(const void *gate);
+ 
+-void vkd3d_set_teardown_order(const void *order);
++void vkd3d_set_lifecycle_gates(const void *gates);
+ 
+ /* Releases every submission thread of `device` blocked in a wait for a fence
+  * value nothing has been submitted to signal, and makes later such waits
+diff --git a/libs/d3d12core/d3d12core.def b/libs/d3d12core/d3d12core.def
+index 31e23cf..3cc4b12 100644
+--- a/libs/d3d12core/d3d12core.def
++++ b/libs/d3d12core/d3d12core.def
+@@ -6,7 +6,7 @@ EXPORTS
+     vkd3d_proton_open_heap_from_dmabuf
+     vkd3d_proton_create_exported_heap
+     vkd3d_proton_set_vram_gate
+-    vkd3d_proton_set_teardown_order
++    vkd3d_proton_set_lifecycle_gates
+     vkd3d_proton_abandon_waits
+     vkd3d_proton_export_image
+     vkd3d_proton_export_fence
+diff --git a/libs/d3d12core/main.c b/libs/d3d12core/main.c
+index ea4900e..23140fe 100644
+--- a/libs/d3d12core/main.c
++++ b/libs/d3d12core/main.c
+@@ -1362,9 +1362,9 @@ void WINAPI DLLEXPORT vkd3d_proton_set_vram_gate(const void *gate)
+     vkd3d_set_vram_gate(gate);
+ }
+ 
+-void WINAPI DLLEXPORT vkd3d_proton_set_teardown_order(const void *order)
++void WINAPI DLLEXPORT vkd3d_proton_set_lifecycle_gates(const void *gates)
+ {
+-    vkd3d_set_teardown_order(order);
++    vkd3d_set_lifecycle_gates(gates);
+ }
+ 
+ void WINAPI DLLEXPORT vkd3d_proton_abandon_waits(ID3D12Device *device)
+diff --git a/libs/vkd3d/device.c b/libs/vkd3d/device.c
+index 7e71758..1a568c2 100644
+--- a/libs/vkd3d/device.c
++++ b/libs/vkd3d/device.c
+@@ -3955,30 +3955,33 @@ static void d3d12_device_init_workarounds(struct d3d12_device *device)
+     }
+ }
+ 
+-static const struct vkd3d_teardown_order *vkd3d_teardown_order;
++static const struct vkd3d_lifecycle_gates *vkd3d_lifecycle_gates;
+ 
+-void vkd3d_set_teardown_order(const void *order)
++void vkd3d_set_lifecycle_gates(const void *gates)
+ {
+-    const struct vkd3d_teardown_order *given = order;
+-    vkd3d_teardown_order = given && given->size >= sizeof(*given) ? given : NULL;
++    const struct vkd3d_lifecycle_gates *given = gates;
++    vkd3d_lifecycle_gates = given && given->size >= sizeof(*given) ? given : NULL;
+ }
+ 
+-const struct vkd3d_teardown_order *vkd3d_teardown_order_for(const struct d3d12_device *device)
++const struct vkd3d_lifecycle_gates *vkd3d_lifecycle_gate_of(const struct d3d12_device *device, void **gate)
+ {
+-    const struct vkd3d_teardown_order *order = vkd3d_teardown_order;
+-    if (!order || !order->needed_by(order->self, device->device_info.vulkan_1_2_properties.driverID))
+-        return NULL;
+-    return order;
++    const struct vkd3d_lifecycle_gates *gates = vkd3d_lifecycle_gates;
++    *gate = gates ? gates->gate_of(gates->self, device->device_info.vulkan_1_1_properties.deviceUUID) : NULL;
++    return *gate ? gates : NULL;
+ }
+ 
+ static void vkd3d_destroy_vk_device(struct d3d12_device *device, VkDevice vk_device)
+ {
+-    const struct vkd3d_teardown_order *order = vkd3d_teardown_order_for(device);
+-    if (order)
+-        order->destroying(order->self);
++    void *gate;
++    const struct vkd3d_lifecycle_gates *gates = vkd3d_lifecycle_gate_of(device, &gate);
++    if (gates && !gates->enter(gate))
++    {
++        ERR("Vulkan device leaked instead of destroyed, the embedder's lifecycle gate stayed held.\n");
++        return;
++    }
+     device->vk_procs.vkDestroyDevice(vk_device, NULL);
+-    if (order)
+-        order->destroyed(order->self);
++    if (gates)
++        gates->leave(gate);
+ }
+ 
+ static HRESULT vkd3d_create_vk_device(struct d3d12_device *device,
+@@ -3991,11 +3994,13 @@ static HRESULT vkd3d_create_vk_device(struct d3d12_device *device,
+     VkPhysicalDevice physical_device;
+     VkDeviceCreateInfo device_info;
+     VkDeviceQueueGlobalPriorityCreateInfoKHR queue_priorities[VKD3D_QUEUE_FAMILY_COUNT];
++    const struct vkd3d_lifecycle_gates *lifecycle_gates;
+     VkExtensionProperties *host_extensions = NULL;
+     uint32_t host_extension_count = 0;
+     uint32_t original_extension_count;
+     bool low_priority = false;
+     unsigned int device_index;
++    void *lifecycle_gate;
+     uint32_t extension_count;
+     const char **extensions;
+     VkDevice vk_device;
+@@ -4132,6 +4137,14 @@ static HRESULT vkd3d_create_vk_device(struct d3d12_device *device,
+         extensions[device_info.enabledExtensionCount++] = VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME;
+     }
+ 
++    lifecycle_gates = vkd3d_lifecycle_gate_of(device, &lifecycle_gate);
++    if (lifecycle_gates && !lifecycle_gates->enter(lifecycle_gate))
++    {
++        ERR("Failed to create Vulkan device, the embedder's lifecycle gate stayed held.\n");
++        vkd3d_free((void *)extensions);
++        return E_FAIL;
++    }
++
+     vr = VK_CALL(vkCreateDevice(physical_device, &device_info, NULL, &vk_device));
+     if (vr < 0 && low_priority)
+     {
+@@ -4147,6 +4160,9 @@ static HRESULT vkd3d_create_vk_device(struct d3d12_device *device,
+         vr = VK_CALL(vkCreateDevice(physical_device, &device_info, NULL, &vk_device));
+     }
+ 
++    if (lifecycle_gates)
++        lifecycle_gates->leave(lifecycle_gate);
++
+     if (vr < 0)
+     {
+         ERR("Failed to create Vulkan device, vr %d.\n", vr);
+diff --git a/libs/vkd3d/raytracing_pipeline.c b/libs/vkd3d/raytracing_pipeline.c
+index d176ce6..892d660 100644
+--- a/libs/vkd3d/raytracing_pipeline.c
++++ b/libs/vkd3d/raytracing_pipeline.c
+@@ -1882,7 +1882,8 @@ static HRESULT d3d12_state_object_compile_pipeline_variant(struct d3d12_rt_state
+ {
+     struct vkd3d_nv_shader_extn nv_shader_extn = d3d12_device_get_nv_shader_extn(object->device);
+     const struct vkd3d_vk_device_procs *vk_procs = &object->device->vk_procs;
+-    const struct vkd3d_teardown_order *teardown_order;
++    const struct vkd3d_lifecycle_gates *lifecycle_gates;
++    void *lifecycle_gate;
+     struct vkd3d_shader_interface_local_info shader_interface_local_info;
+     VkRayTracingPipelineInterfaceCreateInfoKHR interface_create_info;
+     VkDescriptorSetLayoutBinding *local_static_sampler_bindings;
+@@ -2537,9 +2538,9 @@ static HRESULT d3d12_state_object_compile_pipeline_variant(struct d3d12_rt_state
+ 
+     TRACE("Calling vkCreateRayTracingPipelinesKHR.\n");
+ 
+-    teardown_order = vkd3d_teardown_order_for(object->device);
+-    if (teardown_order)
+-        teardown_order->compiling(teardown_order->self);
++    lifecycle_gates = vkd3d_lifecycle_gate_of(object->device, &lifecycle_gate);
++    if (lifecycle_gates && !lifecycle_gates->share(lifecycle_gate))
++        return E_OUTOFMEMORY;
+ 
+     vr = VK_CALL(vkCreateRayTracingPipelinesKHR(object->device->vk_device, VK_NULL_HANDLE,
+             VK_NULL_HANDLE, 1, &pipeline_create_info, NULL,
+@@ -2563,8 +2564,8 @@ static HRESULT d3d12_state_object_compile_pipeline_variant(struct d3d12_rt_state
+                 VK_NULL_HANDLE, 1, &pipeline_create_info, NULL, &variant->pipeline));
+     }
+ 
+-    if (teardown_order)
+-        teardown_order->compiled(teardown_order->self);
++    if (lifecycle_gates)
++        lifecycle_gates->unshare(lifecycle_gate);
+ 
+     TRACE("Completed vkCreateRayTracingPipelinesKHR.\n");
+ 
+diff --git a/libs/vkd3d/vkd3d_private.h b/libs/vkd3d/vkd3d_private.h
+index ff21e42..b94197a 100644
+--- a/libs/vkd3d/vkd3d_private.h
++++ b/libs/vkd3d/vkd3d_private.h
+@@ -4484,18 +4484,18 @@ struct vkd3d_vram_gate
+ 
+ extern const struct vkd3d_vram_gate *vkd3d_vram_gate;
+ 
+-struct vkd3d_teardown_order
++struct vkd3d_lifecycle_gates
+ {
+     uint32_t size;
+     void *self;
+-    int (*needed_by)(void *self, uint32_t driver_id);
+-    void (*compiling)(void *self);
+-    void (*compiled)(void *self);
+-    void (*destroying)(void *self);
+-    void (*destroyed)(void *self);
++    void *(*gate_of)(void *self, const uint8_t *device_uuid);
++    int (*enter)(void *gate);
++    void (*leave)(void *gate);
++    int (*share)(void *gate);
++    void (*unshare)(void *gate);
+ };
+ 
+-const struct vkd3d_teardown_order *vkd3d_teardown_order_for(const struct d3d12_device *device);
++const struct vkd3d_lifecycle_gates *vkd3d_lifecycle_gate_of(const struct d3d12_device *device, void **gate);
+ 
+ struct vkd3d_memory_info
+ {

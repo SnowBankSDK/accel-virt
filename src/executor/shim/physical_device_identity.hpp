@@ -15,10 +15,12 @@ public:
     bool              is(const uint8_t *uuid) const;
     const DeviceUuid &uuid() const;
     int32_t           render_minor() const;
+    VkDriverId        driver() const;
 
 private:
     DeviceUuid uuid_;
     int32_t    render_minor_;
+    VkDriverId driver_;
     bool       known_;
 };
 

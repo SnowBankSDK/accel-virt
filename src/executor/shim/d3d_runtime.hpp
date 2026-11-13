@@ -8,7 +8,7 @@ struct IDXGIAdapter1;
 struct ID3D11Device;
 struct ID3D11DeviceContext;
 struct AvVramGate;
-struct AvTeardownOrder;
+struct AvLifecycleGates;
 
 namespace av {
 
@@ -26,7 +26,7 @@ public:
     void               close();
 
     void give_vram_gate(const AvVramGate &gate) const;
-    uint32_t give_teardown_order(const AvTeardownOrder &order) const;
+    uint32_t give_lifecycle_gates(const AvLifecycleGates &gates) const;
 
     IDXGIAdapter1 *adapter_for(const uint8_t *uuid) const;
     int32_t create_device11(IDXGIAdapter1 *adapter, ID3D11Device *&device, ID3D11DeviceContext *&context,
@@ -58,7 +58,7 @@ private:
     using ExportImage = int32_t (*)(void *resource, Vkd3dImageExport *image);
     using ExportFence = int32_t (*)(void *fence, int *fd);
     using SetVramGate = void (*)(const AvVramGate *gate);
-    using SetTeardownOrder = void (*)(const AvTeardownOrder *order);
+    using SetLifecycleGates = void (*)(const AvLifecycleGates *gates);
     using TakeOutOfMemory = uint32_t (*)();
     using AbandonWaits = void (*)(void *device);
     using SetIndirectTable = int32_t (*)(void *list, uint64_t table);
