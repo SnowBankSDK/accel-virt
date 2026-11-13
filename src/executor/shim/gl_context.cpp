@@ -9,7 +9,7 @@
 
 namespace av {
 
-GlContext::GlContext() : display_(nullptr), context_(nullptr)
+GlContext::GlContext() : display_(nullptr), context_(nullptr), stranded_(false)
 {
     AV_SCOPE("GlContext::GlContext");
 }
@@ -41,6 +41,7 @@ bool GlContext::open(const GlDisplay &display, const GlContextAttributes &attrib
     }
     display_ = &display;
     context_ = context;
+    stranded_ = false;
     return true;
 }
 
@@ -49,6 +50,7 @@ bool GlContext::make_current()
     AV_SCOPE("GlContext::make_current");
     if (context_ == nullptr) return false;
     if (current()) return true;
+    if (stranded_) return false;
     return display_->make_current(context_);
 }
 
@@ -57,6 +59,7 @@ void GlContext::let_go()
     AV_SCOPE("GlContext::let_go");
     if (context_ == nullptr || !current()) return;
     const HostLifecycleHold hold(display_->lifecycle());
+    stranded_ = !hold.held();
     if (hold.held()) display_->release_current();
 }
 

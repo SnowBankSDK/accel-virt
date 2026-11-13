@@ -512,13 +512,16 @@ void ExecutorRoot::close(ContextSession *session)
     uint64_t marked = 0u;
     uint64_t reached = 0u;
     session->gpu_progress(marked, reached);
+    const bool settled = marked == reached;
+    if (!settled) session->let_go_of_thread();
     lock_.acquire();
     closing_[slot] = true;
-    reaping_[slot] = marked == reached;
+    reaping_[slot] = settled;
     lock_.release();
-    if (marked == reached) {
+    if (settled) {
         TeardownBudget idle(clock_, 0u);
         const bool done = finish(slot, idle);
+        if (!done) session->let_go_of_thread();
         lock_.acquire();
         reaping_[slot] = false;
         lock_.release();

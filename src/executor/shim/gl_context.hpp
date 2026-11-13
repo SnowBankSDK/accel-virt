@@ -28,6 +28,7 @@ private:
 
     const GlDisplay *display_;
     void            *context_;
+    bool             stranded_;
 };
 
 }
