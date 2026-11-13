@@ -8,7 +8,8 @@
 namespace av {
 
 HostLifecycleGate::HostLifecycleGate(uint64_t wait_ns)
-    : lock_(), wait_ns_(wait_ns), entries_(0u), shares_(0u), refusals_(0u), shares_compiles_(false), egl_(nullptr)
+    : lock_(), wait_ns_(wait_ns), entries_(0u), shares_(0u), refusals_(0u), shares_compiles_(false), egl_(nullptr),
+      devices_()
 {
     AV_SCOPE("HostLifecycleGate::HostLifecycleGate");
     pthread_rwlockattr_t attributes;
@@ -28,6 +29,7 @@ void HostLifecycleGate::driven_by(VkDriverId driver)
 {
     AV_SCOPE("HostLifecycleGate::driven_by");
     shares_compiles_ = driver == VK_DRIVER_ID_NVIDIA_PROPRIETARY;
+    devices_.driven_by(driver);
     if (excludes_egl()) egl_->need();
 }
 
@@ -48,6 +50,12 @@ bool HostLifecycleGate::shares_compiles() const
 {
     AV_SCOPE("HostLifecycleGate::shares_compiles");
     return shares_compiles_;
+}
+
+HostDeviceSlots &HostLifecycleGate::devices()
+{
+    AV_SCOPE("HostLifecycleGate::devices");
+    return devices_;
 }
 
 timespec HostLifecycleGate::deadline() const

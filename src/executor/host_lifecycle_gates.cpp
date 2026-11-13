@@ -37,6 +37,18 @@ void gates_unshare(void *gate)
     static_cast<HostLifecycleGate *>(gate)->unshare();
 }
 
+int gates_admit_device(void *gate, VkPhysicalDevice_T *physical, const VkDeviceCreateInfo *create, uint32_t *slots)
+{
+    AV_SCOPE("gates_admit_device");
+    return static_cast<HostLifecycleGate *>(gate)->devices().admit(physical, *create, *slots) ? 1 : 0;
+}
+
+void gates_return_device(void *gate, uint32_t slots)
+{
+    AV_SCOPE("gates_return_device");
+    static_cast<HostLifecycleGate *>(gate)->devices().give(slots);
+}
+
 }
 
 HostLifecycleGates::HostLifecycleGates() : HostLifecycleGates(EglEntryGate::process())
@@ -55,6 +67,8 @@ HostLifecycleGates::HostLifecycleGates(EglEntryGate &egl)
     abi_.leave = gates_leave;
     abi_.share = gates_share;
     abi_.unshare = gates_unshare;
+    abi_.admit_device = gates_admit_device;
+    abi_.return_device = gates_return_device;
     for (HostLifecycleGate &gate : gates_) gate.guard_egl(egl);
 }
 

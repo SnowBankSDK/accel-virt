@@ -1,0 +1,101 @@
+From: accel-virt
+Subject: [PATCH] vulkan: a device reserves room for its queues with the embedder before it is created
+
+The lifecycle gate table gains admitDevice and returnDevice. Inside the gate
+of its GPU a device first asks the embedder to admit its queue set; a refusal
+fails the creation without entering the driver. What was admitted is returned
+when the creation fails and after vkDestroyDevice, and stays held for a device
+that is leaked instead of destroyed.
+---
+diff --git a/src/dxvk/dxvk_adapter.cpp b/src/dxvk/dxvk_adapter.cpp
+index a9410a75..cb71d9ae 100644
+--- a/src/dxvk/dxvk_adapter.cpp
++++ b/src/dxvk/dxvk_adapter.cpp
+@@ -338,6 +338,14 @@ namespace dxvk {
+       return nullptr;
+     }
+ 
++    uint32_t lifecycleSlots = 0u;
++
++    if (lifecycleGate && !lifecycleGates->admitDevice(lifecycleGate, m_handle, &deviceInfo, &lifecycleSlots)) {
++      lifecycleGates->leave(lifecycleGate);
++      Logger::err("Failed to create Vulkan device: the driver has no room left for its queues in this process");
++      return nullptr;
++    }
++
+     VkDevice device = VK_NULL_HANDLE;
+     VkResult vr = vk->vkCreateDevice(m_handle, &deviceInfo, nullptr, &device);
+ 
+@@ -348,8 +356,12 @@ namespace dxvk {
+       vr = vk->vkCreateDevice(m_handle, &deviceInfo, nullptr, &device);
+     }
+ 
+-    if (lifecycleGate)
++    if (lifecycleGate) {
++      if (vr)
++        lifecycleGates->returnDevice(lifecycleGate, lifecycleSlots);
++
+       lifecycleGates->leave(lifecycleGate);
++    }
+ 
+     if (vr) {
+       Logger::err(str::format("Failed to create Vulkan device: ", vr,
+@@ -358,7 +370,7 @@ namespace dxvk {
+     }
+ 
+     Rc<vk::DeviceFn> vkd = new vk::DeviceFn(vk, true, device);
+-    vkd->gateLifecycle(lifecycleGates, lifecycleGate);
++    vkd->gateLifecycle(lifecycleGates, lifecycleGate, lifecycleSlots);
+ 
+     DxvkDeviceQueueSet deviceQueues = { };
+     deviceQueues.graphics = getDeviceQueue(vkd, caps, queueMapping.graphics);
+diff --git a/src/vulkan/vulkan_loader.cpp b/src/vulkan/vulkan_loader.cpp
+index 90812ebb..2e9c7341 100644
+--- a/src/vulkan/vulkan_loader.cpp
++++ b/src/vulkan/vulkan_loader.cpp
+@@ -111,14 +111,17 @@ namespace dxvk::vk {
+ 
+     this->vkDestroyDevice(m_device, nullptr);
+ 
+-    if (m_lifecycleGate)
++    if (m_lifecycleGate) {
++      m_lifecycleGates->returnDevice(m_lifecycleGate, m_lifecycleSlots);
+       m_lifecycleGates->leave(m_lifecycleGate);
++    }
+   }
+ 
+ 
+-  void DeviceFn::gateLifecycle(const LifecycleGates* gates, void* gate) {
++  void DeviceFn::gateLifecycle(const LifecycleGates* gates, void* gate, uint32_t slots) {
+     m_lifecycleGates = gates;
+     m_lifecycleGate = gate;
++    m_lifecycleSlots = slots;
+   }
+   
+ }
+diff --git a/src/vulkan/vulkan_loader.h b/src/vulkan/vulkan_loader.h
+index 411da392..78ce7fd0 100644
+--- a/src/vulkan/vulkan_loader.h
++++ b/src/vulkan/vulkan_loader.h
+@@ -192,6 +192,8 @@ namespace dxvk::vk {
+     void     (*leave)(void* gate);
+     int      (*share)(void* gate);
+     void     (*unshare)(void* gate);
++    int      (*admitDevice)(void* gate, VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo* createInfo, uint32_t* slots);
++    void     (*returnDevice)(void* gate, uint32_t slots);
+   };
+ 
+   inline const LifecycleGates* g_lifecycleGates = nullptr;
+@@ -200,10 +202,11 @@ namespace dxvk::vk {
+     DeviceFn(const Rc<InstanceLoader>& library, bool owned, VkDevice device);
+     ~DeviceFn();
+ 
+-    void gateLifecycle(const LifecycleGates* gates, void* gate);
++    void gateLifecycle(const LifecycleGates* gates, void* gate, uint32_t slots);
+ 
+     const LifecycleGates* m_lifecycleGates = nullptr;
+     void*                 m_lifecycleGate  = nullptr;
++    uint32_t              m_lifecycleSlots = 0u;
+     
+     VULKAN_FN(vkDestroyDevice);
+     VULKAN_FN(vkGetDeviceQueue);

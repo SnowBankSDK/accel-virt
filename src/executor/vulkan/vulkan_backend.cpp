@@ -564,6 +564,12 @@ VkResult VulkanBackend::on_vkCreateDevice(VkPhysicalDevice physicalDevice,
         lines_.write("a device was not created: the GPU's lifecycle gate stayed held");
         return VK_ERROR_INITIALIZATION_FAILED;
     }
+    HostDeviceSlots *const pool = lifecycle_ != nullptr ? &lifecycle_->devices() : nullptr;
+    uint32_t               slots = 0u;
+    if (pool != nullptr && !pool->admit(physicalDevice, *pCreateInfo, slots)) {
+        lines_.write("a device was not created: the host driver has no room left for its queues in this process");
+        return VK_ERROR_TOO_MANY_OBJECTS;
+    }
     VulkanTimelineFeature timeline;
     VkDeviceCreateInfo    timed = *pCreateInfo;
     bool                  timelines = timeline.offered_by(physicalDevice) && timeline.apply(timed);
@@ -573,14 +579,19 @@ VkResult VulkanBackend::on_vkCreateDevice(VkPhysicalDevice physicalDevice,
         timelines = false;
         result = create_lowered(physicalDevice, pCreateInfo, pDevice);
     }
-    if (result != VK_SUCCESS) return result;
+    if (result != VK_SUCCESS) {
+        if (pool != nullptr) pool->give(slots);
+        return result;
+    }
     if (timelines && !progress_.enable_timelines(*pDevice)) timelines = false;
     GuestDevice *made = nullptr;
     if (devices_.create(made) != Status::ok) {
         RealVulkanDispatch::on_vkDestroyDevice(*pDevice, nullptr);
+        if (pool != nullptr) pool->give(slots);
         *pDevice = VK_NULL_HANDLE;
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     }
+    made->hold_slots(slots);
     physical_ = physicalDevice;
     const auto instance = reinterpret_cast<VkInstance>(handles_.parent_of(reinterpret_cast<uint64_t>(physicalDevice)));
     if (made->load(instance, physicalDevice, *pDevice)) {
@@ -961,6 +972,7 @@ void VulkanBackend::on_vkDestroyDevice(VkDevice device, const VkAllocationCallba
         adopting_ = nullptr;
         memory_import_ = false;
     }
+    const uint32_t slots = ending != nullptr ? ending->slots() : 0u;
     if (ending != nullptr) static_cast<void>(devices_.destroy(ending));
     if (!idle) {
         devices_leaked_ = true;
@@ -973,6 +985,7 @@ void VulkanBackend::on_vkDestroyDevice(VkDevice device, const VkAllocationCallba
         return;
     }
     RealVulkanDispatch::on_vkDestroyDevice(device, nullptr);
+    if (lifecycle_ != nullptr) lifecycle_->devices().give(slots);
 }
 
 void VulkanBackend::on_vkFreeMemory(VkDevice device, VkDeviceMemory memory, const VkAllocationCallbacks *)

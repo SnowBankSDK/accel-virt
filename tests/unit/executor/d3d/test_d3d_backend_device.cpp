@@ -1435,6 +1435,10 @@ struct CountedGate {
     std::atomic<std::uint32_t> entries{0u};
     std::atomic<std::uint32_t> unbalanced{0u};
     std::atomic<bool>          refuses{false};
+    std::atomic<std::uint32_t> admitted{0u};
+    std::atomic<std::uint32_t> returned{0u};
+    std::atomic<std::uint32_t> ungated{0u};
+    std::atomic<bool>          full{false};
 };
 
 void *counted_gate_of(void *self, const std::uint8_t *uuid)
@@ -1461,6 +1465,23 @@ void counted_leave(void *self)
 int  counted_share(void *) { return 1; }
 void counted_unshare(void *) {}
 
+int counted_admit_device(void *self, VkPhysicalDevice_T *, const VkDeviceCreateInfo *create, std::uint32_t *slots)
+{
+    CountedGate &gate = *static_cast<CountedGate *>(self);
+    if (gate.held.load() != 1u) gate.ungated++;
+    if (gate.full.load()) return 0;
+    *slots = create->queueCreateInfoCount;
+    gate.admitted += *slots;
+    return 1;
+}
+
+void counted_return_device(void *self, std::uint32_t slots)
+{
+    CountedGate &gate = *static_cast<CountedGate *>(self);
+    if (gate.held.load() != 1u) gate.ungated++;
+    gate.returned += slots;
+}
+
 }
 
 TEST(d3d_backend_device, every_host_d3d_runtime_creates_and_destroys_its_vulkan_devices_inside_the_lifecycle_gate_of_their_gpu)
@@ -1475,7 +1496,8 @@ TEST(d3d_backend_device, every_host_d3d_runtime_creates_and_destroys_its_vulkan_
     CountedGate counted;
     apis.gpu_uuid(index, counted.uuid);
     const AvLifecycleGates table = {sizeof(AvLifecycleGates), &counted, counted_gate_of, counted_enter,
-                                    counted_leave, counted_share, counted_unshare};
+                                    counted_leave, counted_share, counted_unshare, counted_admit_device,
+                                    counted_return_device};
     CHECK_EQ(runtime.give_lifecycle_gates(table), 3u);
     IDXGIAdapter1 *const adapter = runtime.adapter_for(counted.uuid);
     CHECK(adapter != nullptr);
@@ -1484,16 +1506,37 @@ TEST(d3d_backend_device, every_host_d3d_runtime_creates_and_destroys_its_vulkan_
     std::uint32_t        level = 0u;
     CHECK(adapter != nullptr && SUCCEEDED(runtime.create_device11(adapter, device, context, level)));
     CHECK_EQ(counted.entries.load(), 1u);
+    const std::uint32_t held11 = counted.admitted.load();
+    CHECK(held11 >= 1u);
+    CHECK_EQ(counted.returned.load(), 0u);
     if (context != nullptr) context->Release();
     if (device != nullptr) device->Release();
     const std::uint32_t after11 = counted.entries.load();
     CHECK_EQ(after11, 2u);
+    CHECK_EQ(counted.returned.load(), held11);
     void *device12 = nullptr;
     if (SUCCEEDED(runtime.create_device12(counted.uuid, device12)) && device12 != nullptr) {
         CHECK_EQ(counted.entries.load(), after11 + 1u);
+        CHECK(counted.admitted.load() > held11);
+        CHECK_EQ(counted.returned.load(), held11);
         static_cast<IUnknown *>(device12)->Release();
         CHECK_EQ(counted.entries.load(), after11 + 2u);
+        CHECK_EQ(counted.returned.load(), counted.admitted.load());
     }
+    const std::uint32_t before_full = counted.entries.load();
+    const std::uint32_t admitted_before_full = counted.admitted.load();
+    counted.full = true;
+    ID3D11Device        *unadmitted = nullptr;
+    ID3D11DeviceContext *unadmitted_context = nullptr;
+    CHECK(adapter != nullptr && FAILED(runtime.create_device11(adapter, unadmitted, unadmitted_context, level)));
+    CHECK(unadmitted == nullptr);
+    void *unadmitted12 = nullptr;
+    CHECK(FAILED(runtime.create_device12(counted.uuid, unadmitted12)) || unadmitted12 == nullptr);
+    counted.full = false;
+    CHECK(counted.entries.load() > before_full);
+    CHECK_EQ(counted.admitted.load(), admitted_before_full);
+    CHECK_EQ(counted.returned.load(), admitted_before_full);
+    CHECK_EQ(counted.ungated.load(), 0u);
     const std::uint32_t before_refusal = counted.entries.load();
     counted.refuses = true;
     ID3D11Device        *refused = nullptr;

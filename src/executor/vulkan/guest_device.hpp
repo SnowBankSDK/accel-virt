@@ -22,12 +22,15 @@ public:
     VkResult            shader_refusal() const;
     void                enable_placement(bool enabled);
     bool                placement() const;
+    void                hold_slots(uint32_t slots);
+    uint32_t            slots() const;
 
 private:
     VulkanDeviceTable  table_;
     VulkanMemoryImport memory_;
     bool               invalid_shader_extension_;
     bool               placement_;
+    uint32_t           slots_;
 };
 
 }

@@ -1,0 +1,79 @@
+From: accel-virt
+Subject: [PATCH] device: a device reserves room for its queues with the embedder before it is created
+
+The lifecycle gate table gains admit_device and return_device. Inside the gate
+of its GPU a device first asks the embedder to admit its queue set; a refusal
+fails the creation with E_OUTOFMEMORY without entering the driver. What was
+admitted is returned when the creation fails and after vkDestroyDevice, and
+stays held for a device that is leaked instead of destroyed.
+---
+diff --git a/libs/vkd3d/device.c b/libs/vkd3d/device.c
+index 1a568c2f..0263ad15 100644
+--- a/libs/vkd3d/device.c
++++ b/libs/vkd3d/device.c
+@@ -3981,7 +3981,11 @@ static void vkd3d_destroy_vk_device(struct d3d12_device *device, VkDevice vk_dev
+     }
+     device->vk_procs.vkDestroyDevice(vk_device, NULL);
+     if (gates)
++    {
++        gates->return_device(gate, device->lifecycle_slots);
++        device->lifecycle_slots = 0;
+         gates->leave(gate);
++    }
+ }
+ 
+ static HRESULT vkd3d_create_vk_device(struct d3d12_device *device,
+@@ -4145,6 +4149,16 @@ static HRESULT vkd3d_create_vk_device(struct d3d12_device *device,
+         return E_FAIL;
+     }
+ 
++    device->lifecycle_slots = 0;
++    if (lifecycle_gates && !lifecycle_gates->admit_device(lifecycle_gate, physical_device, &device_info,
++            &device->lifecycle_slots))
++    {
++        lifecycle_gates->leave(lifecycle_gate);
++        ERR("Failed to create Vulkan device, the driver has no room left for its queues in this process.\n");
++        vkd3d_free((void *)extensions);
++        return E_OUTOFMEMORY;
++    }
++
+     vr = VK_CALL(vkCreateDevice(physical_device, &device_info, NULL, &vk_device));
+     if (vr < 0 && low_priority)
+     {
+@@ -4161,7 +4175,14 @@ static HRESULT vkd3d_create_vk_device(struct d3d12_device *device,
+     }
+ 
+     if (lifecycle_gates)
++    {
++        if (vr < 0)
++        {
++            lifecycle_gates->return_device(lifecycle_gate, device->lifecycle_slots);
++            device->lifecycle_slots = 0;
++        }
+         lifecycle_gates->leave(lifecycle_gate);
++    }
+ 
+     if (vr < 0)
+     {
+diff --git a/libs/vkd3d/vkd3d_private.h b/libs/vkd3d/vkd3d_private.h
+index 2c005681..a5aa1f64 100644
+--- a/libs/vkd3d/vkd3d_private.h
++++ b/libs/vkd3d/vkd3d_private.h
+@@ -4493,6 +4493,9 @@ struct vkd3d_lifecycle_gates
+     void (*leave)(void *gate);
+     int (*share)(void *gate);
+     void (*unshare)(void *gate);
++    int (*admit_device)(void *gate, VkPhysicalDevice physical_device, const VkDeviceCreateInfo *create_info,
++            uint32_t *slots);
++    void (*return_device)(void *gate, uint32_t slots);
+ };
+ 
+ const struct vkd3d_lifecycle_gates *vkd3d_lifecycle_gate_of(const struct d3d12_device *device, void **gate);
+@@ -5708,6 +5711,7 @@ struct d3d12_device
+     LONG refcount;
+ 
+     VkDevice vk_device;
++    uint32_t lifecycle_slots;
+     uint32_t api_version;
+     VkPhysicalDevice vk_physical_device;
+     struct vkd3d_vk_device_procs vk_procs;

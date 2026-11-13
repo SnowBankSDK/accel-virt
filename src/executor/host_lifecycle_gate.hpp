@@ -1,6 +1,8 @@
 #ifndef AV_HOST_LIFECYCLE_GATE_HPP
 #define AV_HOST_LIFECYCLE_GATE_HPP
 
+#include "executor/host_device_slots.hpp"
+
 #include <pthread.h>
 #include <stdint.h>
 
@@ -23,6 +25,7 @@ public:
     void               guard_egl(EglEntryGate &egl);
     bool               excludes_egl() const;
     bool               shares_compiles() const;
+    HostDeviceSlots   &devices();
     [[nodiscard]] bool enter();
     void               leave();
     [[nodiscard]] bool share();
@@ -41,6 +44,7 @@ private:
     uint64_t         refusals_;
     bool             shares_compiles_;
     EglEntryGate    *egl_;
+    HostDeviceSlots  devices_;
 };
 
 class HostLifecycleHold {

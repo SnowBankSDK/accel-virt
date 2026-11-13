@@ -29,6 +29,7 @@ private:
     VkInstance        instance_;
     VkDevice          device_;
     HostLifecycleGate *gate_;
+    uint32_t           slots_;
     VulkanDeviceTable table_;
 };
 

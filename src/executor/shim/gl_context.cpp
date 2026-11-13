@@ -33,10 +33,12 @@ bool GlContext::open(const GlDisplay &display, const GlContextAttributes &attrib
     if (share != nullptr && (share->context_ == nullptr || share->display_ != &display)) return false;
     const HostLifecycleHold hold(display.lifecycle());
     if (!hold.held()) return false;
+    HostLifecycleGate *const gate = display.lifecycle();
+    if (gate != nullptr && !gate->devices().take(HostDeviceSlots::context_slots)) return false;
     void *const context = display.create_context(attributes, share != nullptr ? share->context_ : nullptr);
-    if (context == nullptr) return false;
-    if (!display.make_current(context)) {
-        display.destroy_context(context);
+    if (context == nullptr || !display.make_current(context)) {
+        if (context != nullptr) display.destroy_context(context);
+        if (gate != nullptr) gate->devices().give(HostDeviceSlots::context_slots);
         return false;
     }
     display_ = &display;
@@ -95,7 +97,10 @@ void GlContext::close()
     AV_SCOPE("GlContext::close");
     if (context_ == nullptr) return;
     const HostLifecycleHold hold(display_->lifecycle());
-    if (hold.held()) display_->destroy_context(context_);
+    if (hold.held()) {
+        display_->destroy_context(context_);
+        if (display_->lifecycle() != nullptr) display_->lifecycle()->devices().give(HostDeviceSlots::context_slots);
+    }
     display_ = nullptr;
     context_ = nullptr;
 }
