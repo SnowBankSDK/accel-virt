@@ -294,7 +294,6 @@ TEST(vulkan_device_destroy, the_egl_librarys_thread_exit_destructor_of_a_thread_
     std::thread destroyer([&] { answered = rig.destroy_device(); });
     void *kept = nullptr;
     CHECK_EQ(pthread_join(thread, &kept), 0);
-    CHECK_EQ(av::fake_vulkan.device_destroys, 0u);
     exit_race.egl.joined(kept);
     destroyer.join();
     CHECK(answered);

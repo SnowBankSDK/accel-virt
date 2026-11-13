@@ -2,8 +2,11 @@
 
 #include "core/trace/function_scope.hpp"
 
+#include <errno.h>
 #include <sched.h>
+#include <sys/syscall.h>
 #include <time.h>
+#include <unistd.h>
 
 namespace av {
 
@@ -125,7 +128,8 @@ bool EglEntryGate::exclude(uint64_t wait_ns)
     __atomic_store_n(&excluder_, pthread_self(), __ATOMIC_RELAXED);
     __atomic_store_n(&pending_, 1u, __ATOMIC_SEQ_CST);
     const Slot *const own = thread_slot.gate_ == this ? thread_slot.slot_ : nullptr;
-    for (;;) {
+    for (uint32_t look = 0u;; look++) {
+        if (look % looks_between_reaps == 1u) reap_gone();
         uint32_t busy = own == nullptr ? __atomic_load_n(&overflow_.inside_, __ATOMIC_SEQ_CST) : 0u;
         for (const Slot &other : slots_)
             if (&other != own) busy += __atomic_load_n(&other.inside_, __ATOMIC_SEQ_CST);
@@ -161,20 +165,53 @@ void *EglEntryGate::retire()
     if (!needed()) return nullptr;
     enter();
     Slot *const kept = thread_slot.gate_ == this ? thread_slot.slot_ : &overflow_;
-    if (kept != &overflow_) {
-        thread_slot.gate_ = nullptr;
-        thread_slot.slot_ = nullptr;
-    }
-    return kept;
+    if (kept == &overflow_) return reinterpret_cast<void *>(overflow_token);
+    thread_slot.gate_ = nullptr;
+    thread_slot.slot_ = nullptr;
+    const uint32_t retirement = ++kept->retirements_ != 0u ? kept->retirements_ : ++kept->retirements_;
+    __atomic_store_n(&kept->retiree_, static_cast<uint32_t>(syscall(SYS_gettid)), __ATOMIC_SEQ_CST);
+    __atomic_store_n(&kept->retired_, retirement, __ATOMIC_SEQ_CST);
+    return reinterpret_cast<void *>((uintptr_t{retirement} << slot_bits) | static_cast<uintptr_t>(kept - slots_ + 1));
 }
 
 void EglEntryGate::joined(void *retired)
 {
     AV_SCOPE("EglEntryGate::joined");
     if (retired == nullptr) return;
-    Slot *const kept = static_cast<Slot *>(retired);
-    __atomic_sub_fetch(&kept->inside_, 1u, __ATOMIC_SEQ_CST);
-    if (kept != &overflow_) __atomic_store_n(&kept->claimed_, 0u, __ATOMIC_RELEASE);
+    const uintptr_t token = reinterpret_cast<uintptr_t>(retired);
+    const uintptr_t index = token & ((uintptr_t{1} << slot_bits) - 1u);
+    if (index == overflow_token) {
+        __atomic_sub_fetch(&overflow_.inside_, 1u, __ATOMIC_SEQ_CST);
+        return;
+    }
+    if (index == 0u || index > threads) return;
+    release(slots_[index - 1u], static_cast<uint32_t>(token >> slot_bits));
+}
+
+void EglEntryGate::release(Slot &kept, uint32_t retirement)
+{
+    AV_SCOPE("EglEntryGate::release");
+    if (retirement == 0u ||
+        !__atomic_compare_exchange_n(&kept.retired_, &retirement, 0u, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST))
+        return;
+    __atomic_sub_fetch(&kept.inside_, 1u, __ATOMIC_SEQ_CST);
+    __atomic_store_n(&kept.claimed_, 0u, __ATOMIC_RELEASE);
+}
+
+void EglEntryGate::reap_gone()
+{
+    AV_SCOPE("EglEntryGate::reap_gone");
+    for (Slot &other : slots_) {
+        const uint32_t retirement = __atomic_load_n(&other.retired_, __ATOMIC_SEQ_CST);
+        if (retirement == 0u) continue;
+        if (gone(__atomic_load_n(&other.retiree_, __ATOMIC_SEQ_CST))) release(other, retirement);
+    }
+}
+
+bool EglEntryGate::gone(uint32_t thread)
+{
+    AV_SCOPE("EglEntryGate::gone");
+    return thread != 0u && syscall(SYS_tgkill, getpid(), static_cast<pid_t>(thread), 0) == -1 && errno == ESRCH;
 }
 
 uint32_t EglEntryGate::inside() const

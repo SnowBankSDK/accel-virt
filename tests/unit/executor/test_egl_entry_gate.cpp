@@ -134,11 +134,14 @@ TEST(egl_entry_gate, a_thread_that_retired_keeps_exclusions_out_until_its_joiner
   idle.join();
   CHECK(kept == nullptr);
   gate.need();
-  std::thread leaving([&] {
+  std::atomic<bool> left{false}, end{false};
+  std::thread       leaving([&] {
       { const EglEntry entered(gate); }
       kept = gate.retire();
+      left = true;
+      while (!end.load()) std::this_thread::yield();
   });
-  leaving.join();
+  while (!left.load()) std::this_thread::yield();
   CHECK(kept != nullptr);
   CHECK_EQ(gate.inside(), 1u);
   std::atomic<bool> excluded{false};
@@ -153,6 +156,8 @@ TEST(egl_entry_gate, a_thread_that_retired_keeps_exclusions_out_until_its_joiner
   destroyer.join();
   CHECK(excluded.load());
   CHECK_EQ(gate.inside(), 0u);
+  end = true;
+  leaving.join();
   std::thread during([&] {
       CHECK(gate.exclude(long_wait_ns));
       std::atomic<bool> retired{false};
@@ -170,6 +175,37 @@ TEST(egl_entry_gate, a_thread_that_retired_keeps_exclusions_out_until_its_joiner
   gate.joined(kept);
   gate.joined(nullptr);
   CHECK_EQ(gate.inside(), 0u); }
+
+TEST(egl_entry_gate, a_thread_that_retired_and_is_never_joined_keeps_exclusions_out_while_it_lives_and_lets_them_in_once_it_is_gone)
+{ static EglEntryGate      gate;
+  static std::atomic<bool> retired{false}, end{false};
+  static void             *kept = nullptr;
+  gate.need();
+  std::thread abandoned([] {
+      { const EglEntry entered(gate); }
+      kept = gate.retire();
+      retired = true;
+      while (!end.load()) std::this_thread::yield();
+  });
+  abandoned.detach();
+  while (!retired.load()) std::this_thread::yield();
+  CHECK(kept != nullptr);
+  CHECK(!gate.exclude(short_wait_ns));
+  CHECK(!gate.exclude(short_wait_ns));
+  CHECK_EQ(gate.inside(), 1u);
+  end = true;
+  CHECK(gate.exclude(long_wait_ns));
+  CHECK_EQ(gate.inside(), 0u);
+  gate.admit();
+  std::thread next([] {
+      { const EglEntry entered(gate); }
+      CHECK_EQ(gate.inside(), 0u);
+  });
+  next.join();
+  gate.joined(kept);
+  CHECK_EQ(gate.inside(), 0u);
+  CHECK(gate.exclude(short_wait_ns));
+  gate.admit(); }
 
 TEST(egl_entry_gate, only_a_gate_of_the_driver_that_needs_it_excludes_egl_entries_and_another_drivers_entries_are_held_out_too)
 { static EglEntryGate egl;

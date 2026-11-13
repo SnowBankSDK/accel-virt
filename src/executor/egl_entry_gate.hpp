@@ -35,10 +35,20 @@ private:
     struct alignas(64) Slot {
         uint32_t inside_;
         uint32_t claimed_;
+        uint32_t retiree_;
+        uint32_t retired_;
+        uint32_t retirements_;
     };
+
+    static constexpr uint32_t  looks_between_reaps = 64u;
+    static constexpr uintptr_t slot_bits = 10u;
+    static constexpr uintptr_t overflow_token = threads + 1u;
 
     Slot *slot();
     void  wait_out();
+    void  release(Slot &kept, uint32_t retirement);
+    void  reap_gone();
+    static bool gone(uint32_t thread);
 
     Slot            slots_[threads];
     Slot            overflow_;
