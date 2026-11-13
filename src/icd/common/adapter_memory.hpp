@@ -22,6 +22,7 @@ public:
     uint64_t             budget(MemorySegmentGroup group) const;
     uint64_t             usage(MemorySegmentGroup group) const;
     uint64_t             available(MemorySegmentGroup group) const;
+    uint64_t             shared_segment();
 
     bool invariants_hold() const;
 

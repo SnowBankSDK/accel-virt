@@ -46,9 +46,12 @@ Status MemoryTypeTable::build(const VkPhysicalDeviceMemoryProperties &host)
     properties_.memoryTypeCount = host.memoryTypeCount;
     for (uint32_t type = 0u; type < host.memoryTypeCount; type++) properties_.memoryTypes[type] = host.memoryTypes[type];
     properties_.memoryHeapCount = host.memoryHeapCount;
+    const uint64_t shared_segment = memory_.shared_segment();
     for (uint32_t heap = 0u; heap < host.memoryHeapCount; heap++) {
+        const bool shared = group_of(host.memoryHeaps[heap]) == MemorySegmentGroup::non_local;
+        const bool capped = shared && shared_segment != 0u && shared_segment < host.memoryHeaps[heap].size;
         properties_.memoryHeaps[heap].flags = host.memoryHeaps[heap].flags;
-        properties_.memoryHeaps[heap].size = host.memoryHeaps[heap].size;
+        properties_.memoryHeaps[heap].size = capped ? shared_segment : host.memoryHeaps[heap].size;
     }
     shared_budget_ = memory_.budget(MemorySegmentGroup::non_local);
     placed_ = PlacedMemoryTypes::mask(properties_);

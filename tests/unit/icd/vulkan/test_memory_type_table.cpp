@@ -150,6 +150,30 @@ TEST(memory_type_table, nvidia_s_host_heap_is_the_host_s_size_whatever_the_non_l
   const bool visible_types[] = {false, false, false, true, true, false};
   for (std::uint32_t type = 0u; type < 6u; type++) CHECK_EQ(table.host_visible(type), visible_types[type]); }
 
+TEST(memory_type_table, a_host_visible_heap_is_no_larger_than_the_adapters_shared_segment_as_the_kernel_reports_it)
+{ TableRig rig;
+  rig.kmt().set_segment_sizes(1024u * mib, 0u, 512u * mib);
+  MemoryTypeTable table(rig.kmt(), rig.adapter());
+  CHECK_STATUS(table.build(nvidia()), Status::ok);
+  CHECK(table.invariants_hold());
+  VkPhysicalDeviceMemoryProperties answer = answered(table);
+  CHECK_EQ(answer.memoryHeaps[0].size, 1024u * mib);
+  CHECK_EQ(answer.memoryHeaps[1].size, 512u * mib);
+  CHECK_EQ(answer.memoryHeaps[1].flags, 0u);
+  VkPhysicalDeviceMemoryBudgetPropertiesEXT hosted = {};
+  VkPhysicalDeviceMemoryBudgetPropertiesEXT budget = {};
+  table.budget(budget, hosted);
+  CHECK_EQ(budget.heapBudget[1], 512u * mib);
+  rig.kmt().set_segment_sizes(1024u * mib, 0u, 4096u * mib);
+  CHECK_STATUS(table.build(nvidia()), Status::ok);
+  answer = answered(table);
+  CHECK_EQ(answer.memoryHeaps[1].size, 2u * 1024u * mib);
+  rig.kmt().set_segment_sizes(16u * mib, 0u, 16u * mib);
+  CHECK_STATUS(table.build(intel()), Status::ok);
+  answer = answered(table);
+  CHECK_EQ(answer.memoryHeaps[0].size, 1024u * mib);
+  CHECK_EQ(answer.memoryHeaps[0].flags, static_cast<VkMemoryHeapFlags>(VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)); }
+
 TEST(memory_type_table, the_budget_of_each_heap_is_its_size_unless_the_adapter_budget_is_lower)
 { TableRig      rig;
   MemoryTypeTable table(rig.kmt(), rig.adapter());

@@ -99,3 +99,16 @@ TEST(adapter_memory, figures_held_before_any_read_are_unsound)
   CHECK(!memory.invariants_hold());
   AdapterMemoryProbe::set_usage(memory, 0u, 0u);
   CHECK(memory.invariants_hold()); }
+
+TEST(adapter_memory, the_shared_segment_is_the_kernels_shared_system_size_and_nothing_when_the_kernel_refuses)
+{ av::MockKmt kmt;
+  kmt.add_adapter(av::PciIdentity(), 3200u);
+  kmt.set_segment_sizes(1u << 20u, 2u << 20u, 3u << 20u);
+  std::uint32_t adapter = 0u, count = 0u;
+  CHECK_STATUS(kmt.enumerate_adapters(&adapter, 1u, count), av::Status::ok);
+  av::icd::AdapterMemory memory(kmt, adapter);
+  CHECK_EQ(memory.shared_segment(), std::uint64_t{3u} << 20u);
+  CHECK(memory.invariants_hold());
+  kmt.fail_at(MockKmt::Call::query_segment_sizes, 1u, MockKmt::invalid_parameter);
+  CHECK_EQ(memory.shared_segment(), 0u);
+  CHECK_STATUS(kmt.close_adapter(adapter), av::Status::ok); }

@@ -48,6 +48,14 @@ Status AdapterMemory::read()
     return Status::ok;
 }
 
+uint64_t AdapterMemory::shared_segment()
+{
+    AV_SCOPE("AdapterMemory::shared_segment");
+    uint64_t dedicated_video = 0u, dedicated_system = 0u, shared_system = 0u;
+    if (kmt_.query_segment_sizes(adapter_, dedicated_video, dedicated_system, shared_system) != Status::ok) return 0u;
+    return shared_system;
+}
+
 uint64_t AdapterMemory::budget(MemorySegmentGroup group) const
 {
     AV_SCOPE("AdapterMemory::budget");
