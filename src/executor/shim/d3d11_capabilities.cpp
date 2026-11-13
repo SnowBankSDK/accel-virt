@@ -5,6 +5,8 @@
 #include "executor/shim/d3d_headers.hpp"
 #include "proto/d3d/dxgi_format.hpp"
 
+#include <sched.h>
+
 namespace av {
 
 namespace {
@@ -12,6 +14,7 @@ constexpr uint32_t sample_count_steps = 6u;
 constexpr uint32_t trial_extent = 32u;
 constexpr uint32_t trial_mips = 6u;
 constexpr uint32_t trial_layers = 3u;
+constexpr uint32_t settle_polls = 200000u;
 
 }
 
@@ -128,6 +131,28 @@ void D3d11Capabilities::measure_formats(ID3D11Device5 &device)
             row.support &= ~static_cast<uint32_t>(D3D11_FORMAT_SUPPORT_MIP | D3D11_FORMAT_SUPPORT_MIP_AUTOGEN);
         formats_.answer(format, row);
     }
+    settle(device);
+}
+
+void D3d11Capabilities::settle(ID3D11Device5 &device) const
+{
+    AV_SCOPE("D3d11Capabilities::settle");
+    ID3D11DeviceContext *context = nullptr;
+    device.GetImmediateContext(&context);
+    if (context == nullptr) return;
+    const D3D11_QUERY_DESC described = {D3D11_QUERY_EVENT, 0u};
+    ID3D11Query           *done = nullptr;
+    if (SUCCEEDED(device.CreateQuery(&described, &done)) && done != nullptr) {
+        context->End(done);
+        context->Flush();
+        BOOL signalled = FALSE;
+        for (uint32_t polls = 0u; polls < settle_polls; polls++) {
+            if (context->GetData(done, &signalled, sizeof signalled, 0u) == S_OK && signalled != FALSE) break;
+            sched_yield();
+        }
+        done->Release();
+    }
+    context->Release();
 }
 
 bool D3d11Capabilities::makes(ID3D11Device5 &device, uint32_t format, uint32_t support, uint32_t mips,

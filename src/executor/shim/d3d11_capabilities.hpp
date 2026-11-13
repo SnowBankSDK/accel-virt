@@ -24,6 +24,7 @@ private:
     void measure_options(ID3D11Device5 &device);
     void measure_formats(ID3D11Device5 &device);
     bool makes(ID3D11Device5 &device, uint32_t format, uint32_t support, uint32_t mips, uint32_t layers) const;
+    void settle(ID3D11Device5 &device) const;
 
     d3dproto::Caps11 caps_;
     FormatCapsRows   formats_;
