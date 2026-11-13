@@ -123,6 +123,7 @@ public:
     const GrantedProfile &profile() const;
     icd::PresentPacing   &pacing();
     const icd::HostChannel &channel() const;
+    icd::HostChannel       &channel();
     uint64_t              adapter_luid() const;
     void                  asking(GrantedProfile::Rung rung);
     GlDebugMessages &debug();

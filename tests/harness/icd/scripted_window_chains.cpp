@@ -9,7 +9,7 @@ constexpr std::uint64_t page = 4096u;
 }
 
 ScriptedWindowChains::ScriptedWindowChains()
-    : refuse_opens_(true), refuse_presents_(false), holds_copies_(false), opens_(0u), presents_(0u), closes_(0u), window_(nullptr),
+    : refuse_opens_(true), refuse_presents_(false), holds_copies_(false), settle_looks_(0u), looks_{}, opens_(0u), presents_(0u), closes_(0u), window_(nullptr),
       luid_(0u), width_(0u), height_(0u), layout_(icd::SlotLayout::rgba_bottom_up), slots_(0u), slot_(0u), closed_(nullptr)
 {
 }
@@ -17,6 +17,7 @@ ScriptedWindowChains::ScriptedWindowChains()
 void ScriptedWindowChains::refuse_opens(bool refuse) { refuse_opens_ = refuse; }
 void ScriptedWindowChains::refuse_presents(bool refuse) { refuse_presents_ = refuse; }
 void ScriptedWindowChains::hold_copies(bool hold) { holds_copies_ = hold; }
+void ScriptedWindowChains::settle_after_looks(std::uint32_t looks) { settle_looks_ = looks; }
 
 bool ScriptedWindowChains::open(void *window, std::uint64_t luid, std::uint32_t width, std::uint32_t height,
                                 icd::SlotLayout layout, std::uint32_t slots, std::uint64_t *ids, std::uint64_t *bytes)
@@ -41,10 +42,15 @@ bool ScriptedWindowChains::present(void *window, std::uint32_t slot)
     if (refuse_presents_ || window != window_ || slot >= slots_) return false;
     presents_++;
     slot_ = slot;
+    looks_[slot] = 0u;
     return true;
 }
 
-bool ScriptedWindowChains::settled(void *, std::uint32_t) { return !holds_copies_; }
+bool ScriptedWindowChains::settled(void *, std::uint32_t slot)
+{
+    if (holds_copies_) return false;
+    return slot >= max_slots || looks_[slot]++ >= settle_looks_;
+}
 
 void ScriptedWindowChains::close(void *window)
 {

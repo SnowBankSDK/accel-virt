@@ -48,6 +48,7 @@ public:
     void     refuse();
     uint32_t free_slot(const Source &owner, uint32_t slots, uint32_t reserved);
     uint32_t wait_slot(const Source &owner, uint32_t slots, uint32_t reserved);
+    uint32_t paced_slot(const Source &owner, uint32_t slots, uint32_t reserved);
     uint32_t try_slot(const Source &owner, uint32_t slots, uint32_t reserved);
     uint32_t reclaim_slot(const Source &owner, uint32_t slots, uint32_t reserved);
     void     keep(HeldFlusher &owner);
@@ -184,7 +185,7 @@ uint32_t WindowPresentQueue<Source, Readiness>::wait_slot(const Source &owner, u
 {
     AV_SCOPE("WindowPresentQueue::wait_slot");
     for (;;) {
-        const uint32_t slot = try_slot(owner, slots, reserved);
+        const uint32_t slot = paced_slot(owner, slots, reserved);
         if (slot != slots) return slot;
         const bool lost = owner.lost();
         {
@@ -196,6 +197,16 @@ uint32_t WindowPresentQueue<Source, Readiness>::wait_slot(const Source &owner, u
         }
         static_cast<void>(shown_.wait(slot_milliseconds));
     }
+}
+
+template <typename Source, typename Readiness>
+uint32_t WindowPresentQueue<Source, Readiness>::paced_slot(const Source &owner, uint32_t slots, uint32_t reserved)
+{
+    AV_SCOPE("WindowPresentQueue::paced_slot");
+    const ThreadLockHold held(lock_);
+    if (held_by(owner) != 0u) return slots;
+    reap_copied();
+    return first_free(owner, slots, reserved);
 }
 
 template <typename Source, typename Readiness>

@@ -504,3 +504,61 @@ TEST(window_present_queue, waiting_for_a_slot_of_a_refused_queue_is_a_dropped_fr
   rig.queue.refuse();
   CHECK_EQ(rig.queue.wait_slot(rig.owner, 1u, 1u), 1u);
   CHECK_EQ(rig.queue.dropped_frames(), 1u); }
+
+namespace {
+
+void a_frame_is_shown(void *context) { static_cast<void>(static_cast<Rig *>(context)->thread.step()); }
+
+void run_paced(std::uint32_t interval, std::uint32_t slots, bool renders_into_slots)
+{ constexpr std::uint32_t frames = 24u;
+  constexpr std::uint32_t warm = 4u;
+  Rig              rig;
+  av::PacedDisplay display;
+  CHECK(display.pacing.ask(static_cast<std::int32_t>(interval)));
+  rig.chains.refuse_opens(false);
+  rig.chains.settle_after_looks(1u);
+  std::uint64_t ids[3] = {}, sizes[3] = {};
+  CHECK(rig.chains.open(&rig.window, 1u, 4u, 2u, av::icd::SlotLayout::rgba_bottom_up, slots, ids, sizes));
+  CHECK(rig.queue.start());
+  rig.shown.on_wait(a_frame_is_shown, &rig);
+  std::uint32_t drawn_into = 0u;
+  std::uint32_t last = 0u;
+  for (std::uint32_t frame = 0u; frame < frames; frame++) {
+      const std::uint32_t slot = rig.queue.wait_slot(rig.owner, slots, renders_into_slots ? drawn_into : slots);
+      CHECK(slot != slots);
+      const std::uint32_t blanks = display.blanks_waited();
+      if (frame >= warm) CHECK_EQ(blanks - last, interval);
+      last = blanks;
+      Frame handed(rig.owner, renders_into_slots ? drawn_into : slot, nullptr, Frame::Rows::bgra_bottom_up, 4u, 2u,
+                   &rig.window, Mark{frame + 1u});
+      handed.paced_by(&display.pacing);
+      CHECK(rig.queue.hand(handed));
+      drawn_into = slot;
+  }
+  static_cast<void>(rig.thread.run_until_done());
+  CHECK_EQ(rig.queue.dropped_frames(), 0u);
+  CHECK_EQ(rig.queue.shown_frames(), std::uint64_t{frames});
+  CHECK_EQ(rig.chains.presents(), frames);
+  CHECK(rig.queue.invariants_hold()); }
+
+}
+
+TEST(window_present_queue, paced_frames_are_let_in_one_per_frame_shown_however_late_a_slot_s_copy_settles)
+{ run_paced(1u, 3u, true);
+  run_paced(2u, 3u, true);
+  run_paced(1u, 2u, false);
+  run_paced(2u, 2u, false); }
+
+TEST(window_present_queue, a_paced_frame_is_not_let_in_while_an_earlier_one_of_its_owner_is_not_shown)
+{ Rig rig;
+  CHECK(rig.queue.start());
+  CHECK_EQ(rig.queue.paced_slot(rig.owner, 2u, 2u), 0u);
+  CHECK(rig.queue.hand(rig.frame(0u)));
+  CHECK_EQ(rig.queue.paced_slot(rig.owner, 2u, 2u), 2u);
+  CHECK_EQ(rig.queue.try_slot(rig.owner, 2u, 2u), 1u);
+  Owner other;
+  CHECK_EQ(rig.queue.paced_slot(other, 2u, 2u), 0u);
+  CHECK(rig.thread.step());
+  CHECK_EQ(rig.queue.paced_slot(rig.owner, 2u, 2u), 0u);
+  CHECK_EQ(rig.queue.dropped_frames(), 0u);
+  CHECK_EQ(rig.shown.waits(), 0u); }

@@ -186,7 +186,7 @@ bool WindowFramebuffers::present(ClientTransport &wire, const ClientArrayState &
     return presenter->present(wire, state, dc, surface, loop, luid);
 }
 
-void WindowFramebuffers::watched_by(const icd::HostChannel &channel)
+void WindowFramebuffers::watched_by(icd::HostChannel &channel)
 {
     AV_SCOPE("WindowFramebuffers::watched_by");
     channel_ = &channel;

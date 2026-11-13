@@ -436,6 +436,12 @@ const icd::HostChannel &GuestGlContext::channel() const
     return channel_;
 }
 
+icd::HostChannel &GuestGlContext::channel()
+{
+    AV_SCOPE("GuestGlContext::channel");
+    return channel_;
+}
+
 icd::PresentPacing &GuestGlContext::pacing()
 {
     AV_SCOPE("GuestGlContext::pacing");

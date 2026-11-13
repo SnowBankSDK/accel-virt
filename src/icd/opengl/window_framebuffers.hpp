@@ -69,7 +69,7 @@ public:
     void     hand_over(const BatchMark &mark);
     void     hold_over(const BatchMark &mark, icd::PresentPacing &pacing);
     void     paced_by(icd::PresentPacing &pacing);
-    void     watched_by(const icd::HostChannel &channel);
+    void     watched_by(icd::HostChannel &channel);
     void     show_held_now();
     bool     viewport_resizes(uint32_t width, uint32_t height);
     void     follow(ClientTransport &wire, void *window, const PixelFormat &format, icd::WindowSurface &surface);
@@ -97,7 +97,7 @@ private:
     BackBufferPresenter                *current_;
     BackBufferPresenter                *presented_;
     icd::PresentPacing                 *pacing_;
-    const icd::HostChannel             *channel_;
+    icd::HostChannel                   *channel_;
     bool                                draws_window_;
     bool                                reads_window_;
     uint32_t                            read_buffer_;

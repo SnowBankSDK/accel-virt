@@ -179,7 +179,7 @@ void BackBufferPresenter::paced_by(icd::PresentPacing &pacing)
     pacing_ = &pacing;
 }
 
-void BackBufferPresenter::watched_by(const icd::HostChannel &channel)
+void BackBufferPresenter::watched_by(icd::HostChannel &channel)
 {
     AV_SCOPE("BackBufferPresenter::watched_by");
     channel_ = &channel;
@@ -452,8 +452,17 @@ bool BackBufferPresenter::lost() const
 uint32_t BackBufferPresenter::slot_to_fill(GlPresentQueue &loop, uint32_t slots, uint32_t reserved, bool newest_wins)
 {
     AV_SCOPE("BackBufferPresenter::slot_to_fill");
-    if (pacing_ != nullptr && pacing_->blanks() != 0u) return loop.wait_slot(*this, slots, reserved);
-    return newest_wins ? loop.reclaim_slot(*this, slots, reserved) : loop.free_slot(*this, slots, reserved);
+    if (!paced()) return newest_wins ? loop.reclaim_slot(*this, slots, reserved) : loop.free_slot(*this, slots, reserved);
+    const uint32_t ready = loop.paced_slot(*this, slots, reserved);
+    if (ready != slots) return ready;
+    if (channel_ != nullptr) static_cast<void>(channel_->flush());
+    return loop.wait_slot(*this, slots, reserved);
+}
+
+bool BackBufferPresenter::paced() const
+{
+    AV_SCOPE("BackBufferPresenter::paced");
+    return pacing_ != nullptr && pacing_->blanks() != 0u;
 }
 
 void BackBufferPresenter::copy_chained(ClientTransport &wire, GlPresentQueue &loop)
@@ -486,9 +495,11 @@ void BackBufferPresenter::rotate_chained(ClientTransport &wire, GlPresentQueue &
 {
     AV_SCOPE("BackBufferPresenter::rotate_chained");
     const uint32_t swapped = current_;
+    const bool     ahead = paced();
+    if (ahead) chained_.finish(wire);
     const uint32_t next = slot_to_fill(loop, ChainedFrames::slot_count, swapped, true);
     if (next == ChainedFrames::slot_count) return;
-    chained_.finish(wire);
+    if (!ahead) chained_.finish(wire);
     chained_.attach(wire, sampled_framebuffer(), next);
     pending_ = swapped;
     pending_chained_ = true;

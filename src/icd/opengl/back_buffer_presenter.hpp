@@ -81,7 +81,7 @@ public:
     bool     lost() const;
     void     hold_over(const BatchMark &mark, icd::PresentPacing &pacing);
     void     paced_by(icd::PresentPacing &pacing);
-    void     watched_by(const icd::HostChannel &channel);
+    void     watched_by(icd::HostChannel &channel);
     void     show_held_now();
     uint32_t flush_held() override;
     void     done(const GlFrame &frame, bool drawn);
@@ -105,6 +105,7 @@ private:
     void                 read_back(ClientTransport &wire);
     bool                 draw_chained(ClientTransport &wire, GlPresentQueue &loop, uint64_t luid);
     uint32_t             slot_to_fill(GlPresentQueue &loop, uint32_t slots, uint32_t reserved, bool newest_wins);
+    bool                 paced() const;
     void                 copy_chained(ClientTransport &wire, GlPresentQueue &loop);
     void                 begin_rotation(ClientTransport &wire, GlPresentQueue &loop);
     void                 rotate_chained(ClientTransport &wire, GlPresentQueue &loop);
@@ -141,7 +142,7 @@ private:
     bool             held_;
     BatchMark        held_mark_;
     icd::PresentPacing *pacing_;
-    const icd::HostChannel *channel_;
+    icd::HostChannel *channel_;
     ChainedFrames    chained_;
     bool             chain_refused_;
     uint32_t         current_;

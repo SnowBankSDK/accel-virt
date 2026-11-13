@@ -126,6 +126,9 @@ public:
       return chain.initialize(info, window(), properties); }
 
     void pump() { thread_.run_until_done(); }
+    void show_while_waiting()
+    { shown_.on_wait([](void *thread) { static_cast<void>(static_cast<ScriptedThread *>(thread)->step()); },
+                     &thread_); }
     std::uint32_t shown_waits() const { return shown_.waits(); }
     std::uint32_t shown_raises() const { return shown_.raises(); }
     std::uint32_t shown_last_wait() const { return shown_.last_wait(); }
@@ -293,18 +296,23 @@ TEST(swapchain, a_present_puts_the_frame_on_the_window_top_down_in_the_window_s_
       CHECK_EQ(rig.memory().live_allocations() != 0u, rgba);
   } }
 
-TEST(swapchain, a_fifo_present_returns_without_waiting_for_a_blank_and_the_present_thread_shows_one_frame_a_refresh)
+TEST(swapchain, a_fifo_present_returns_without_waiting_for_a_blank_once_the_frame_before_it_is_shown_and_the_present_thread_shows_one_frame_a_refresh)
 { SwapchainRig rig(true);
   Swapchain &chain = rig.chain();
   CHECK_EQ(rig.initialize(chain, create_info()), VK_SUCCESS);
   CHECK_EQ(chain.pacing().blanks(), 1u);
-  for (std::uint32_t frame = 0u; frame < 2u; frame++) {
-      std::uint32_t index = 0u;
-      CHECK_EQ(chain.acquire(0u, index), VK_SUCCESS);
-      CHECK_EQ(chain.present(rig.host().queue(), index, 0u, nullptr), VK_SUCCESS);
-  }
+  std::uint32_t first = 0u, second = 0u;
+  CHECK_EQ(chain.acquire(0u, first), VK_SUCCESS);
+  CHECK_EQ(chain.acquire(0u, second), VK_SUCCESS);
+  CHECK_EQ(chain.present(rig.host().queue(), first, 0u, nullptr), VK_SUCCESS);
+  CHECK_EQ(rig.shown_waits(), 0u);
+  CHECK_EQ(rig.presents().queued(), 1u);
+  rig.show_while_waiting();
+  CHECK_EQ(chain.present(rig.host().queue(), second, 0u, nullptr), VK_SUCCESS);
+  CHECK_EQ(rig.shown_waits(), 1u);
+  CHECK_EQ(rig.presents().shown_frames(), 1u);
   CHECK_EQ(rig.kmt().calls(MockKmt::Call::wait_for_vertical_blank), 0u);
-  CHECK_EQ(rig.presents().queued(), 2u);
+  CHECK_EQ(rig.presents().queued(), 1u);
   rig.pump();
   CHECK_EQ(rig.presents().shown_frames(), 2u);
   CHECK_EQ(rig.presents().dropped_frames(), 0u);
@@ -700,7 +708,7 @@ TEST(swapchain, a_present_for_a_chain_that_lost_its_slot_is_out_of_date_or_the_e
   CHECK_EQ(chain.acquire(0u, index), VK_SUCCESS);
   CHECK_EQ(chain.present(rig.host().queue(), index, 0u, nullptr), VK_ERROR_OUT_OF_DATE_KHR); }
 
-TEST(swapchain, a_queued_present_takes_the_second_chain_slot_while_the_first_is_queued)
+TEST(swapchain, a_queued_present_takes_the_second_chain_slot_while_the_first_is_still_being_copied)
 { SwapchainRig rig(true);
   rig.chains().refuse_opens(false);
   rig.device().shared_object(0u, 0x7700u);
@@ -713,9 +721,16 @@ TEST(swapchain, a_queued_present_takes_the_second_chain_slot_while_the_first_is_
   CHECK_EQ(chain.acquire(0u, first), VK_SUCCESS);
   CHECK_EQ(chain.acquire(0u, second), VK_SUCCESS);
   CHECK_EQ(chain.present(rig.host().queue(), first, 0u, nullptr), VK_SUCCESS);
+  rig.chains().hold_copies(true);
+  rig.show_while_waiting();
   CHECK_EQ(chain.present(rig.host().queue(), second, 0u, nullptr), VK_SUCCESS);
+  CHECK_EQ(rig.chains().last_slot(), 0u);
   CHECK_EQ(rig.presents().queued(), 2u);
-  CHECK_EQ(chain.acquire(0u, third), VK_NOT_READY);
+  CHECK_EQ(chain.acquire(0u, third), VK_SUCCESS);
+  CHECK_EQ(third, first);
+  rig.pump();
+  CHECK_EQ(rig.chains().presents(), 2u);
+  CHECK_EQ(rig.chains().last_slot(), 1u);
   CHECK(chain.invariants_hold()); }
 
 TEST(swapchain, a_queued_present_whose_copy_fails_frees_its_image_and_answers_the_error)
@@ -971,12 +986,10 @@ TEST(swapchain, a_fifo_present_waiting_for_a_slot_of_a_lost_transport_answers_de
   VkSwapchainCreateInfoKHR info = create_info();
   info.minImageCount = 3u;
   CHECK_EQ(rig.initialize(chain, info), VK_SUCCESS);
-  std::uint32_t first = 9u, second = 9u, third = 9u;
+  std::uint32_t first = 9u, third = 9u;
   CHECK_EQ(chain.acquire(0u, first), VK_SUCCESS);
-  CHECK_EQ(chain.acquire(0u, second), VK_SUCCESS);
   CHECK_EQ(chain.present(rig.host().queue(), first, 0u, nullptr), VK_SUCCESS);
-  CHECK_EQ(chain.present(rig.host().queue(), second, 0u, nullptr), VK_SUCCESS);
-  CHECK_EQ(rig.presents().queued(), 2u);
+  CHECK_EQ(rig.presents().queued(), 1u);
   CHECK(!chain.lost());
   rig.kmt().fail_first(MockKmt::Call::submit, 64u, 0xC0000001u);
   av::ClientTransport &wire = rig.connection().transport();
@@ -987,5 +1000,5 @@ TEST(swapchain, a_fifo_present_waiting_for_a_slot_of_a_lost_transport_answers_de
   CHECK(chain.lost());
   CHECK_EQ(chain.acquire(0u, third), VK_SUCCESS);
   CHECK_EQ(chain.present(rig.host().queue(), third, 0u, nullptr), VK_ERROR_DEVICE_LOST);
-  CHECK_EQ(chain.presented(), 2u);
+  CHECK_EQ(chain.presented(), 1u);
   CHECK(chain.invariants_hold()); }
