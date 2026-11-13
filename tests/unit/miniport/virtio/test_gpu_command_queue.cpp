@@ -391,7 +391,7 @@ TEST(gpu_command_queue_exchange, answers_not_found_when_the_device_never_does)
   CHECK_EQ(fixture.control().in_flight(), 1u);
 
   const std::uint16_t published = fixture.device(0u).available_index();
-  CHECK_STATUS(exchange_move(fixture, written), Status::not_found);
+  CHECK_STATUS(exchange_move(fixture, written), Status::conflict);
   CHECK_EQ(fixture.device(0u).available_index(), published);
   CHECK_EQ(fixture.platform().interrupt_time(), gave_up);
   CHECK_EQ(fixture.platform().logged(), 1u);

@@ -35,6 +35,7 @@ public:
 
     [[nodiscard]] Status set_up(VirtioGpuDevice &device, const CapsetInfo &capset, const ContextPages &pages);
     [[nodiscard]] Status tear_down(VirtioGpuDevice &device);
+    [[nodiscard]] Status finish_tear_down(VirtioGpuDevice &device);
     void                 abandon();
     [[nodiscard]] Status submit(const SubmissionDescriptor &submission);
     void                 kick();

@@ -53,6 +53,15 @@ Status GuestContext::accept(const uint8_t *bytes, size_t length)
     return status;
 }
 
+void GuestContext::unanswered(bool sent)
+{
+    AV_SCOPE("GuestContext::unanswered");
+    platform_.require_irql_at_most(Irql::dispatch, "GuestContext::unanswered");
+    SpinLockGuard guard(lock_);
+    sequence_.unanswered(sent);
+    if (sequence_.finished()) finish_sequence();
+}
+
 void GuestContext::finish_sequence()
 {
     AV_SCOPE("GuestContext::finish_sequence");

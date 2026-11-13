@@ -688,10 +688,99 @@ TEST(av_context_table_bind, a_setup_the_device_never_answers_keeps_its_pages_out
   CHECK_STATUS(fixture.bind(&first_context), Status::not_supported);
   CHECK_EQ(fixture.table().bound(), 0u);
   CHECK_EQ(fixture.platform().process_mappings(), 0u);
-  CHECK_EQ(fixture.platform().mapped_frames(), 0u);
   CHECK_EQ(fixture.platform().owned_page_blocks(), 3u);
   CHECK(fixture.table().invariants_hold());
-  CHECK_EQ(fixture.platform().reclaim_page_blocks(), 3u); }
+  const std::uint32_t asked = host.queue().requests();
+  CHECK_STATUS(fixture.bind(&second_context), Status::not_supported);
+  CHECK_EQ(host.queue().requests(), asked);
+  CHECK_EQ(fixture.table().bound(), 0u);
+  CHECK_EQ(fixture.platform().owned_page_blocks(), 3u);
+  CHECK(fixture.table().invariants_hold());
+  host.delay_next(0u, 0u);
+  CHECK_EQ(host.queue().respond_all(0x1100u), 1u);
+  CHECK_STATUS(fixture.bind(&second_context), Status::ok);
+  CHECK_EQ(host.count_of(ctx_destroy_type), 1u);
+  CHECK_EQ(fixture.table().doorbell_of(&second_context), 0u);
+  CHECK_EQ(fixture.platform().owned_page_blocks(), 3u);
+  CHECK(fixture.table().invariants_hold());
+  CHECK_STATUS(fixture.table().unbind(&second_context, &fixture.device()), Status::ok);
+  CHECK_EQ(fixture.platform().mapped_frames(), 0u);
+  CHECK_EQ(fixture.platform().owned_page_blocks(), 0u); }
+
+TEST(av_context_table_unbind, a_teardown_the_device_answers_late_is_finished_later_and_its_doorbell_and_pages_wait_for_it)
+{ Fixture fixture;
+  Host host(fixture.mapped());
+  std::optional<ProcessAllocation> other;
+  other.emplace(fixture.platform(), fixture.allocations(), fixture.handles(), AllocationKind::context_ring, page);
+  const AvContextRecord second(SubApi::vulkan, 12u, other->handle(), page);
+  CHECK_STATUS(fixture.bind(&first_context), Status::ok);
+  CHECK_STATUS(fixture.bind(&second_context, second), Status::ok);
+  host.delay_next(unref_type, ~std::uint64_t{0});
+  CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok);
+  CHECK(fixture.platform().logged_line("left a control request unanswered"));
+  CHECK(fixture.platform().logged_line("keeps its doorbell and pages"));
+  CHECK_EQ(host.count_of(ctx_destroy_type), 1u);
+  CHECK_EQ(host.queue().pending_type(), unref_type);
+  CHECK_EQ(fixture.table().bound(), 1u);
+  CHECK_EQ(fixture.platform().owned_page_blocks(), 6u);
+  CHECK(fixture.table().invariants_hold());
+  const std::uint32_t asked = host.queue().requests();
+  CHECK_STATUS(fixture.table().unbind(&second_context, &fixture.device()), Status::ok);
+  CHECK_EQ(host.queue().requests(), asked);
+  CHECK_EQ(fixture.table().bound(), 0u);
+  CHECK_EQ(fixture.platform().process_mappings(), 0u);
+  CHECK_EQ(fixture.platform().owned_page_blocks(), 6u);
+  CHECK_STATUS(fixture.bind(&first_context), Status::not_supported);
+  CHECK_EQ(host.queue().requests(), asked);
+  CHECK_EQ(fixture.platform().owned_page_blocks(), 6u);
+  CHECK(fixture.table().invariants_hold());
+  host.delay_next(0u, 0u);
+  CHECK_EQ(host.queue().respond_all(0x1100u), 1u);
+  CHECK_STATUS(fixture.bind(&first_context), Status::ok);
+  CHECK_EQ(host.count_of(ctx_destroy_type), 2u);
+  CHECK_EQ(host.count_of(unref_type), 7u);
+  CHECK_EQ(fixture.table().doorbell_of(&first_context), 0u);
+  CHECK_EQ(fixture.platform().owned_page_blocks(), 3u);
+  CHECK(fixture.table().invariants_hold());
+  CHECK_STATUS(fixture.bind(&second_context, second), Status::ok);
+  CHECK_EQ(fixture.table().doorbell_of(&second_context), 1u);
+  CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok);
+  CHECK_STATUS(fixture.table().unbind(&second_context, &fixture.device()), Status::ok);
+  CHECK_EQ(fixture.platform().mapped_frames(), 0u);
+  CHECK_EQ(fixture.platform().owned_page_blocks(), 0u); }
+
+TEST(av_context_table_unbind, a_release_the_device_refuses_keeps_the_pages_until_it_is_granted)
+{ Fixture fixture;
+  Host host(fixture.mapped());
+  CHECK_STATUS(fixture.bind(&first_context), Status::ok);
+  host.refuse_next(unref_type);
+  CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok);
+  CHECK_EQ(fixture.table().bound(), 0u);
+  CHECK_EQ(fixture.platform().process_mappings(), 0u);
+  CHECK_EQ(fixture.platform().owned_page_blocks(), 3u);
+  CHECK_EQ(host.count_of(unref_type), 1u);
+  CHECK(fixture.table().invariants_hold());
+  CHECK_STATUS(fixture.bind(&first_context), Status::ok);
+  CHECK_EQ(host.count_of(unref_type), 4u);
+  CHECK_EQ(fixture.table().doorbell_of(&first_context), 0u);
+  CHECK_EQ(fixture.platform().owned_page_blocks(), 3u);
+  CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok);
+  CHECK_EQ(fixture.platform().owned_page_blocks(), 0u); }
+
+TEST(av_context_table_abandon_all, a_reset_device_gives_back_what_a_late_teardown_still_held)
+{ Fixture fixture;
+  Host host(fixture.mapped());
+  CHECK_STATUS(fixture.bind(&first_context), Status::ok);
+  host.refuse_next(unref_type);
+  CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok);
+  CHECK_EQ(fixture.platform().owned_page_blocks(), 3u);
+  fixture.table().abandon_all();
+  CHECK_EQ(fixture.platform().mapped_frames(), 0u);
+  CHECK_EQ(fixture.platform().owned_page_blocks(), 0u);
+  CHECK(fixture.table().invariants_hold());
+  CHECK_STATUS(fixture.bind(&first_context), Status::ok);
+  CHECK_EQ(fixture.table().doorbell_of(&first_context), 0u);
+  CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok); }
 
 TEST(av_context_table_bind, a_record_the_capset_forbids_is_refused_before_the_device_is_asked)
 { Fixture fixture;
@@ -1989,12 +2078,16 @@ TEST(av_context_table_bind, a_setup_and_a_teardown_the_device_both_refuse_leave_
   CHECK_STATUS(fixture.bind(&first_context), Status::not_supported);
   CHECK_EQ(fixture.table().bound(), 0u);
   CHECK_EQ(host.count_of(ctx_destroy_type), 1u);
-  CHECK_EQ(fixture.platform().mapped_frames(), 0u);
+  CHECK_EQ(fixture.platform().owned_page_blocks(), 3u);
   CHECK_EQ(fixture.platform().process_mappings(), 0u);
   CHECK(fixture.table().invariants_hold());
   host.refuse_from(-1);
   CHECK_STATUS(fixture.bind(&first_context), Status::ok);
-  CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok); }
+  CHECK_EQ(host.count_of(ctx_destroy_type), 2u);
+  CHECK_EQ(fixture.platform().owned_page_blocks(), 3u);
+  CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok);
+  CHECK_EQ(fixture.platform().mapped_frames(), 0u);
+  CHECK_EQ(fixture.platform().owned_page_blocks(), 0u); }
 
 TEST(av_context_table_invariants, detect_a_live_slot_without_its_binding_and_a_free_one_with_a_stray_binding_wake_or_flag)
 { Fixture fixture;

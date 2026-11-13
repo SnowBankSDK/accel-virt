@@ -34,6 +34,7 @@ public:
                                 const ContextPages &pages);
     [[nodiscard]] Status next_request(uint8_t *bytes, size_t capacity, size_t &length);
     [[nodiscard]] Status accept(const uint8_t *bytes, size_t length);
+    void                 unanswered(bool sent);
     [[nodiscard]] Status submit(const SubmissionDescriptor &submission);
     void                 kick();
     void                 kick_if_behind();

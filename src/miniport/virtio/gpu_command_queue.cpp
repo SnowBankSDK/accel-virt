@@ -187,7 +187,7 @@ Status GpuCommandQueue::exchange_segments(const uint8_t *request, size_t length,
     {
         SpinLockGuard lock(lock_);
         if (awaited_slot_ != no_slot) return Status::conflict;
-        if (abandoned_slot_ != no_slot) return Status::not_found;
+        if (abandoned_slot_ != no_slot) return Status::conflict;
         const Status status = send_locked(exchange_slot, request, length, payload, payload_count);
         if (status != Status::ok) return status;
         awaited_slot_ = exchange_slot;

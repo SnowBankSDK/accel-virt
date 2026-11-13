@@ -91,6 +91,9 @@ private:
     [[nodiscard]] Status set_up(uint32_t slot, const AvContextRecord &record, VirtioGpuDevice &device,
                                 RegisterWindow &doorbells, const CapsetInfo &capset);
     void                 release(uint32_t slot);
+    void                 vacate(uint32_t slot);
+    void                 strand(uint32_t slot);
+    void                 settle_stranded(VirtioGpuDevice &device);
     void                 lose(uint32_t slot, const char *why, const SubmissionDescriptor &batch);
     void                 release_chunks(uint32_t slot, VirtioGpuDevice *device, bool host_let_go);
     [[nodiscard]] Status open_window(uint32_t slot, HostWindowRecord &record, VirtioGpuDevice &device);
@@ -122,6 +125,8 @@ private:
     bool                             told_lost_[max_contexts];
     uint32_t                         generations_[max_contexts];
     bool                             live_[max_contexts];
+    bool                             stranded_[max_contexts];
+    uint32_t                         stranded_count_;
     bool                             lanes_[max_contexts];
     uint32_t                         parents_[max_contexts];
     void                            *departed_[max_contexts];

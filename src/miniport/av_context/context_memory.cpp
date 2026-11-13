@@ -82,6 +82,16 @@ void ContextMemory::unmap_kernel_views()
     ring_header_ = nullptr;
 }
 
+void ContextMemory::leave_process()
+{
+    AV_SCOPE("ContextMemory::leave_process");
+    platform_.require_irql_at_most(Irql::passive, "ContextMemory::leave_process");
+    InvariantScope<ContextMemory> guard(platform_, *this, "leave_process");
+    reply_.unmap_from_process();
+    fence_.unmap_from_process();
+    ring_.unmap_from_process();
+}
+
 void ContextMemory::release()
 {
     AV_SCOPE("ContextMemory::release");

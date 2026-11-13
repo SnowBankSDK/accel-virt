@@ -46,7 +46,7 @@ AvContextTable::AvContextTable(Platform &platform, DxgkrnlInterface &dxgkrnl, Al
     : platform_(platform), dxgkrnl_(dxgkrnl), allocations_(allocations), window_(window),
       lock_(platform, LockRank::av_context_slots),
       reader_(platform), bindings_(), contexts_{}, names_{}, memories_(), chunks_(platform), ids_(platform, HostBlobId::most), held_chunks_{}, orders_{},
-      wakes_{}, raised_{}, told_lost_{}, generations_{}, live_{}, lanes_{}, parents_{}, departed_{}, request_{}, requests_(platform, LockRank::av_control_requests), adapter_(0u)
+      wakes_{}, raised_{}, told_lost_{}, generations_{}, live_{}, stranded_{}, stranded_count_(0u), lanes_{}, parents_{}, departed_{}, request_{}, requests_(platform, LockRank::av_control_requests), adapter_(0u)
       {
           AV_SCOPE("AvContextTable::AvContextTable");
           for (uint32_t &parent : parents_) parent = no_slot;
@@ -56,7 +56,7 @@ AvContextTable::~AvContextTable()
 {
     AV_SCOPE("AvContextTable::~AvContextTable");
     for (uint32_t slot = 0u; slot < max_contexts; slot++) {
-        if (contexts_[slot] == nullptr) continue;
+        if (contexts_[slot] == nullptr && !stranded_[slot]) continue;
         release_chunks(slot, nullptr, true);
         release(slot);
     }
@@ -77,7 +77,7 @@ uint32_t AvContextTable::claim(void *context, bool &duplicate)
     duplicate = slot_of(context) != no_slot;
     if (duplicate) return no_slot;
     for (uint32_t slot = 0u; slot < max_contexts; slot++) {
-        if (contexts_[slot] != nullptr) continue;
+        if (contexts_[slot] != nullptr || stranded_[slot]) continue;
         contexts_[slot] = context;
         return slot;
     }
@@ -143,6 +143,7 @@ Status AvContextTable::bind(void *context, const AvContextRecord &record, Virtio
     WaitMutexGuard                  sequence(requests_);
     InvariantScope<AvContextTable> guard(platform_, *this, "bind");
     if (context == nullptr) return Status::invalid_state;
+    if (stranded_count_ != 0u) settle_stranded(device);
     bool           duplicate = false;
     const uint32_t slot = claim(context, duplicate);
     if (duplicate) return Status::invalid_state;
@@ -175,7 +176,10 @@ Status AvContextTable::bind(void *context, const AvContextRecord &record, Virtio
     const AvContextRecord sharing(record.sub_api(), record.ring_order(), record.ring(), record.reply_bytes(),
                                    record.options().sharing(share));
     status = set_up(slot, sharing, device, doorbells, capset);
-    if (status != Status::ok) return status;
+    if (status != Status::ok) {
+        if (stranded_[slot]) unwind.dismiss();
+        return status;
+    }
     unwind.dismiss();
     SpinLockGuard locked(lock_);
     live_[slot] = true;
@@ -197,10 +201,13 @@ Status AvContextTable::set_up(uint32_t slot, const AvContextRecord &record, Virt
     if (status == Status::ok || !bindings_[slot].constructed()) return status;
     AvContextBinding &binding = bindings_[slot].object();
     const bool         asked = binding.state() != GuestContext::State::idle;
-    if (binding.tear_down(device) != Status::ok) {
-        binding.abandon();
-        if (asked) memories_[slot].object().abandon();
+    if (binding.tear_down(device) == Status::ok) return status;
+    if (asked && device.running()) {
+        strand(slot);
+        return status;
     }
+    binding.abandon();
+    if (asked) memories_[slot].object().abandon();
     return status;
 }
 
@@ -210,6 +217,7 @@ Status AvContextTable::unbind(void *context, VirtioGpuDevice *device)
     platform_.require_irql_at_most(Irql::passive, "AvContextTable::unbind");
     WaitMutexGuard                  sequence(requests_);
     InvariantScope<AvContextTable> guard(platform_, *this, "unbind");
+    if (stranded_count_ != 0u && device != nullptr) settle_stranded(*device);
     uint32_t slot = no_slot;
     {
         SpinLockGuard locked(lock_);
@@ -224,6 +232,10 @@ Status AvContextTable::unbind(void *context, VirtioGpuDevice *device)
     const bool torn_down = held && device != nullptr && binding.tear_down(*device) == Status::ok;
     const bool let_go = torn_down || !held || device == nullptr;
     release_chunks(slot, torn_down ? device : nullptr, let_go);
+    if (!let_go && device->running()) {
+        strand(slot);
+        return Status::ok;
+    }
     if (!torn_down) binding.abandon();
     if (!let_go) memories_[slot].object().abandon();
     release(slot);
@@ -235,6 +247,40 @@ void AvContextTable::release(uint32_t slot)
     AV_SCOPE("AvContextTable::release");
     bindings_[slot].destroy();
     memories_[slot].destroy();
+    vacate(slot);
+}
+
+void AvContextTable::strand(uint32_t slot)
+{
+    AV_SCOPE("AvContextTable::strand");
+    memories_[slot].object().leave_process();
+    {
+        SpinLockGuard locked(lock_);
+        stranded_[slot] = true;
+    }
+    stranded_count_++;
+    vacate(slot);
+    StampedLine(platform_, adapter_, "avgpu: a context the device has not let go of keeps its doorbell and pages until it does")
+        .number("doorbell", slot)
+        .write();
+}
+
+void AvContextTable::settle_stranded(VirtioGpuDevice &device)
+{
+    AV_SCOPE("AvContextTable::settle_stranded");
+    for (uint32_t slot = 0u; slot < max_contexts; slot++) {
+        if (!stranded_[slot] || bindings_[slot].object().finish_tear_down(device) != Status::ok) continue;
+        bindings_[slot].destroy();
+        memories_[slot].destroy();
+        SpinLockGuard locked(lock_);
+        stranded_[slot] = false;
+        stranded_count_--;
+    }
+}
+
+void AvContextTable::vacate(uint32_t slot)
+{
+    AV_SCOPE("AvContextTable::vacate");
     void *wake = nullptr;
     {
         SpinLockGuard locked(lock_);
@@ -590,11 +636,19 @@ void AvContextTable::abandon_all()
     for (uint32_t slot = 0u; slot < max_contexts; slot++) {
         {
             SpinLockGuard locked(lock_);
-            if (!live_[slot]) continue;
-            live_[slot] = false;
-            if (wakes_[slot] != nullptr) platform_.signal_event(wakes_[slot]);
+            if (stranded_[slot]) {
+                stranded_[slot] = false;
+                stranded_count_--;
+            } else {
+                if (!live_[slot]) continue;
+                live_[slot] = false;
+                if (wakes_[slot] != nullptr) platform_.signal_event(wakes_[slot]);
+            }
         }
         bindings_[slot].object().abandon();
+        if (contexts_[slot] != nullptr) continue;
+        bindings_[slot].destroy();
+        memories_[slot].destroy();
     }
 }
 
@@ -722,7 +776,9 @@ bool AvContextTable::invariants_hold() const
         const bool running = memories_[slot].constructed() && memories_[slot].object().allocated() &&
                              memories_[slot].object().ring_view() != 0u;
         if (live_[slot] && !(bound_slot && running && bindings_[slot].constructed())) return false;
-        if (!bound_slot && (bindings_[slot].constructed() || memories_[slot].constructed() || names_[slot] != nullptr ||
+        if (stranded_[slot] && (bound_slot || !bindings_[slot].constructed() || !memories_[slot].constructed()))
+            return false;
+        if (!bound_slot && !stranded_[slot] && (bindings_[slot].constructed() || memories_[slot].constructed() || names_[slot] != nullptr ||
                             wakes_[slot] != nullptr || raised_[slot] != 0u || told_lost_[slot]))
             return false;
         if (bound_slot && names_[slot] == nullptr) return false;

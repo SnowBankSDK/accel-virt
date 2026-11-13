@@ -266,7 +266,7 @@ TEST(context_request_sequence_setup, a_refusal_stops_the_setup_and_teardown_rele
       CHECK_EQ(fixture.platform().logged(), 1u);
   } }
 
-TEST(context_request_sequence_teardown, a_refused_release_is_reported_and_the_rest_still_sent)
+TEST(context_request_sequence_teardown, an_object_the_device_no_longer_knows_counts_as_released)
 { Fixture fixture;
   CHECK_STATUS(fixture.sequence().begin_setup(context_id, setup(), fixture.pages()), Status::ok);
   Sent sent;
@@ -276,15 +276,108 @@ TEST(context_request_sequence_teardown, a_refused_release_is_reported_and_the_re
   }
   CHECK_STATUS(fixture.sequence().begin_teardown(), Status::ok);
   CHECK_STATUS(fixture.next(sent), Status::ok);
+  CHECK_STATUS(fixture.answer(GpuResponse::err_invalid_context_id), Status::ok);
+  std::uint32_t releases = 0u;
+  while (fixture.next(sent) == Status::ok) {
+      releases++;
+      CHECK_STATUS(fixture.answer(GpuResponse::err_invalid_resource_id), Status::ok);
+  }
+  CHECK_EQ(releases, 3u);
+  CHECK(fixture.sequence().finished());
+  CHECK(!fixture.sequence().refused()); }
+
+TEST(context_request_sequence_teardown, a_release_the_device_refuses_is_asked_again_before_anything_after_it)
+{ Fixture fixture;
+  CHECK_STATUS(fixture.sequence().begin_setup(context_id, setup(), fixture.pages()), Status::ok);
+  Sent sent;
+  for (std::uint32_t step = 0u; step < 5u; step++) {
+      CHECK_STATUS(fixture.next(sent), Status::ok);
+      CHECK_STATUS(fixture.answer(GpuResponse::ok_nodata), Status::ok);
+  }
+  CHECK_STATUS(fixture.sequence().begin_teardown(), Status::ok);
+  CHECK_STATUS(fixture.next(sent), Status::ok);
+  CHECK_STATUS(fixture.answer(GpuResponse::ok_nodata), Status::ok);
+  CHECK_STATUS(fixture.next(sent), Status::ok);
+  const std::uint32_t ring = sent.id;
+  CHECK_STATUS(fixture.answer(GpuResponse::err_invalid_parameter), Status::not_supported);
+  CHECK(fixture.sequence().refused());
+  CHECK_EQ(fixture.sequence().refusal(), GpuResponse::err_invalid_parameter);
+  CHECK(!fixture.sequence().finished());
+  CHECK_STATUS(fixture.next(sent), Status::ok);
+  CHECK_EQ(sent.type, 0x0102u);
+  CHECK_EQ(sent.id, ring);
   CHECK_STATUS(fixture.answer(GpuResponse::err_invalid_context_id), Status::not_supported);
+  CHECK_STATUS(fixture.next(sent), Status::ok);
+  CHECK_EQ(sent.id, ring);
+  CHECK_STATUS(fixture.answer(GpuResponse::ok_nodata), Status::ok);
+  std::uint32_t releases = 0u;
+  while (fixture.next(sent) == Status::ok) {
+      releases++;
+      CHECK(sent.id != ring);
+      CHECK_STATUS(fixture.answer(GpuResponse::ok_nodata), Status::ok);
+  }
+  CHECK_EQ(releases, 2u);
+  CHECK(fixture.sequence().finished()); }
+
+TEST(context_request_sequence_unanswered, a_teardown_request_the_device_left_unanswered_is_asked_again)
+{ Fixture fixture;
+  CHECK_STATUS(fixture.sequence().begin_setup(context_id, setup(), fixture.pages()), Status::ok);
+  Sent sent;
+  for (std::uint32_t step = 0u; step < 5u; step++) {
+      CHECK_STATUS(fixture.next(sent), Status::ok);
+      CHECK_STATUS(fixture.answer(GpuResponse::ok_nodata), Status::ok);
+  }
+  CHECK_STATUS(fixture.sequence().begin_teardown(), Status::ok);
+  CHECK_STATUS(fixture.next(sent), Status::ok);
+  CHECK_EQ(sent.type, 0x0201u);
+  fixture.sequence().unanswered(true);
+  CHECK(!fixture.sequence().finished());
+  CHECK_STATUS(fixture.sequence().begin_setup(context_id, setup(), fixture.pages()), Status::invalid_state);
+  CHECK_STATUS(fixture.next(sent), Status::ok);
+  CHECK_EQ(sent.type, 0x0201u);
+  CHECK_STATUS(fixture.answer(GpuResponse::err_invalid_context_id), Status::ok);
+  CHECK_STATUS(fixture.next(sent), Status::ok);
+  CHECK_EQ(sent.type, 0x0102u);
+  fixture.sequence().unanswered(false);
   std::uint32_t releases = 0u;
   while (fixture.next(sent) == Status::ok) {
       releases++;
       CHECK_STATUS(fixture.answer(GpuResponse::ok_nodata), Status::ok);
   }
   CHECK_EQ(releases, 3u);
+  CHECK(fixture.sequence().finished());
+  fixture.sequence().unanswered(true);
+  CHECK(fixture.sequence().finished()); }
+
+TEST(context_request_sequence_unanswered, a_setup_request_that_reached_the_device_is_torn_down_as_if_made)
+{ Fixture fixture;
+  CHECK_STATUS(fixture.sequence().begin_setup(context_id, setup(), fixture.pages()), Status::ok);
+  Sent sent;
+  CHECK_STATUS(fixture.next(sent), Status::ok);
+  CHECK_STATUS(fixture.answer(GpuResponse::ok_nodata), Status::ok);
+  CHECK_STATUS(fixture.next(sent), Status::ok);
+  const std::uint32_t ring = sent.id;
+  fixture.sequence().unanswered(true);
+  CHECK(fixture.sequence().finished());
   CHECK(fixture.sequence().refused());
-  CHECK_EQ(fixture.sequence().refusal(), GpuResponse::err_invalid_context_id); }
+  CHECK_STATUS(fixture.sequence().begin_teardown(), Status::ok);
+  CHECK_STATUS(fixture.next(sent), Status::ok);
+  CHECK_EQ(sent.type, 0x0201u);
+  CHECK_STATUS(fixture.answer(GpuResponse::ok_nodata), Status::ok);
+  CHECK_STATUS(fixture.next(sent), Status::ok);
+  CHECK_EQ(sent.type, 0x0102u);
+  CHECK_EQ(sent.id, ring);
+  CHECK_STATUS(fixture.answer(GpuResponse::ok_nodata), Status::ok);
+  CHECK_STATUS(fixture.next(sent), Status::invalid_state);
+  CHECK(fixture.sequence().finished());
+
+  Fixture unsent;
+  CHECK_STATUS(unsent.sequence().begin_setup(context_id, setup(), unsent.pages()), Status::ok);
+  CHECK_STATUS(unsent.next(sent), Status::ok);
+  unsent.sequence().unanswered(false);
+  CHECK(unsent.sequence().finished());
+  CHECK(unsent.sequence().refused());
+  CHECK_STATUS(unsent.sequence().begin_teardown(), Status::invalid_state); }
 
 TEST(context_request_sequence_abandon, a_device_reset_forgets_every_created_resource)
 { Fixture fixture;
@@ -301,7 +394,7 @@ TEST(context_request_sequence_abandon, a_device_reset_forgets_every_created_reso
   CHECK_STATUS(fixture.sequence().begin_teardown(), Status::invalid_state);
   CHECK_STATUS(fixture.sequence().begin_setup(context_id, setup(), fixture.pages()), Status::ok); }
 
-TEST(context_request_sequence_teardown, an_unreadable_answer_keeps_the_teardown_going)
+TEST(context_request_sequence_teardown, an_unreadable_answer_releases_nothing_and_the_request_is_asked_again)
 { Fixture fixture;
   CHECK_STATUS(fixture.sequence().begin_setup(context_id, setup(), fixture.pages()), Status::ok);
   Sent sent;
@@ -313,6 +406,10 @@ TEST(context_request_sequence_teardown, an_unreadable_answer_keeps_the_teardown_
   CHECK_STATUS(fixture.next(sent), Status::ok);
   const std::uint8_t bytes[4] = {};
   CHECK_STATUS(fixture.sequence().accept(bytes, sizeof bytes), Status::malformed);
+  CHECK(!fixture.sequence().finished());
+  CHECK_STATUS(fixture.next(sent), Status::ok);
+  CHECK_EQ(sent.type, 0x0201u);
+  CHECK_STATUS(fixture.answer(GpuResponse::ok_nodata), Status::ok);
   std::uint32_t releases = 0u;
   while (fixture.next(sent) == Status::ok) {
       releases++;
@@ -399,10 +496,9 @@ TEST(context_request_sequence_begin_teardown, waits_for_a_running_sequence)
   CHECK_STATUS(fixture.sequence().begin_teardown(), Status::ok);
   CHECK_STATUS(fixture.sequence().begin_teardown(), Status::invalid_state);
   CHECK_STATUS(fixture.next(sent), Status::ok);
-  CHECK_STATUS(fixture.answer(GpuResponse::err_invalid_context_id), Status::not_supported);
-  CHECK_STATUS(fixture.next(sent), Status::ok);
-  CHECK_STATUS(fixture.answer(GpuResponse::err_invalid_resource_id), Status::not_supported);
-  CHECK_EQ(fixture.sequence().refusal(), GpuResponse::err_invalid_context_id);   }
+  CHECK_STATUS(fixture.answer(GpuResponse::err_unspec), Status::not_supported);
+  CHECK_STATUS(fixture.sequence().begin_teardown(), Status::invalid_state);
+  CHECK_EQ(fixture.sequence().refusal(), GpuResponse::err_unspec);   }
 
 TEST(context_request_sequence_begin_setup, a_new_setup_forgets_the_last_refusal)
 { Fixture fixture;

@@ -22,6 +22,7 @@ public:
     [[nodiscard]] Status begin_teardown();
     [[nodiscard]] Status next_request(uint8_t *bytes, size_t capacity, size_t &length);
     [[nodiscard]] Status accept(const uint8_t *bytes, size_t length);
+    void                 unanswered(bool sent);
     void                 abandon();
     bool                 finished() const;
     bool                 refused() const;
@@ -43,6 +44,7 @@ private:
     [[nodiscard]] Status write_setup_request(uint8_t *bytes, size_t capacity, size_t &length);
     [[nodiscard]] Status write_teardown_request(uint8_t *bytes, size_t capacity, size_t &length);
     void                 finish_setup_step(bool done);
+    [[nodiscard]] Status accept_teardown(bool readable, bool done, uint32_t type);
     void                 refuse(uint32_t type);
     uint32_t             teardown_steps() const;
 
