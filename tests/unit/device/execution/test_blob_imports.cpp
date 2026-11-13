@@ -38,6 +38,8 @@ struct BlobImportsProbe {
 }
 
 namespace {
+std::uint64_t blob_id(std::uint64_t nth) { return (std::uint64_t{ImportRig::context} << 32u) | nth; }
+
 std::uint64_t read_u64(const std::uint8_t *bytes)
 {
     std::uint64_t value = 0u;
@@ -70,9 +72,9 @@ TEST(blob_imports_import, hands_the_executor_the_memory_allocated_under_the_blob
   CHECK_STATUS(import(rig, rig.blob(3u), device_memory), Status::ok);
   CHECK(device_memory != 0u);
   std::uint64_t key = 0u;
-  CHECK(rig.ops().import_of(1u, key));
+  CHECK(rig.ops().import_of(blob_id(1u), key));
   CHECK_EQ(key, rig.blob(3u));
-  CHECK_EQ(device_memory, 1u | MockExecutorOps::handle_bit);
+  CHECK_EQ(device_memory, blob_id(1u) | MockExecutorOps::handle_bit);
   CHECK_EQ(rig.imports().imports(), 1u);
   CHECK_EQ(rig.ops().imported(), 1u); }
 
@@ -86,9 +88,9 @@ TEST(blob_imports_import, each_import_gets_an_id_never_used_before_and_its_own_h
   CHECK_STATUS(import(rig, rig.blob(0u), second), Status::ok);
   release(rig, first);
   CHECK_STATUS(import(rig, rig.blob(0u), third), Status::ok);
-  CHECK_EQ(first, 1u | MockExecutorOps::handle_bit);
-  CHECK_EQ(second, 2u | MockExecutorOps::handle_bit);
-  CHECK_EQ(third, 3u | MockExecutorOps::handle_bit);
+  CHECK_EQ(first, blob_id(1u) | MockExecutorOps::handle_bit);
+  CHECK_EQ(second, blob_id(2u) | MockExecutorOps::handle_bit);
+  CHECK_EQ(third, blob_id(3u) | MockExecutorOps::handle_bit);
   CHECK_EQ(rig.imports().imports(), 2u); }
 
 TEST(blob_imports_import, a_blob_this_context_did_not_open_is_not_found_and_asks_nothing)
@@ -188,8 +190,8 @@ TEST(blob_imports_release, lets_go_of_the_import_its_handle_names_and_only_that)
   CHECK_EQ(rig.ops().released(), 1u);
   CHECK_EQ(rig.imports().imports(), 1u);
   std::uint64_t key = 0u;
-  CHECK(rig.ops().import_of(1u, key));
-  CHECK(!rig.ops().import_of(2u, key));
+  CHECK(rig.ops().import_of(blob_id(1u), key));
+  CHECK(!rig.ops().import_of(blob_id(2u), key));
   release(rig, second);
   CHECK_EQ(rig.ops().released(), 1u); }
 
@@ -243,9 +245,9 @@ TEST(blob_imports_invariants, each_rule_is_detected)
   CHECK(rig.imports().invariants_hold());
   const std::uint64_t kept_id = av::BlobImportsProbe::swap_blob_id(rig.imports(), 0u);
   CHECK(!rig.imports().invariants_hold());
-  static_cast<void>(av::BlobImportsProbe::swap_blob_id(rig.imports(), 3u));
+  static_cast<void>(av::BlobImportsProbe::swap_blob_id(rig.imports(), blob_id(3u)));
   CHECK(!rig.imports().invariants_hold());
-  static_cast<void>(av::BlobImportsProbe::swap_blob_id(rig.imports(), 2u));
+  static_cast<void>(av::BlobImportsProbe::swap_blob_id(rig.imports(), blob_id(2u)));
   CHECK(rig.imports().invariants_hold());
   static_cast<void>(av::BlobImportsProbe::swap_blob_id(rig.imports(), kept_id));
   CHECK(rig.imports().invariants_hold()); }
@@ -267,14 +269,14 @@ TEST(blob_imports_import, records_the_import_and_its_release_under_one_id)
   CHECK_EQ(record.length(), av::WireRecorder::blob_payload);
   if (imported != nullptr) {
       CHECK_EQ(imported[0], 1u);
-      CHECK_EQ(read_u64(imported + 8u), 1u);
+      CHECK_EQ(read_u64(imported + 8u), blob_id(1u));
       CHECK_EQ(read_u64(imported + 24u), rig.blob(3u));
   }
   const std::uint8_t *released = file.expect(av::RecordKind::blob, record);
   CHECK(released != nullptr);
   if (released != nullptr) {
       CHECK_EQ(released[0], 2u);
-      CHECK_EQ(read_u64(released + 8u), 1u);
+      CHECK_EQ(read_u64(released + 8u), blob_id(1u));
   }
   CHECK_EQ(file.remaining(), 0u);
   rig.recorder().close(); }

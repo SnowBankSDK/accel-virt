@@ -26,6 +26,10 @@
 #include "proto/context/gpu_identity.hpp"
 #include "proto/context/protocol_version.hpp"
 #include "proto/context/sub_api.hpp"
+#include "proto/resources/host_blob_id.hpp"
+#include "proto/resources/host_memory_request.hpp"
+#include "proto/submission/blob_import_answer.hpp"
+#include "proto/submission/blob_import_request.hpp"
 #include "proto/submission/command_header.hpp"
 #include "proto/submission/fault_code.hpp"
 #include "proto/submission/fence_page.hpp"
@@ -168,6 +172,25 @@ public:
     {
         for (std::uint32_t spins = 0u; spins < 50000000u && !context(index).worker().exited(); spins++) sched_yield();
         return context(index).worker().exited();
+    }
+    std::uint32_t imports(std::uint32_t index, std::uint32_t resource, std::uint64_t fence_id)
+    {
+        const av::HostMemoryRequest upload(av::HostMemoryRequest::Kind::upload, 0u);
+        if (host_maker_.create(resource, session_id + index, upload, 0x1000u) != Status::ok) return ~0u;
+        std::uint8_t batch[8u + av::BlobImportRequest::encoded_size] = {};
+        static_cast<void>(CommandHeader(CommandHeader::import_blob_id, sizeof batch, CommandHeader::generate_reply)
+                              .encode(batch, 8u));
+        static_cast<void>(av::BlobImportRequest(resource).encode(batch + 8u, av::BlobImportRequest::encoded_size));
+        GuestRing &ring_of = guest(index);
+        ring_of.write_batch(fence_id, batch, sizeof batch);
+        if (!ring(index, ring_of) || !completes(index, fence_id)) return ~0u;
+        av::BlobWindow       window;
+        std::uint8_t         answer[32u + av::BlobImportAnswer::encoded_size] = {};
+        av::BlobImportAnswer imported;
+        if (blobs_.window(reply(index), window) != Status::ok || window.read(0u, answer, sizeof answer) != Status::ok ||
+            imported.decode(answer + 32u, av::BlobImportAnswer::encoded_size) != Status::ok)
+            return ~0u;
+        return imported.status();
     }
     void settle()
     {
@@ -314,6 +337,18 @@ TEST(session_lanes, a_lane_retired_while_it_waits_for_the_session_stops_waiting_
   CHECK(lanes.stops(1u));
   CHECK(!lanes.page(1u).faulted());
   CHECK_EQ(lanes.ops().executed(), 0u); }
+
+TEST(session_lanes, a_lane_and_its_session_each_import_memory_into_their_one_executor_under_ids_that_never_meet)
+{ Lanes lanes;
+  CHECK_STATUS(lanes.bind(0u), Status::ok);
+  CHECK(lanes.ready(0u));
+  CHECK_STATUS(lanes.bind(1u), Status::ok);
+  CHECK_STATUS(lanes.bind(2u), Status::ok);
+  CHECK_EQ(lanes.imports(0u, av::HostBlobId::first, 1u), static_cast<std::uint32_t>(av::BlobImportAnswer::imported));
+  CHECK_EQ(lanes.imports(1u, av::HostBlobId::first + 1u, 1u), static_cast<std::uint32_t>(av::BlobImportAnswer::imported));
+  CHECK_EQ(lanes.imports(2u, av::HostBlobId::first + 2u, 1u), static_cast<std::uint32_t>(av::BlobImportAnswer::imported));
+  CHECK_EQ(lanes.imports(1u, av::HostBlobId::first + 3u, 2u), static_cast<std::uint32_t>(av::BlobImportAnswer::imported));
+  CHECK_EQ(lanes.ops().live_imports(), 4u); }
 
 TEST(session_lanes, a_ring_that_takes_the_session_from_another_ring_restores_the_selection_it_left)
 { Lanes lanes;

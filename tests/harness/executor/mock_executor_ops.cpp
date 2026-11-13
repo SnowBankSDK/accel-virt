@@ -76,6 +76,8 @@ MockExecutorOps::MockExecutorOps(std::uint32_t sub_apis)
         if (mock.fires(mock.refuse_import_)) return AV_UNDECODABLE;
         Memory *const memory = mock.held_memory_of(executor->domain, memory_key);
         if (memory == nullptr) return AV_UNDECODABLE;
+        for (const Import &import : mock.imports_)
+            if (import.live && import.executor == handle && import.blob_id == blob_id) return AV_UNDECODABLE;
         for (Import &import : mock.imports_) {
             if (import.live) continue;
             import = Import{blob_id, memory_key, memory, handle, true};

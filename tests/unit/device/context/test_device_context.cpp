@@ -405,10 +405,10 @@ TEST(device_context_bind, a_bound_context_imports_a_host_blob_made_for_it_and_no
   CHECK_STATUS(imported.decode(import_through_ring(fixture, guest, mine, answer), av::BlobImportAnswer::encoded_size),
                Status::ok);
   CHECK_EQ(imported.status(), av::BlobImportAnswer::imported);
-  CHECK_EQ(imported.device_memory(), 1u | av::MockExecutorOps::handle_bit);
+  CHECK_EQ(imported.device_memory(), ((std::uint64_t{fixture.context().id()} << 32u) | 1u) | av::MockExecutorOps::handle_bit);
   CHECK_EQ(fixture.ops().live_imports(), 1u);
   std::uint64_t key = 0u;
-  CHECK(fixture.ops().import_of(1u, key));
+  CHECK(fixture.ops().import_of((std::uint64_t{fixture.context().id()} << 32u) | 1u, key));
   CHECK_EQ(key, mine);
   CHECK_STATUS(fixture.host_maker().release(mine), Status::ok);
   CHECK_STATUS(fixture.host_maker().release(theirs), Status::ok);
