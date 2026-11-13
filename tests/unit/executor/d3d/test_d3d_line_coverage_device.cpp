@@ -23,6 +23,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <dlfcn.h>
 #include <initializer_list>
 
 extern "C" const char *__lsan_default_suppressions(void);
@@ -46,6 +47,10 @@ constexpr std::uint32_t centre_row = 20u;
 constexpr std::uint32_t boundary_row = 44u;
 constexpr std::uint32_t centre_column = 12u;
 constexpr std::uint32_t probe_column = 32u;
+constexpr std::uint32_t slanted_column = 8u;
+constexpr std::uint32_t slanted_row = 50u;
+constexpr std::uint32_t slanted_run = 47u;
+constexpr std::uint32_t slanted_rise = 7u;
 
 struct Vertex {
     float x, y;
@@ -55,14 +60,19 @@ struct Vertex {
 constexpr float ndc_x(float window) { return 2.0f * window / float(size) - 1.0f; }
 constexpr float ndc_y(float window) { return 1.0f - 2.0f * window / float(size); }
 
-constexpr Vertex line_vertices[6] = {
+constexpr Vertex line_vertices[8] = {
     {ndc_x(8.0f), ndc_y(float(centre_row) + 0.5f), 1.0f, 1.0f, 1.0f, 1.0f},
     {ndc_x(56.0f), ndc_y(float(centre_row) + 0.5f), 1.0f, 1.0f, 1.0f, 1.0f},
     {ndc_x(8.0f), ndc_y(float(boundary_row)), 1.0f, 1.0f, 1.0f, 1.0f},
     {ndc_x(56.0f), ndc_y(float(boundary_row)), 1.0f, 1.0f, 1.0f, 1.0f},
     {ndc_x(float(centre_column) + 0.5f), ndc_y(26.0f), 1.0f, 1.0f, 1.0f, 1.0f},
     {ndc_x(float(centre_column) + 0.5f), ndc_y(38.0f), 1.0f, 1.0f, 1.0f, 1.0f},
+    {ndc_x(float(slanted_column) + 0.5f), ndc_y(float(slanted_row) + 0.5f), 1.0f, 1.0f, 1.0f, 1.0f},
+    {ndc_x(float(slanted_column + slanted_run) + 0.5f), ndc_y(float(slanted_row + slanted_rise) + 0.5f), 1.0f, 1.0f, 1.0f,
+     1.0f},
 };
+
+constexpr std::uint32_t line_vertex_count = sizeof(line_vertices) / sizeof(line_vertices[0]);
 
 const char *const wanted_gpu = std::getenv("AV_TEST_HOST_GPU");
 
@@ -149,6 +159,32 @@ void judge_aliased(const Frame &frame)
     CHECK_EQ(a[32u][centre_column + 1u], 0u);
 }
 
+void judge_slanted_aliased(const Frame &frame)
+{
+    const std::uint32_t(&a)[size][size] = frame.alpha;
+    std::uint32_t wrong = 0u;
+    for (std::uint32_t step = 0u; step < slanted_run; step++) {
+        const std::uint32_t row = slanted_row + (2u * slanted_rise * step + slanted_run) / (2u * slanted_run);
+        const std::uint32_t x = slanted_column + step;
+        wrong += a[row][x] == 255u && a[row - 1u][x] == 0u && a[row + 1u][x] == 0u ? 0u : 1u;
+    }
+    CHECK_EQ(wrong, 0u);
+}
+
+std::uint64_t fast_linked_pipelines()
+{
+    char path[512] = {};
+    std::snprintf(path, sizeof path, "%s/libdxvk_d3d11.so", std::getenv("AV_D3D_PATH"));
+    void *const library = dlopen(path, RTLD_NOW | RTLD_NOLOAD);
+    CHECK(library != nullptr);
+    if (library == nullptr) return 0u;
+    const auto count = reinterpret_cast<std::uint64_t (*)()>(dlsym(library, "dxvk_proton_fast_linked_pipelines"));
+    CHECK(count != nullptr);
+    const std::uint64_t counted = count != nullptr ? count() : 0u;
+    dlclose(library);
+    return counted;
+}
+
 namespace d3d11 {
 
 using namespace av::d3dproto;
@@ -226,7 +262,7 @@ void draw(av::D3dLoopback &wire, std::uint32_t rasterizer, Frame &frame)
     const ConstantBufferBinding constants = {tint, 0u, 0u};
     CHECK(av_d3d_SetConstantBuffers(wire, 4u, 0u, 1u, &constants));
     CHECK(av_d3d_SetRasterizerState(wire, rasterizer));
-    CHECK(av_d3d_Draw(wire, 6u, 0u));
+    CHECK(av_d3d_Draw(wire, line_vertex_count, 0u));
 
     static std::uint8_t pixels[size * size * 4u];
     std::uint32_t hresult = 1u, row_pitch = 0u, depth_pitch = 0u;
@@ -421,7 +457,7 @@ void draw(av::D3dLoopback &wire, const Rig &rig, std::uint32_t pipeline, Frame &
     const VertexBufferView binding = {upload_address, sizeof(line_vertices), sizeof(Vertex)};
     CHECK(av_d3d12_SetVertexBuffers12(wire, list, 0u, 1u, &binding));
     CHECK(av_d3d12_SetTopology12(wire, list, topology_lines));
-    CHECK(av_d3d12_DrawInstanced12(wire, list, 6u, 1u, 0u, 0u));
+    CHECK(av_d3d12_DrawInstanced12(wire, list, line_vertex_count, 1u, 0u, 0u));
 
     const Barrier to_copy = {0u, 0u, target, 0xffffffffu, state_render_target, state_copy_source, 0u, 0u};
     CHECK(av_d3d12_ResourceBarrier12(wire, list, 1u, &to_copy));
@@ -491,6 +527,18 @@ TEST(d3d_line_coverage_device, a_direct3d11_antialiased_line_is_full_at_its_cent
         Frame frame;
         d3d11::draw(wire, d3d11::antialiased, frame);
         judge_antialiased(frame);
+    });
+}
+
+TEST(d3d_line_coverage_device, the_first_aliased_line_of_a_direct3d11_device_lights_the_diamond_exit_pixels_and_no_fast_linked_pipeline_draws_it)
+{
+    d3d11::on_each_gpu([](av::D3dLoopback &wire) {
+        const std::uint64_t fast_linked = fast_linked_pipelines();
+        Frame               frame;
+        d3d11::draw(wire, d3d11::aliased, frame);
+        judge_aliased(frame);
+        judge_slanted_aliased(frame);
+        CHECK_EQ(fast_linked_pipelines(), fast_linked);
     });
 }
 

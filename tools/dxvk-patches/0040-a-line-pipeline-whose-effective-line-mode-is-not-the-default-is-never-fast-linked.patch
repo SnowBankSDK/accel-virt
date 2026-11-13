@@ -1,0 +1,130 @@
+From: accel-virt
+Subject: [PATCH] a line pipeline whose effective line mode is not the default is never fast-linked
+
+The pipeline takes Bresenham for a line whose state asks for no mode on a
+single-sample target, but the choice of a fast-linked base pipeline looked at
+the state's mode only, so the first draws of such a line pipeline went through
+the base pipeline with the device's default lines until the optimized pipeline
+was compiled. One function now gives the effective line mode; the
+rasterization state and the base pipeline check both use it, so these
+pipelines are compiled before their first use. Coverage quads are not lines
+and stay fast-linked. dxvk_proton_fast_linked_pipelines counts the instances
+that were given a base pipeline.
+---
+diff --git a/src/d3d11/d3d11.sym b/src/d3d11/d3d11.sym
+index a08d652..a964156 100644
+--- a/src/d3d11/d3d11.sym
++++ b/src/d3d11/d3d11.sym
+@@ -6,6 +6,7 @@
+     D3D11On12CreateDevice;
+     dxvk_proton_set_vram_gate;
+     dxvk_proton_set_lifecycle_gates;
++    dxvk_proton_fast_linked_pipelines;
+     dxvk_take_out_of_memory;
+ 
+   local:
+diff --git a/src/d3d11/d3d11_main.cpp b/src/d3d11/d3d11_main.cpp
+index 54693f2..185cd7a 100644
+--- a/src/d3d11/d3d11_main.cpp
++++ b/src/d3d11/d3d11_main.cpp
+@@ -224,6 +224,11 @@ extern "C" {
+     }
+ 
+ 
++    DLLEXPORT uint64_t dxvk_proton_fast_linked_pipelines() {
++      return dxvk::g_fastLinkedPipelines.load(std::memory_order_relaxed);
++    }
++
++
+     DLLEXPORT void dxvk_proton_set_lifecycle_gates(const dxvk::vk::LifecycleGates* gates) {
+       dxvk::vk::g_lifecycleGates = gates && gates->size >= sizeof(dxvk::vk::LifecycleGates) ? gates : nullptr;
+     }
+diff --git a/src/dxvk/dxvk_graphics.cpp b/src/dxvk/dxvk_graphics.cpp
+index e490c71..d3dd2b6 100644
+--- a/src/dxvk/dxvk_graphics.cpp
++++ b/src/dxvk/dxvk_graphics.cpp
+@@ -599,12 +599,7 @@ namespace dxvk {
+     }
+ 
+     // Set up line rasterization mode as requested by the application.
+-    VkLineRasterizationModeEXT lineMode = state.rs.lineMode();
+-
+-    if (lineMode == VK_LINE_RASTERIZATION_MODE_DEFAULT_EXT
+-     && state.rs.sampleCount() <= VK_SAMPLE_COUNT_1_BIT
+-     && device->features().extLineRasterization.bresenhamLines)
+-      lineMode = VK_LINE_RASTERIZATION_MODE_BRESENHAM_EXT;
++    VkLineRasterizationModeEXT lineMode = effectiveLineMode(device, state);
+ 
+     if (lineMode != VK_LINE_RASTERIZATION_MODE_DEFAULT_EXT && isLineRendering(shaders, state)) {
+       rsLineInfo.pNext = std::exchange(rsInfo.pNext, &rsLineInfo);
+@@ -677,6 +672,20 @@ namespace dxvk {
+   }
+ 
+ 
++  VkLineRasterizationModeEXT DxvkGraphicsPipelinePreRasterizationState::effectiveLineMode(
++    const DxvkDevice*                     device,
++    const DxvkGraphicsPipelineStateInfo&  state) {
++    VkLineRasterizationModeEXT lineMode = state.rs.lineMode();
++
++    if (lineMode == VK_LINE_RASTERIZATION_MODE_DEFAULT_EXT
++     && state.rs.sampleCount() <= VK_SAMPLE_COUNT_1_BIT
++     && device->features().extLineRasterization.bresenhamLines)
++      lineMode = VK_LINE_RASTERIZATION_MODE_BRESENHAM_EXT;
++
++    return lineMode;
++  }
++
++
+   bool DxvkGraphicsPipelinePreRasterizationState::isLineRendering(
+     const DxvkGraphicsPipelineShaders&    shaders,
+     const DxvkGraphicsPipelineStateInfo&  state) {
+@@ -1218,6 +1227,9 @@ namespace dxvk {
+     if (!fastHandle && !baseHandle)
+       this->logPipelineState(LogLevel::Error, state);
+ 
++    if (baseHandle)
++      g_fastLinkedPipelines.fetch_add(1u, std::memory_order_relaxed);
++
+     m_stats->numGraphicsPipelines += 1;
+     return m_pipelines.add(state, baseHandle, fastHandle, computeAttachmentMask(state));
+   }
+@@ -1240,7 +1252,7 @@ namespace dxvk {
+ 
+     if (state.rs.polygonMode() != VK_POLYGON_MODE_FILL
+      || state.rs.conservativeMode() != VK_CONSERVATIVE_RASTERIZATION_MODE_DISABLED_EXT
+-     || (state.rs.lineMode() != VK_LINE_RASTERIZATION_MODE_DEFAULT_EXT && isLineRendering))
++     || (isLineRendering && DxvkGraphicsPipelinePreRasterizationState::effectiveLineMode(m_device, state) != VK_LINE_RASTERIZATION_MODE_DEFAULT_EXT))
+       return false;
+ 
+     // Depth clip is assumed to be enabled. If the driver does not
+diff --git a/src/dxvk/dxvk_graphics.h b/src/dxvk/dxvk_graphics.h
+index 98eea48..6eb1c51 100644
+--- a/src/dxvk/dxvk_graphics.h
++++ b/src/dxvk/dxvk_graphics.h
+@@ -1,5 +1,6 @@
+ #pragma once
+ 
++#include <atomic>
+ #include <mutex>
+ 
+ #include "dxvk_bind_mask.h"
+@@ -11,6 +12,8 @@
+ #include "dxvk_stats.h"
+ 
+ namespace dxvk {
++
++  inline std::atomic<uint64_t> g_fastLinkedPipelines = { 0u };
+   
+   class DxvkDevice;
+   class DxvkPipelineManager;
+@@ -186,6 +189,10 @@ namespace dxvk {
+       const DxvkGraphicsPipelineShaders&    shaders,
+       const DxvkGraphicsPipelineStateInfo&  state);
+ 
++    static VkLineRasterizationModeEXT effectiveLineMode(
++      const DxvkDevice*                     device,
++      const DxvkGraphicsPipelineStateInfo&  state);
++
+   };
+ 
+ 
