@@ -51,6 +51,7 @@ struct D3d9Resource {
     uint32_t             allocation_pitch;
     bool                 opened;
     bool                 cross_adapter;
+    bool                 open_refused;
     HostAllocation      *lent;
     uint64_t             shared_key;
     uint64_t             leased;

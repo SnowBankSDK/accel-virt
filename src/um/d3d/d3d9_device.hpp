@@ -167,6 +167,7 @@ private:
 
     HRESULT allocate(D3d9Resource &resource);
     HRESULT make_resource(D3DDDIARG_CREATERESOURCE &args, uint32_t flags2);
+    HRESULT create_shared_image(D3d9Resource &resource, const D3DDDIARG_CREATERESOURCE &create, bool texture);
     HRESULT create_across_adapters(D3d9Resource &resource, const D3DDDIARG_CREATERESOURCE &create, bool texture);
     [[nodiscard]] bool adopt_opened(D3d9Resource &resource);
     HRESULT show_lent(const D3d9Resource &resource);

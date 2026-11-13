@@ -34,8 +34,12 @@ TEST(d3d9_surface_role, the_flip_model_swap_chain_of_a_render_adapter_is_two_cro
 
 TEST(d3d9_surface_role, the_same_resources_without_the_cross_adapter_flag_stay_shared_on_their_own_adapter)
 {
-    CHECK(D3d9SurfaceRole(shared_render_target, 0u, video_memory, a8r8g8b8, 1u, 0u).kind() == Kind::shared);
-    CHECK(D3d9SurfaceRole(shared_render_target_texture, 0u, video_memory, x8r8g8b8, 1u, 0u).kind() == Kind::shared);
+    CHECK(D3d9SurfaceRole(shared_render_target, 0u, video_memory, a8r8g8b8, 1u, 0u).kind() == Kind::shared_image);
+    const D3d9SurfaceRole texture(shared_render_target_texture, 0u, video_memory, x8r8g8b8, 1u, 0u);
+    CHECK(texture.kind() == Kind::shared_image);
+    CHECK(texture.texture());
+    CHECK(D3d9SurfaceRole(shared_render_target, 0u, video_memory, a16b16g16r16f, 1u, 0u).kind() == Kind::shared);
+    CHECK(D3d9SurfaceRole(shared_render_target, 0u, video_memory, a8r8g8b8, 1u, 2u).kind() == Kind::shared);
     CHECK(D3d9SurfaceRole(shared_render_target_texture, 0u, video_memory, x8r8g8b8, 3u, 0u).kind() == Kind::local);
     CHECK(D3d9SurfaceRole(shared_render_target, 0u, system_memory, x8r8g8b8, 1u, 0u).kind() == Kind::local);
     CHECK(D3d9SurfaceRole(0x800u, 0u, video_memory, x8r8g8b8, 1u, 0u).kind() == Kind::local);

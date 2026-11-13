@@ -13,13 +13,14 @@ D3d9SurfaceRole::D3d9SurfaceRole(uint32_t flags, uint32_t flags2, uint32_t pool,
     const bool single = surfaces == 1u && (flags & not_one_surface) == 0u;
     const bool colour = (flags & flag_z_buffer) == 0u;
     const bool in_video_memory = pool != pool_system_memory;
+    const bool rows = format == format_a8r8g8b8 || format == format_x8r8g8b8;
+    const bool one_image = single && colour && in_video_memory && rows && multisample == 0u;
     if ((flags & flag_primary) != 0u) {
         kind_ = Kind::primary;
     } else if ((flags2 & flag2_cross_adapter) != 0u) {
-        const bool rows = format == format_a8r8g8b8 || format == format_x8r8g8b8;
-        kind_ = single && colour && in_video_memory && rows && multisample == 0u ? Kind::across_adapters : Kind::refused;
+        kind_ = one_image ? Kind::across_adapters : Kind::refused;
     } else if ((flags & flag_shared) != 0u && (flags & flag_render_target) != 0u && single && in_video_memory) {
-        kind_ = Kind::shared;
+        kind_ = one_image ? Kind::shared_image : Kind::shared;
     }
 }
 

@@ -288,8 +288,9 @@ HRESULT D3d9Device::set_texture(UINT stage, HANDLE texture)
 {
     AV_SCOPE("D3d9Device::set_texture");
     if (recorded(D3d9StateEntry(Kind::texture, stage, texture, 0u, 0u))) return S_OK;
-    const D3d9Resource *const bound = resource(texture);
-    const uint32_t            id = bound != nullptr && bound->kind != D3d9Resource::Kind::system ? bound->id : 0u;
+    D3d9Resource *const bound = resource(texture);
+    if (bound != nullptr && bound->opened) static_cast<void>(adopt_opened(*bound));
+    const uint32_t id = bound != nullptr && bound->kind != D3d9Resource::Kind::system ? bound->id : 0u;
     return d3d9proto::av_d3d9_SetTexture9(wire(), stage, id) ? S_OK : lost(__func__);
 }
 
@@ -499,8 +500,9 @@ HRESULT D3d9Device::set_render_target(const D3DDDIARG_SETRENDERTARGET *args)
     AV_SCOPE("D3d9Device::set_render_target");
     if (args->RenderTargetIndex >= render_targets) return E_INVALIDARG;
     uint32_t                  id = 0u, subresource = 0u;
-    const D3d9Resource *const target = resource(args->hRenderTarget);
-    if (target != nullptr && refuses_opened(*target, "a Direct3D 9 render target that is an opened surface"))
+    D3d9Resource *const target = resource(args->hRenderTarget);
+    if (target != nullptr && !(target->opened && adopt_opened(*target)) &&
+        refuses_opened(*target, "a Direct3D 9 render target that is an opened surface"))
         return E_NOTIMPL;
     if (target != nullptr && !surface_of(*target, args->SubResourceIndex, id, subresource)) return E_INVALIDARG;
     trace("target", args->RenderTargetIndex, id, target != nullptr ? target->subresources[args->SubResourceIndex].width : 0u,

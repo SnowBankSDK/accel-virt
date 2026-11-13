@@ -177,6 +177,9 @@ TEST(d3d9_session_on_commands, with_no_device_selected_each_is_refused)
     CHECK(!session.on_PresentPoint9(nobody, 0u, 0x9152u, 1u));
     CHECK(!session.on_CopyToLent9(nobody, 0u, rect, 0x9153u, 64u, 0u, 0u));
     CHECK(!session.on_CreateLentSurface9(nobody, 1u, 8u, 8u, 21u, 0x9153u, 64u));
+    CHECK(!session.on_CreateSharedSurface9(nobody, 1u, 8u, 8u, 21u, 0x9154u));
+    std::uint32_t opened = 0u;
+    CHECK(!session.on_OpenSharedSurface9(nobody, 0x9154u, opened));
     CHECK(!session.on_CreateVertexShader9(1u, data, sizeof data));
     CHECK(!session.on_CreatePixelShader9(1u, data, sizeof data));
     CHECK(!session.on_CreateVertexDeclaration9(1u, 1u, &element));

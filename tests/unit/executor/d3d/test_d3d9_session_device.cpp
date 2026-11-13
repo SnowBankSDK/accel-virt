@@ -631,6 +631,105 @@ TEST(d3d9_session_device, a_flipped_primary_is_shared_under_its_key_as_it_was_dr
     shares->release(domain, 0u);
 }
 
+TEST(d3d9_session_device,
+     a_shared_render_target_is_the_image_direct3d_11_and_a_second_direct3d_9_device_read_with_no_present_point)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice *device11 = nullptr;
+    av::D3d9HostDevice  *device9 = nullptr;
+    if (!host_devices(apis, device11, device9)) return;
+    av::HostShares *const shares = apis.shares(gpu_of(apis, device9));
+    constexpr std::uint64_t key = 0x9170u, texture_key = 0x9171u, nobodys_key = 0x9172u;
+    constexpr std::uint32_t domain = 1u, kind_surface = 1u, kind_texture = 2u;
+    constexpr std::uint32_t opened = 30u, copy = 31u, shared_texture = 32u, never_opened = 33u;
+    av::HostHeap       surfaces_heap;
+    av::SharedSurfaces surfaces(surfaces_heap);
+    av::D3dBackend     backend(rig.log);
+    av::SessionShares  session;
+    session.bind(*shares, domain, backend);
+    CHECK(backend.initialize(session, rig.imports, device11, nullptr, &surfaces, device9));
+    av::D3dLoopback wire(backend, rig.imports);
+    const Rect all = {0, 0, static_cast<std::int32_t>(size), static_cast<std::int32_t>(size)};
+    const Rect right = {static_cast<std::int32_t>(size / 2u), 0, static_cast<std::int32_t>(size),
+                        static_cast<std::int32_t>(size)};
+    std::uint32_t seen[size * size] = {};
+    const auto through_d3d11 = [&](std::uint64_t name, std::uint32_t left, std::uint32_t far_right) {
+        return device11->read_image(domain, name, seen, size * 4u, size, size) &&
+               (seen[size * (size / 2u)] & 0x00ffffffu) == (left & 0x00ffffffu) &&
+               (seen[size * (size / 2u) + size - 1u] & 0x00ffffffu) == (far_right & 0x00ffffffu);
+    };
+
+    std::uint32_t hresult = 1u;
+    CHECK(av_d3d9_CreateDevice9(wire, device, 0u, &hresult));
+    CHECK_EQ(hresult, 0u);
+    CHECK(av_d3d9_CreateSharedSurface9(wire, target, kind_surface, size, size, format_a8r8g8b8, key));
+    CHECK(av_d3d9_SetRenderTarget9(wire, 0u, target, 0u));
+    CHECK(av_d3d9_Clear9(wire, 0u, nullptr, clear_target, green, 1.0f, 0u));
+    CHECK(av_d3d9_PresentPoint9(wire, target, 0u, key, 0u));
+    bool presented = false;
+    for (int waited = 0; waited < 200 && !presented; waited++) {
+        presented = through_d3d11(key, green, green);
+        if (!presented) usleep(10000);
+    }
+    CHECK(presented);
+    Pixels drawn;
+    CHECK(av_d3d9_Clear9(wire, 0u, nullptr, clear_target, red, 1.0f, 0u));
+    CHECK(av_d3d9_Clear9(wire, 1u, &right, clear_target, blue, 1.0f, 0u));
+    CHECK(read(wire, target, drawn));
+    CHECK_EQ(drawn.hresult, 0u);
+    CHECK_EQ(drawn.at(1u, size / 2u), red);
+    CHECK_EQ(wire.refused(), 0u);
+    CHECK(through_d3d11(key, red, blue));
+
+    CHECK(av_d3d9_SelectDevice9(wire, other_device));
+    hresult = 1u;
+    CHECK(av_d3d9_CreateDevice9(wire, other_device, 0u, &hresult));
+    CHECK_EQ(hresult, 0u);
+    hresult = 1u;
+    CHECK(av_d3d9_OpenSharedSurface9(wire, opened, key, &hresult));
+    CHECK_EQ(hresult, 0u);
+    CHECK(av_d3d9_CreateSurface9(wire, copy, kind_render_target, size, size, format_a8r8g8b8, 0u, 0u, 0u));
+    CHECK(av_d3d9_StretchRect9(wire, opened, 0u, all, copy, 0u, all, 0u));
+    Pixels copied;
+    CHECK(read(wire, copy, copied));
+    CHECK_EQ(copied.hresult, 0u);
+    CHECK_EQ(copied.at(1u, size / 2u), red);
+    CHECK_EQ(copied.at(size - 2u, size / 2u), blue);
+
+    CHECK(av_d3d9_SelectDevice9(wire, device));
+    CHECK(av_d3d9_Clear9(wire, 0u, nullptr, clear_target, green, 1.0f, 0u));
+    CHECK(read(wire, target, drawn));
+    CHECK_EQ(drawn.at(1u, size / 2u), green);
+    CHECK(through_d3d11(key, green, green));
+    CHECK(av_d3d9_PresentPoint9(wire, target, 0u, key, 0u));
+    CHECK(av_d3d9_Finish9(wire, &hresult));
+    CHECK_EQ(hresult, 0u);
+    CHECK(through_d3d11(key, green, green));
+    CHECK(av_d3d9_SelectDevice9(wire, other_device));
+    CHECK(av_d3d9_StretchRect9(wire, opened, 0u, all, copy, 0u, all, 0u));
+    CHECK(read(wire, copy, copied));
+    CHECK_EQ(copied.at(1u, size / 2u), green);
+    CHECK_EQ(copied.at(size - 2u, size / 2u), green);
+    hresult = 0u;
+    CHECK(av_d3d9_OpenSharedSurface9(wire, never_opened, nobodys_key, &hresult));
+    CHECK(hresult != 0u);
+
+    CHECK(av_d3d9_SelectDevice9(wire, device));
+    CHECK(av_d3d9_CreateSharedSurface9(wire, shared_texture, kind_texture, size, size, format_a8r8g8b8, texture_key));
+    CHECK(av_d3d9_SetRenderTarget9(wire, 0u, shared_texture, 0u));
+    CHECK(av_d3d9_Clear9(wire, 0u, nullptr, clear_target, blue, 1.0f, 0u));
+    CHECK(read(wire, shared_texture, drawn));
+    CHECK_EQ(drawn.at(1u, size / 2u), blue);
+    CHECK(through_d3d11(texture_key, blue, blue));
+    CHECK(through_d3d11(key, green, green));
+    CHECK(av_d3d9_Finish9(wire, &hresult));
+    CHECK_EQ(hresult, 0u);
+    CHECK_EQ(wire.refused(), 0u);
+    backend.shut_down();
+    shares->release(domain, 0u);
+}
+
 TEST(d3d9_session_device, a_flip_with_no_compositor_crosses_through_the_cpu)
 {
     av::ExecutorLogRig rig;

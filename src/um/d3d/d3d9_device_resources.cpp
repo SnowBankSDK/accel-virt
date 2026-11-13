@@ -10,6 +10,7 @@
 #include "icd/d3d/cross_adapter_rows.hpp"
 #include "icd/d3d/d3d9_surface_role.hpp"
 #include "icd/d3d/d3d_device_channel.hpp"
+#include "icd/d3d/kernel_surface.hpp"
 #include "icd/d3d/texture_upload.hpp"
 #include "proto/resources/pitched_rows.hpp"
 #include "proto/d3d/d3d9_format_layout.hpp"
@@ -145,6 +146,9 @@ HRESULT D3d9Device::make_resource(D3DDDIARG_CREATERESOURCE &created, uint32_t fl
         break;
     case d3d::D3d9SurfaceRole::Kind::across_adapters:
         host = create_across_adapters(*made, *args, role.texture());
+        break;
+    case d3d::D3d9SurfaceRole::Kind::shared_image:
+        host = create_shared_image(*made, *args, role.texture());
         break;
     case d3d::D3d9SurfaceRole::Kind::local:
     case d3d::D3d9SurfaceRole::Kind::primary:
@@ -341,6 +345,11 @@ HRESULT D3d9Device::open_resource(D3DDDIARG_OPENRESOURCE *args)
     made->opened = true;
     made->allocation_resource = made->runtime;
     made->cross_adapter = descriptor.kind() == AllocationKind::cross_adapter;
+    d3d::KernelSurface shared;
+    if (descriptor.kind() == AllocationKind::surface &&
+        shared.open(args->pPrivateDriverData, args->PrivateDriverDataSize, info.pPrivateDriverData,
+                    info.PrivateDriverDataSize) == Status::ok)
+        made->shared_key = shared.key();
     if (made->cross_adapter) {
         d3d::CrossAdapterRows rows(allocations_, lender_);
         if (FAILED(rows.adopt(made->allocation, descriptor))) {

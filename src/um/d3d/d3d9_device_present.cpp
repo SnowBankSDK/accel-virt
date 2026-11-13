@@ -6,6 +6,7 @@
 #include "icd/d3d/d3d_device_channel.hpp"
 #include "icd/d3d/kernel_surface.hpp"
 #include "proto/d3d/d3d9_present_format.hpp"
+#include "proto/d3d/resource_footprint.hpp"
 #include "proto/resources/pitched_rows.hpp"
 #include "proto/generated/d3d9/d3d9_dispatch_client.h"
 #include "proto/escape/next_point_record.hpp"
@@ -116,12 +117,64 @@ HRESULT D3d9Device::create_across_adapters(D3d9Resource &resource, const D3DDDIA
                : lost(__func__);
 }
 
+HRESULT D3d9Device::create_shared_image(D3d9Resource &resource, const D3DDDIARG_CREATERESOURCE &create, bool texture)
+{
+    AV_SCOPE("D3d9Device::create_shared_image");
+    D3d9Subresource  &top = resource.subresources[0];
+    D3d9PresentFormat presented(0u);
+    if (!presented.take_ddi(static_cast<uint32_t>(resource.format))) return E_INVALIDARG;
+    d3d::KernelSurface surface(top.width, top.height, presented.dxgi());
+    if (surface.make() != Status::ok) return E_INVALIDARG;
+    D3DKMT_HANDLE allocation = 0u;
+    const HRESULT made = allocations_.make(surface, create.hResource, allocation);
+    if (FAILED(made)) return made;
+    resource.allocation = allocation;
+    resource.allocation_resource = create.hResource;
+    resource.allocation_pitch = surface.pitch();
+    resource.shared_key = surface.key();
+    if (resource.shared_key == 0u) return E_FAIL;
+    const uint64_t leased = ResourceFootprint(static_cast<uint32_t>(create.Format), top.width, top.height, 1u, 1u, 1u,
+                                              0u)
+                                .bytes();
+    if (!lease(leased)) return E_OUTOFMEMORY;
+    resource.leased = leased;
+    const uint32_t id = next_id();
+    resource.kind = texture ? D3d9Resource::Kind::texture : D3d9Resource::Kind::surface;
+    if (texture) {
+        resource.levels = 1u;
+        resource.id = id;
+    } else {
+        top.id = id;
+    }
+    uint32_t published = 0u;
+    if (!d3d9proto::av_d3d9_CreateSharedSurface9(wire(), id, texture ? lent_texture : lent_surface, top.width,
+                                                 top.height, static_cast<uint32_t>(create.Format),
+                                                 resource.shared_key) ||
+        !d3d9proto::av_d3d9_Finish9(wire(), &published))
+        return lost(__func__);
+    return published == 0u ? S_OK : lost(__func__);
+}
+
 bool D3d9Device::adopt_opened(D3d9Resource &resource)
 {
     AV_SCOPE("D3d9Device::adopt_opened");
-    if (!resource.opened || !resource.cross_adapter || resource.lent == nullptr) return false;
+    if (!resource.opened) return false;
     D3d9Subresource &top = resource.subresources[0];
-    if (top.id != 0u) return true;
+    if (top.id != 0u || resource.id != 0u) return true;
+    if (!resource.cross_adapter) {
+        if (resource.shared_key == 0u || resource.open_refused) return false;
+        const uint32_t id = next_id();
+        uint32_t       hresult = static_cast<uint32_t>(E_FAIL);
+        if (!d3d9proto::av_d3d9_OpenSharedSurface9(wire(), id, resource.shared_key, &hresult) || hresult != 0u) {
+            resource.open_refused = true;
+            return false;
+        }
+        resource.kind = D3d9Resource::Kind::texture;
+        resource.levels = 1u;
+        resource.id = id;
+        return true;
+    }
+    if (resource.lent == nullptr) return false;
     if (resource.format != D3DDDIFMT_A8R8G8B8 && resource.format != D3DDDIFMT_X8R8G8B8) return false;
     const uint32_t id = next_id();
     if (!d3d9proto::av_d3d9_CreateLentSurface9(wire(), id, lent_surface, top.width, top.height,

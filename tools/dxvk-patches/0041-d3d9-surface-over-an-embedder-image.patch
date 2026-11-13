@@ -9,15 +9,19 @@ render target surface or a one-level texture whose image is the one given,
 imported as D3D11 imports one, and leaves its contents alone.
 ---
 diff --git a/src/d3d9/d3d9_common_texture.cpp b/src/d3d9/d3d9_common_texture.cpp
-index 9d5fe38..2ff36b2 100644
+index 9d5fe38..4e3c16c 100644
 --- a/src/d3d9/d3d9_common_texture.cpp
 +++ b/src/d3d9/d3d9_common_texture.cpp
-@@ -499,6 +499,9 @@ namespace dxvk {
+@@ -499,6 +499,13 @@ namespace dxvk {
        imageInfo.debugName = debugName.c_str();
      }
  
-+    if (m_desc.ImportedImage != VK_NULL_HANDLE)
++    if (m_desc.ImportedImage != VK_NULL_HANDLE) {
++      // Another device or the embedder reads the memory behind the image:
++      // clears and layout changes must reach each submission
++      imageInfo.shared = true;
 +      return m_device->GetDXVKDevice()->importImage(imageInfo, m_desc.ImportedImage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
++    }
 +
      return m_device->GetDXVKDevice()->createImage(imageInfo, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
    }

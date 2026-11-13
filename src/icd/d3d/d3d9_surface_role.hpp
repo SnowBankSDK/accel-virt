@@ -7,7 +7,7 @@ namespace av::d3d {
 
 class D3d9SurfaceRole {
 public:
-    enum class Kind : uint8_t { local, primary, shared, across_adapters, refused };
+    enum class Kind : uint8_t { local, primary, shared, shared_image, across_adapters, refused };
 
     static constexpr uint32_t flag_render_target = 0x1u;
     static constexpr uint32_t flag_z_buffer = 0x2u;

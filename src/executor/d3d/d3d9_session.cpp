@@ -19,7 +19,7 @@ namespace av {
 
 D3d9Session::D3d9Session(const GuestBytes &guest, D3dObjectTable &objects, LeasedObjects &leased, WatchedBlocks &blocks,
                          SliceStorages &storages, EventfdWake &wake, DriverLog &lines)
-    : d3d9proto::ServerDispatch(guest), host_(nullptr), surfaces_(nullptr), flips_(blocks), lent_(blocks), rows_(blocks), imports_(nullptr), objects_(objects), leased_(leased), blocks_(blocks),
+    : d3d9proto::ServerDispatch(guest), host_(nullptr), surfaces_(nullptr), flips_(blocks), lent_(blocks), rows_(blocks), aliases_(blocks, Pool::paged), device11_(nullptr), shares_(nullptr), imports_(nullptr), objects_(objects), leased_(leased), blocks_(blocks),
       devices_(blocks), lines_(lines), refusal_(lines_), arena_(nullptr), lanes_(blocks, wake, lines_), slices_(blocks, storages, lanes_, lines_), line_ends_(),
       refused_(blocks), clock_(), lost_(false)
 {
@@ -40,6 +40,8 @@ void D3d9Session::initialize(D3d9HostDevice *host, SharedSurfaces *surfaces, D3d
     surfaces_ = surfaces;
     lost_ = false;
     flips_.bind(device11, shares);
+    device11_ = device11;
+    shares_ = shares;
     slices_.initialize(host_, imports);
     imports_ = imports;
 }
@@ -53,6 +55,9 @@ void D3d9Session::shut_down()
     imports_ = nullptr;
     objects_.remove_kinds(D3dObjectKind::surface9, D3dObjectKind::query9);
     rows_.release();
+    aliases_.clear();
+    device11_ = nullptr;
+    shares_ = nullptr;
     refused_.clear();
     for (IDirect3DDevice9 *device = devices_.remove_any(); device != nullptr; device = devices_.remove_any())
         device->Release();
@@ -176,6 +181,7 @@ bool D3d9Session::on_Destroy9(uint32_t object)
     D3dObjectKind kind = D3dObjectKind::none;
     if (objects_.find_any(object, kind) == nullptr || kind < D3dObjectKind::surface9) return false;
     objects_.remove(object);
+    static_cast<void>(aliases_.erase(object));
     slices_.forget(object);
     return true;
 }

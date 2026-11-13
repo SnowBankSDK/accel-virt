@@ -105,6 +105,14 @@ namespace av::d3d9proto {
 // What the memory held is kept. Memory that does not hold the rows, a format that cannot be drawn into as rows, or a
 // device without Vulkan interop is refused.
 [[nodiscard]] bool av_d3d9_CreateLentSurface9(::av::ClientTransport& t, uint32_t surface, uint32_t kind, uint32_t width, uint32_t height, uint32_t format, uint64_t memory, uint32_t pitch);
+// A render target shared under `key`: kind 1 a render-target surface, kind 2 a one-level render-target texture,
+// `format` a D3DFORMAT. Its image is the image of the texture published under the key, so what the device draws is what
+// every device that opens the key reads, in Direct3D 9 and Direct3D 11, without a copy and without a present point. A
+// format that cannot be shared this way or a device without Vulkan interop is refused.
+[[nodiscard]] bool av_d3d9_CreateSharedSurface9(::av::ClientTransport& t, uint32_t surface, uint32_t kind, uint32_t width, uint32_t height, uint32_t format, uint64_t key);
+// A one-level render-target texture over the image of the texture another device published under `key`. hresult is
+// D3DERR_INVALIDCALL when nothing of a shareable format is published under the key; no surface is made then.
+[[nodiscard]] bool av_d3d9_OpenSharedSurface9(::av::ClientTransport& t, uint32_t surface, uint64_t key, uint32_t* hresult);
 // A vertex shader from its Direct3D 9 token stream, as IDirect3DDevice9::CreateVertexShader takes it.
 [[nodiscard]] bool av_d3d9_CreateVertexShader9(::av::ClientTransport& t, uint32_t shader, const void* code, uint64_t code_size);
 [[nodiscard]] bool av_d3d9_CreatePixelShader9(::av::ClientTransport& t, uint32_t shader, const void* code, uint64_t code_size);

@@ -104,6 +104,9 @@ public:
     bool on_PresentPoint9(uint32_t surface, uint32_t subresource, uint64_t key, uint32_t point) override;
     bool on_CopyToLent9(uint32_t surface, uint32_t subresource, const d3d9proto::Rect &source_rect, uint64_t memory,
                         uint32_t pitch, uint32_t x, uint32_t y) override;
+    bool on_CreateSharedSurface9(uint32_t surface, uint32_t kind, uint32_t width, uint32_t height, uint32_t format,
+                                 uint64_t key) override;
+    bool on_OpenSharedSurface9(uint32_t surface, uint64_t key, uint32_t &hresult) override;
     bool on_CreateLentSurface9(uint32_t surface, uint32_t kind, uint32_t width, uint32_t height, uint32_t format,
                                uint64_t memory, uint32_t pitch) override;
 
@@ -172,6 +175,9 @@ private:
     D3d9FlipShares  flips_;
     D3d9LentCopies  lent_;
     D3d9RowSurfaces rows_;
+    KeyedSlots<uint32_t, uint64_t> aliases_;
+    D3d11HostDevice *device11_;
+    SessionShares   *shares_;
     ImportTable    *imports_;
     D3dObjectTable &objects_;
     LeasedObjects  &leased_;

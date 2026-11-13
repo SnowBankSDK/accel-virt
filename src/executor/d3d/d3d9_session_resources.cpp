@@ -4,7 +4,10 @@
 #include "executor/d3d/d3d9_session.hpp"
 #include "executor/d3d/d3d9_texture_write.hpp"
 #include "executor/d3d/leased_objects.hpp"
+#include "executor/sharing/session_shares.hpp"
+#include "executor/shim/d3d11_host_device.hpp"
 #include "executor/shim/d3d9_host_device.hpp"
+#include "proto/d3d/d3d9_present_format.hpp"
 #include "executor/shim/d3d_headers.hpp"
 #include "executor/d3d/shared_surfaces.hpp"
 #include "executor/import_table.hpp"
@@ -483,6 +486,12 @@ bool D3d9Session::on_PresentPoint9(uint32_t surface_id, uint32_t subresource, ui
     if (source == nullptr) return false;
     ScopeExit             release([source] { source->Release(); });
     if (point == 0u && key != 0u) {
+        const uint64_t *const aliased = aliases_.find(surface_id);
+        if (aliased != nullptr && *aliased == key) {
+            rows_.submit(device());
+            if (shares_ != nullptr) shares_->written(key);
+            return true;
+        }
         const Status shown = flips_.flip(device(), source, key);
         if (shown != Status::ok && shown != Status::not_supported) lines_.note_hex("a primary's flip was not shared, key", key, 16u);
         return shown == Status::ok || shown == Status::not_supported;
@@ -522,6 +531,69 @@ bool D3d9Session::on_CreateLentSurface9(uint32_t surface, uint32_t kind, uint32_
     }
     return keep(surface, kind == D3d9RowSurfaces::kind_texture ? D3dObjectKind::texture9 : D3dObjectKind::surface9,
                 made);
+}
+
+bool D3d9Session::on_CreateSharedSurface9(uint32_t surface, uint32_t kind, uint32_t width, uint32_t height,
+                                          uint32_t format, uint64_t key)
+{
+    AV_SCOPE("D3d9Session::on_CreateSharedSurface9");
+    if (device() == nullptr || device11_ == nullptr || shares_ == nullptr || key == 0u || width == 0u ||
+        height == 0u || width > max_dimension || height > max_dimension ||
+        (format != static_cast<uint32_t>(D3DFMT_A8R8G8B8) && format != static_cast<uint32_t>(D3DFMT_X8R8G8B8)))
+        return false;
+    leased_.charge(surface, ResourceFootprint(format, width, height, 1u, 1u, 1u, 0u).bytes());
+    const ScopeExit       settled([this] { leased_.settle(); });
+    D3D11_TEXTURE2D_DESC1 described = {};
+    described.Width = width;
+    described.Height = height;
+    described.MipLevels = 1u;
+    described.ArraySize = 1u;
+    D3d9PresentFormat presented(DXGI_FORMAT_B8G8R8A8_UNORM);
+    static_cast<void>(presented.take_ddi(format));
+    described.Format = static_cast<DXGI_FORMAT>(presented.dxgi());
+    described.SampleDesc.Count = 1u;
+    described.Usage = D3D11_USAGE_DEFAULT;
+    described.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+    described.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
+    device11_->lock(nullptr);
+    ID3D11Texture2D *const shared = device11_->make_tiled(described);
+    device11_->unlock();
+    if (shared == nullptr) return false;
+    const ScopeExit release([shared] { shared->Release(); });
+    IUnknown       *made = nullptr;
+    const Status    aliased = rows_.make_over(device(), kind, *device11_, shared, made);
+    if (aliased != Status::ok) {
+        lines_.note_hex("a shared surface was not made over its image, status", static_cast<uint32_t>(aliased), 8u);
+        return false;
+    }
+    if (shares_->publish_resource(key, shared, ShareOrigin::d3d11) != Status::ok ||
+        aliases_.reserve(aliases_.count() + 1u) != Status::ok) {
+        made->Release();
+        return false;
+    }
+    uint32_t slot = 0u;
+    static_cast<void>(aliases_.insert(surface, key, slot));
+    return keep(surface, kind == D3d9RowSurfaces::kind_texture ? D3dObjectKind::texture9 : D3dObjectKind::surface9,
+                made);
+}
+
+bool D3d9Session::on_OpenSharedSurface9(uint32_t surface, uint64_t key, uint32_t &hresult)
+{
+    AV_SCOPE("D3d9Session::on_OpenSharedSurface9");
+    hresult = static_cast<uint32_t>(D3DERR_INVALIDCALL);
+    if (device() == nullptr) return false;
+    if (device11_ == nullptr || shares_ == nullptr || key == 0u) return true;
+    IUnknown *const published = device11_->open_shared(shares_->domain(), key);
+    if (published == nullptr) return true;
+    const ScopeExit  release([published] { published->Release(); });
+    ID3D11Texture2D *shared = nullptr;
+    if (FAILED(published->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void **>(&shared)))) return true;
+    const ScopeExit release_texture([shared] { shared->Release(); });
+    IUnknown       *made = nullptr;
+    if (rows_.make_over(device(), D3d9RowSurfaces::kind_texture, *device11_, shared, made) != Status::ok) return true;
+    if (!keep(surface, D3dObjectKind::texture9, made)) return false;
+    hresult = 0u;
+    return true;
 }
 
 }

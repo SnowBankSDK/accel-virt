@@ -11,12 +11,16 @@
 #include <stdint.h>
 
 struct IDirect3DDevice9;
+struct ID3D11Texture2D;
 struct ID3D9VkInteropDevice1;
 struct IUnknown;
 
 namespace av {
 
 class BlockSource;
+class D3d11HostDevice;
+class ExportableImageInfo;
+class OwnedFd;
 class SourceMemory;
 
 class D3d9RowSurfaces final : public ImageRetirement {
@@ -29,6 +33,9 @@ public:
 
     [[nodiscard]] Status make(IDirect3DDevice9 *device, uint32_t kind, uint32_t width, uint32_t height,
                               uint32_t format, const SourceMemory &memory, uint32_t pitch, IUnknown *&made);
+    [[nodiscard]] Status make_over(IDirect3DDevice9 *device, uint32_t kind, D3d11HostDevice &owner,
+                                   ID3D11Texture2D *shared, IUnknown *&made);
+    void     submit(IDirect3DDevice9 *device);
     void     forget_device(IDirect3DDevice9 *device);
     void     collect();
     void     release();
@@ -46,6 +53,9 @@ private:
     };
 
     Maker *maker_for(IDirect3DDevice9 *device);
+    [[nodiscard]] Status wrap(Maker &maker, uint32_t kind, uint32_t width, uint32_t height, uint32_t format,
+                              const ExportableImageInfo &described, OwnedFd &descriptor, IUnknown *keep,
+                              IUnknown *&made);
     void   close(Maker &maker);
     void   idle(Maker &maker);
     void   unbind(Maker &maker);

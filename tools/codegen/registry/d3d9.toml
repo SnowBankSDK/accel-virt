@@ -217,6 +217,23 @@ device without Vulkan interop is refused."""
 params = ["u32 surface", "u32 kind", "u32 width", "u32 height", "u32 format", "u64 memory", "u32 pitch"]
 
 [[command]]
+name = "CreateSharedSurface9"
+id = 0x2110
+doc = """A render target shared under `key`: kind 1 a render-target surface, kind 2 a one-level render-target texture,
+`format` a D3DFORMAT. Its image is the image of the texture published under the key, so what the device draws is what
+every device that opens the key reads, in Direct3D 9 and Direct3D 11, without a copy and without a present point. A
+format that cannot be shared this way or a device without Vulkan interop is refused."""
+params = ["u32 surface", "u32 kind", "u32 width", "u32 height", "u32 format", "u64 key"]
+
+[[command]]
+name = "OpenSharedSurface9"
+id = 0x2111
+doc = """A one-level render-target texture over the image of the texture another device published under `key`. hresult is
+D3DERR_INVALIDCALL when nothing of a shareable format is published under the key; no surface is made then."""
+params = ["u32 surface", "u64 key"]
+reply = ["u32 hresult"]
+
+[[command]]
 name = "CreateVertexShader9"
 id = 0x2300
 doc = """A vertex shader from its Direct3D 9 token stream, as IDirect3DDevice9::CreateVertexShader takes it."""

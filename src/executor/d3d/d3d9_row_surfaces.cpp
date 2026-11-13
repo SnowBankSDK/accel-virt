@@ -2,7 +2,10 @@
 
 #include "core/trace/function_scope.hpp"
 #include "executor/owned_fd.hpp"
+#include "executor/shim/d3d11_host_device.hpp"
 #include "executor/shim/d3d_headers.hpp"
+#include "executor/sharing/shared_image_shape.hpp"
+#include "proto/d3d/dxgi_format.hpp"
 #include "executor/source_memory.hpp"
 #include "proto/d3d/d3d9_present_format.hpp"
 #include "proto/vulkan/exportable_image_info.hpp"
@@ -12,6 +15,7 @@ namespace av {
 namespace {
 
 constexpr GUID     image_data = {0x7a3e91c5, 0x2d48, 0x4b0f, {0xa6, 0x13, 0x9e, 0x52, 0xc7, 0x08, 0xf1, 0x6d}};
+constexpr GUID     owner_data = {0x1c8f4e27, 0x6ab3, 0x4d95, {0xb2, 0x7e, 0x40, 0xd1, 0x93, 0x5f, 0x0a, 0xe8}};
 constexpr uint64_t drm_format_mod_linear = 0u;
 constexpr uint32_t bind_drawn_and_sampled = 0x28u;
 constexpr uint32_t texel_bytes = 4u;
@@ -64,6 +68,36 @@ Status D3d9RowSurfaces::make(IDirect3DDevice9 *device, uint32_t kind, uint32_t w
                                         drm_format_mod_linear, 0u, pitch);
     OwnedFd descriptor;
     if (!described.supported() || !memory.share(descriptor)) return Status::not_supported;
+    return wrap(*maker, kind, width, height, format, described, descriptor, nullptr, made);
+}
+
+Status D3d9RowSurfaces::make_over(IDirect3DDevice9 *device, uint32_t kind, D3d11HostDevice &owner,
+                                  ID3D11Texture2D *shared, IUnknown *&made)
+{
+    AV_SCOPE("D3d9RowSurfaces::make_over");
+    made = nullptr;
+    if (device == nullptr || shared == nullptr || (kind != kind_surface && kind != kind_texture))
+        return Status::invalid_parameter;
+    OwnedFd          descriptor;
+    SharedImageShape shape;
+    if (!owner.carry_image(shared, descriptor, shape)) return Status::not_supported;
+    const uint32_t format = DxgiFormat(shape.format()).ddi_format();
+    if (!drawn_as_rows(format)) return Status::not_supported;
+    collect();
+    Maker *const maker = maker_for(device);
+    if (maker == nullptr) return Status::not_supported;
+    const ExportableImageInfo described(shape.width(), shape.height(), 1u, 1u, 1u, shape.format(),
+                                        bind_drawn_and_sampled, shape.modifier(), shape.offset(), shape.pitch());
+    if (!described.supported()) return Status::not_supported;
+    return wrap(*maker, kind, shape.width(), shape.height(), format, described, descriptor, shared, made);
+}
+
+Status D3d9RowSurfaces::wrap(Maker &maker_ref, uint32_t kind, uint32_t width, uint32_t height, uint32_t format,
+                             const ExportableImageInfo &described, OwnedFd &descriptor, IUnknown *keep,
+                             IUnknown *&made)
+{
+    AV_SCOPE("D3d9RowSurfaces::wrap");
+    Maker *const maker = &maker_ref;
     ExportableImage *image = nullptr;
     if (maker->images_.create(image, *this) != Status::ok) return Status::no_memory;
     if (!image->image().import_dma_buf(maker->vulkan_.table(), described.info(), descriptor)) {
@@ -95,6 +129,10 @@ Status D3d9RowSurfaces::make(IDirect3DDevice9 *device, uint32_t kind, uint32_t w
         idle(*maker);
         image->free();
         static_cast<void>(maker->images_.destroy(image));
+        return Status::no_memory;
+    }
+    if (keep != nullptr && FAILED(resource->SetPrivateData(owner_data, keep, sizeof(IUnknown *), D3DSPD_IUNKNOWN))) {
+        resource->Release();
         return Status::no_memory;
     }
     made = resource;
@@ -184,6 +222,13 @@ void D3d9RowSurfaces::collect()
         static_cast<void>(makers_.destroy(maker));
         return true;
     });
+}
+
+void D3d9RowSurfaces::submit(IDirect3DDevice9 *device)
+{
+    AV_SCOPE("D3d9RowSurfaces::submit");
+    Maker *const *known = maker_of_.find(reinterpret_cast<uintptr_t>(device));
+    if (known != nullptr && (*known)->interop_ != nullptr) (*known)->interop_->FlushCommands();
 }
 
 void D3d9RowSurfaces::forget_device(IDirect3DDevice9 *device)
