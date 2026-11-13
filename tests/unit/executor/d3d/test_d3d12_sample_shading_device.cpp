@@ -38,10 +38,11 @@ constexpr std::uint32_t topology_type_triangle = 3u;
 constexpr std::size_t   region_bytes = 8u << 20u;
 
 constexpr std::uint32_t spirv_magic = 0x07230203u;
-constexpr std::uint32_t op_entry_point = 15u, op_variable = 59u, op_decorate = 71u;
+constexpr std::uint32_t op_ext_inst = 12u, op_entry_point = 15u, op_variable = 59u, op_access_chain = 65u, op_decorate = 71u;
+constexpr std::uint32_t interpolate_at_centroid = 76u, interpolate_at_sample = 77u, interpolate_at_offset = 78u;
 constexpr std::uint32_t model_fragment = 4u, storage_input = 1u;
 constexpr std::uint32_t decoration_builtin = 11u, decoration_no_perspective = 13u, decoration_flat = 14u,
-                        decoration_sample = 17u, decoration_location = 30u;
+                        decoration_centroid = 16u, decoration_sample = 17u, decoration_location = 30u;
 constexpr std::uint32_t builtin_sample_id = 18u;
 
 enum Id : std::uint32_t { root = 1, per_sample_pipeline, per_pixel_pipeline };
@@ -51,8 +52,17 @@ struct Input {
     bool          located = false;
     bool          flat = false;
     bool          no_perspective = false;
+    bool          centroid = false;
     bool          sample = false;
     bool          sample_id = false;
+    std::uint32_t at_centre = 0u;
+    std::uint32_t at_centroid = 0u;
+    std::uint32_t at_sample = 0u;
+};
+
+struct Chain {
+    std::uint32_t id;
+    std::uint32_t base;
 };
 
 struct Fragment {
@@ -86,6 +96,7 @@ bool read_fragment(const char *path, Fragment &fragment)
     bool               fragment_stage = false;
     std::vector<Input> decorated;
     std::vector<std::uint32_t> stage_inputs;
+    std::vector<Chain>         chains;
     for (std::size_t at = 5u; at < count;) {
         const std::uint32_t length = words[at] >> 16u;
         const std::uint32_t op = words[at] & 0xffffu;
@@ -98,9 +109,20 @@ bool read_fragment(const char *path, Fragment &fragment)
             input.located = input.located || decoration == decoration_location;
             input.flat = input.flat || decoration == decoration_flat;
             input.no_perspective = input.no_perspective || decoration == decoration_no_perspective;
+            input.centroid = input.centroid || decoration == decoration_centroid;
             input.sample = input.sample || decoration == decoration_sample;
             input.sample_id = input.sample_id ||
                               (decoration == decoration_builtin && length > 3u && words[at + 3u] == builtin_sample_id);
+        }
+        if (op == op_access_chain && length > 3u) chains.push_back(Chain{words[at + 2u], words[at + 3u]});
+        if (op == op_ext_inst && length > 5u) {
+            std::uint32_t interpolant = words[at + 5u];
+            for (const Chain &chain : chains)
+                if (chain.id == interpolant) interpolant = chain.base;
+            Input &input = input_of(decorated, interpolant);
+            input.at_centroid += words[at + 4u] == interpolate_at_centroid ? 1u : 0u;
+            input.at_sample += words[at + 4u] == interpolate_at_sample ? 1u : 0u;
+            input.at_centre += words[at + 4u] == interpolate_at_offset ? 1u : 0u;
         }
         at += length;
     }
@@ -177,7 +199,7 @@ bool make_pipeline(av::D3dLoopback &wire, std::uint32_t id, const std::uint32_t 
 
 }
 
-TEST(d3d12_sample_shading_device, a_pixel_shader_that_reads_the_sample_index_takes_every_interpolated_input_at_the_sample_and_one_that_does_not_takes_none)
+TEST(d3d12_sample_shading_device, a_pixel_shader_that_reads_the_sample_index_takes_its_plain_inputs_at_the_pixel_centre_and_its_centroid_inputs_at_the_centroid_and_one_that_runs_per_pixel_loads_them_as_they_are)
 {
     char directory[] = "/tmp/av-sample-shading-XXXXXX";
     CHECK(mkdtemp(directory) != nullptr);
@@ -218,19 +240,29 @@ TEST(d3d12_sample_shading_device, a_pixel_shader_that_reads_the_sample_index_tak
     std::uint32_t per_sample = 0u, per_pixel = 0u;
     for (const Fragment &fragment : fragments) {
         const bool    sampled = fragment.reads_sample_id();
-        std::uint32_t interpolated = 0u, flat = 0u, kept_plane = 0u;
+        std::uint32_t plain = 0u, flat = 0u, kept_plane = 0u, centroid = 0u;
         for (const Input &input : fragment.inputs) {
             if (!input.located) continue;
+            CHECK(!input.sample);
+            CHECK_EQ(input.at_sample, 0u);
             if (input.flat) {
                 flat++;
-                CHECK(!input.sample);
+                CHECK_EQ(input.at_centre + input.at_centroid, 0u);
                 continue;
             }
-            interpolated++;
             kept_plane += input.no_perspective ? 1u : 0u;
-            CHECK_EQ(input.sample, sampled);
+            if (input.centroid) {
+                centroid++;
+                CHECK_EQ(input.at_centre, 0u);
+                CHECK_EQ(input.at_centroid != 0u, sampled);
+                continue;
+            }
+            plain++;
+            CHECK_EQ(input.at_centroid, 0u);
+            CHECK_EQ(input.at_centre != 0u, sampled);
         }
-        CHECK_EQ(interpolated, 2u);
+        CHECK_EQ(plain, 2u);
+        CHECK_EQ(centroid, 1u);
         CHECK_EQ(flat, 1u);
         CHECK_EQ(kept_plane, 1u);
         per_sample += sampled ? 1u : 0u;

@@ -1,0 +1,98 @@
+From: accel-virt
+Subject: [PATCH] a pixel shader that runs per sample reads its plain inputs at the pixel centre
+
+A pixel shader whose input signature has the sample index, or any input
+declared with sample interpolation, runs once per sample. Direct3D still
+evaluates an input declared linear at the pixel centre and one declared
+centroid at the centroid; only inputs declared sample are evaluated at the
+sample. Vulkan leaves the location of an undecorated input of a shader that
+runs per sample to the implementation, and some pick the sample. In such a
+shader a floating point user input that is not declared flat or sample is now
+read through InterpolateAtOffset with a zero offset, or InterpolateAtCentroid
+when it is declared centroid. Shaders that run per pixel are unchanged.
+---
+diff --git a/dxil_converter.cpp b/dxil_converter.cpp
+index 40ba5f8..519bfaa 100644
+--- a/dxil_converter.cpp
++++ b/dxil_converter.cpp
+@@ -5631,6 +5631,20 @@ bool Converter::Impl::emit_stage_input_variables()
+ 	if (auto_patch_location)
+ 		patch_location_offset = 0;
+ 
++	bool runs_per_sample = false;
++	if (execution_model == spv::ExecutionModelFragment)
++	{
++		for (unsigned i = 0; i < inputs_node->getNumOperands(); i++)
++		{
++			auto *input = llvm::cast<llvm::MDNode>(inputs_node->getOperand(i));
++			auto declared_value = static_cast<DXIL::Semantic>(get_constant_metadata(input, 3));
++			auto declared_mode = static_cast<DXIL::InterpolationMode>(get_constant_metadata(input, 5));
++			runs_per_sample = runs_per_sample || declared_value == DXIL::Semantic::SampleIndex ||
++			                  declared_mode == DXIL::InterpolationMode::LinearSample ||
++			                  declared_mode == DXIL::InterpolationMode::LinearNoperspectiveSample;
++		}
++	}
++
+ 	for (unsigned i = 0; i < inputs_node->getNumOperands(); i++)
+ 	{
+ 		bool arrayed_input = stage_arrayed_inputs;
+@@ -5710,6 +5724,19 @@ bool Converter::Impl::emit_stage_input_variables()
+ 
+ 		bool per_vertex = llvm_attribute_at_vertex_indices.count(element_id) != 0;
+ 
++		if (runs_per_sample && !per_vertex && system_value == DXIL::Semantic::User &&
++		    (effective_element_type == DXIL::ComponentType::F32 || effective_element_type == DXIL::ComponentType::F16 ||
++		     effective_element_type == DXIL::ComponentType::F64))
++		{
++			if (interpolation == DXIL::InterpolationMode::Undefined ||
++			    interpolation == DXIL::InterpolationMode::Linear ||
++			    interpolation == DXIL::InterpolationMode::LinearNoperspective)
++				input_pixel_interpolation[element_id] = GLSLstd450InterpolateAtOffset;
++			else if (interpolation == DXIL::InterpolationMode::LinearCentroid ||
++			         interpolation == DXIL::InterpolationMode::LinearNoperspectiveCentroid)
++				input_pixel_interpolation[element_id] = GLSLstd450InterpolateAtCentroid;
++		}
++
+ 		if (arrayed_input)
+ 		{
+ 			type_id =
+diff --git a/opcodes/converter_impl.hpp b/opcodes/converter_impl.hpp
+index a6823b1..17f458d 100644
+--- a/opcodes/converter_impl.hpp
++++ b/opcodes/converter_impl.hpp
+@@ -580,6 +580,7 @@ struct Converter::Impl
+ 	};
+ 	UnorderedMap<uint32_t, ElementMeta> input_elements_meta;
+ 	UnorderedMap<uint32_t, ElementMeta> output_elements_meta;
++	UnorderedMap<uint32_t, uint32_t> input_pixel_interpolation;
+ 	UnorderedMap<uint32_t, ElementPatchMeta> patch_elements_meta;
+ 	UnorderedMap<uint32_t, ClipCullMeta> input_clip_cull_meta;
+ 	UnorderedMap<uint32_t, ClipCullMeta> output_clip_cull_meta;
+diff --git a/opcodes/dxil/dxil_resources.cpp b/opcodes/dxil/dxil_resources.cpp
+index 56dbc68..d063113 100644
+--- a/opcodes/dxil/dxil_resources.cpp
++++ b/opcodes/dxil/dxil_resources.cpp
+@@ -277,6 +277,23 @@ bool emit_load_input_instruction(Converter::Impl &impl, const llvm::CallInst *in
+ 		op->add_id(builder.makeUintConstant(vid));
+ 		impl.add(op);
+ 	}
++	else if (impl.input_pixel_interpolation.count(input_element_index) != 0)
++	{
++		const uint32_t at = impl.input_pixel_interpolation[input_element_index];
++		if (!impl.glsl_std450_ext)
++			impl.glsl_std450_ext = builder.import("GLSL.std.450");
++		auto *op = impl.allocate(spv::OpExtInst, instruction, load_type);
++		op->add_id(impl.glsl_std450_ext);
++		op->add_literal(at);
++		op->add_id(ptr_id);
++		if (at == GLSLstd450InterpolateAtOffset)
++		{
++			spv::Id centre[2] = { builder.makeFloatConstant(0.0f), builder.makeFloatConstant(0.0f) };
++			op->add_id(impl.build_constant_vector(builder.makeFloatType(32), centre, 2));
++		}
++		impl.add(op);
++		builder.addCapability(spv::CapabilityInterpolationFunction);
++	}
+ 	else
+ 	{
+ 		auto *op = impl.allocate(spv::OpLoad, instruction, load_type);
