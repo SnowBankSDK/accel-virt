@@ -80,18 +80,6 @@ extern "C" HRESULT APIENTRY avumd_d3d9_DrawIndexedPrimitive2(HANDLE device, cons
 { const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
   return call.noted("DrawIndexedPrimitive2", call.traced("DrawIndexedPrimitive2", &D3d9Device::draw_indexed_primitive2, a1, a2, a3, a4)); }
 
-extern "C" HRESULT APIENTRY avumd_d3d9_VolBlt(HANDLE device, const D3DDDIARG_VOLUMEBLT * a1)
-{ const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
-  return call.noted("VolBlt", call.traced("VolBlt", &D3d9Device::vol_blt, a1)); }
-
-extern "C" HRESULT APIENTRY avumd_d3d9_BufBlt(HANDLE device, const D3DDDIARG_BUFFERBLT * a1)
-{ const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
-  return call.noted("BufBlt", call.traced("BufBlt", &D3d9Device::buf_blt, a1)); }
-
-extern "C" HRESULT APIENTRY avumd_d3d9_TexBlt(HANDLE device, const D3DDDIARG_TEXBLT * a1)
-{ const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
-  return call.noted("TexBlt", call.traced("TexBlt", &D3d9Device::tex_blt, a1)); }
-
 extern "C" HRESULT APIENTRY avumd_d3d9_StateSet(HANDLE device, D3DDDIARG_STATESET * a1)
 { const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
   return call.noted("StateSet", call.traced("StateSet", &D3d9Device::state_set, a1)); }
@@ -164,10 +152,6 @@ extern "C" HRESULT APIENTRY avumd_d3d9_Unlock(HANDLE device, const D3DDDIARG_UNL
 { const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
   return call.noted("Unlock", call.traced("Unlock", &D3d9Device::unlock, a1)); }
 
-extern "C" HRESULT APIENTRY avumd_d3d9_CreateResource(HANDLE device, D3DDDIARG_CREATERESOURCE * a1)
-{ const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
-  return call.noted("CreateResource", call.traced("CreateResource", &D3d9Device::create_resource, a1)); }
-
 extern "C" HRESULT APIENTRY avumd_d3d9_DestroyResource(HANDLE device, HANDLE a1)
 { const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
   return call.noted("DestroyResource", call.traced("DestroyResource", &D3d9Device::destroy_resource, a1)); }
@@ -175,14 +159,6 @@ extern "C" HRESULT APIENTRY avumd_d3d9_DestroyResource(HANDLE device, HANDLE a1)
 extern "C" HRESULT APIENTRY avumd_d3d9_SetDisplayMode(HANDLE device, const D3DDDIARG_SETDISPLAYMODE * a1)
 { const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
   return call.noted("SetDisplayMode", call.traced("SetDisplayMode", &D3d9Device::set_display_mode, a1)); }
-
-extern "C" HRESULT APIENTRY avumd_d3d9_Present(HANDLE device, const D3DDDIARG_PRESENT * a1)
-{ const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
-  return call.noted("Present", call.traced("Present", &D3d9Device::present, a1)); }
-
-extern "C" HRESULT APIENTRY avumd_d3d9_Flush(HANDLE device)
-{ const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
-  return call.noted("Flush", call.traced("Flush", &D3d9Device::flush)); }
 
 extern "C" HRESULT APIENTRY avumd_d3d9_CreateVertexShaderFunc(HANDLE device, D3DDDIARG_CREATEVERTEXSHADERFUNC * a1, const UINT * a2)
 { const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
@@ -487,9 +463,6 @@ void fill_device_funcs9(D3DDDI_DEVICEFUNCS &table)
     table.pfnDrawTriPatch = &avumd_d3d9_DrawTriPatch;
     table.pfnDrawPrimitive2 = &avumd_d3d9_DrawPrimitive2;
     table.pfnDrawIndexedPrimitive2 = &avumd_d3d9_DrawIndexedPrimitive2;
-    table.pfnVolBlt = &avumd_d3d9_VolBlt;
-    table.pfnBufBlt = &avumd_d3d9_BufBlt;
-    table.pfnTexBlt = &avumd_d3d9_TexBlt;
     table.pfnStateSet = &avumd_d3d9_StateSet;
     table.pfnSetPriority = &avumd_d3d9_SetPriority;
     table.pfnClear = &avumd_d3d9_Clear;
@@ -508,11 +481,8 @@ void fill_device_funcs9(D3DDDI_DEVICEFUNCS &table)
     table.pfnGetInfo = &avumd_d3d9_GetInfo;
     table.pfnLock = &avumd_d3d9_Lock;
     table.pfnUnlock = &avumd_d3d9_Unlock;
-    table.pfnCreateResource = &avumd_d3d9_CreateResource;
     table.pfnDestroyResource = &avumd_d3d9_DestroyResource;
     table.pfnSetDisplayMode = &avumd_d3d9_SetDisplayMode;
-    table.pfnPresent = &avumd_d3d9_Present;
-    table.pfnFlush = &avumd_d3d9_Flush;
     table.pfnCreateVertexShaderFunc = &avumd_d3d9_CreateVertexShaderFunc;
     table.pfnDeleteVertexShaderFunc = &avumd_d3d9_DeleteVertexShaderFunc;
     table.pfnSetVertexShaderFunc = &avumd_d3d9_SetVertexShaderFunc;

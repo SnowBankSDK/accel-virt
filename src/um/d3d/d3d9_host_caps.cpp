@@ -1,3 +1,4 @@
+#include "icd/d3d/d3d9_level_caps.hpp"
 #include "um/d3d/d3d9_host_caps.hpp"
 
 #include "core/trace/function_scope.hpp"
@@ -140,7 +141,7 @@ HRESULT D3d9HostCaps::answer(const D3DDDIARG_GETCAPS &args) const
     case D3DDDICAPS_GETD3DQUERYDATA: return copy_out(args, queries, sizeof(queries));
     case D3DDDICAPS_GETGAMMARAMPCAPS: return copy_out(args, &gamma, sizeof(gamma));
     case D3DDDICAPS_GETMULTISAMPLEQUALITYLEVELS: return answer_quality(args);
-    default: return E_INVALIDARG;
+    default: return static_cast<HRESULT>(d3d::D3d9LevelCaps().answer(static_cast<uint32_t>(args.Type), args.pData, args.DataSize));
     }
 }
 

@@ -1038,63 +1038,6 @@ HRESULT D3d9Device::check_present_duration_support(D3DDDIARG_CHECKPRESENTDURATIO
     return S_OK;
 }
 
-HRESULT D3d9Device::flush1(UINT)
-{
-    AV_SCOPE("D3d9Device::flush1");
-    return flush();
-}
-
-HRESULT D3d9Device::present1(D3DDDIARG_PRESENT1 *args)
-{
-    AV_SCOPE("D3d9Device::present1");
-    if (args->SrcResources == 0u || args->phSrcResources == nullptr) return E_INVALIDARG;
-    D3DDDIARG_PRESENT one = {};
-    one.hSrcResource = args->phSrcResources[0].hResource;
-    one.SrcSubResourceIndex = args->phSrcResources[0].SubResourceIndex;
-    one.hDstResource = args->hDstResource;
-    one.DstSubResourceIndex = args->DstSubResourceIndex;
-    one.Flags = args->Flags;
-    one.FlipInterval = args->FlipInterval;
-    args->BackBufferMultiplicity = 1u;
-    return present(&one);
-}
-
-HRESULT D3d9Device::tex_blt1(const D3DDDIARG_TEXBLT1 *args)
-{
-    AV_SCOPE("D3d9Device::tex_blt1");
-    D3DDDIARG_TEXBLT copy = {};
-    copy.hDstResource = args->hDstResource;
-    copy.hSrcResource = args->hSrcResource;
-    copy.CubeMapFace = args->CubeMapFace;
-    copy.DstPoint = args->DstPoint;
-    copy.SrcRect = args->SrcRect;
-    return tex_blt(&copy);
-}
-
-HRESULT D3d9Device::vol_blt1(const D3DDDIARG_VOLUMEBLT1 *args)
-{
-    AV_SCOPE("D3d9Device::vol_blt1");
-    D3DDDIARG_VOLUMEBLT copy = {};
-    copy.hDstResource = args->hDstResource;
-    copy.hSrcResource = args->hSrcResource;
-    copy.DstX = args->DstX;
-    copy.DstY = args->DstY;
-    copy.DstZ = args->DstZ;
-    copy.SrcBox = args->SrcBox;
-    return vol_blt(&copy);
-}
-
-HRESULT D3d9Device::buf_blt1(const D3DDDIARG_BUFFERBLT1 *args)
-{
-    AV_SCOPE("D3d9Device::buf_blt1");
-    D3DDDIARG_BUFFERBLT copy = {};
-    copy.hDstResource = args->hDstResource;
-    copy.hSrcResource = args->hSrcResource;
-    copy.Offset = args->Offset;
-    copy.SrcRange = args->SrcRange;
-    return buf_blt(&copy);
-}
-
 HRESULT D3d9Device::update_subresource_up(const D3DDDIARG_UPDATESUBRESOURCEUP *args)
 {
     AV_SCOPE("D3d9Device::update_subresource_up");

@@ -76,12 +76,6 @@ bool same_pixels(D3DDDIFORMAT source, D3DDDIFORMAT destination)
 }
 
 
-HRESULT D3d9Device::create_resource(D3DDDIARG_CREATERESOURCE *args)
-{
-    AV_SCOPE("D3d9Device::create_resource");
-    return make_resource(*args, 0u);
-}
-
 HRESULT D3d9Device::create_resource2(D3DDDIARG_CREATERESOURCE2 *args)
 {
     AV_SCOPE("D3d9Device::create_resource2");
@@ -796,9 +790,9 @@ HRESULT D3d9Device::read_surface(const D3d9Resource &resource, uint32_t index, u
 }
 
 
-HRESULT D3d9Device::tex_blt(const D3DDDIARG_TEXBLT *args)
+HRESULT D3d9Device::tex_blt1(const D3DDDIARG_TEXBLT1 *args)
 {
-    AV_SCOPE("D3d9Device::tex_blt");
+    AV_SCOPE("D3d9Device::tex_blt1");
     const D3d9Resource *const destination = resource(args->hDstResource);
     const D3d9Resource *const source = resource(args->hSrcResource);
     if (destination == nullptr || source == nullptr || source->kind != D3d9Resource::Kind::system ||
@@ -849,9 +843,9 @@ HRESULT D3d9Device::blt_level(const D3d9Resource &source, uint32_t source_index,
     return write_texture(destination, destination_index, box, data, from.system_pitch, from.system_slice_pitch, 0u);
 }
 
-HRESULT D3d9Device::vol_blt(const D3DDDIARG_VOLUMEBLT *args)
+HRESULT D3d9Device::vol_blt1(const D3DDDIARG_VOLUMEBLT1 *args)
 {
-    AV_SCOPE("D3d9Device::vol_blt");
+    AV_SCOPE("D3d9Device::vol_blt1");
     const D3d9Resource *const destination = resource(args->hDstResource);
     const D3d9Resource *const source = resource(args->hSrcResource);
     if (destination == nullptr || source == nullptr || source->kind != D3d9Resource::Kind::system ||
@@ -879,9 +873,9 @@ HRESULT D3d9Device::vol_blt(const D3DDDIARG_VOLUMEBLT *args)
     return S_OK;
 }
 
-HRESULT D3d9Device::buf_blt(const D3DDDIARG_BUFFERBLT *args)
+HRESULT D3d9Device::buf_blt1(const D3DDDIARG_BUFFERBLT1 *args)
 {
-    AV_SCOPE("D3d9Device::buf_blt");
+    AV_SCOPE("D3d9Device::buf_blt1");
     D3d9Resource *const       destination = resource(args->hDstResource);
     const D3d9Resource *const source = resource(args->hSrcResource);
     if (destination == nullptr || source == nullptr || source->kind != D3d9Resource::Kind::system ||

@@ -36,9 +36,9 @@ HRESULT D3d9Device::follow_host()
     return present_order_.constructed() ? present_order_.object().follow() : E_FAIL;
 }
 
-HRESULT D3d9Device::flush()
+HRESULT D3d9Device::flush1(UINT)
 {
-    AV_SCOPE("D3d9Device::flush");
+    AV_SCOPE("D3d9Device::flush1");
     if (!channel_.constructed()) return S_OK;
     if (!send_states() || wire().application_flush() != Status::ok) return lost(__func__);
     const HRESULT followed = follow_host();
@@ -265,13 +265,16 @@ HRESULT D3d9Device::publish(D3d9Resource &resource, uint32_t index)
     return S_OK;
 }
 
-HRESULT D3d9Device::present(const D3DDDIARG_PRESENT *args)
+HRESULT D3d9Device::present1(D3DDDIARG_PRESENT1 *args)
 {
-    AV_SCOPE("D3d9Device::present");
-    D3d9Resource *const source = resource(args->hSrcResource);
-    if (source == nullptr || args->SrcSubResourceIndex >= source->count) return E_INVALIDARG;
+    AV_SCOPE("D3d9Device::present1");
+    if (args->SrcResources == 0u || args->phSrcResources == nullptr) return E_INVALIDARG;
+    const D3DDDIARG_PRESENTSURFACE &shown = args->phSrcResources[0];
+    D3d9Resource *const source = resource(shown.hResource);
+    if (source == nullptr || shown.SubResourceIndex >= source->count) return E_INVALIDARG;
     const D3d9Resource *const destination = resource(args->hDstResource);
-    trace("presentargs", args->Flags.Value, static_cast<uint32_t>(args->FlipInterval), args->SrcSubResourceIndex,
+    args->BackBufferMultiplicity = 1u;
+    trace("presentargs", args->Flags.Value, static_cast<uint32_t>(args->FlipInterval), shown.SubResourceIndex,
           destination != nullptr ? 1u : 0u);
     const uint64_t began = clock_.microseconds();
     trace("present", static_cast<uint32_t>(busy_), calls_, 0u,
@@ -296,7 +299,7 @@ HRESULT D3d9Device::present(const D3DDDIARG_PRESENT *args)
             return made;
         }
     }
-    const HRESULT published = publish_presented(*source, args->SrcSubResourceIndex);
+    const HRESULT published = publish_presented(*source, shown.SubResourceIndex);
     if (FAILED(published)) {
         lines_.once("a Direct3D 9 present whose buffer could not be read back");
         return published;
