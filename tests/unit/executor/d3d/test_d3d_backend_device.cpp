@@ -1680,3 +1680,39 @@ TEST(d3d_backend_device, a_texture_or_view_the_host_refuses_to_make_never_remove
 
     backend.shut_down();
 }
+
+TEST(d3d_backend_device, every_format_reported_as_a_mipped_2d_texture_makes_a_mip_chain_with_layers)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice *const device = host_device(apis);
+    if (device == nullptr) return;
+    constexpr std::uint32_t formats = 192u;
+    static FormatCaps       rows[formats];
+    CHECK_EQ(device->capabilities().formats().give(reinterpret_cast<std::uint8_t *>(rows), sizeof rows),
+             std::uint64_t{sizeof rows});
+    std::uint32_t judged = 0u;
+    for (std::uint32_t format = 1u; format < formats; format++) {
+        const std::uint32_t support = rows[format].support;
+        constexpr std::uint32_t mipped = D3D11_FORMAT_SUPPORT_TEXTURE2D | D3D11_FORMAT_SUPPORT_MIP;
+        if ((support & mipped) != mipped) continue;
+        D3D11_TEXTURE2D_DESC texture = {};
+        texture.Width = 32u;
+        texture.Height = 32u;
+        texture.MipLevels = 6u;
+        texture.ArraySize = 3u;
+        texture.Format = static_cast<DXGI_FORMAT>(format);
+        texture.SampleDesc.Count = 1u;
+        texture.Usage = D3D11_USAGE_DEFAULT;
+        texture.BindFlags = (support & (D3D11_FORMAT_SUPPORT_SHADER_LOAD | D3D11_FORMAT_SUPPORT_SHADER_SAMPLE)) != 0u
+                                ? D3D11_BIND_SHADER_RESOURCE
+                                : (support & D3D11_FORMAT_SUPPORT_RENDER_TARGET) != 0u ? D3D11_BIND_RENDER_TARGET : 0u;
+        ID3D11Texture2D *made = nullptr;
+        const HRESULT    result = device->device()->CreateTexture2D(&texture, nullptr, &made);
+        if (FAILED(result)) std::fprintf(stderr, "format %u claims mips and makes none: %08x\n", format, static_cast<unsigned>(result));
+        CHECK(SUCCEEDED(result));
+        if (made != nullptr) made->Release();
+        judged++;
+    }
+    CHECK(judged > 20u);
+}
