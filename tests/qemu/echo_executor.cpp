@@ -474,6 +474,8 @@ const AvExecutorOps table = {AV_EXECUTOR_ABI_VERSION,
                               channel_stats,
                               nullptr,
                               nullptr,
+                              nullptr,
+                              nullptr,
                               nullptr};
 
 }

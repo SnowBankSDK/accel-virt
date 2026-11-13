@@ -57,6 +57,18 @@ void BatchExecutor::stop()
     gathered_.clear();
 }
 
+void *BatchExecutor::leave_thread() const
+{
+    AV_SCOPE("BatchExecutor::leave_thread");
+    return executor_.leave_thread();
+}
+
+void BatchExecutor::thread_joined(void *left) const
+{
+    AV_SCOPE("BatchExecutor::thread_joined");
+    executor_.thread_joined(left);
+}
+
 void BatchExecutor::abandon()
 {
     AV_SCOPE("BatchExecutor::abandon");

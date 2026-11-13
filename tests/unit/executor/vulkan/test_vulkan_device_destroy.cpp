@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <pthread.h>
 #include <cstdint>
 #include <thread>
 
@@ -212,3 +213,92 @@ TEST(vulkan_device_destroy, on_a_driver_that_needs_it_a_device_destroy_and_an_eg
     CHECK_EQ(av::fake_vulkan.device_destroys, 1u);
     CHECK_EQ(egl_race.inside_at_destroy.load(), 0u);
     CHECK(!egl_race.overlapped.load()); } }
+
+namespace {
+
+struct ExitRace {
+    av::EglEntryGate  egl;
+    pthread_key_t     thread_state;
+    std::atomic<bool> destroying{false};
+    std::atomic<bool> in_destructor{false};
+    std::atomic<bool> overlapped{false};
+    std::atomic<bool> exit_now{false};
+    std::atomic<std::uint32_t> destructors{0u};
+};
+
+ExitRace exit_race;
+
+void fake_egl_thread_state_destructor(void *)
+{
+    exit_race.in_destructor = true;
+    if (exit_race.destroying.load()) exit_race.overlapped = true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(60));
+    if (exit_race.destroying.load()) exit_race.overlapped = true;
+    exit_race.destructors++;
+    exit_race.in_destructor = false;
+}
+
+void fake_egl_call()
+{
+    const av::EglEntry entered(exit_race.egl);
+    pthread_setspecific(exit_race.thread_state, &exit_race);
+}
+
+void destroy_while_a_thread_exits()
+{
+    exit_race.destroying = true;
+    if (exit_race.in_destructor.load()) exit_race.overlapped = true;
+    exit_race.exit_now = true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(80));
+    if (exit_race.in_destructor.load()) exit_race.overlapped = true;
+    exit_race.destroying = false;
+}
+
+void *egl_thread(void *)
+{
+    fake_egl_call();
+    while (!exit_race.exit_now.load()) std::this_thread::yield();
+    return exit_race.egl.retire();
+}
+
+}
+
+TEST(vulkan_device_destroy, the_egl_librarys_thread_exit_destructor_of_a_thread_that_retired_never_runs_beside_a_device_destroy_whichever_came_first)
+{ static av::HostLifecycleGates gates(exit_race.egl);
+  const std::uint8_t vendor_gpu[16] = {9};
+  av::HostLifecycleGate *const gate =
+      gates.add(vendor_gpu, av::HostDriver(VK_DRIVER_ID_NVIDIA_PROPRIETARY, "vendor", "1"));
+  CHECK(gate != nullptr);
+  CHECK_EQ(pthread_key_create(&exit_race.thread_state, fake_egl_thread_state_destructor), 0);
+  { Rig rig;
+    av::fake_vulkan.destroying_device = destroy_while_a_thread_exits;
+    rig.backend().gate_lifecycle(gate);
+    pthread_t thread;
+    CHECK_EQ(pthread_create(&thread, nullptr, egl_thread, nullptr), 0);
+    CHECK(rig.destroy_device());
+    void *kept = nullptr;
+    CHECK_EQ(pthread_join(thread, &kept), 0);
+    CHECK(kept != nullptr);
+    exit_race.egl.joined(kept);
+    CHECK_EQ(av::fake_vulkan.device_destroys, 1u);
+    CHECK_EQ(exit_race.destructors.load(), 1u);
+    CHECK(!exit_race.overlapped.load()); }
+  { Rig rig;
+    av::fake_vulkan.destroying_device = destroy_while_a_thread_exits;
+    rig.backend().gate_lifecycle(gate);
+    exit_race.exit_now = true;
+    pthread_t thread;
+    CHECK_EQ(pthread_create(&thread, nullptr, egl_thread, nullptr), 0);
+    while (!exit_race.in_destructor.load()) std::this_thread::yield();
+    bool        answered = false;
+    std::thread destroyer([&] { answered = rig.destroy_device(); });
+    void *kept = nullptr;
+    CHECK_EQ(pthread_join(thread, &kept), 0);
+    CHECK_EQ(av::fake_vulkan.device_destroys, 0u);
+    exit_race.egl.joined(kept);
+    destroyer.join();
+    CHECK(answered);
+    CHECK_EQ(av::fake_vulkan.device_destroys, 1u);
+    CHECK_EQ(exit_race.destructors.load(), 2u);
+    CHECK(!exit_race.overlapped.load()); }
+  CHECK_EQ(exit_race.egl.inside(), 0u); }

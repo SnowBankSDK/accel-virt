@@ -127,6 +127,50 @@ TEST(egl_entry_gate, an_exclusion_that_an_entry_never_leaves_room_for_is_refused
   entry.join();
   CHECK_EQ(gate.exclusions(), 0u); }
 
+TEST(egl_entry_gate, a_thread_that_retired_keeps_exclusions_out_until_its_joiner_says_it_is_gone_and_one_on_a_gate_nothing_needs_keeps_nothing)
+{ static EglEntryGate gate;
+  void       *kept = &gate;
+  std::thread idle([&] { kept = gate.retire(); });
+  idle.join();
+  CHECK(kept == nullptr);
+  gate.need();
+  std::thread leaving([&] {
+      { const EglEntry entered(gate); }
+      kept = gate.retire();
+  });
+  leaving.join();
+  CHECK(kept != nullptr);
+  CHECK_EQ(gate.inside(), 1u);
+  std::atomic<bool> excluded{false};
+  std::thread       destroyer([&] {
+      CHECK(gate.exclude(long_wait_ns));
+      excluded = true;
+      gate.admit();
+  });
+  settle();
+  CHECK(!excluded.load());
+  gate.joined(kept);
+  destroyer.join();
+  CHECK(excluded.load());
+  CHECK_EQ(gate.inside(), 0u);
+  std::thread during([&] {
+      CHECK(gate.exclude(long_wait_ns));
+      std::atomic<bool> retired{false};
+      std::thread       late([&] {
+          kept = gate.retire();
+          retired = true;
+      });
+      settle();
+      CHECK(!retired.load());
+      gate.admit();
+      late.join();
+      CHECK(retired.load());
+  });
+  during.join();
+  gate.joined(kept);
+  gate.joined(nullptr);
+  CHECK_EQ(gate.inside(), 0u); }
+
 TEST(egl_entry_gate, only_a_gate_of_the_driver_that_needs_it_excludes_egl_entries_and_another_drivers_entries_are_held_out_too)
 { static EglEntryGate egl;
   static av::HostLifecycleGates gates(egl);

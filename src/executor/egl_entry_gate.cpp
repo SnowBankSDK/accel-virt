@@ -155,6 +155,28 @@ void EglEntryGate::admit()
     pthread_mutex_unlock(&excluding_);
 }
 
+void *EglEntryGate::retire()
+{
+    AV_SCOPE("EglEntryGate::retire");
+    if (!needed()) return nullptr;
+    enter();
+    Slot *const kept = thread_slot.gate_ == this ? thread_slot.slot_ : &overflow_;
+    if (kept != &overflow_) {
+        thread_slot.gate_ = nullptr;
+        thread_slot.slot_ = nullptr;
+    }
+    return kept;
+}
+
+void EglEntryGate::joined(void *retired)
+{
+    AV_SCOPE("EglEntryGate::joined");
+    if (retired == nullptr) return;
+    Slot *const kept = static_cast<Slot *>(retired);
+    __atomic_sub_fetch(&kept->inside_, 1u, __ATOMIC_SEQ_CST);
+    if (kept != &overflow_) __atomic_store_n(&kept->claimed_, 0u, __ATOMIC_RELEASE);
+}
+
 uint32_t EglEntryGate::inside() const
 {
     AV_SCOPE("EglEntryGate::inside");

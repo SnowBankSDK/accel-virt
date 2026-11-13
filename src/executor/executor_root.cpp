@@ -1,6 +1,7 @@
 #include "executor/executor_root.hpp"
 
 #include "executor/context_refusals.hpp"
+#include "executor/egl_entry_gate.hpp"
 #include "executor/executor_log.hpp"
 #include "core/log/log_line.hpp"
 
@@ -23,24 +24,34 @@
 #include "proto/resources/surface_pair.hpp"
 #include "proto/resources/surface_point.hpp"
 
+#include <EGL/egl.h>
+
 namespace av {
 
 namespace {
 
 alignas(16) uint8_t decode_blocks[ExecutorRoot::sessions][ContextSession::arena_bytes];
 
+void *left_egl()
+{
+    AV_SCOPE("left_egl");
+    void *const kept = EglEntryGate::process().retire();
+    if (kept != nullptr) static_cast<void>(eglReleaseThread());
+    return kept;
+}
+
 void *run_wedged_watch(void *root)
 {
     AV_SCOPE("run_wedged_watch");
     static_cast<ExecutorRoot *>(root)->watch_wedged();
-    return nullptr;
+    return left_egl();
 }
 
 void *run_closing_watch(void *root)
 {
     AV_SCOPE("run_closing_watch");
     static_cast<ExecutorRoot *>(root)->watch_closing();
-    return nullptr;
+    return left_egl();
 }
 
 }
@@ -97,8 +108,12 @@ void ExecutorRoot::halt_watcher()
     stopping_ = true;
     wake_.broadcast();
     lock_.release();
-    if (joined) pthread_join(watcher_, nullptr);
-    for (uint32_t helper = 0u; helper < helpers; helper++) pthread_join(helpers_[helper], nullptr);
+    void *left = nullptr;
+    if (joined && pthread_join(watcher_, &left) == 0) EglEntryGate::process().joined(left);
+    for (uint32_t helper = 0u; helper < helpers; helper++) {
+        left = nullptr;
+        if (pthread_join(helpers_[helper], &left) == 0) EglEntryGate::process().joined(left);
+    }
 }
 
 Status ExecutorRoot::initialize(HostApis &apis)

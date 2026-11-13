@@ -21,7 +21,7 @@ extern "C" void av_session_gate_raised(void *gate);
 
 ContextExecutor::ContextExecutor(Host &host, const ExecutorLibrary &library, ExecutorShares &shares, uint32_t id)
     : host_(host), library_(library), signal_(nullptr), shares_(shares), id_(id), executor_(nullptr), api_(SubApi::vulkan), uuid_(),
-      options_(), configured_(false), own_gate_(host), gate_(nullptr), progress_(nullptr)
+      options_(), configured_(false), own_gate_(host), gate_(nullptr), entered_(false), progress_(nullptr)
       {
           AV_SCOPE("ContextExecutor::ContextExecutor");
       }
@@ -72,6 +72,7 @@ Status ContextExecutor::create()
     AV_SCOPE("ContextExecutor::create");
     host_.require_worker("ContextExecutor::create");
     if (executor_ != nullptr || !configured_) return Status::invalid_state;
+    entered_ = true;
     if (lane()) return join_session();
     __atomic_store_n(&executor_, make(), __ATOMIC_RELEASE);
     if (executor_ == nullptr) {
@@ -153,6 +154,18 @@ void ContextExecutor::withdraw()
     if (made == nullptr || lane()) return;
     own_gate_.withdraw();
     shares_.withdraw(id_, made);
+}
+
+void *ContextExecutor::leave_thread() const
+{
+    AV_SCOPE("ContextExecutor::leave_thread");
+    return entered_ ? library_.leave_thread() : nullptr;
+}
+
+void ContextExecutor::thread_joined(void *left) const
+{
+    AV_SCOPE("ContextExecutor::thread_joined");
+    library_.thread_joined(left);
 }
 
 bool ContextExecutor::lane() const

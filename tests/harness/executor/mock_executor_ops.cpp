@@ -281,6 +281,15 @@ MockExecutorOps::MockExecutorOps(std::uint32_t sub_apis)
         mock.lease_room_.store(room == UINT64_MAX ? room : room - granted);
         return granted;
     };
+    table_.leave_thread = [](void *opaque) -> void * {
+        MockExecutorOps &mock = mock_of(opaque);
+        mock.threads_left_++;
+        return &mock.threads_left_;
+    };
+    table_.thread_joined = [](void *opaque, void *left) {
+        MockExecutorOps &mock = mock_of(opaque);
+        if (left == &mock.threads_left_) mock.threads_joined_++;
+    };
     table_.return_lease = [](void *opaque, AvExecutor *, std::uint32_t kind, std::uint64_t bytes) {
         MockExecutorOps &mock = mock_of(opaque);
         mock.last_lease_kind_.store(kind);

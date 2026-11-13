@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-#define AV_EXECUTOR_ABI_VERSION 34u
+#define AV_EXECUTOR_ABI_VERSION 35u
 #define AV_EXECUTOR_OPS_SYMBOL "av_executor_ops"
 
 #define AV_EXECUTOR_SUB_API_VULKAN 1u
@@ -169,6 +169,8 @@ typedef struct AvExecutorOps {
     uint32_t (*place_memory)(void *opaque, AvExecutor *executor, uint64_t size, uint32_t request, AvHostMemory *memory);
     uint64_t (*extend_lease)(void *opaque, AvExecutor *executor, uint32_t kind, uint64_t bytes, uint64_t least);
     void (*return_lease)(void *opaque, AvExecutor *executor, uint32_t kind, uint64_t bytes);
+    void *(*leave_thread)(void *opaque);
+    void (*thread_joined)(void *opaque, void *left);
 } AvExecutorOps;
 
 typedef const AvExecutorOps *(*AvExecutorOpsFunction)(void);

@@ -11,7 +11,7 @@ namespace av {
 
 Worker::Worker(Host &host, RingConsumer &ring)
     : host_(host), ring_(ring), signal_(nullptr), doorbell_(host), thread_(nullptr), wake_(nullptr), lock_(nullptr), queue_{}, head_(0u), count_(0u),
-      stopping_(false), exit_watch_(nullptr), exited_(false), joined_(false)
+      stopping_(false), exit_watch_(nullptr), exited_(false), joined_(false), left_(nullptr)
       {
           AV_SCOPE("Worker::Worker");
       }
@@ -119,6 +119,7 @@ void Worker::join()
     AV_SCOPE("Worker::join");
     if (thread_ == nullptr || __atomic_load_n(&joined_, __ATOMIC_ACQUIRE)) return;
     host_.join_thread(thread_);
+    ring_.thread_joined(__atomic_exchange_n(&left_, static_cast<void *>(nullptr), __ATOMIC_ACQ_REL));
     __atomic_store_n(&joined_, true, __ATOMIC_RELEASE);
 }
 
@@ -206,6 +207,7 @@ void Worker::run()
     __atomic_store_n(&exited_, true, __ATOMIC_SEQ_CST);
     void *const watch = __atomic_load_n(&exit_watch_, __ATOMIC_SEQ_CST);
     if (watch != nullptr) host_.signal_event(watch);
+    __atomic_store_n(&left_, ring_.leave_thread(), __ATOMIC_RELEASE);
 }
 
 void Worker::serve()

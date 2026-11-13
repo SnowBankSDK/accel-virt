@@ -32,6 +32,8 @@ public:
 
     void                 prepare(const BlobWindow &reply);
     void                 withdraw();
+    void                *leave_thread() const;
+    void                 thread_joined(void *left) const;
     [[nodiscard]] Status start();
     void                 stop();
     void                 abandon();

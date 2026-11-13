@@ -93,6 +93,8 @@ public:
     std::uint32_t last_role();
     std::uint64_t last_arena_base();
     std::uint32_t released();
+    std::uint32_t threads_left() const { return threads_left_.load(); }
+    std::uint32_t threads_joined() const { return threads_joined_.load(); }
     void          refuse_import_at(std::uint32_t nth);
     void          withhold_handle_at(std::uint32_t nth);
     void          answer_handle(std::uint64_t handle);
@@ -207,6 +209,8 @@ private:
     std::atomic<std::uint64_t> lease_room_{UINT64_MAX};
     std::atomic<std::uint32_t> lease_extensions_{0u};
     std::atomic<std::uint64_t> lease_returned_{0u};
+    std::atomic<std::uint32_t> threads_left_{0u};
+    std::atomic<std::uint32_t> threads_joined_{0u};
     std::atomic<std::uint32_t> last_lease_kind_{0u};
     std::atomic<std::uint64_t> last_lease_least_{0u};
     std::uint32_t              signals_set_;

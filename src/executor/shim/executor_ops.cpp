@@ -2,6 +2,7 @@
 #include "core/trace/function_scope.hpp"
 #include "device/abi/av_executor.h"
 #include "executor/context_session.hpp"
+#include "executor/egl_entry_gate.hpp"
 #include "executor/executor_log.hpp"
 #include "executor/executor_root.hpp"
 #include "device/host/stdio_log.hpp"
@@ -13,6 +14,7 @@
 #include "proto/resources/surface_pair.hpp"
 #include "proto/resources/surface_point.hpp"
 
+#include <EGL/egl.h>
 #include <dlfcn.h>
 
 namespace {
@@ -350,6 +352,20 @@ void return_lease(void *, AvExecutor *executor, uint32_t kind, uint64_t bytes)
     library.root().return_lease(session_of(executor), kind, bytes);
 }
 
+void *leave_thread(void *)
+{
+    AV_SCOPE("leave_thread");
+    void *const kept = av::EglEntryGate::process().retire();
+    if (kept != nullptr) static_cast<void>(eglReleaseThread());
+    return kept;
+}
+
+void thread_joined(void *, void *left)
+{
+    AV_SCOPE("thread_joined");
+    av::EglEntryGate::process().joined(left);
+}
+
 const AvExecutorOps table = {AV_EXECUTOR_ABI_VERSION,
                               nullptr,
                               sub_apis,
@@ -387,7 +403,9 @@ const AvExecutorOps table = {AV_EXECUTOR_ABI_VERSION,
                               channel_stats,
                               place_memory,
                               extend_lease,
-                              return_lease};
+                              return_lease,
+                              leave_thread,
+                              thread_joined};
 
 }
 

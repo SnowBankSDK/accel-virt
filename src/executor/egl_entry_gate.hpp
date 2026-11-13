@@ -25,6 +25,8 @@ public:
     void               leave();
     [[nodiscard]] bool exclude(uint64_t wait_ns);
     void               admit();
+    void              *retire();
+    void               joined(void *retired);
     uint32_t           inside() const;
     uint64_t           exclusions() const;
     uint64_t           held_back() const;

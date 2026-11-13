@@ -78,6 +78,12 @@ GuardedExecutorOps::GuardedExecutorOps(MockHost &host, std::uint32_t sub_apis)
     if (table_.place_memory != nullptr) table_.place_memory = guarded<&AvExecutorOps::place_memory>;
     if (table_.extend_lease != nullptr) table_.extend_lease = guarded<&AvExecutorOps::extend_lease>;
     if (table_.return_lease != nullptr) table_.return_lease = guarded<&AvExecutorOps::return_lease>;
+    if (table_.leave_thread != nullptr) table_.leave_thread = guarded<&AvExecutorOps::leave_thread>;
+    if (table_.thread_joined != nullptr)
+        table_.thread_joined = [](void *opaque, void *left) {
+            const AvExecutorOps &inner = static_cast<GuardedExecutorOps *>(opaque)->inner_table();
+            inner.thread_joined(inner.opaque, left);
+        };
 }
 
 GuardedExecutorOps::~GuardedExecutorOps()

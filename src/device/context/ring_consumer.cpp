@@ -80,6 +80,18 @@ void RingConsumer::attach()
     fences_.signal();
 }
 
+void *RingConsumer::leave_thread() const
+{
+    AV_SCOPE("RingConsumer::leave_thread");
+    return executor_.leave_thread();
+}
+
+void RingConsumer::thread_joined(void *left) const
+{
+    AV_SCOPE("RingConsumer::thread_joined");
+    executor_.thread_joined(left);
+}
+
 void RingConsumer::abandon()
 {
     AV_SCOPE("RingConsumer::abandon");

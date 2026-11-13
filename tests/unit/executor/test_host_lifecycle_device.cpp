@@ -106,3 +106,45 @@ TEST(host_lifecycle_device, gl_batches_that_make_native_fences_and_a_vulkan_devi
   CHECK_EQ(gate->refusals(), 0u);
   CHECK(av::EglEntryGate::process().exclusions() - excluded_before >= std::uint64_t{rounds} * 2u);
   CHECK_EQ(av::EglEntryGate::process().inside(), 0u); }
+
+TEST(host_lifecycle_device, gl_worker_threads_that_retire_and_exit_while_vulkan_devices_are_destroyed_on_a_driver_that_excludes_egl_all_finish)
+{ av::WidestHostGpu gpu;
+  if ((gpu.sub_apis() & AV_EXECUTOR_SUB_API_OPENGL) == 0u) return;
+  constexpr std::uint32_t       rounds = 24u, workers = 24u;
+  static av::HostLifecycleGates gates;
+  av::HostLifecycleGate *const  gate =
+      gates.add(gpu.uuid(), av::HostDriver(VK_DRIVER_ID_NVIDIA_PROPRIETARY, "taken for the vendor's", "1"));
+  CHECK(gate != nullptr && gate->excludes_egl());
+  static av::GlDisplay display;
+  CHECK(gate != nullptr && display.open(gpu.uuid(), *gate));
+  av::EglEntryGate          &egl = av::EglEntryGate::process();
+  std::atomic<std::uint32_t> made{0u}, devices{0u};
+  std::thread                vulkan([&] {
+      for (std::uint32_t round = 0u; round < rounds; round++) {
+          av::CompositorDevice device;
+          static_cast<void>(device.open(gpu.uuid(), gate));
+          device.close();
+          devices++;
+      }
+  });
+  for (std::uint32_t worker = 0u; worker < workers; worker++) {
+      void       *kept = nullptr;
+      std::thread gl([&] {
+          av::RecordingLog sink;
+          av::DriverLog    lines(sink, "opengl: ");
+          {
+              av::OpenGlBackend backend(lines);
+              made += backend.initialize(&display, nullptr, nullptr) ? 1u : 0u;
+              backend.shut_down();
+          }
+          kept = egl.retire();
+      });
+      gl.join();
+      CHECK(kept != nullptr);
+      egl.joined(kept);
+  }
+  vulkan.join();
+  CHECK_EQ(made.load(), workers);
+  CHECK_EQ(devices.load(), rounds);
+  CHECK_EQ(gate->refusals(), 0u);
+  CHECK_EQ(egl.inside(), 0u); }

@@ -65,6 +65,7 @@ private:
     void          *exit_watch_;
     bool           exited_;
     bool           joined_;
+    void          *left_;
 
     friend struct WorkerProbe;
 };

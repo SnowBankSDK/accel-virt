@@ -44,6 +44,8 @@ public:
     bool                 session_gone() const;
     void                 wake();
     bool                 lane() const;
+    void                *leave_thread() const;
+    void                 thread_joined(void *left) const;
     HostPoll             poll();
     void                 gpu_progress(uint64_t &marked, uint64_t &reached) const;
     [[nodiscard]] Status execute(uint32_t command_id, const uint8_t *payload, size_t size, uint8_t *reply,
@@ -85,6 +87,7 @@ private:
     bool                   configured_;
     SessionGate            own_gate_;
     SessionGate           *gate_;
+    bool                   entered_;
     void                  *progress_;
 
     friend struct ContextExecutorProbe;

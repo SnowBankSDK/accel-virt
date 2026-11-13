@@ -187,6 +187,18 @@ uint64_t ExecutorLibrary::extend_lease(AvExecutor *executor, uint32_t kind, uint
     return ops_->extend_lease(ops_->opaque, executor, kind, bytes, least);
 }
 
+void *ExecutorLibrary::leave_thread() const
+{
+    AV_SCOPE("ExecutorLibrary::leave_thread");
+    return ops_ != nullptr && ops_->leave_thread != nullptr ? ops_->leave_thread(ops_->opaque) : nullptr;
+}
+
+void ExecutorLibrary::thread_joined(void *left) const
+{
+    AV_SCOPE("ExecutorLibrary::thread_joined");
+    if (left != nullptr && ops_ != nullptr && ops_->thread_joined != nullptr) ops_->thread_joined(ops_->opaque, left);
+}
+
 void ExecutorLibrary::return_lease(AvExecutor *executor, uint32_t kind, uint64_t bytes) const
 {
     AV_SCOPE("ExecutorLibrary::return_lease");

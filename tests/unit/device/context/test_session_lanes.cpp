@@ -350,6 +350,20 @@ TEST(session_lanes, a_lane_and_its_session_each_import_memory_into_their_one_exe
   CHECK_EQ(lanes.imports(1u, av::HostBlobId::first + 3u, 2u), static_cast<std::uint32_t>(av::BlobImportAnswer::imported));
   CHECK_EQ(lanes.ops().live_imports(), 4u); }
 
+TEST(session_lanes, a_worker_tells_its_executor_library_as_its_last_act_that_it_leaves_and_its_joiner_tells_it_once_the_thread_is_gone)
+{ Lanes lanes;
+  CHECK_STATUS(lanes.bind(0u), Status::ok);
+  CHECK(lanes.ready(0u));
+  CHECK_EQ(lanes.ops().threads_left(), 0u);
+  lanes.retire(0u);
+  CHECK(lanes.stops(0u));
+  CHECK_EQ(lanes.ops().threads_joined(), 0u);
+  lanes.context(0u).worker().join();
+  CHECK_EQ(lanes.ops().threads_left(), 1u);
+  CHECK_EQ(lanes.ops().threads_joined(), 1u);
+  lanes.context(0u).worker().join();
+  CHECK_EQ(lanes.ops().threads_joined(), 1u); }
+
 TEST(session_lanes, a_ring_that_takes_the_session_from_another_ring_restores_the_selection_it_left)
 { Lanes lanes;
   CHECK_STATUS(lanes.bind(0u), Status::ok);
