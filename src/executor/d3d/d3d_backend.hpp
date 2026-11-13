@@ -216,6 +216,7 @@ public:
 
 private:
     bool refused_shader(const char *why) const;
+    bool refused_view(uint32_t id, HRESULT result);
     bool dynamic_buffer(ID3D11Resource *resource) const;
     bool detach_buffer_slice(uint32_t resource, uint64_t offset, uint64_t bytes);
     bool marks_batches();
@@ -300,6 +301,7 @@ private:
     bool                    predication_refusal_noted_;
     bool                    mark_refused_;
     bool                    show_refused_;
+    bool                    refused_use_noted_;
     bool                    lost_;
     bool                    memory_refused_;
 };

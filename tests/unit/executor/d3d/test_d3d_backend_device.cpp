@@ -1595,3 +1595,88 @@ TEST(d3d_backend_device, creates_past_the_leased_room_are_refused_up_front_and_t
     CHECK(backend.invariants_hold());
     backend.shut_down();
 }
+
+TEST(d3d_backend_device, a_texture_or_view_the_host_refuses_to_make_never_removes_the_device_however_it_is_used)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice *const device = host_device(apis);
+    if (device == nullptr) return;
+    HeldBackend     held(first_backend, rig.log);
+    av::D3dBackend &backend = held.backend();
+    av::SessionShares unshared;
+    CHECK(backend.initialize(unshared, rig.imports, device));
+    av::D3dLoopback wire(backend, rig.imports);
+
+    std::uint32_t hresult = 1u, level = 0u;
+    CHECK(av_d3d_CreateDevice11(wire, 1u, 0u, 0u, &hresult, &level));
+    CHECK_EQ(hresult, 0u);
+    make_triangle(wire);
+    bind_triangle(wire);
+
+    constexpr std::uint32_t refused_texture = 60u, refused_view = 61u, refused_target = 62u, good_texture = 63u,
+                            view_of_good = 64u;
+    constexpr std::uint32_t bind_shader_resource = 0x8u, stage_pixel = 4u, srv_texture2d = 4u, rgba8 = 28u,
+                            depth32 = 40u;
+    ResourceDesc texture = {};
+    texture.dimension = 3u;
+    texture.width = size;
+    texture.height = size;
+    texture.depth_or_array = 1u;
+    texture.mip_levels = 1u;
+    texture.format = rgba8;
+    texture.sample_count = 3u;
+    texture.bind_flags = bind_shader_resource;
+    CHECK(av_d3d_CreateResource(wire, refused_texture, texture, 0u, 0u, 0u));
+    texture.sample_count = 1u;
+    CHECK(av_d3d_CreateResource(wire, good_texture, texture, 0u, 0u, 0u));
+
+    ViewDesc sampled = {};
+    sampled.resource = refused_texture;
+    sampled.format = rgba8;
+    sampled.dimension = srv_texture2d;
+    sampled.args[1] = 1u;
+    CHECK(av_d3d_CreateShaderResourceView(wire, refused_view, sampled));
+    ViewDesc target = sampled;
+    CHECK(av_d3d_CreateRenderTargetView(wire, refused_target, target));
+    ViewDesc mismatched = sampled;
+    mismatched.resource = good_texture;
+    mismatched.format = depth32;
+    CHECK(av_d3d_CreateShaderResourceView(wire, view_of_good, mismatched));
+
+    static std::uint8_t texels[size * size * 4u];
+    const Box           whole = {};
+    CHECK(av_d3d_UpdateSubresource(wire, refused_texture, 0u, 0u, whole, size * 4u, size * size * 4u, 0u, texels,
+                                   sizeof texels));
+    CHECK(av_d3d_CopyResource(wire, good_texture, refused_texture));
+    CHECK(av_d3d_CopyResource(wire, refused_texture, good_texture));
+    const std::uint32_t views[2] = {refused_view, view_of_good};
+    CHECK(av_d3d_SetShaderResources(wire, stage_pixel, 0u, 2u, views));
+    CHECK(av_d3d_ClearRenderTargetView(wire, refused_target, Float4{{1.0f, 0.0f, 0.0f, 1.0f}}));
+    CHECK(av_d3d_Draw(wire, 3u, 0u));
+
+    std::uint32_t row_pitch = 0u, depth_pitch = 0u;
+    std::uint64_t read = 1u;
+    hresult = 0u;
+    CHECK(av_d3d_ReadSubresource(wire, refused_texture, 0u, &hresult, &row_pitch, &depth_pitch, texels, sizeof texels,
+                                 &read));
+    CHECK(hresult != 0u);
+    CHECK_EQ(read, std::uint64_t{0});
+
+    CHECK(av_d3d_DestroyObject(wire, view_of_good));
+    CHECK(av_d3d_DestroyObject(wire, refused_target));
+    CHECK(av_d3d_DestroyObject(wire, refused_view));
+    CHECK(av_d3d_DestroyObject(wire, refused_texture));
+
+    hresult = 1u;
+    CHECK(av_d3d_Finish11(wire, &hresult));
+    CHECK_EQ(hresult, 0u);
+    CHECK_EQ(wire.refused(), 0u);
+
+    static std::uint8_t pixels[size * size * 4u];
+    CHECK(av_d3d_ReadSubresource(wire, 1u, 0u, &hresult, &row_pitch, &depth_pitch, pixels, sizeof(pixels), &read));
+    CHECK_EQ(hresult, 0u);
+    CHECK_EQ(read, static_cast<std::uint64_t>(sizeof(pixels)));
+
+    backend.shut_down();
+}

@@ -16,7 +16,7 @@ bool view_kind(D3dObjectKind kind)
 
 }
 
-D3dObjectTable::D3dObjectTable(BlockSource &blocks) : objects_(blocks), views_(blocks, Pool::paged)
+D3dObjectTable::D3dObjectTable(BlockSource &blocks) : objects_(blocks), views_(blocks, Pool::paged), missed_(0u)
 {
     AV_SCOPE("D3dObjectTable::D3dObjectTable");
     static_assert(no_slot == HostObjectRegistry<uint32_t, D3dObjectKind, Entry>::no_slot, "one sentinel for no slot");
@@ -55,6 +55,7 @@ IUnknown *D3dObjectTable::find(uint32_t id, D3dObjectKind kind) const
 {
     AV_SCOPE("D3dObjectTable::find");
     const Entry *const entry = objects_.find(id, kind);
+    if (entry == nullptr) missed_ = id;
     return entry != nullptr ? entry->object_ : nullptr;
 }
 
@@ -63,6 +64,7 @@ IUnknown *D3dObjectTable::find_any(uint32_t id, D3dObjectKind &kind) const
     AV_SCOPE("D3dObjectTable::find_any");
     kind = D3dObjectKind::none;
     const Entry *const entry = objects_.find_any(id, kind);
+    if (entry == nullptr) missed_ = id;
     return entry != nullptr ? entry->object_ : nullptr;
 }
 
@@ -71,7 +73,20 @@ IUnknown *D3dObjectTable::find_view(uint32_t id) const
     AV_SCOPE("D3dObjectTable::find_view");
     D3dObjectKind      kind = D3dObjectKind::none;
     const Entry *const entry = objects_.find_any(id, kind);
+    if (entry == nullptr) missed_ = id;
     return entry != nullptr && view_kind(kind) ? entry->object_ : nullptr;
+}
+
+uint32_t D3dObjectTable::missed() const
+{
+    AV_SCOPE("D3dObjectTable::missed");
+    return missed_;
+}
+
+void D3dObjectTable::forget_miss()
+{
+    AV_SCOPE("D3dObjectTable::forget_miss");
+    missed_ = 0u;
 }
 
 IUnknown *D3dObjectTable::exchange(uint32_t id, D3dObjectKind kind, IUnknown *object)

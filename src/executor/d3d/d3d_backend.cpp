@@ -130,7 +130,7 @@ D3dBackend::D3dBackend(ExecutorLog &log)
       region_(guest_, lines_), imports_(nullptr), slices_(blocks_, lines_), d3d12_(guest_, objects_, leased_, wake_, fence_wake_, blocks_, log.d3d12()),
       d3d9_(guest_, objects_, leased_, blocks_, slices_, fence_wake_, log.d3d9()), tiles_(objects_),
       published_(blocks_, guest_), progress11_(fence_wake_), constants_(blocks_),
-      missed_key_(0u), batches_(), queue_drain_(), submitted_(0u), drained_(false), predication_refusal_noted_(false), mark_refused_(false), show_refused_(false), lost_(false), memory_refused_(false)
+      missed_key_(0u), batches_(), queue_drain_(), submitted_(0u), drained_(false), predication_refusal_noted_(false), mark_refused_(false), show_refused_(false), refused_use_noted_(false), lost_(false), memory_refused_(false)
 {
     AV_SCOPE("D3dBackend::D3dBackend");
 }
@@ -250,9 +250,21 @@ bool D3dBackend::run(uint32_t command_id, WireReader &payload, WireWriter &reply
     else device11_->select(states_.selected());
     held_ = true;
     arena_ = &arena;
+    objects_.forget_miss();
     const bool ran = d3dproto::dispatch_command(*this, command_id, payload, reply, arena);
     arena_ = nullptr;
     if (ran) return true;
+    if (refused_creates_.holds(objects_.missed())) {
+        if (!refused_use_noted_)
+            LogLine(lines_)
+                .text(d3dproto::command_name(command_id))
+                .text(" names ")
+                .number(objects_.missed())
+                .text(", which the host refused to make: the command is dropped, as every later one naming it is")
+                .write();
+        refused_use_noted_ = true;
+        return true;
+    }
     return states_.refuse(refusal_, d3dproto::command_name(command_id),
                           blocks_.refusal(static_cast<uint32_t>(DXGI_ERROR_DRIVER_INTERNAL_ERROR)));
 }
@@ -1036,10 +1048,26 @@ bool D3dBackend::on_OpenResource(uint32_t id, uint64_t shared_key, uint32_t &fou
     return true;
 }
 
+bool D3dBackend::refused_view(uint32_t id, HRESULT result)
+{
+    AV_SCOPE("D3dBackend::refused_view");
+    if (refused_creates_.note(id, static_cast<uint32_t>(result)))
+        LogLine(lines_)
+            .text("the host made no view ")
+            .number(id)
+            .text(" (")
+            .hex(static_cast<uint32_t>(result), 8u)
+            .text(")")
+            .write();
+    return true;
+}
+
 bool D3dBackend::on_CreateShaderResourceView(uint32_t id, const d3dproto::ViewDesc &desc)
 {
     AV_SCOPE("D3dBackend::on_CreateShaderResourceView");
     ID3D11Resource *const resource = objects_.find_as<ID3D11Resource>(desc.resource, D3dObjectKind::resource);
+    if (resource == nullptr && refused_creates_.holds(desc.resource))
+        return refused_view(id, static_cast<HRESULT>(refused_creates_.hresult_of(desc.resource)));
     if (resource == nullptr || !DxgiFormatLayout(desc.format).known()) return false;
     D3D11_SHADER_RESOURCE_VIEW_DESC view = {};
     view.Format = static_cast<DXGI_FORMAT>(desc.format);
@@ -1049,7 +1077,8 @@ bool D3dBackend::on_CreateShaderResourceView(uint32_t id, const d3dproto::ViewDe
     if (view.ViewDimension == D3D11_SRV_DIMENSION_BUFFEREX) view.BufferEx.Flags = desc.flags;
     if (desc.dimension > D3D11_SRV_DIMENSION_BUFFEREX) return false;
     ID3D11ShaderResourceView *made = nullptr;
-    if (FAILED(device11_->device()->CreateShaderResourceView(resource, &view, &made))) return true;
+    const HRESULT viewed = device11_->device()->CreateShaderResourceView(resource, &view, &made);
+    if (FAILED(viewed)) return refused_view(id, viewed);
     return objects_.keep(id, D3dObjectKind::shader_resource_view, made) == Status::ok;
 }
 
@@ -1057,6 +1086,8 @@ bool D3dBackend::on_CreateRenderTargetView(uint32_t id, const d3dproto::ViewDesc
 {
     AV_SCOPE("D3dBackend::on_CreateRenderTargetView");
     ID3D11Resource *const resource = objects_.find_as<ID3D11Resource>(desc.resource, D3dObjectKind::resource);
+    if (resource == nullptr && refused_creates_.holds(desc.resource))
+        return refused_view(id, static_cast<HRESULT>(refused_creates_.hresult_of(desc.resource)));
     if (resource == nullptr || !DxgiFormatLayout(desc.format).known() || desc.dimension > D3D11_RTV_DIMENSION_TEXTURE3D)
         return false;
     D3D11_RENDER_TARGET_VIEW_DESC view = {};
@@ -1064,7 +1095,8 @@ bool D3dBackend::on_CreateRenderTargetView(uint32_t id, const d3dproto::ViewDesc
     view.ViewDimension = static_cast<D3D11_RTV_DIMENSION>(desc.dimension);
     __builtin_memcpy(&view.Buffer, desc.args, sizeof(uint32_t) * 3u);
     ID3D11RenderTargetView *made = nullptr;
-    if (FAILED(device11_->device()->CreateRenderTargetView(resource, &view, &made))) return true;
+    const HRESULT viewed = device11_->device()->CreateRenderTargetView(resource, &view, &made);
+    if (FAILED(viewed)) return refused_view(id, viewed);
     return objects_.keep(id, D3dObjectKind::render_target_view, made) == Status::ok;
 }
 
@@ -1072,6 +1104,8 @@ bool D3dBackend::on_CreateDepthStencilView(uint32_t id, const d3dproto::ViewDesc
 {
     AV_SCOPE("D3dBackend::on_CreateDepthStencilView");
     ID3D11Resource *const resource = objects_.find_as<ID3D11Resource>(desc.resource, D3dObjectKind::resource);
+    if (resource == nullptr && refused_creates_.holds(desc.resource))
+        return refused_view(id, static_cast<HRESULT>(refused_creates_.hresult_of(desc.resource)));
     if (resource == nullptr || !DxgiFormatLayout(desc.format).known() || desc.dimension > D3D11_DSV_DIMENSION_TEXTURE2DMSARRAY)
         return false;
     D3D11_DEPTH_STENCIL_VIEW_DESC view = {};
@@ -1080,7 +1114,8 @@ bool D3dBackend::on_CreateDepthStencilView(uint32_t id, const d3dproto::ViewDesc
     view.Flags = desc.flags & (D3D11_DSV_READ_ONLY_DEPTH | D3D11_DSV_READ_ONLY_STENCIL);
     __builtin_memcpy(&view.Texture1D, desc.args, sizeof(uint32_t) * 3u);
     ID3D11DepthStencilView *made = nullptr;
-    if (FAILED(device11_->device()->CreateDepthStencilView(resource, &view, &made))) return true;
+    const HRESULT viewed = device11_->device()->CreateDepthStencilView(resource, &view, &made);
+    if (FAILED(viewed)) return refused_view(id, viewed);
     return objects_.keep(id, D3dObjectKind::depth_stencil_view, made) == Status::ok;
 }
 
@@ -1088,6 +1123,8 @@ bool D3dBackend::on_CreateUnorderedAccessView(uint32_t id, const d3dproto::ViewD
 {
     AV_SCOPE("D3dBackend::on_CreateUnorderedAccessView");
     ID3D11Resource *const resource = objects_.find_as<ID3D11Resource>(desc.resource, D3dObjectKind::resource);
+    if (resource == nullptr && refused_creates_.holds(desc.resource))
+        return refused_view(id, static_cast<HRESULT>(refused_creates_.hresult_of(desc.resource)));
     if (resource == nullptr || !DxgiFormatLayout(desc.format).known() || desc.dimension > D3D11_UAV_DIMENSION_TEXTURE3D)
         return false;
     D3D11_UNORDERED_ACCESS_VIEW_DESC view = {};
@@ -1096,7 +1133,8 @@ bool D3dBackend::on_CreateUnorderedAccessView(uint32_t id, const d3dproto::ViewD
     __builtin_memcpy(&view.Buffer, desc.args, sizeof(uint32_t) * 3u);
     if (view.ViewDimension == D3D11_UAV_DIMENSION_BUFFER) view.Buffer.Flags = desc.flags;
     ID3D11UnorderedAccessView *made = nullptr;
-    if (FAILED(device11_->device()->CreateUnorderedAccessView(resource, &view, &made))) return true;
+    const HRESULT viewed = device11_->device()->CreateUnorderedAccessView(resource, &view, &made);
+    if (FAILED(viewed)) return refused_view(id, viewed);
     return objects_.keep(id, D3dObjectKind::unordered_access_view, made) == Status::ok;
 }
 
@@ -2216,6 +2254,10 @@ bool D3dBackend::read_packed(uint32_t resource, uint32_t subresource, uint64_t o
     data_size = 0u;
     total = 0u;
     ID3D11Resource *const found = objects_.find_as<ID3D11Resource>(resource, D3dObjectKind::resource);
+    if (ready() && found == nullptr && refused_creates_.holds(resource)) {
+        hresult = refused_creates_.hresult_of(resource);
+        return true;
+    }
     if (!ready() || found == nullptr) return false;
     constants_.release(device11_->context(), states_.selected_id(), resource, static_cast<ID3D11Buffer *>(found));
     uint32_t width = 0u, height = 0u, depth = 0u, format = 0u;
