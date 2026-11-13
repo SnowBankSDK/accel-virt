@@ -164,6 +164,11 @@ public:
         for (std::uint32_t spins = 0u; spins < 50000000u && ops_.executed() < count; spins++) sched_yield();
         return ops_.executed() >= count;
     }
+    bool stops(std::uint32_t index)
+    {
+        for (std::uint32_t spins = 0u; spins < 50000000u && !context(index).worker().exited(); spins++) sched_yield();
+        return context(index).worker().exited();
+    }
     void settle()
     {
         for (std::uint32_t spins = 0u; spins < 200000u; spins++) sched_yield();
@@ -267,6 +272,48 @@ TEST(session_lanes, a_lane_batch_runs_only_after_the_session_ran_what_it_follows
   session.write_batch(2u, next.bytes(), next.size());
   CHECK(lanes.ring(0u, session));
   CHECK(lanes.completes(0u, 2u)); }
+
+TEST(session_lanes, every_lane_waiting_for_the_session_runs_once_the_session_ran_what_they_follow_with_no_time_passing)
+{ Lanes lanes;
+  CHECK_STATUS(lanes.bind(0u), Status::ok);
+  CHECK(lanes.ready(0u));
+  CHECK_STATUS(lanes.bind(1u), Status::ok);
+  CHECK_STATUS(lanes.bind(2u), Status::ok);
+  GuestRing &session = lanes.guest(0u);
+  Commands   recorded;
+  recorded.add(command_id, 1u);
+  session.write_batch(1u, recorded.bytes(), recorded.size());
+  for (std::uint32_t index = 1u; index < contexts; index++) {
+      GuestRing &lane = lanes.guest(index);
+      Commands   executed;
+      executed.add(command_id, 1u + index);
+      lane.write_batch(1u, executed.bytes(), executed.size(), session.tail());
+      CHECK(lanes.ring(index, lane));
+  }
+  lanes.settle();
+  CHECK_EQ(lanes.ops().executed(), 0u);
+  CHECK(lanes.ring(0u, session));
+  CHECK(lanes.completes(0u, 1u));
+  CHECK(lanes.completes(1u, 1u));
+  CHECK(lanes.completes(2u, 1u));
+  CHECK_EQ(lanes.ops().executed(), 3u);
+  CHECK_EQ(lanes.ops().id_at(0u), command_id); }
+
+TEST(session_lanes, a_lane_retired_while_it_waits_for_the_session_stops_waiting_without_a_fault)
+{ Lanes lanes;
+  CHECK_STATUS(lanes.bind(0u), Status::ok);
+  CHECK(lanes.ready(0u));
+  CHECK_STATUS(lanes.bind(1u), Status::ok);
+  GuestRing &lane = lanes.guest(1u);
+  Commands  executed;
+  executed.add(command_id, 2u);
+  lane.write_batch(1u, executed.bytes(), executed.size(), 64u);
+  CHECK(lanes.ring(1u, lane));
+  lanes.settle();
+  lanes.retire(1u);
+  CHECK(lanes.stops(1u));
+  CHECK(!lanes.page(1u).faulted());
+  CHECK_EQ(lanes.ops().executed(), 0u); }
 
 TEST(session_lanes, a_ring_that_takes_the_session_from_another_ring_restores_the_selection_it_left)
 { Lanes lanes;

@@ -42,6 +42,7 @@ public:
     void                 consumed(uint64_t head);
     [[nodiscard]] bool   session_reached(uint64_t end, uint64_t deadline);
     bool                 session_gone() const;
+    void                 wake();
     bool                 lane() const;
     HostPoll             poll();
     void                 gpu_progress(uint64_t &marked, uint64_t &reached) const;
@@ -84,6 +85,7 @@ private:
     bool                   configured_;
     SessionGate            own_gate_;
     SessionGate           *gate_;
+    void                  *progress_;
 
     friend struct ContextExecutorProbe;
 };

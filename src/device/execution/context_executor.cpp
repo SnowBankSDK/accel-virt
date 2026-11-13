@@ -21,7 +21,7 @@ extern "C" void av_session_gate_raised(void *gate);
 
 ContextExecutor::ContextExecutor(Host &host, const ExecutorLibrary &library, ExecutorShares &shares, uint32_t id)
     : host_(host), library_(library), signal_(nullptr), shares_(shares), id_(id), executor_(nullptr), api_(SubApi::vulkan), uuid_(),
-      options_(), configured_(false), own_gate_(host), gate_(nullptr)
+      options_(), configured_(false), own_gate_(host), gate_(nullptr), progress_(nullptr)
       {
           AV_SCOPE("ContextExecutor::ContextExecutor");
       }
@@ -29,7 +29,10 @@ ContextExecutor::ContextExecutor(Host &host, const ExecutorLibrary &library, Exe
 ContextExecutor::~ContextExecutor()
 {
     AV_SCOPE("ContextExecutor::~ContextExecutor");
-    if (executor_ == nullptr) return;
+    if (executor_ == nullptr) {
+        if (progress_ != nullptr) host_.destroy_event(progress_);
+        return;
+    }
     if (lane()) {
         shares_.leave(executor_);
         return;
@@ -104,8 +107,13 @@ Status ContextExecutor::join_session()
 {
     AV_SCOPE("ContextExecutor::join_session");
     SessionGate *gate = nullptr;
+    void        *wake = __atomic_load_n(&progress_, __ATOMIC_ACQUIRE);
+    if (wake == nullptr && host_.create_event(wake) != Status::ok) return Status::no_memory;
+    __atomic_store_n(&progress_, wake, __ATOMIC_RELEASE);
     AvExecutor *const joined = shares_.join(options_.share_context(), uuid_.raw(), gate);
-    if (joined == nullptr || (signal_ != nullptr && gate->listen(*signal_) != Status::ok)) {
+    const bool        attended = joined != nullptr && gate->attend(wake) == Status::ok;
+    if (!attended || (signal_ != nullptr && gate->listen(*signal_) != Status::ok)) {
+        if (attended) gate->depart(wake);
         shares_.leave(joined);
         StdioLog  sink(stderr);
         DriverLog lines(sink, "virtio-gpu-av: ");
@@ -124,6 +132,7 @@ void ContextExecutor::destroy()
     if (executor_ == nullptr) return;
     if (gate_ != nullptr && signal_ != nullptr) gate_->forget(*signal_);
     if (lane()) {
+        if (gate_ != nullptr) gate_->depart(progress_);
         shares_.leave(executor_);
         executor_ = nullptr;
         gate_ = nullptr;
@@ -174,7 +183,14 @@ bool ContextExecutor::session_reached(uint64_t end, uint64_t deadline)
 {
     AV_SCOPE("ContextExecutor::session_reached");
     if (!lane()) return true;
-    return gate_ != nullptr && gate_->reached(end, deadline);
+    return gate_ != nullptr && gate_->reached(end, deadline, progress_);
+}
+
+void ContextExecutor::wake()
+{
+    AV_SCOPE("ContextExecutor::wake");
+    void *const event = __atomic_load_n(&progress_, __ATOMIC_ACQUIRE);
+    if (event != nullptr) host_.signal_event(event);
 }
 
 bool ContextExecutor::session_gone() const

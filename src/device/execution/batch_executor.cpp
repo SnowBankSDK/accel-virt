@@ -60,13 +60,14 @@ void BatchExecutor::stop()
 void BatchExecutor::abandon()
 {
     AV_SCOPE("BatchExecutor::abandon");
-    __atomic_store_n(&abandoned_, true, __ATOMIC_RELEASE);
+    __atomic_store_n(&abandoned_, true, __ATOMIC_SEQ_CST);
+    executor_.wake();
 }
 
 bool BatchExecutor::abandoned() const
 {
     AV_SCOPE("BatchExecutor::abandoned");
-    return __atomic_load_n(&abandoned_, __ATOMIC_ACQUIRE);
+    return __atomic_load_n(&abandoned_, __ATOMIC_SEQ_CST);
 }
 
 bool BatchExecutor::started() const

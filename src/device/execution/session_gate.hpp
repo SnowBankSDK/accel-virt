@@ -15,7 +15,6 @@ struct SessionGateProbe;
 class SessionGate {
 public:
     static constexpr uint32_t most_listeners = ContextCapacity::lanes + 1u;
-    static constexpr uint64_t wait_slice_ns = 1000000u;
 
     explicit SessionGate(Host &host);
     ~SessionGate();
@@ -30,7 +29,9 @@ public:
     void                 leave();
     void                 consumed(uint64_t head);
     uint64_t             consumed() const;
-    [[nodiscard]] bool   reached(uint64_t end, uint64_t deadline);
+    [[nodiscard]] bool   reached(uint64_t end, uint64_t deadline, void *wake);
+    [[nodiscard]] Status attend(void *wake);
+    void                 depart(const void *wake);
     [[nodiscard]] Status listen(ContextSignal &signal);
     void                 forget(const ContextSignal &signal);
     void                 raise();
@@ -38,16 +39,19 @@ public:
     bool invariants_hold() const;
 
 private:
+    void wake_waiters();
+
     Host          &host_;
     void          *run_;
     void          *listeners_lock_;
-    void          *progress_;
     const void    *runner_;
     uint64_t       consumed_;
     uint32_t       waiting_;
     bool           closed_;
     ContextSignal *listeners_[most_listeners];
     uint32_t       listening_;
+    void          *waiters_[ContextCapacity::lanes];
+    uint32_t       attending_;
 
     friend struct SessionGateProbe;
 };
