@@ -92,4 +92,19 @@ HRESULT PresentedAllocations::make_context(HANDLE &context)
     return made;
 }
 
+Hresult PresentedAllocations::make_surface(KernelSurface &surface, void *resource, uint32_t &allocation)
+{
+    AV_SCOPE("PresentedAllocations::make_surface");
+    D3DKMT_HANDLE made = 0u;
+    const HRESULT result = make(surface, resource, made);
+    allocation = made;
+    return static_cast<Hresult>(result);
+}
+
+void PresentedAllocations::return_surface(uint32_t allocation, void *resource)
+{
+    AV_SCOPE("PresentedAllocations::return_surface");
+    give_back(allocation, resource);
+}
+
 }

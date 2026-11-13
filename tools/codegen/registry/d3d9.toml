@@ -206,6 +206,17 @@ surface that cannot be copied, or a device without Vulkan interop is refused."""
 params = ["u32 surface", "u32 subresource", "Rect source_rect", "u64 memory", "u32 pitch", "u32 x", "u32 y"]
 
 [[command]]
+name = "CreateLentSurface9"
+id = 0x210f
+doc = """A render target whose pixels are rows of `pitch` bytes of guest memory the guest lent beforehand (named by the
+handle IMPORT_BLOB answered as `memory`): kind 1 a render-target surface, kind 2 a one-level render-target texture,
+`format` a D3DFORMAT. The host GPU draws into the lent rows and samples them in place, so the adapter that made a
+cross-adapter surface and the adapter that opened it each make one over the same memory and neither copies a frame.
+What the memory held is kept. Memory that does not hold the rows, a format that cannot be drawn into as rows, or a
+device without Vulkan interop is refused."""
+params = ["u32 surface", "u32 kind", "u32 width", "u32 height", "u32 format", "u64 memory", "u32 pitch"]
+
+[[command]]
 name = "CreateVertexShader9"
 id = 0x2300
 doc = """A vertex shader from its Direct3D 9 token stream, as IDirect3DDevice9::CreateVertexShader takes it."""

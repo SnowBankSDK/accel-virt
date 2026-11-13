@@ -1038,4 +1038,107 @@ HRESULT D3d9Device::check_present_duration_support(D3DDDIARG_CHECKPRESENTDURATIO
     return S_OK;
 }
 
+HRESULT D3d9Device::flush1(UINT)
+{
+    AV_SCOPE("D3d9Device::flush1");
+    return flush();
+}
+
+HRESULT D3d9Device::present1(D3DDDIARG_PRESENT1 *args)
+{
+    AV_SCOPE("D3d9Device::present1");
+    if (args->SrcResources == 0u || args->phSrcResources == nullptr) return E_INVALIDARG;
+    D3DDDIARG_PRESENT one = {};
+    one.hSrcResource = args->phSrcResources[0].hResource;
+    one.SrcSubResourceIndex = args->phSrcResources[0].SubResourceIndex;
+    one.hDstResource = args->hDstResource;
+    one.DstSubResourceIndex = args->DstSubResourceIndex;
+    one.Flags = args->Flags;
+    one.FlipInterval = args->FlipInterval;
+    args->BackBufferMultiplicity = 1u;
+    return present(&one);
+}
+
+HRESULT D3d9Device::tex_blt1(const D3DDDIARG_TEXBLT1 *args)
+{
+    AV_SCOPE("D3d9Device::tex_blt1");
+    D3DDDIARG_TEXBLT copy = {};
+    copy.hDstResource = args->hDstResource;
+    copy.hSrcResource = args->hSrcResource;
+    copy.CubeMapFace = args->CubeMapFace;
+    copy.DstPoint = args->DstPoint;
+    copy.SrcRect = args->SrcRect;
+    return tex_blt(&copy);
+}
+
+HRESULT D3d9Device::vol_blt1(const D3DDDIARG_VOLUMEBLT1 *args)
+{
+    AV_SCOPE("D3d9Device::vol_blt1");
+    D3DDDIARG_VOLUMEBLT copy = {};
+    copy.hDstResource = args->hDstResource;
+    copy.hSrcResource = args->hSrcResource;
+    copy.DstX = args->DstX;
+    copy.DstY = args->DstY;
+    copy.DstZ = args->DstZ;
+    copy.SrcBox = args->SrcBox;
+    return vol_blt(&copy);
+}
+
+HRESULT D3d9Device::buf_blt1(const D3DDDIARG_BUFFERBLT1 *args)
+{
+    AV_SCOPE("D3d9Device::buf_blt1");
+    D3DDDIARG_BUFFERBLT copy = {};
+    copy.hDstResource = args->hDstResource;
+    copy.hSrcResource = args->hSrcResource;
+    copy.Offset = args->Offset;
+    copy.SrcRange = args->SrcRange;
+    return buf_blt(&copy);
+}
+
+HRESULT D3d9Device::update_subresource_up(const D3DDDIARG_UPDATESUBRESOURCEUP *args)
+{
+    AV_SCOPE("D3d9Device::update_subresource_up");
+    D3d9Resource *const target = resource(args->hResource);
+    if (target == nullptr || args->SubResourceIndex >= target->count || args->pSysMemUP == nullptr ||
+        target->kind == D3d9Resource::Kind::system)
+        return E_INVALIDARG;
+    if (refuses_opened(*target, "a Direct3D 9 UpdateSubresourceUP of an opened surface")) return E_NOTIMPL;
+    const D3d9Subresource &level = target->subresources[args->SubResourceIndex];
+    const D3DDDIBOX        whole = {0u, 0u, level.width, level.height, 0u, level.depth};
+    const D3DDDIBOX       &box = args->Flags.BoxValid ? args->DstBox : whole;
+    const auto *const      data = static_cast<const uint8_t *>(args->pSysMemUP);
+    if (target->kind == D3d9Resource::Kind::vertex_buffer || target->kind == D3d9Resource::Kind::index_buffer) {
+        if (box.Right <= box.Left || box.Right > level.width) return E_INVALIDARG;
+        if (level.shadow != nullptr) memcpy(level.shadow + box.Left, data, box.Right - box.Left);
+        return write_buffer(target->id, box.Left, data, box.Right - box.Left, 0u);
+    }
+    if (!send_states()) return lost(__func__);
+    return write_texture(*target, args->SubResourceIndex, box, data, args->RowPitch, args->DepthPitch, 0u);
+}
+
+VOID D3d9Device::check_counter_info(D3DDDIARG_COUNTER_INFO *info)
+{
+    AV_SCOPE("D3d9Device::check_counter_info");
+    *info = D3DDDIARG_COUNTER_INFO{};
+}
+
+HRESULT D3d9Device::check_counter(D3DDDIQUERYTYPE, D3DDDI_COUNTER_TYPE *, UINT *, LPSTR, UINT *, LPSTR, UINT *, LPSTR,
+                                  UINT *)
+{
+    AV_SCOPE("D3d9Device::check_counter");
+    return E_INVALIDARG;
+}
+
+HRESULT D3d9Device::set_marker()
+{
+    AV_SCOPE("D3d9Device::set_marker");
+    return S_OK;
+}
+
+HRESULT D3d9Device::set_marker_mode(D3DDDI_MARKERTYPE, UINT)
+{
+    AV_SCOPE("D3d9Device::set_marker_mode");
+    return S_OK;
+}
+
 }

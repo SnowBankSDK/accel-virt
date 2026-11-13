@@ -470,6 +470,30 @@ static bool decode_CopyToLent9(ServerDispatch& s, ::av::WireReader& r, ::av::Wir
     return true;
 }
 
+static bool decode_CreateLentSurface9(ServerDispatch& s, ::av::WireReader& r, ::av::WireWriter& reply, ::av::WireArena& arena) {
+    AV_SCOPE("server:d3d9:CreateLentSurface9");
+    (void)s;
+    (void)reply;
+    (void)arena;
+    uint32_t surface{};
+    if (!r.read_pod(surface)) return false;
+    uint32_t kind{};
+    if (!r.read_pod(kind)) return false;
+    uint32_t width{};
+    if (!r.read_pod(width)) return false;
+    uint32_t height{};
+    if (!r.read_pod(height)) return false;
+    uint32_t format{};
+    if (!r.read_pod(format)) return false;
+    uint64_t memory{};
+    if (!r.read_pod(memory)) return false;
+    uint32_t pitch{};
+    if (!r.read_pod(pitch)) return false;
+    if (r.remaining() != 0u) return false;
+    if (!s.on_CreateLentSurface9(surface, kind, width, height, format, memory, pitch)) return false;
+    return true;
+}
+
 static bool decode_CreateVertexShader9(ServerDispatch& s, ::av::WireReader& r, ::av::WireWriter& reply, ::av::WireArena& arena) {
     AV_SCOPE("server:d3d9:CreateVertexShader9");
     (void)s;
@@ -1027,6 +1051,7 @@ bool knows_command(uint32_t cmd_id) {
         case kCmd_ColorFill9:
         case kCmd_PresentPoint9:
         case kCmd_CopyToLent9:
+        case kCmd_CreateLentSurface9:
         case kCmd_CreateVertexShader9:
         case kCmd_CreatePixelShader9:
         case kCmd_CreateVertexDeclaration9:
@@ -1088,6 +1113,7 @@ bool dispatch_command(ServerDispatch& s, uint32_t cmd_id, ::av::WireReader& r,
         case kCmd_ColorFill9: return decode_ColorFill9(s, r, reply, arena);
         case kCmd_PresentPoint9: return decode_PresentPoint9(s, r, reply, arena);
         case kCmd_CopyToLent9: return decode_CopyToLent9(s, r, reply, arena);
+        case kCmd_CreateLentSurface9: return decode_CreateLentSurface9(s, r, reply, arena);
         case kCmd_CreateVertexShader9: return decode_CreateVertexShader9(s, r, reply, arena);
         case kCmd_CreatePixelShader9: return decode_CreatePixelShader9(s, r, reply, arena);
         case kCmd_CreateVertexDeclaration9: return decode_CreateVertexDeclaration9(s, r, reply, arena);

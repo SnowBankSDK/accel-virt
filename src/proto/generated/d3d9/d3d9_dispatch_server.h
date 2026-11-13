@@ -50,6 +50,7 @@ public:
     virtual bool on_ColorFill9(uint32_t surface, uint32_t subresource, const Rect& rect, uint32_t color) = 0;
     virtual bool on_PresentPoint9(uint32_t surface, uint32_t subresource, uint64_t key, uint32_t point) = 0;
     virtual bool on_CopyToLent9(uint32_t surface, uint32_t subresource, const Rect& source_rect, uint64_t memory, uint32_t pitch, uint32_t x, uint32_t y) = 0;
+    virtual bool on_CreateLentSurface9(uint32_t surface, uint32_t kind, uint32_t width, uint32_t height, uint32_t format, uint64_t memory, uint32_t pitch) = 0;
     virtual bool on_CreateVertexShader9(uint32_t shader, const uint8_t* code, uint64_t code_size) = 0;
     virtual bool on_CreatePixelShader9(uint32_t shader, const uint8_t* code, uint64_t code_size) = 0;
     virtual bool on_CreateVertexDeclaration9(uint32_t declaration, uint32_t count, const VertexElement* elements) = 0;

@@ -2,6 +2,7 @@
 #include "core/log/log_line.hpp"
 #include "core/trace/function_scope.hpp"
 #include "core/log/keyed_log.hpp"
+#include "icd/d3d/cross_adapter_rows.hpp"
 #include "icd/d3d/guest_surface_scan.hpp"
 #include "icd/d3d/kernel_surface.hpp"
 #include "proto/d3d/d3d9_present_format.hpp"
@@ -22,23 +23,30 @@ HRESULT D3d11Device::allocate(ResourceRecord &resource, const D3D11DDIARG_CREATE
     AV_SCOPE("D3d11Device::allocate");
     const bool primary = create.pPrimaryDesc != nullptr;
     const DXGI_DDI_MODE_DESC *const mode = primary ? &create.pPrimaryDesc->ModeDesc : nullptr;
-    const bool across = is_cross_adapter(create, resource);
+    if (is_cross_adapter(create, resource)) {
+        d3d::CrossAdapterRows rows(allocations_, lender_);
+        const HRESULT lent = rows.make(resource.width, resource.height, resource.format, runtime.handle);
+        if (lent == E_OUTOFMEMORY) lines_.write("the device took no cross-adapter texture's pages");
+        if (FAILED(lent)) return lent;
+        engage();
+        resource.lent = rows.lent();
+        resource.shared_key = rows.key();
+        resource.allocation = rows.allocation();
+        resource.allocation_owned = 1u;
+        resource.allocation_pitch = rows.pitch();
+        resource.present_model = d3d::SwapChainBuffer(primary, create.MiscFlags).model();
+        resource.vidpn_source = 0u;
+        return S_OK;
+    }
     d3d::KernelSurface surface =
         primary ? d3d::KernelSurface(resource.width, resource.height, resource.format,
                                      ScanoutTarget(create.pPrimaryDesc->VidPnSourceId, mode->RefreshRate.Numerator,
                                                    mode->RefreshRate.Denominator))
-        : across ? d3d::KernelSurface(d3d::SharedWith::another_adapter, resource.width, resource.height, resource.format)
-                 : d3d::KernelSurface(resource.width, resource.height, resource.format);
+                : d3d::KernelSurface(resource.width, resource.height, resource.format);
     if (surface.make() != Status::ok) return E_INVALIDARG;
     D3DKMT_HANDLE allocation = 0u;
     const HRESULT made = allocations_.make(surface, runtime.handle, allocation);
     if (FAILED(made)) return made;
-    if (across && lender_.lend(allocation, surface.bytes(), resource.lent) != Status::ok) {
-        allocations_.give_back(allocation, runtime.handle);
-        lines_.write("the device took no cross-adapter texture's pages");
-        return E_OUTOFMEMORY;
-    }
-    if (across) engage();
     resource.shared_key = surface.key();
     resource.allocation = allocation;
     resource.allocation_owned = 1u;
@@ -450,12 +458,14 @@ bool D3d11Device::open_cross_adapter(ResourceRecord &resource, const D3D10DDIARG
     resource.samples = 1u;
     resource.format = presented.dxgi();
     resource.bind = D3D10_DDI_BIND_SHADER_RESOURCE | D3D10_DDI_BIND_RENDER_TARGET;
-    resource.allocation_pitch = layout.pitch();
-    if (lender_.lend(resource.allocation, descriptor.size(), resource.lent) != Status::ok) {
+    d3d::CrossAdapterRows rows(allocations_, lender_);
+    if (FAILED(rows.adopt(resource.allocation, descriptor))) {
         lines_.write("the device took no opened cross-adapter texture's pages");
         set_error(E_OUTOFMEMORY);
         return true;
     }
+    resource.lent = rows.lent();
+    resource.allocation_pitch = rows.pitch();
     engage();
     d3dproto::ResourceDesc desc = {};
     desc.dimension = resource.dimension;

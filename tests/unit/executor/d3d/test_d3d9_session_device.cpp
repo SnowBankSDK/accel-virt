@@ -14,6 +14,7 @@
 #include "executor/shim/d3d9_host_device.hpp"
 #include "executor/shim/loader_host_apis.hpp"
 #include "executor/d3d/shared_surfaces.hpp"
+#include "proto/resources/cross_adapter_layout.hpp"
 #include "proto/resources/surface_point.hpp"
 #include "harness/executor/d3d_loopback.hpp"
 #include "harness/executor/executor_log_rig.hpp"
@@ -813,6 +814,147 @@ TEST(d3d9_session_device, a_render_target_is_copied_into_lent_memory_row_by_row_
     CHECK(av_d3d9_Finish9(wire, &hresult));
     CHECK(hresult != 0u);
     wire.close_memory(memory);
+    backend.shut_down();
+}
+
+TEST(d3d9_session_device,
+     a_flip_model_swap_chain_across_adapters_draws_into_lent_rows_and_the_device_that_opens_them_reads_them_in_place)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice  *device11 = nullptr;
+    av::D3d9HostDevice   *device9 = nullptr;
+    av::HostMemorySource *source = nullptr;
+    if (!slice_host(apis, device11, device9, source)) return;
+    av::D3dBackend backend(rig.log);
+    av::SessionShares unshared;
+    CHECK(backend.initialize(unshared, rig.imports, device11, nullptr, nullptr, device9));
+    av::D3dLoopback wire(backend, rig.imports, source, 16u << 20u, 8u << 20u);
+    enum : std::uint32_t {
+        display_device = 20,
+        display_target,
+        render_device,
+        shared_surface,
+        shared_texture,
+        opened_surface,
+        opened_texture,
+        refused_surface
+    };
+    constexpr std::uint32_t format_x8r8g8b8 = 22u;
+    constexpr std::uint32_t kind_lent_surface = 1u;
+    constexpr std::uint32_t kind_lent_texture = 2u;
+    constexpr std::uint32_t wide = 60u;
+    constexpr std::uint8_t  untouched = 0x5au;
+    const av::CrossAdapterLayout across(wide, size, format_a8r8g8b8, 4u);
+    CHECK(across.valid());
+    const std::uint32_t pitch = across.pitch();
+    CHECK(pitch > wide * 4u);
+    const av::HostMemoryRequest lend(av::HostMemoryRequest::Kind::readback, 0u);
+    const std::uint64_t surface_memory = wire.open_memory(lend, across.bytes());
+    const std::uint64_t texture_memory = wire.open_memory(lend, across.bytes());
+    av::SourceMemory *const surface_rows = rig.imports.named(surface_memory);
+    av::SourceMemory *const texture_rows = rig.imports.named(texture_memory);
+    CHECK(surface_rows != nullptr && texture_rows != nullptr);
+    std::memset(surface_rows->pointer(), untouched, surface_rows->size());
+    std::memset(texture_rows->pointer(), untouched, texture_rows->size());
+    const auto texel = [pitch](const av::SourceMemory *rows, std::uint32_t x, std::uint32_t y) {
+        std::uint32_t value = 0u;
+        std::memcpy(&value, rows->pointer() + std::size_t{y} * pitch + std::size_t{x} * 4u, sizeof(value));
+        return value;
+    };
+    const auto holds = [&texel, pitch](const av::SourceMemory *rows, std::uint32_t left, std::uint32_t right) {
+        for (std::uint32_t y = 0u; y < size; y += 7u) {
+            if (texel(rows, 0u, y) != left || texel(rows, wide / 2u - 1u, y) != left ||
+                texel(rows, wide / 2u, y) != right || texel(rows, wide - 1u, y) != right)
+                return false;
+            if (rows->pointer()[std::size_t{y} * pitch + wide * 4u] != untouched) return false;
+        }
+        return true;
+    };
+    const Rect all = {0, 0, static_cast<std::int32_t>(wide), static_cast<std::int32_t>(size)};
+    const Rect right_half = {static_cast<std::int32_t>(wide / 2u), 0, static_cast<std::int32_t>(wide),
+                             static_cast<std::int32_t>(size)};
+
+    std::uint32_t hresult = 1u;
+    CHECK(av_d3d9_CreateDevice9(wire, display_device, 0u, &hresult));
+    CHECK_EQ(hresult, 0u);
+    CHECK(av_d3d9_CreateSurface9(wire, display_target, kind_render_target, wide, size, format_x8r8g8b8, 0u, 0u, 0u));
+    CHECK(av_d3d9_SelectDevice9(wire, render_device));
+    hresult = 1u;
+    CHECK(av_d3d9_CreateDevice9(wire, render_device, 0u, &hresult));
+    CHECK_EQ(hresult, 0u);
+    CHECK(av_d3d9_CreateLentSurface9(wire, shared_surface, kind_lent_surface, wide, size, format_a8r8g8b8,
+                                     surface_memory, pitch));
+    CHECK(av_d3d9_CreateLentSurface9(wire, shared_texture, kind_lent_texture, wide, size, format_a8r8g8b8,
+                                     texture_memory, pitch));
+    CHECK(av_d3d9_Finish9(wire, &hresult));
+    CHECK_EQ(hresult, 0u);
+    CHECK_EQ(wire.refused(), 0u);
+    CHECK_EQ(surface_rows->pointer()[0], untouched);
+    CHECK_EQ(texture_rows->pointer()[0], untouched);
+
+    CHECK(av_d3d9_SetRenderTarget9(wire, 0u, shared_texture, 0u));
+    CHECK(av_d3d9_Clear9(wire, 0u, nullptr, clear_target, red, 1.0f, 0u));
+    CHECK(av_d3d9_Clear9(wire, 1u, &right_half, clear_target, blue, 1.0f, 0u));
+    CHECK(av_d3d9_StretchRect9(wire, shared_texture, 0u, all, shared_surface, 0u, all, 0u));
+    Pixels drawn;
+    CHECK(read(wire, shared_surface, drawn));
+    CHECK_EQ(drawn.hresult, 0u);
+    CHECK_EQ(drawn.at(1u, size / 2u), red);
+    CHECK_EQ(drawn.at(wide - 2u, size / 2u), blue);
+    CHECK(holds(texture_rows, red, blue));
+    CHECK(holds(surface_rows, red, blue));
+
+    CHECK(av_d3d9_SelectDevice9(wire, display_device));
+    CHECK(av_d3d9_CreateLentSurface9(wire, opened_surface, kind_lent_surface, wide, size, format_a8r8g8b8,
+                                     surface_memory, pitch));
+    CHECK(av_d3d9_CreateLentSurface9(wire, opened_texture, kind_lent_texture, wide, size, format_a8r8g8b8,
+                                     texture_memory, pitch));
+    CHECK(av_d3d9_StretchRect9(wire, opened_surface, 0u, all, display_target, 0u, all, 0u));
+    Pixels shown;
+    CHECK(read(wire, display_target, shown));
+    CHECK_EQ(shown.hresult, 0u);
+    CHECK_EQ(shown.at(1u, size / 2u), red);
+    CHECK_EQ(shown.at(wide - 2u, size / 2u), blue);
+    CHECK(holds(surface_rows, red, blue));
+    CHECK(holds(texture_rows, red, blue));
+
+    CHECK(av_d3d9_SelectDevice9(wire, render_device));
+    CHECK(av_d3d9_Clear9(wire, 0u, nullptr, clear_target, green, 1.0f, 0u));
+    CHECK(av_d3d9_Clear9(wire, 1u, &right_half, clear_target, red, 1.0f, 0u));
+    CHECK(read(wire, shared_texture, drawn));
+    CHECK_EQ(drawn.hresult, 0u);
+    CHECK_EQ(drawn.at(1u, size / 2u), green);
+    CHECK(holds(texture_rows, green, red));
+    CHECK(holds(surface_rows, red, blue));
+    CHECK(av_d3d9_SelectDevice9(wire, display_device));
+    CHECK(av_d3d9_StretchRect9(wire, opened_texture, 0u, all, display_target, 0u, all, 0u));
+    CHECK(read(wire, display_target, shown));
+    CHECK_EQ(shown.at(1u, size / 2u), green);
+    CHECK_EQ(shown.at(wide - 2u, size / 2u), red);
+    CHECK_EQ(wire.refused(), 0u);
+
+    CHECK(av_d3d9_Destroy9(wire, opened_surface));
+    CHECK(av_d3d9_Destroy9(wire, opened_texture));
+    CHECK(av_d3d9_Destroy9(wire, display_target));
+    CHECK(av_d3d9_Finish9(wire, &hresult));
+    CHECK_EQ(hresult, 0u);
+    CHECK(av_d3d9_SelectDevice9(wire, render_device));
+    CHECK(av_d3d9_SetRenderTarget9(wire, 0u, shared_surface, 0u));
+    CHECK(av_d3d9_Destroy9(wire, shared_texture));
+    CHECK(av_d3d9_Clear9(wire, 0u, nullptr, clear_target, blue, 1.0f, 0u));
+    CHECK(read(wire, shared_surface, drawn));
+    CHECK_EQ(drawn.hresult, 0u);
+    CHECK_EQ(drawn.at(1u, size / 2u), blue);
+    CHECK(holds(texture_rows, green, red));
+    CHECK(holds(surface_rows, blue, blue));
+
+    CHECK(av_d3d9_CreateLentSurface9(wire, refused_surface, kind_lent_surface, wide, size, format_a8r8g8b8,
+                                     surface_memory, wide * 4u - 4u));
+    CHECK(av_d3d9_Finish9(wire, &hresult));
+    CHECK(hresult != 0u);
+    wire.close_memory(surface_memory);
+    wire.close_memory(texture_memory);
     backend.shut_down();
 }
 

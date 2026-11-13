@@ -6,6 +6,7 @@
 #include "executor/d3d/d3d9_lanes.hpp"
 #include "executor/d3d/d3d9_line_ends.hpp"
 #include "executor/d3d/d3d9_lent_copies.hpp"
+#include "executor/d3d/d3d9_row_surfaces.hpp"
 #include "executor/d3d/d3d9_flip_shares.hpp"
 #include "executor/d3d/d3d9_refused_queries.hpp"
 #include "executor/d3d/d3d9_slices.hpp"
@@ -103,6 +104,8 @@ public:
     bool on_PresentPoint9(uint32_t surface, uint32_t subresource, uint64_t key, uint32_t point) override;
     bool on_CopyToLent9(uint32_t surface, uint32_t subresource, const d3d9proto::Rect &source_rect, uint64_t memory,
                         uint32_t pitch, uint32_t x, uint32_t y) override;
+    bool on_CreateLentSurface9(uint32_t surface, uint32_t kind, uint32_t width, uint32_t height, uint32_t format,
+                               uint64_t memory, uint32_t pitch) override;
 
     bool on_CreateVertexShader9(uint32_t shader, const uint8_t *code, uint64_t code_size) override;
     bool on_CreatePixelShader9(uint32_t shader, const uint8_t *code, uint64_t code_size) override;
@@ -168,6 +171,7 @@ private:
     SharedSurfaces *surfaces_;
     D3d9FlipShares  flips_;
     D3d9LentCopies  lent_;
+    D3d9RowSurfaces rows_;
     ImportTable    *imports_;
     D3dObjectTable &objects_;
     LeasedObjects  &leased_;

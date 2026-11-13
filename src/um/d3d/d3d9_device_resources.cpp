@@ -7,6 +7,8 @@
 #include "core/log/keyed_log.hpp"
 #include "icd/d3d/d3d_command_stream.hpp"
 #include "icd/common/pieces.hpp"
+#include "icd/d3d/cross_adapter_rows.hpp"
+#include "icd/d3d/d3d9_surface_role.hpp"
 #include "icd/d3d/d3d_device_channel.hpp"
 #include "icd/d3d/texture_upload.hpp"
 #include "proto/resources/pitched_rows.hpp"
@@ -77,6 +79,35 @@ bool same_pixels(D3DDDIFORMAT source, D3DDDIFORMAT destination)
 HRESULT D3d9Device::create_resource(D3DDDIARG_CREATERESOURCE *args)
 {
     AV_SCOPE("D3d9Device::create_resource");
+    return make_resource(*args, 0u);
+}
+
+HRESULT D3d9Device::create_resource2(D3DDDIARG_CREATERESOURCE2 *args)
+{
+    AV_SCOPE("D3d9Device::create_resource2");
+    D3DDDIARG_CREATERESOURCE base = {};
+    base.Format = args->Format;
+    base.Pool = args->Pool;
+    base.MultisampleType = args->MultisampleType;
+    base.MultisampleQuality = args->MultisampleQuality;
+    base.pSurfList = args->pSurfList;
+    base.SurfCount = args->SurfCount;
+    base.MipLevels = args->MipLevels;
+    base.Fvf = args->Fvf;
+    base.VidPnSourceId = args->VidPnSourceId;
+    base.RefreshRate = args->RefreshRate;
+    base.hResource = args->hResource;
+    base.Flags = args->Flags;
+    base.Rotation = args->Rotation;
+    const HRESULT made = make_resource(base, args->Flags2.Value);
+    if (SUCCEEDED(made)) args->hResource = base.hResource;
+    return made;
+}
+
+HRESULT D3d9Device::make_resource(D3DDDIARG_CREATERESOURCE &created, uint32_t flags2)
+{
+    AV_SCOPE("D3d9Device::make_resource");
+    D3DDDIARG_CREATERESOURCE *const args = &created;
     if (args->SurfCount == 0u || args->pSurfList == nullptr) return E_INVALIDARG;
     D3d9Resource *made = nullptr;
     if (resources_.create(made) != Status::ok) return E_OUTOFMEMORY;
@@ -109,9 +140,28 @@ HRESULT D3d9Device::create_resource(D3DDDIARG_CREATERESOURCE *args)
     if (args->Flags.RenderTarget || args->Flags.ZBuffer || args->Flags.Primary)
         trace("resource", args->Flags.Value, static_cast<uint32_t>(args->Format), made->subresources[0].width,
               made->subresources[0].height);
-    HRESULT host = args->Pool == D3DDDIPOOL_SYSTEMMEM ? S_OK : create_host_object(*made, *args);
-    if (SUCCEEDED(host) && args->Flags.Primary) host = allocate_primary(*made, *args);
-    else if (SUCCEEDED(host) && shares_render_target(*made, *args)) host = allocate_shared(*made, *args);
+    const d3d::D3d9SurfaceRole role(args->Flags.Value, flags2, static_cast<uint32_t>(args->Pool),
+                                    static_cast<uint32_t>(args->Format), args->SurfCount,
+                                    static_cast<uint32_t>(args->MultisampleType));
+    HRESULT host = S_OK;
+    switch (role.kind()) {
+    case d3d::D3d9SurfaceRole::Kind::refused:
+        lines_.once("a Direct3D 9 cross-adapter resource that is not one surface of rows");
+        host = E_INVALIDARG;
+        break;
+    case d3d::D3d9SurfaceRole::Kind::across_adapters:
+        host = create_across_adapters(*made, *args, role.texture());
+        break;
+    case d3d::D3d9SurfaceRole::Kind::local:
+    case d3d::D3d9SurfaceRole::Kind::primary:
+    case d3d::D3d9SurfaceRole::Kind::shared:
+        host = args->Pool == D3DDDIPOOL_SYSTEMMEM ? S_OK : create_host_object(*made, *args);
+        if (SUCCEEDED(host) && role.kind() == d3d::D3d9SurfaceRole::Kind::primary)
+            host = allocate_primary(*made, *args);
+        else if (SUCCEEDED(host) && role.kind() == d3d::D3d9SurfaceRole::Kind::shared)
+            host = allocate_shared(*made, *args);
+        break;
+    }
     if (FAILED(host)) {
         LogLine refused(lines_);
         refused.text("d3d9 resource refused ").hex(static_cast<uint32_t>(host), 8u).text(" flags ").hex(args->Flags.Value, 8u);
@@ -298,12 +348,14 @@ HRESULT D3d9Device::open_resource(D3DDDIARG_OPENRESOURCE *args)
     made->allocation_resource = made->runtime;
     made->cross_adapter = descriptor.kind() == AllocationKind::cross_adapter;
     if (made->cross_adapter) {
-        if (lender_.lend(made->allocation, descriptor.size(), made->lent) != Status::ok) {
+        d3d::CrossAdapterRows rows(allocations_, lender_);
+        if (FAILED(rows.adopt(made->allocation, descriptor))) {
             lines_.write("the device took no opened cross-adapter surface's pages");
             release_resource(*made);
             static_cast<void>(resources_.destroy(made));
             return E_OUTOFMEMORY;
         }
+        made->lent = rows.lent();
         engage();
     }
     if (FAILED(allocations_.keep_resident(made->allocation))) {
@@ -849,14 +901,15 @@ HRESULT D3d9Device::buf_blt(const D3DDDIARG_BUFFERBLT *args)
 HRESULT D3d9Device::blt(const D3DDDIARG_BLT *args)
 {
     AV_SCOPE("D3d9Device::blt");
-    const D3d9Resource *const source = resource(args->hSrcResource);
+    D3d9Resource *const       source = resource(args->hSrcResource);
     const D3d9Resource *const destination = resource(args->hDstResource);
     if (source == nullptr || destination == nullptr || args->SrcSubResourceIndex >= source->count ||
         args->DstSubResourceIndex >= destination->count)
         return E_INVALIDARG;
     trace("bltargs", args->Flags.Value, source->format, destination->format, destination->opened ? 1u : 0u);
     if (destination->opened && destination->cross_adapter && !source->opened) return blt_to_cross_adapter(*source, *destination, *args);
-    if (refuses_opened(*source, "a Direct3D 9 blt from an opened surface") ||
+    const bool from_rows = source->opened && !destination->opened && adopt_opened(*source);
+    if ((!from_rows && refuses_opened(*source, "a Direct3D 9 blt from an opened surface")) ||
         refuses_opened(*destination, "a Direct3D 9 blt into an opened surface"))
         return E_NOTIMPL;
     const bool from_system = source->kind == D3d9Resource::Kind::system;

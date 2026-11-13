@@ -339,6 +339,19 @@ bool av_d3d9_CopyToLent9(::av::ClientTransport& t, uint32_t surface, uint32_t su
     return t.send_async(kCmd_CopyToLent9, b) == ::av::TransportResult::ok;
 }
 
+bool av_d3d9_CreateLentSurface9(::av::ClientTransport& t, uint32_t surface, uint32_t kind, uint32_t width, uint32_t height, uint32_t format, uint64_t memory, uint32_t pitch) {
+    AV_SCOPE("av_d3d9_CreateLentSurface9");
+    ::av::WireWriter b = t.request_writer();
+    b.write_pod<uint32_t>(surface);
+    b.write_pod<uint32_t>(kind);
+    b.write_pod<uint32_t>(width);
+    b.write_pod<uint32_t>(height);
+    b.write_pod<uint32_t>(format);
+    b.write_pod<uint64_t>(memory);
+    b.write_pod<uint32_t>(pitch);
+    return t.send_async(kCmd_CreateLentSurface9, b) == ::av::TransportResult::ok;
+}
+
 bool av_d3d9_CreateVertexShader9(::av::ClientTransport& t, uint32_t shader, const void* code, uint64_t code_size) {
     AV_SCOPE("av_d3d9_CreateVertexShader9");
     const uint64_t blob_sizes[] = {code_size > inline_bytes ? code_size : 0u};

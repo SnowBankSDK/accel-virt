@@ -1,0 +1,145 @@
+From: accel-virt
+Subject: [PATCH] d3d9: a surface or texture over an image the embedder made
+
+accel-virt lends the rows of a cross-adapter surface as guest memory: the
+render adapter draws into them and the display adapter reads them in place.
+Direct3D 11 takes such an image through CreateTexture2DFromVkImage; this is
+the same for Direct3D 9. ID3D9VkInteropDevice1::CreateImageOver makes a
+render target surface or a one-level texture whose image is the one given,
+imported as D3D11 imports one, and leaves its contents alone.
+---
+diff --git a/src/d3d9/d3d9_common_texture.cpp b/src/d3d9/d3d9_common_texture.cpp
+index 9d5fe38..2ff36b2 100644
+--- a/src/d3d9/d3d9_common_texture.cpp
++++ b/src/d3d9/d3d9_common_texture.cpp
+@@ -499,6 +499,9 @@ namespace dxvk {
+       imageInfo.debugName = debugName.c_str();
+     }
+ 
++    if (m_desc.ImportedImage != VK_NULL_HANDLE)
++      return m_device->GetDXVKDevice()->importImage(imageInfo, m_desc.ImportedImage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
++
+     return m_device->GetDXVKDevice()->createImage(imageInfo, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+   }
+ 
+diff --git a/src/d3d9/d3d9_common_texture.h b/src/d3d9/d3d9_common_texture.h
+index 5989859..3755725 100644
+--- a/src/d3d9/d3d9_common_texture.h
++++ b/src/d3d9/d3d9_common_texture.h
+@@ -51,6 +51,9 @@ namespace dxvk {
+ 
+     // Additional parameters for ID3D9VkInteropDevice
+     VkImageUsageFlags   ImageUsage = 0;
++
++    // An image the embedder made on this device and keeps alive
++    VkImage             ImportedImage = VK_NULL_HANDLE;
+   };
+ 
+   struct D3D9ColorView {
+diff --git a/src/d3d9/d3d9_interfaces.h b/src/d3d9/d3d9_interfaces.h
+index 2a8d0c8..ceaf16e 100644
+--- a/src/d3d9/d3d9_interfaces.h
++++ b/src/d3d9/d3d9_interfaces.h
+@@ -327,6 +327,23 @@ ID3D9VkInteropDevice1 : public ID3D9VkInteropDevice {
+    * the device.
+    */
+   virtual void STDMETHODCALLTYPE WaitForIdle() = 0;
++
++  /**
++   * \brief Creates a surface or 2D texture over an image of the embedder
++   *
++   * The image was made on this device with the format, extent and usage
++   * the description gives, one mip level and one sample, and has its
++   * memory bound. The embedder keeps it alive until the resource and every
++   * command that used it are gone. Its contents are kept, not cleared.
++   * \param [in] desc Image description: SURFACE or TEXTURE in the DEFAULT pool
++   * \param [in] Image The image
++   * \param [out, retval] ppResult The surface or texture
++   * \returns D3D_OK, D3DERR_INVALIDCALL, or D3DERR_OUTOFVIDEOMEMORY
++   */
++  virtual HRESULT STDMETHODCALLTYPE CreateImageOver(
++          const D3D9VkExtImageDesc* desc,
++          VkImage                   Image,
++          IDirect3DResource9**      ppResult) = 0;
+ };
+ 
+ /**
+diff --git a/src/d3d9/d3d9_interop.cpp b/src/d3d9/d3d9_interop.cpp
+index 5969b1f..0e73a05 100644
+--- a/src/d3d9/d3d9_interop.cpp
++++ b/src/d3d9/d3d9_interop.cpp
+@@ -426,6 +426,33 @@ namespace dxvk {
+   HRESULT STDMETHODCALLTYPE D3D9VkInteropDevice::CreateImage(
+           const D3D9VkExtImageDesc* params,
+           IDirect3DResource9**      ppResult) {
++    return CreateImageFrom(params, VK_NULL_HANDLE, ppResult);
++  }
++
++  HRESULT STDMETHODCALLTYPE D3D9VkInteropDevice::CreateImageOver(
++          const D3D9VkExtImageDesc* params,
++          VkImage                   Image,
++          IDirect3DResource9**      ppResult) {
++    InitReturnPtr(ppResult);
++
++    if (unlikely(params == nullptr || Image == VK_NULL_HANDLE))
++      return D3DERR_INVALIDCALL;
++
++    if (unlikely(params->Type != D3DRTYPE_SURFACE && params->Type != D3DRTYPE_TEXTURE))
++      return D3DERR_INVALIDCALL;
++
++    if (unlikely(params->Pool != D3DPOOL_DEFAULT || params->MipLevels != 1
++              || params->MultiSample != D3DMULTISAMPLE_NONE))
++      return D3DERR_INVALIDCALL;
++
++    D3D9DeviceLock lock = m_device->LockDevice();
++    return CreateImageFrom(params, Image, ppResult);
++  }
++
++  HRESULT D3D9VkInteropDevice::CreateImageFrom(
++          const D3D9VkExtImageDesc* params,
++          VkImage                   Image,
++          IDirect3DResource9**      ppResult) {
+     InitReturnPtr(ppResult);
+ 
+     if (unlikely(ppResult == nullptr))
+@@ -478,6 +505,7 @@ namespace dxvk {
+     desc.IsAttachmentOnly   = params->IsAttachmentOnly;
+     desc.IsLockable         = params->IsLockable;
+     desc.ImageUsage         = params->ImageUsage;
++    desc.ImportedImage      = Image;
+     
+     D3DRESOURCETYPE textureType = params->Type == D3DRTYPE_SURFACE ? D3DRTYPE_TEXTURE : params->Type;
+ 
+@@ -510,7 +538,8 @@ namespace dxvk {
+     try {
+       const bool isExtended = m_device->IsD3DCompatibile(D3DCompatibility::D3D9Ex);
+       const Com<ResourceType> texture = new ResourceType(m_device, &desc, isExtended);
+-      m_device->m_initializer->InitTexture(texture->GetCommonTexture());
++      if (desc.ImportedImage == VK_NULL_HANDLE)
++        m_device->m_initializer->InitTexture(texture->GetCommonTexture());
+       *ppResult = texture.ref();
+ 
+       if (desc.Pool == D3DPOOL_DEFAULT)
+diff --git a/src/d3d9/d3d9_interop.h b/src/d3d9/d3d9_interop.h
+index 8837306..49b95e1 100644
+--- a/src/d3d9/d3d9_interop.h
++++ b/src/d3d9/d3d9_interop.h
+@@ -156,8 +156,18 @@ namespace dxvk {
+ 
+     void STDMETHODCALLTYPE WaitForIdle();
+ 
++    HRESULT STDMETHODCALLTYPE CreateImageOver(
++            const D3D9VkExtImageDesc* desc,
++            VkImage                   Image,
++            IDirect3DResource9**      ppResult);
++
+   private:
+ 
++    HRESULT CreateImageFrom(
++            const D3D9VkExtImageDesc* desc,
++            VkImage                   Image,
++            IDirect3DResource9**      ppResult);
++
+     template <typename ResourceType>
+     HRESULT CreateTextureResource(
+             const D3D9_COMMON_TEXTURE_DESC& desc,

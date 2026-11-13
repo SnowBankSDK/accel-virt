@@ -507,4 +507,21 @@ bool D3d9Session::on_CopyToLent9(uint32_t surface_id, uint32_t subresource, cons
     return copied == Status::ok;
 }
 
+bool D3d9Session::on_CreateLentSurface9(uint32_t surface, uint32_t kind, uint32_t width, uint32_t height,
+                                        uint32_t format, uint64_t memory, uint32_t pitch)
+{
+    AV_SCOPE("D3d9Session::on_CreateLentSurface9");
+    if (device() == nullptr || width > max_dimension || height > max_dimension) return false;
+    const SourceMemory *const lent = imports_ != nullptr ? imports_->named(memory) : nullptr;
+    if (lent == nullptr) return false;
+    IUnknown    *made = nullptr;
+    const Status adopted = rows_.make(device(), kind, width, height, format, *lent, pitch, made);
+    if (adopted != Status::ok) {
+        lines_.note_hex("a surface over lent rows was refused, status", static_cast<uint32_t>(adopted), 8u);
+        return false;
+    }
+    return keep(surface, kind == D3d9RowSurfaces::kind_texture ? D3dObjectKind::texture9 : D3dObjectKind::surface9,
+                made);
+}
+
 }

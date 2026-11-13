@@ -1,6 +1,8 @@
 #include "core/log/log_line.hpp"
 #include "core/trace/function_scope.hpp"
 #include "core/log/keyed_log.hpp"
+#include "guest/transport/host_allocation.hpp"
+#include "icd/d3d/cross_adapter_rows.hpp"
 #include "icd/d3d/d3d_device_channel.hpp"
 #include "icd/d3d/kernel_surface.hpp"
 #include "proto/d3d/d3d9_present_format.hpp"
@@ -14,6 +16,12 @@
 #include <string.h>
 
 namespace av::d3d9 {
+
+namespace {
+constexpr uint32_t lent_surface = 1u;
+constexpr uint32_t lent_texture = 2u;
+
+}
 
 void D3d9Device::engage()
 {
@@ -75,12 +83,64 @@ HRESULT D3d9Device::allocate_primary(D3d9Resource &resource, const D3DDDIARG_CRE
     return resource.shared_key != 0u ? show_primary(resource, 0u) : S_OK;
 }
 
-bool D3d9Device::shares_render_target(const D3d9Resource &resource, const D3DDDIARG_CREATERESOURCE &create) const
+HRESULT D3d9Device::create_across_adapters(D3d9Resource &resource, const D3DDDIARG_CREATERESOURCE &create,
+                                           bool texture)
 {
-    AV_SCOPE("D3d9Device::shares_render_target");
-    const bool single = (resource.kind == D3d9Resource::Kind::surface && resource.count == 1u) ||
-                        (resource.kind == D3d9Resource::Kind::texture && resource.levels == 1u);
-    return create.Flags.SharedResource && create.Flags.RenderTarget && single && create.Pool != D3DDDIPOOL_SYSTEMMEM;
+    AV_SCOPE("D3d9Device::create_across_adapters");
+    D3d9Subresource  &top = resource.subresources[0];
+    D3d9PresentFormat presented(0u);
+    if (!presented.take_ddi(static_cast<uint32_t>(resource.format))) return E_INVALIDARG;
+    d3d::CrossAdapterRows rows(allocations_, lender_);
+    const HRESULT         lent = rows.make(top.width, top.height, presented.dxgi(), create.hResource);
+    if (lent == E_OUTOFMEMORY) lines_.write("the device took no cross-adapter surface's pages");
+    if (FAILED(lent)) return lent;
+    resource.allocation = rows.allocation();
+    resource.allocation_resource = create.hResource;
+    resource.allocation_pitch = rows.pitch();
+    resource.lent = rows.lent();
+    resource.cross_adapter = true;
+    engage();
+    const uint32_t id = next_id();
+    resource.kind = texture ? D3d9Resource::Kind::texture : D3d9Resource::Kind::surface;
+    if (texture) {
+        resource.levels = 1u;
+        resource.id = id;
+    } else {
+        top.id = id;
+    }
+    trace("across", create.Flags.Value, static_cast<uint32_t>(create.Format), top.width, top.height);
+    return d3d9proto::av_d3d9_CreateLentSurface9(wire(), id, texture ? lent_texture : lent_surface, top.width,
+                                                 top.height, static_cast<uint32_t>(create.Format),
+                                                 resource.lent->handle(), resource.allocation_pitch)
+               ? S_OK
+               : lost(__func__);
+}
+
+bool D3d9Device::adopt_opened(D3d9Resource &resource)
+{
+    AV_SCOPE("D3d9Device::adopt_opened");
+    if (!resource.opened || !resource.cross_adapter || resource.lent == nullptr) return false;
+    D3d9Subresource &top = resource.subresources[0];
+    if (top.id != 0u) return true;
+    if (resource.format != D3DDDIFMT_A8R8G8B8 && resource.format != D3DDDIFMT_X8R8G8B8) return false;
+    const uint32_t id = next_id();
+    if (!d3d9proto::av_d3d9_CreateLentSurface9(wire(), id, lent_surface, top.width, top.height,
+                                               static_cast<uint32_t>(resource.format), resource.lent->handle(),
+                                               resource.allocation_pitch))
+        return false;
+    top.id = id;
+    return true;
+}
+
+HRESULT D3d9Device::show_lent(const D3d9Resource &resource)
+{
+    AV_SCOPE("D3d9Device::show_lent");
+    engage();
+    const bool laned = lane_.constructed() && lane_.object().opened();
+    if (laned) lane_.object().writing(resource.allocation);
+    const bool flushed = wire().flush() == Status::ok;
+    if (laned) lane_.object().writing(0u);
+    return flushed ? S_OK : lost(__func__);
 }
 
 HRESULT D3d9Device::allocate_shared(D3d9Resource &resource, const D3DDDIARG_CREATERESOURCE &create)
@@ -121,6 +181,7 @@ HRESULT D3d9Device::show_primary(D3d9Resource &primary, uint32_t index)
 HRESULT D3d9Device::publish_presented(D3d9Resource &resource, uint32_t index)
 {
     AV_SCOPE("D3d9Device::publish_presented");
+    if (resource.lent != nullptr) return show_lent(resource);
     if (resource.allocation_resource != nullptr && resource.shared_key != 0u) {
         engage();
         if (!lane_.constructed() || !lane_.object().opened()) return show_primary(resource, index);

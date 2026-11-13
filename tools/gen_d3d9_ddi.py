@@ -14,9 +14,7 @@ NULL_SLOTS = {
     "pfnQueryAuthenticatedChannel", "pfnConfigureAuthenticatedChannel", "pfnDestroyAuthenticatedChannel",
     "pfnCreateCryptoSession", "pfnCryptoSessionKeyExchange", "pfnDestroyCryptoSession", "pfnEncryptionBlt",
     "pfnGetPitch", "pfnStartSessionKeyRefresh", "pfnFinishSessionKeyRefresh", "pfnGetEncryptionBltKey",
-    "pfnDecryptionBlt", "pfnCreateResource2", "pfnVolBlt1", "pfnBufBlt1", "pfnTexBlt1", "pfnFlush1",
-    "pfnCheckCounterInfo", "pfnCheckCounter", "pfnUpdateSubresourceUP", "pfnPresent1", "pfnSetMarker",
-    "pfnSetMarkerMode", "pfnTrimResidencySet", "pfnAcquireResource", "pfnReleaseResource",
+    "pfnDecryptionBlt", "pfnTrimResidencySet", "pfnAcquireResource", "pfnReleaseResource",
 }
 
 

@@ -98,6 +98,13 @@ namespace av::d3d9proto {
 // is a cross-adapter allocation of the display adapter, which reads it in place. A copy that does not fit the memory, a
 // surface that cannot be copied, or a device without Vulkan interop is refused.
 [[nodiscard]] bool av_d3d9_CopyToLent9(::av::ClientTransport& t, uint32_t surface, uint32_t subresource, const Rect& source_rect, uint64_t memory, uint32_t pitch, uint32_t x, uint32_t y);
+// A render target whose pixels are rows of `pitch` bytes of guest memory the guest lent beforehand (named by the
+// handle IMPORT_BLOB answered as `memory`): kind 1 a render-target surface, kind 2 a one-level render-target texture,
+// `format` a D3DFORMAT. The host GPU draws into the lent rows and samples them in place, so the adapter that made a
+// cross-adapter surface and the adapter that opened it each make one over the same memory and neither copies a frame.
+// What the memory held is kept. Memory that does not hold the rows, a format that cannot be drawn into as rows, or a
+// device without Vulkan interop is refused.
+[[nodiscard]] bool av_d3d9_CreateLentSurface9(::av::ClientTransport& t, uint32_t surface, uint32_t kind, uint32_t width, uint32_t height, uint32_t format, uint64_t memory, uint32_t pitch);
 // A vertex shader from its Direct3D 9 token stream, as IDirect3DDevice9::CreateVertexShader takes it.
 [[nodiscard]] bool av_d3d9_CreateVertexShader9(::av::ClientTransport& t, uint32_t shader, const void* code, uint64_t code_size);
 [[nodiscard]] bool av_d3d9_CreatePixelShader9(::av::ClientTransport& t, uint32_t shader, const void* code, uint64_t code_size);

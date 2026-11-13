@@ -56,7 +56,7 @@ AV_SAME_OFFSET(D3d102ddiargGetCapsRecord, Type, D3DDDIARG_GETCAPS, Type);
 AV_SAME_OFFSET(D3d102ddiargGetCapsRecord, pInfo, D3DDDIARG_GETCAPS, pInfo);
 AV_SAME_OFFSET(D3d102ddiargGetCapsRecord, pData, D3DDDIARG_GETCAPS, pData);
 AV_SAME_OFFSET(D3d102ddiargGetCapsRecord, DataSize, D3DDDIARG_GETCAPS, DataSize);
-static_assert(D3D_UMD_INTERFACE_VERSION_WIN7 == 0x2003, "the interface d3d9.dll is told the driver speaks");
+static_assert(D3D_UMD_INTERFACE_VERSION_WDDM1_3 == 0x4002, "the interface d3d9.dll is told the driver speaks");
 
 AV_SAME_SIZE(D3d10ddiargOpenAdapterRecord, D3D10DDIARG_OPENADAPTER);
 AV_SAME_OFFSET(D3d10ddiargOpenAdapterRecord, hRTAdapter, D3D10DDIARG_OPENADAPTER, hRTAdapter);

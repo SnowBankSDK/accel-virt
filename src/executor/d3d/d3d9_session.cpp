@@ -19,7 +19,7 @@ namespace av {
 
 D3d9Session::D3d9Session(const GuestBytes &guest, D3dObjectTable &objects, LeasedObjects &leased, WatchedBlocks &blocks,
                          SliceStorages &storages, EventfdWake &wake, DriverLog &lines)
-    : d3d9proto::ServerDispatch(guest), host_(nullptr), surfaces_(nullptr), flips_(blocks), lent_(blocks), imports_(nullptr), objects_(objects), leased_(leased), blocks_(blocks),
+    : d3d9proto::ServerDispatch(guest), host_(nullptr), surfaces_(nullptr), flips_(blocks), lent_(blocks), rows_(blocks), imports_(nullptr), objects_(objects), leased_(leased), blocks_(blocks),
       devices_(blocks), lines_(lines), refusal_(lines_), arena_(nullptr), lanes_(blocks, wake, lines_), slices_(blocks, storages, lanes_, lines_), line_ends_(),
       refused_(blocks), clock_(), lost_(false)
 {
@@ -52,6 +52,7 @@ void D3d9Session::shut_down()
     lent_.release();
     imports_ = nullptr;
     objects_.remove_kinds(D3dObjectKind::surface9, D3dObjectKind::query9);
+    rows_.release();
     refused_.clear();
     for (IDirect3DDevice9 *device = devices_.remove_any(); device != nullptr; device = devices_.remove_any())
         device->Release();
@@ -72,6 +73,7 @@ bool D3d9Session::run(uint32_t command_id, WireReader &payload, WireWriter &repl
     arena_ = nullptr;
     flips_.reap();
     lent_.reap();
+    rows_.collect();
     if (device() != nullptr && device()->TestCooperativeLevel() == D3DERR_DEVICELOST && !lost_) {
         lines_.write("a device's host Direct3D 9 device was lost; the session is faulted");
         lost_ = true;
@@ -165,6 +167,7 @@ bool D3d9Session::on_Destroy9(uint32_t object)
     if (device != nullptr) {
         flips_.forget_device(device);
         lent_.forget_device(device);
+        rows_.forget_device(device);
         slices_.forget_device(device);
         device->Release();
         return true;
