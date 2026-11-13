@@ -122,6 +122,7 @@ public:
     const char *string(uint32_t name) const;
     const GrantedProfile &profile() const;
     icd::PresentPacing   &pacing();
+    const icd::HostChannel &channel() const;
     uint64_t              adapter_luid() const;
     void                  asking(GrantedProfile::Rung rung);
     GlDebugMessages &debug();

@@ -12,7 +12,7 @@ namespace av::glicd {
 
 WindowFramebuffers::WindowFramebuffers(BlockSource &memory, DriverLog &log)
     : memory_(memory), log_(log), pool_(memory), presenters_(memory, Pool::paged), current_(nullptr),
-      presented_(nullptr), pacing_(nullptr), draws_window_(false),
+      presented_(nullptr), pacing_(nullptr), channel_(nullptr), draws_window_(false),
       reads_window_(false),
       read_buffer_(gl_back), viewport_width_(0u), viewport_height_(0u), shown_calls_(no_calls),
       resolved_calls_(no_calls),       ever_current_(false)
@@ -182,7 +182,14 @@ bool WindowFramebuffers::present(ClientTransport &wire, const ClientArrayState &
     presented_ = presenter;
     resolved_calls_ = no_calls;
     if (pacing_ != nullptr) presenter->paced_by(*pacing_);
+    if (channel_ != nullptr) presenter->watched_by(*channel_);
     return presenter->present(wire, state, dc, surface, loop, luid);
+}
+
+void WindowFramebuffers::watched_by(const icd::HostChannel &channel)
+{
+    AV_SCOPE("WindowFramebuffers::watched_by");
+    channel_ = &channel;
 }
 
 void WindowFramebuffers::paced_by(icd::PresentPacing &pacing)

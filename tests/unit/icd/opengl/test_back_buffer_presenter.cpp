@@ -946,6 +946,55 @@ TEST(back_buffer_presenter, swaps_with_an_interval_wait_for_a_present_slot_so_ev
   CHECK(display.blanks_waited() >= frames - 2u);
   CHECK(rig.presenter.invariants_hold()); }
 
+namespace {
+
+struct FaultWhileWaiting {
+    Rig                 *rig;
+    av::ClientTransport *wire;
+    std::uint32_t        waits;
+};
+
+void fault_on_the_third_wait(void *context)
+{
+    auto *const waiting = static_cast<FaultWhileWaiting *>(context);
+    if (++waiting->waits != 3u) return;
+    waiting->rig->kmt().fail_first(av::MockKmt::Call::submit, 64u, 0xC0000001u);
+    av::WireWriter writer = waiting->wire->request_writer();
+    av::WireReader reply(nullptr, 0u);
+    CHECK(waiting->wire->send_sync(1u, writer, reply) == av::TransportResult::failed);
+    waiting->wire->end_call();
+}
+
+}
+
+TEST(back_buffer_presenter, a_swap_waiting_for_a_present_slot_fails_when_its_transport_faults_while_the_present_thread_never_shows)
+{ Rig               rig;
+  FaultWhileWaiting waiting{&rig, nullptr, 0u};
+  Presents          presents(rig);
+  av::PacedDisplay  display;
+  CHECK(display.pacing.ask(1));
+  rig.presenter.paced_by(display.pacing);
+  rig.presenter.watched_by(rig.context.channel());
+  chained_rig(rig, presents);
+  CHECK(rig.presenter.present(rig.wire(), rig.state, &rig.dc, rig.surface, &presents.loop, 0x1234u));
+  rig.presenter.hand_over(rig.context.mark());
+  CHECK(rig.presenter.present(rig.wire(), rig.state, &rig.dc, rig.surface, &presents.loop, 0x1234u));
+  rig.presenter.hand_over(rig.context.mark());
+  CHECK_EQ(presents.loop.queued(), 2u);
+  CHECK(!rig.context.channel().lost());
+  av::ClientTransport &wire = rig.wire();
+  waiting.wire = &wire;
+  presents.shown.on_wait(fault_on_the_third_wait, &waiting);
+  CHECK(!rig.presenter.present(wire, rig.state, &rig.dc, rig.surface, &presents.loop, 0x1234u));
+  CHECK_EQ(waiting.waits, 3u);
+  CHECK(rig.context.channel().lost());
+  CHECK_EQ(presents.loop.shown_frames(), 0u);
+  CHECK_EQ(presents.loop.queued(), 2u);
+  CHECK(!rig.presenter.present(wire, rig.state, &rig.dc, rig.surface, &presents.loop, 0x1234u));
+  CHECK_EQ(waiting.waits, 3u);
+  CHECK_EQ(presents.loop.queued(), 2u);
+  CHECK(rig.presenter.invariants_hold()); }
+
 TEST(back_buffer_presenter, swaps_with_interval_zero_never_wait_for_a_present_slot_and_the_newest_frame_replaces_a_queued_one)
 { constexpr std::uint32_t frames = 8u;
   Rig              rig;

@@ -401,6 +401,7 @@ GlIcdRoot::Shown GlIcdRoot::present_frame(void *dc, bool paced)
     WindowFramebuffers &framebuffers = context->framebuffers();
     framebuffers.drop_gone(*transport, surface_);
     framebuffers.paced_by(context->pacing());
+    framebuffers.watched_by(context->channel());
     if (!framebuffers.present(*transport, context->arrays(), dc, window, surface_, &presents_,
                               context->adapter_luid()))
         return Shown::refused;

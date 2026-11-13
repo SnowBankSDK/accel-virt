@@ -430,6 +430,12 @@ const char *GuestGlContext::string(uint32_t name) const
     return nullptr;
 }
 
+const icd::HostChannel &GuestGlContext::channel() const
+{
+    AV_SCOPE("GuestGlContext::channel");
+    return channel_;
+}
+
 icd::PresentPacing &GuestGlContext::pacing()
 {
     AV_SCOPE("GuestGlContext::pacing");

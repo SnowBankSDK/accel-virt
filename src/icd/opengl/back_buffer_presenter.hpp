@@ -27,6 +27,7 @@ class StateWriter;
 }
 
 namespace av::icd {
+class HostChannel;
 class PresentPacing;
 class WindowSurface;
 template <typename Source, typename Readiness>
@@ -80,6 +81,7 @@ public:
     bool     lost() const;
     void     hold_over(const BatchMark &mark, icd::PresentPacing &pacing);
     void     paced_by(icd::PresentPacing &pacing);
+    void     watched_by(const icd::HostChannel &channel);
     void     show_held_now();
     uint32_t flush_held() override;
     void     done(const GlFrame &frame, bool drawn);
@@ -139,6 +141,7 @@ private:
     bool             held_;
     BatchMark        held_mark_;
     icd::PresentPacing *pacing_;
+    const icd::HostChannel *channel_;
     ChainedFrames    chained_;
     bool             chain_refused_;
     uint32_t         current_;

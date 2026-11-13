@@ -1,3 +1,4 @@
+#include "icd/common/host_channel.hpp"
 #include "icd/opengl/back_buffer_presenter.hpp"
 
 #include "core/platform/block_source.hpp"
@@ -34,7 +35,7 @@ static_assert(BackBufferPresenter::max_edge * 4u + TransferRoom::command_bytes <
 BackBufferPresenter::BackBufferPresenter(BlockSource &memory, DriverLog &log)
     : memory_(memory), lines_(log), window_(nullptr), format_(0u, 0u, false, false, 0u), width_(0u), height_(0u),
       framebuffers_{}, texture_(0u), renderbuffers_{}, pixels_(nullptr), front_(), capacity_(0u), refusal_logged_(),
-      loop_(nullptr), room_(), pending_(no_slot), undrawn_(false), pending_chained_(false), held_(false), held_mark_(), pacing_(nullptr), chained_(),
+      loop_(nullptr), room_(), pending_(no_slot), undrawn_(false), pending_chained_(false), held_(false), held_mark_(), pacing_(nullptr), channel_(nullptr), chained_(),
       chain_refused_(false), current_(no_slot), rotation_refused_(false)
 {
     AV_SCOPE("BackBufferPresenter::BackBufferPresenter");
@@ -137,9 +138,11 @@ bool BackBufferPresenter::present(ClientTransport &wire, const ClientArrayState 
     if (width_ == 0u || height_ == 0u) return true;
     drop_held();
     __atomic_store_n(&undrawn_, false, __ATOMIC_RELEASE);
+    const auto faulted = [this] { return channel_ != nullptr && channel_->lost(); };
+    if (faulted()) return false;
     static_cast<void>(resolved(wire));
-    if (loop != nullptr && draw_chained(wire, *loop, luid)) return true;
-    if (loop != nullptr && queue_read(wire, state, *loop)) return true;
+    if (loop != nullptr && draw_chained(wire, *loop, luid)) return !faulted();
+    if (loop != nullptr && queue_read(wire, state, *loop)) return !faulted();
     settle();
     const bool plain = pack_is_plain(state);
     if (!plain) set_pack(wire, state, true);
@@ -174,6 +177,12 @@ void BackBufferPresenter::paced_by(icd::PresentPacing &pacing)
 {
     AV_SCOPE("BackBufferPresenter::paced_by");
     pacing_ = &pacing;
+}
+
+void BackBufferPresenter::watched_by(const icd::HostChannel &channel)
+{
+    AV_SCOPE("BackBufferPresenter::watched_by");
+    channel_ = &channel;
 }
 
 void BackBufferPresenter::hold_over(const BatchMark &mark, icd::PresentPacing &pacing)
@@ -437,7 +446,7 @@ bool BackBufferPresenter::draw_chained(ClientTransport &wire, GlPresentQueue &lo
 bool BackBufferPresenter::lost() const
 {
     AV_SCOPE("BackBufferPresenter::lost");
-    return __atomic_load_n(&undrawn_, __ATOMIC_ACQUIRE);
+    return __atomic_load_n(&undrawn_, __ATOMIC_ACQUIRE) || (channel_ != nullptr && channel_->lost());
 }
 
 uint32_t BackBufferPresenter::slot_to_fill(GlPresentQueue &loop, uint32_t slots, uint32_t reserved, bool newest_wins)
