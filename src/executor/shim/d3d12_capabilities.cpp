@@ -23,6 +23,7 @@ constexpr uint32_t queue_list_copy = 8u;
 constexpr uint32_t queue_3d = 1u;
 constexpr uint32_t queue_compute = 2u;
 constexpr uint32_t queue_copy = 4u;
+constexpr uint32_t held_by_layout[] = {68u, 69u, 89u, 100u, 101u, 102u, 106u, 107u, 108u, 109u, 111u, 112u, 113u, 114u};
 
 struct Options9 {
     BOOL mesh_shader_pipeline_stats;
@@ -196,7 +197,9 @@ void D3d12Capabilities::measure_formats(ID3D12Device &device)
         d3dproto::FormatCaps              row = {};
         D3D12_FEATURE_DATA_FORMAT_SUPPORT support = {};
         support.Format = static_cast<DXGI_FORMAT>(format);
-        if (SUCCEEDED(device.CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT, &support, sizeof(support)))) {
+        bool measured = true;
+        for (const uint32_t held : held_by_layout) measured = measured && held != format;
+        if (measured && SUCCEEDED(device.CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT, &support, sizeof(support)))) {
             __builtin_memcpy(&row.support, &support.Support1, sizeof row.support);
             __builtin_memcpy(&row.support2, &support.Support2, sizeof row.support2);
         }

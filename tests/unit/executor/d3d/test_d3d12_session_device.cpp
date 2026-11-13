@@ -1920,6 +1920,85 @@ TEST(d3d12_session_device, a_committed_resource_takes_every_heap_flag_combinatio
     backend.shut_down();
 }
 
+TEST(d3d12_session_device, a_texture_of_each_format_the_runtime_reports_for_every_driver_is_made_and_the_caps_claim_nothing_for_it)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice *device11 = nullptr;
+    av::D3d12HostDevice *device12 = nullptr;
+    av::HostShares      *shares = nullptr;
+    av::HostMemorySource *source = nullptr;
+    if (!host_devices(apis, device11, device12, shares, source)) return;
+    av::D3dBackend backend(rig.log);
+    av::SessionShares session;
+    CHECK(backend.initialize(*shared_as(session, shares, backend), rig.imports, device11, device12));
+    av::D3dLoopback wire(backend, rig.imports, source, region_bytes, lent_bytes);
+    std::uint32_t hresult = 1u;
+    CHECK(av_d3d12_OpenDevice12(wire, 0u, &hresult));
+    CHECK_EQ(hresult, 0u);
+    Caps12              caps = {};
+    static std::uint8_t rows[65536] = {};
+    std::uint64_t       rows_size = 0u;
+    hresult = 1u;
+    CHECK(av_d3d12_QueryCaps12(wire, &hresult, &caps, rows, sizeof rows, &rows_size));
+    CHECK_EQ(hresult, 0u);
+    constexpr std::uint32_t flag_unordered_access = 0x4u;
+    struct Case {
+        std::uint32_t format;
+        std::uint32_t flags;
+    };
+    const Case cases[] = {{68u, 0u},
+                          {69u, 0u},
+                          {89u, 0u},
+                          {100u, 0u},
+                          {100u, flag_render_target},
+                          {100u, flag_unordered_access},
+                          {101u, 0u},
+                          {101u, flag_unordered_access},
+                          {102u, 0u},
+                          {102u, flag_unordered_access},
+                          {106u, 0u},
+                          {107u, 0u},
+                          {107u, flag_unordered_access},
+                          {108u, 0u},
+                          {108u, flag_unordered_access},
+                          {109u, 0u},
+                          {109u, flag_unordered_access},
+                          {111u, 0u},
+                          {112u, 0u},
+                          {113u, 0u},
+                          {114u, 0u}};
+    std::uint32_t id = 700u;
+    for (const Case &one : cases) {
+        ResourceDesc texture = {};
+        texture.width = 16u;
+        texture.dimension = dimension_texture2d;
+        texture.height = 16u;
+        texture.depth_or_array = 1u;
+        texture.mip_levels = 1u;
+        texture.format = one.format;
+        texture.sample_count = 1u;
+        texture.flags = one.flags;
+        std::uint64_t bytes = 0u, alignment = 0u;
+        CHECK(av_d3d12_ResourceAllocation12(wire, texture, &bytes, &alignment));
+        if (bytes == ~std::uint64_t{0}) std::fprintf(stderr, "format %u flags %x is not sized\n", one.format, one.flags);
+        CHECK(bytes != ~std::uint64_t{0});
+        hresult = 1u;
+        CHECK(av_d3d12_CreateCommittedResource12(wire, id, heap_of(heap_default), 0u, texture, 0u, ClearValue{}, 0u,
+                                                  &hresult));
+        if (hresult != 0u) std::fprintf(stderr, "format %u flags %x: %08x\n", one.format, one.flags, hresult);
+        CHECK_EQ(hresult, 0u);
+        id++;
+        av::d3dproto::FormatCaps row = {};
+        CHECK(rows_size >= (std::uint64_t{one.format} + 1u) * sizeof row);
+        std::memcpy(&row, rows + std::uint64_t{one.format} * sizeof row, sizeof row);
+        CHECK_EQ(row.support, 0u);
+        CHECK_EQ(row.support2, 0u);
+    }
+    judge_healthy(wire);
+    backend.shut_down();
+}
+
 TEST(d3d12_session_device, a_list_runs_its_copy_after_the_guest_destroyed_the_buffers_it_names)
 {
     av::ExecutorLogRig rig;
