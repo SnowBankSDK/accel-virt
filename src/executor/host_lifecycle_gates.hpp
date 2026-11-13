@@ -14,6 +14,7 @@ namespace av {
 class HostLifecycleGates {
 public:
     HostLifecycleGates();
+    explicit HostLifecycleGates(EglEntryGate &egl);
     HostLifecycleGates(const HostLifecycleGates &) = delete;
     HostLifecycleGates &operator=(const HostLifecycleGates &) = delete;
 

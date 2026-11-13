@@ -1,10 +1,13 @@
+#include "executor/egl_entry_gate.hpp"
 #include "executor/host_lifecycle_gate.hpp"
+#include "executor/host_lifecycle_gates.hpp"
 #include "harness/executor/fake_vulkan_driver.hpp"
 #include "harness/executor/generous_budget.hpp"
 #include "harness/executor/vulkan_wire_rig.hpp"
 #include "harness/framework/test_registry.hpp"
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <thread>
 
@@ -139,3 +142,73 @@ TEST(vulkan_device_destroy, a_device_whose_gpus_lifecycle_gate_stays_held_is_lea
   CHECK_EQ(av::fake_vulkan.device_destroys, 0u);
   CHECK_EQ(gate.refusals(), 1u);
   CHECK_EQ(rig.sink().holding("leaked instead of destroyed"), 1u); }
+
+namespace {
+
+struct EglRace {
+    av::EglEntryGate  egl;
+    std::atomic<bool> destroying{false};
+    std::atomic<bool> try_entry{false};
+    std::atomic<bool> entered{false};
+    std::atomic<bool> overlapped{false};
+    std::atomic<std::uint32_t> inside_at_destroy{0u};
+};
+
+EglRace egl_race;
+
+void destroy_while_an_entry_tries()
+{
+    egl_race.inside_at_destroy = egl_race.egl.inside();
+    egl_race.destroying = true;
+    egl_race.try_entry = true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(60));
+    if (egl_race.entered.load()) egl_race.overlapped = true;
+    egl_race.destroying = false;
+}
+
+}
+
+TEST(vulkan_device_destroy, on_a_driver_that_needs_it_a_device_destroy_and_an_egl_entry_of_any_driver_never_run_together_whichever_came_first)
+{ static av::HostLifecycleGates gates(egl_race.egl);
+  const std::uint8_t vendor_gpu[16] = {7};
+  av::HostLifecycleGate *const gate =
+      gates.add(vendor_gpu, av::HostDriver(VK_DRIVER_ID_NVIDIA_PROPRIETARY, "vendor", "1"));
+  CHECK(gate != nullptr);
+  { Rig rig;
+    av::fake_vulkan.destroying_device = destroy_while_an_entry_tries;
+    rig.backend().gate_lifecycle(gate);
+    std::thread entry([] {
+        while (!egl_race.try_entry.load()) std::this_thread::yield();
+        const av::EglEntry inside(egl_race.egl);
+        if (egl_race.destroying.load()) egl_race.overlapped = true;
+        egl_race.entered = true;
+    });
+    CHECK(rig.destroy_device());
+    entry.join();
+    CHECK_EQ(av::fake_vulkan.device_destroys, 1u);
+    CHECK(egl_race.entered.load());
+    CHECK(!egl_race.overlapped.load());
+    CHECK_EQ(egl_race.egl.held_back(), 1u); }
+  { Rig rig;
+    av::fake_vulkan.destroying_device = destroy_while_an_entry_tries;
+    rig.backend().gate_lifecycle(gate);
+    egl_race.entered = false;
+    egl_race.try_entry = false;
+    std::atomic<bool> inside{false}, leave{false};
+    std::thread       entry([&] {
+        const av::EglEntry held(egl_race.egl);
+        inside = true;
+        while (!leave.load()) std::this_thread::yield();
+    });
+    while (!inside.load()) std::this_thread::yield();
+    bool        answered = false;
+    std::thread destroyer([&] { answered = rig.destroy_device(); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(60));
+    CHECK_EQ(av::fake_vulkan.device_destroys, 0u);
+    leave = true;
+    entry.join();
+    destroyer.join();
+    CHECK(answered);
+    CHECK_EQ(av::fake_vulkan.device_destroys, 1u);
+    CHECK_EQ(egl_race.inside_at_destroy.load(), 0u);
+    CHECK(!egl_race.overlapped.load()); } }

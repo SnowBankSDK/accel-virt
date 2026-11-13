@@ -24,6 +24,8 @@ public:
     void              *display() const;
 
 private:
+    bool current() const;
+
     const GlDisplay *display_;
     void            *context_;
 };

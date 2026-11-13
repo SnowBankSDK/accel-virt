@@ -1,13 +1,14 @@
 #include "executor/host_lifecycle_gate.hpp"
 
 #include "core/trace/function_scope.hpp"
+#include "executor/egl_entry_gate.hpp"
 
 #include <time.h>
 
 namespace av {
 
 HostLifecycleGate::HostLifecycleGate(uint64_t wait_ns)
-    : lock_(), wait_ns_(wait_ns), entries_(0u), shares_(0u), refusals_(0u), shares_compiles_(false)
+    : lock_(), wait_ns_(wait_ns), entries_(0u), shares_(0u), refusals_(0u), shares_compiles_(false), egl_(nullptr)
 {
     AV_SCOPE("HostLifecycleGate::HostLifecycleGate");
     pthread_rwlockattr_t attributes;
@@ -27,6 +28,20 @@ void HostLifecycleGate::driven_by(VkDriverId driver)
 {
     AV_SCOPE("HostLifecycleGate::driven_by");
     shares_compiles_ = driver == VK_DRIVER_ID_NVIDIA_PROPRIETARY;
+    if (excludes_egl()) egl_->need();
+}
+
+void HostLifecycleGate::guard_egl(EglEntryGate &egl)
+{
+    AV_SCOPE("HostLifecycleGate::guard_egl");
+    egl_ = &egl;
+    if (excludes_egl()) egl_->need();
+}
+
+bool HostLifecycleGate::excludes_egl() const
+{
+    AV_SCOPE("HostLifecycleGate::excludes_egl");
+    return egl_ != nullptr && shares_compiles_;
 }
 
 bool HostLifecycleGate::shares_compiles() const
@@ -55,6 +70,11 @@ bool HostLifecycleGate::enter()
         __atomic_add_fetch(&refusals_, 1u, __ATOMIC_RELAXED);
         return false;
     }
+    if (excludes_egl() && !egl_->exclude(wait_ns_)) {
+        pthread_rwlock_unlock(&lock_);
+        __atomic_add_fetch(&refusals_, 1u, __ATOMIC_RELAXED);
+        return false;
+    }
     __atomic_add_fetch(&entries_, 1u, __ATOMIC_RELAXED);
     return true;
 }
@@ -62,6 +82,7 @@ bool HostLifecycleGate::enter()
 void HostLifecycleGate::leave()
 {
     AV_SCOPE("HostLifecycleGate::leave");
+    if (excludes_egl()) egl_->admit();
     pthread_rwlock_unlock(&lock_);
 }
 

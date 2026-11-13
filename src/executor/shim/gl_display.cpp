@@ -1,6 +1,7 @@
 #include "executor/shim/gl_display.hpp"
 
 #include "core/trace/function_scope.hpp"
+#include "executor/egl_entry_gate.hpp"
 #include "executor/host_lifecycle_gate.hpp"
 #include "executor/opengl/gl_context_attributes.hpp"
 #include "proto/context/device_uuid.hpp"
@@ -49,6 +50,7 @@ bool GlDisplay::open(const uint8_t *uuid, HostLifecycleGate &gate)
     if (display_ != nullptr || uuid == nullptr) return false;
     const HostLifecycleHold hold(&gate);
     if (!hold.held()) return false;
+    const EglEntry entered;
     gate_ = &gate;
     setenv("mesa_glthread", "false", 0);
     static_cast<void>(dlopen("libEGL.so.1", RTLD_NOW | RTLD_NOLOAD | RTLD_GLOBAL));
@@ -86,6 +88,7 @@ void GlDisplay::close()
     AV_SCOPE("GlDisplay::close");
     if (display_ == nullptr) return;
     const HostLifecycleHold hold(gate_);
+    const EglEntry          entered;
     if (hold.held()) (void)eglTerminate(display_);
     display_ = nullptr;
 }
@@ -93,6 +96,7 @@ void GlDisplay::close()
 void *GlDisplay::create_context(const GlContextAttributes &attributes, void *share) const
 {
     AV_SCOPE("GlDisplay::create_context");
+    const EglEntry entered;
     if (display_ == nullptr || !attributes.valid()) return nullptr;
     if (eglQueryAPI() != EGL_OPENGL_API && eglBindAPI(EGL_OPENGL_API) != EGL_TRUE) return nullptr;
     const EGLContext context = eglCreateContext(display_, EGL_NO_CONFIG_KHR,
@@ -115,6 +119,7 @@ HostLifecycleGate *GlDisplay::lifecycle() const
 bool GlDisplay::make_current(void *context) const
 {
     AV_SCOPE("GlDisplay::make_current");
+    const EglEntry entered;
     if (display_ == nullptr || context == nullptr) return false;
     return eglMakeCurrent(display_, EGL_NO_SURFACE, EGL_NO_SURFACE, context) == EGL_TRUE;
 }
@@ -122,6 +127,7 @@ bool GlDisplay::make_current(void *context) const
 void GlDisplay::release_current() const
 {
     AV_SCOPE("GlDisplay::release_current");
+    const EglEntry entered;
     if (display_ == nullptr) return;
     (void)eglMakeCurrent(display_, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
 }
@@ -129,6 +135,7 @@ void GlDisplay::release_current() const
 void GlDisplay::destroy_context(void *context) const
 {
     AV_SCOPE("GlDisplay::destroy_context");
+    const EglEntry entered;
     if (display_ == nullptr || context == nullptr) return;
     if (eglGetCurrentContext() == static_cast<EGLContext>(context))
         (void)eglMakeCurrent(display_, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);

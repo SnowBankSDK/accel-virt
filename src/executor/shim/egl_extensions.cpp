@@ -1,6 +1,7 @@
 #include "executor/shim/egl_extensions.hpp"
 
 #include "core/trace/function_scope.hpp"
+#include "executor/egl_entry_gate.hpp"
 
 #include <EGL/egl.h>
 #include <string.h>
@@ -15,6 +16,7 @@ EglExtensions::EglExtensions() : extensions_(nullptr)
 void EglExtensions::configure(void *display)
 {
     AV_SCOPE("EglExtensions::configure");
+    const EglEntry entered;
     extensions_ = display != nullptr ? eglQueryString(static_cast<EGLDisplay>(display), EGL_EXTENSIONS) : nullptr;
 }
 

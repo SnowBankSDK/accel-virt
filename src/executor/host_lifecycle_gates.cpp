@@ -1,6 +1,7 @@
 #include "executor/host_lifecycle_gates.hpp"
 
 #include "core/trace/function_scope.hpp"
+#include "executor/egl_entry_gate.hpp"
 
 namespace av {
 
@@ -38,7 +39,12 @@ void gates_unshare(void *gate)
 
 }
 
-HostLifecycleGates::HostLifecycleGates()
+HostLifecycleGates::HostLifecycleGates() : HostLifecycleGates(EglEntryGate::process())
+{
+    AV_SCOPE("HostLifecycleGates::HostLifecycleGates");
+}
+
+HostLifecycleGates::HostLifecycleGates(EglEntryGate &egl)
     : abi_{}, gates_(), drivers_(), drivers_count_(0u), uuids_(), gate_of_{}, count_(0u)
 {
     AV_SCOPE("HostLifecycleGates::HostLifecycleGates");
@@ -49,6 +55,7 @@ HostLifecycleGates::HostLifecycleGates()
     abi_.leave = gates_leave;
     abi_.share = gates_share;
     abi_.unshare = gates_unshare;
+    for (HostLifecycleGate &gate : gates_) gate.guard_egl(egl);
 }
 
 HostLifecycleGate *HostLifecycleGates::add(const uint8_t *uuid, const HostDriver &driver)

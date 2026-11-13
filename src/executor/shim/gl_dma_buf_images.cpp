@@ -2,6 +2,7 @@
 
 #include "core/platform/thread_lock_hold.hpp"
 #include "core/trace/function_scope.hpp"
+#include "executor/egl_entry_gate.hpp"
 #include "executor/sharing/shared_image_shape.hpp"
 #include "executor/shim/gl_context.hpp"
 
@@ -44,6 +45,7 @@ GlDmaBufImages::GlDmaBufImages(BlockSource &blocks)
 void GlDmaBufImages::configure(GlContext &context)
 {
     AV_SCOPE("GlDmaBufImages::configure");
+    const EglEntry entered;
     give_back();
     void *const display = context.display();
     if (display == nullptr || !context.make_current()) return;
@@ -69,6 +71,7 @@ void GlDmaBufImages::configure(GlContext &context)
 void GlDmaBufImages::give_back()
 {
     AV_SCOPE("GlDmaBufImages::give_back");
+    const EglEntry entered;
     const ThreadLockHold locked(lock_);
     if (display_ != nullptr)
         images_.erase_if([this](uint32_t, const Image &held) {
@@ -92,6 +95,7 @@ bool GlDmaBufImages::imports_images() const
 bool GlDmaBufImages::import(uint32_t memory, int fd, const SharedImageShape &shape)
 {
     AV_SCOPE("GlDmaBufImages::import");
+    const EglEntry entered;
     const ThreadLockHold locked(lock_);
     const uint32_t fourcc = fourcc_of(shape.format());
     if (display_ == nullptr || fd < 0 || memory == 0u || !shape.described() || fourcc == 0u ||
@@ -139,6 +143,7 @@ bool GlDmaBufImages::bind(uint32_t texture, uint32_t memory)
 void GlDmaBufImages::forget(uint32_t memory)
 {
     AV_SCOPE("GlDmaBufImages::forget");
+    const EglEntry entered;
     const ThreadLockHold locked(lock_);
     Image held{};
     if (!images_.take(memory, held)) return;

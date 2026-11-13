@@ -1,6 +1,7 @@
 #include "executor/shim/gl_context.hpp"
 
 #include "core/trace/function_scope.hpp"
+#include "executor/egl_entry_gate.hpp"
 #include "executor/host_lifecycle_gate.hpp"
 #include "executor/shim/gl_display.hpp"
 
@@ -47,16 +48,23 @@ bool GlContext::make_current()
 {
     AV_SCOPE("GlContext::make_current");
     if (context_ == nullptr) return false;
-    if (eglGetCurrentContext() == static_cast<EGLContext>(context_)) return true;
+    if (current()) return true;
     return display_->make_current(context_);
 }
 
 void GlContext::let_go()
 {
     AV_SCOPE("GlContext::let_go");
-    if (context_ == nullptr || eglGetCurrentContext() != static_cast<EGLContext>(context_)) return;
+    if (context_ == nullptr || !current()) return;
     const HostLifecycleHold hold(display_->lifecycle());
     if (hold.held()) display_->release_current();
+}
+
+bool GlContext::current() const
+{
+    AV_SCOPE("GlContext::current");
+    const EglEntry entered;
+    return eglGetCurrentContext() == static_cast<EGLContext>(context_);
 }
 
 void *GlContext::handle() const
@@ -74,6 +82,7 @@ void *GlContext::display() const
 void *GlContext::resolve(const char *name) const
 {
     AV_SCOPE("GlContext::resolve");
+    const EglEntry entered;
     if (context_ == nullptr) return nullptr;
     return reinterpret_cast<void *>(eglGetProcAddress(name));
 }

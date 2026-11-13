@@ -8,6 +8,8 @@
 
 namespace av {
 
+class EglEntryGate;
+
 class HostLifecycleGate {
 public:
     static constexpr uint64_t default_wait_ns = 10000000000ull;
@@ -18,6 +20,8 @@ public:
     HostLifecycleGate &operator=(const HostLifecycleGate &) = delete;
 
     void               driven_by(VkDriverId driver);
+    void               guard_egl(EglEntryGate &egl);
+    bool               excludes_egl() const;
     bool               shares_compiles() const;
     [[nodiscard]] bool enter();
     void               leave();
@@ -36,6 +40,7 @@ private:
     uint64_t         shares_;
     uint64_t         refusals_;
     bool             shares_compiles_;
+    EglEntryGate    *egl_;
 };
 
 class HostLifecycleHold {
