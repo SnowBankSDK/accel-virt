@@ -26,7 +26,7 @@ constexpr uint32_t ddi_uav_reads = 0x20000u;
 constexpr uint32_t ddi_display = 0x200000u;
 constexpr uint32_t ddi_multiplane_overlay = 0x8000u;
 constexpr uint32_t ddi_not_supported = 0x80000000u;
-constexpr uint32_t xr_bias_format = 89u;
+constexpr uint32_t withheld_formats[] = {89u, 110u};
 constexpr uint32_t overlay_formats[] = {87u, 88u, 28u};
 constexpr Carry    carries[] = {
     {0x200u, false, ddi_shader_sample},
@@ -184,7 +184,8 @@ uint32_t DxgiFormatTable::format_support(uint32_t format) const
     if (!multisamples(format) && !family_multisamples(format)) support &= ~ddi_multisample_load;
     for (const uint32_t overlay : overlay_formats)
         if (format == overlay && (support & ddi_display) != 0u) support |= ddi_multiplane_overlay;
-    if (support == 0u && format == xr_bias_format) return ddi_not_supported;
+    for (const uint32_t withheld : withheld_formats)
+        if (support == 0u && format == withheld) return ddi_not_supported;
     return support;
 }
 

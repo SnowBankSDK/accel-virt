@@ -125,18 +125,21 @@ TEST(dxgi_format_table, the_hosts_bits_become_the_ddis_bits)
   CHECK_EQ(table.format_support(0u), 0u);
   CHECK_EQ(table.format_support(av::DxgiFormat::count), 0u); }
 
-TEST(dxgi_format_table, a_format_with_no_host_support_is_marked_unsupported_only_for_the_one_format_the_ddi_allows)
+TEST(dxgi_format_table, a_format_with_no_host_support_is_marked_unsupported_only_where_a_runtime_then_stops_reporting_it)
 { Table table;
   table.settle();
   CHECK_EQ(table.format_support(89u), 0x80000000u);
+  CHECK_EQ(table.format_support(110u), 0x80000000u);
   CHECK_EQ(table.format_support(68u), 0u);
   CHECK_EQ(table.format_support(107u), 0u); }
 
 TEST(dxgi_format_table, a_format_with_host_support_is_not_marked_unsupported)
 { Table table;
   table.record(89u, api_sample, 0u);
+  table.record(110u, api_sample, 0u);
   table.settle();
-  CHECK_EQ(table.format_support(89u), 0x1u); }
+  CHECK_EQ(table.format_support(89u), 0x1u);
+  CHECK_EQ(table.format_support(110u), 0x1u); }
 
 TEST(dxgi_format_table, an_overlay_plane_takes_the_displayed_32_bit_rgb_formats)
 { Table table;
