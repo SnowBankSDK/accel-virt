@@ -9,9 +9,6 @@ namespace av {
 
 namespace {
 constexpr uint32_t sample_count_steps = 6u;
-constexpr uint32_t trial_extent = 32u;
-constexpr uint32_t trial_mips = 6u;
-constexpr uint32_t trial_layers = 3u;
 
 }
 
@@ -122,35 +119,8 @@ void D3d11Capabilities::measure_formats(ID3D11Device5 &device)
             row.support &= ~static_cast<uint32_t>(D3D11_FORMAT_SUPPORT_MULTISAMPLE_RESOLVE |
                                                   D3D11_FORMAT_SUPPORT_MULTISAMPLE_RENDERTARGET |
                                                   D3D11_FORMAT_SUPPORT_MULTISAMPLE_LOAD);
-        constexpr uint32_t mipped = D3D11_FORMAT_SUPPORT_TEXTURE2D | D3D11_FORMAT_SUPPORT_MIP;
-        if ((row.support & mipped) == mipped && makes(device, format, row.support, 1u, 1u) &&
-            !makes(device, format, row.support, trial_mips, trial_layers))
-            row.support &= ~static_cast<uint32_t>(D3D11_FORMAT_SUPPORT_MIP | D3D11_FORMAT_SUPPORT_MIP_AUTOGEN);
         formats_.answer(format, row);
     }
-}
-
-bool D3d11Capabilities::makes(ID3D11Device5 &device, uint32_t format, uint32_t support, uint32_t mips,
-                              uint32_t layers) const
-{
-    AV_SCOPE("D3d11Capabilities::makes");
-    constexpr uint32_t sampled = D3D11_FORMAT_SUPPORT_SHADER_LOAD | D3D11_FORMAT_SUPPORT_SHADER_SAMPLE;
-    D3D11_TEXTURE2D_DESC texture = {};
-    texture.Width = trial_extent;
-    texture.Height = trial_extent;
-    texture.MipLevels = mips;
-    texture.ArraySize = layers;
-    texture.Format = static_cast<DXGI_FORMAT>(format);
-    texture.SampleDesc.Count = 1u;
-    texture.Usage = D3D11_USAGE_DEFAULT;
-    texture.BindFlags = (support & sampled) != 0u                               ? D3D11_BIND_SHADER_RESOURCE
-                        : (support & D3D11_FORMAT_SUPPORT_RENDER_TARGET) != 0u ? D3D11_BIND_RENDER_TARGET
-                        : (support & D3D11_FORMAT_SUPPORT_DEPTH_STENCIL) != 0u ? D3D11_BIND_DEPTH_STENCIL
-                                                                               : 0u;
-    ID3D11Texture2D *made = nullptr;
-    if (FAILED(device.CreateTexture2D(&texture, nullptr, &made)) || made == nullptr) return false;
-    made->Release();
-    return true;
 }
 
 const d3dproto::Caps11 &D3d11Capabilities::caps() const
