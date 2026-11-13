@@ -325,7 +325,7 @@ TEST(host_visible_blob, a_create_the_device_did_not_answer_is_unrefed_before_its
   CHECK_STATUS(blob.create(fixture.device(), context_id, resource, upload, page), Status::not_found);
   CHECK(blob.created());
   CHECK(!blob.mapped());
-  CHECK_STATUS(blob.destroy(fixture.device()), Status::not_found);
+  CHECK_STATUS(blob.destroy(fixture.device()), Status::conflict);
   CHECK(blob.created()); }
 
 TEST(host_visible_blob_invariants, a_mapping_with_no_resource_is_caught)
