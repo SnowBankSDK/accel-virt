@@ -38,7 +38,8 @@ void gates_unshare(void *gate)
 
 }
 
-HostLifecycleGates::HostLifecycleGates() : abi_{}, gates_(), uuids_(), count_(0u)
+HostLifecycleGates::HostLifecycleGates()
+    : abi_{}, gates_(), drivers_(), drivers_count_(0u), uuids_(), gate_of_{}, count_(0u)
 {
     AV_SCOPE("HostLifecycleGates::HostLifecycleGates");
     abi_.size = sizeof(AvLifecycleGates);
@@ -50,17 +51,24 @@ HostLifecycleGates::HostLifecycleGates() : abi_{}, gates_(), uuids_(), count_(0u
     abi_.unshare = gates_unshare;
 }
 
-HostLifecycleGate *HostLifecycleGates::add(const uint8_t *uuid, VkDriverId driver)
+HostLifecycleGate *HostLifecycleGates::add(const uint8_t *uuid, const HostDriver &driver)
 {
     AV_SCOPE("HostLifecycleGates::add");
     HostLifecycleGate *const known = of(uuid);
     if (known != nullptr) return known;
     const uint32_t at = __atomic_load_n(&count_, __ATOMIC_ACQUIRE);
     if (uuid == nullptr || at == HostGpuSet::max_gpus) return nullptr;
+    uint32_t gate = 0u;
+    while (gate < drivers_count_ && !drivers_[gate].same_library(driver)) gate++;
+    if (gate == drivers_count_) {
+        drivers_[gate] = driver;
+        gates_[gate].driven_by(driver.id());
+        drivers_count_++;
+    }
     uuids_[at] = DeviceUuid(uuid);
-    gates_[at].driven_by(driver);
+    gate_of_[at] = gate;
     __atomic_store_n(&count_, at + 1u, __ATOMIC_RELEASE);
-    return &gates_[at];
+    return &gates_[gate];
 }
 
 HostLifecycleGate *HostLifecycleGates::of(const uint8_t *uuid)
@@ -69,7 +77,7 @@ HostLifecycleGate *HostLifecycleGates::of(const uint8_t *uuid)
     if (uuid == nullptr) return nullptr;
     const uint32_t count = __atomic_load_n(&count_, __ATOMIC_ACQUIRE);
     for (uint32_t at = 0u; at < count; at++)
-        if (uuids_[at].equals(uuid)) return &gates_[at];
+        if (uuids_[at].equals(uuid)) return &gates_[gate_of_[at]];
     return nullptr;
 }
 

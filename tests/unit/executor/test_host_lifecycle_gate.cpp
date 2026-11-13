@@ -140,15 +140,50 @@ TEST(host_lifecycle_gate, a_lifecycle_call_that_cannot_enter_behind_a_compile_in
   CHECK_EQ(gate.refusals(), 1u);
   gate.unshare(); }
 
-TEST(host_lifecycle_gate, each_gpu_has_a_gate_of_its_own_found_by_its_uuid_and_a_held_one_holds_no_other)
+TEST(host_lifecycle_gate, two_gpus_of_one_host_driver_share_a_gate_so_their_lifecycle_calls_never_overlap)
+{ HostLifecycleGates gates;
+  const std::uint8_t first[16] = {1}, second[16] = {2}, third[16] = {3};
+  const av::HostDriver vendor(VK_DRIVER_ID_NVIDIA_PROPRIETARY, "vendor", "build 2");
+  const av::HostDriver same_vendor(VK_DRIVER_ID_NVIDIA_PROPRIETARY, "vendor", "build 2");
+  const av::HostDriver other_build(VK_DRIVER_ID_NVIDIA_PROPRIETARY, "vendor", "build 1");
+  HostLifecycleGate *const one = gates.add(first, vendor);
+  HostLifecycleGate *const two = gates.add(second, same_vendor);
+  HostLifecycleGate *const three = gates.add(third, other_build);
+  CHECK(one != nullptr);
+  CHECK(two == one);
+  CHECK(three != nullptr && three != one);
+  CHECK(gates.of(first) == one);
+  CHECK(gates.of(second) == one);
+  CHECK(gates.of(third) == three);
+  CHECK(gates.of(first)->enter());
+  std::atomic<bool> inside{false};
+  std::thread       other([&] {
+      const HostLifecycleHold hold(gates.of(second));
+      inside = hold.held();
+  });
+  std::this_thread::sleep_for(std::chrono::milliseconds(30));
+  CHECK(!inside.load());
+  {
+      const HostLifecycleHold unrelated(gates.of(third));
+      CHECK(unrelated.held());
+  }
+  gates.of(first)->leave();
+  other.join();
+  CHECK(inside.load());
+  CHECK_EQ(one->entries(), 2u);
+  CHECK_EQ(three->entries(), 1u); }
+
+TEST(host_lifecycle_gate, the_gpus_of_two_host_drivers_have_a_gate_each_found_by_uuid_and_a_held_one_holds_no_other)
 { HostLifecycleGates gates;
   const std::uint8_t first[16] = {1}, second[16] = {2}, unknown[16] = {3};
-  HostLifecycleGate *const one = gates.add(first, VK_DRIVER_ID_NVIDIA_PROPRIETARY);
-  HostLifecycleGate *const two = gates.add(second, VK_DRIVER_ID_MESA_RADV);
+  const av::HostDriver vendor(VK_DRIVER_ID_NVIDIA_PROPRIETARY, "vendor", "build 2");
+  const av::HostDriver mesa(VK_DRIVER_ID_MESA_RADV, "open", "build 7");
+  HostLifecycleGate *const one = gates.add(first, vendor);
+  HostLifecycleGate *const two = gates.add(second, mesa);
   CHECK(one != nullptr);
   CHECK(two != nullptr);
   CHECK(one != two);
-  CHECK(gates.add(first, VK_DRIVER_ID_NVIDIA_PROPRIETARY) == one);
+  CHECK(gates.add(first, vendor) == one);
   CHECK(gates.of(first) == one);
   CHECK(gates.of(second) == two);
   CHECK(gates.of(unknown) == nullptr);
@@ -167,7 +202,7 @@ TEST(host_lifecycle_gate, each_gpu_has_a_gate_of_its_own_found_by_its_uuid_and_a
 TEST(host_lifecycle_gate, the_embedder_table_finds_the_gate_of_a_gpu_and_enters_shares_and_refuses_as_the_gate_does)
 { HostLifecycleGates gates;
   const std::uint8_t uuid[16] = {9}, unknown[16] = {8};
-  HostLifecycleGate *const gate = gates.add(uuid, VK_DRIVER_ID_NVIDIA_PROPRIETARY);
+  HostLifecycleGate *const gate = gates.add(uuid, av::HostDriver(VK_DRIVER_ID_NVIDIA_PROPRIETARY, "vendor", "build 2"));
   const AvLifecycleGates &table = gates.abi();
   CHECK_EQ(table.size, static_cast<std::uint32_t>(sizeof(AvLifecycleGates)));
   CHECK(table.gate_of(table.self, unknown) == nullptr);

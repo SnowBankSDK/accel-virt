@@ -1,6 +1,7 @@
 #ifndef AV_PHYSICAL_DEVICE_IDENTITY_HPP
 #define AV_PHYSICAL_DEVICE_IDENTITY_HPP
 
+#include "executor/host_driver.hpp"
 #include "proto/context/device_uuid.hpp"
 
 #include <stdint.h>
@@ -15,12 +16,12 @@ public:
     bool              is(const uint8_t *uuid) const;
     const DeviceUuid &uuid() const;
     int32_t           render_minor() const;
-    VkDriverId        driver() const;
+    const HostDriver &driver() const;
 
 private:
     DeviceUuid uuid_;
     int32_t    render_minor_;
-    VkDriverId driver_;
+    HostDriver driver_;
     bool       known_;
 };
 

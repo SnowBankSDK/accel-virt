@@ -7,7 +7,7 @@
 namespace av {
 
 PhysicalDeviceIdentity::PhysicalDeviceIdentity(VkInstance instance, VkPhysicalDevice physical)
-    : uuid_(), render_minor_(-1), driver_(static_cast<VkDriverId>(0)), known_(false)
+    : uuid_(), render_minor_(-1), driver_(), known_(false)
 {
     AV_SCOPE("PhysicalDeviceIdentity::PhysicalDeviceIdentity");
     auto query = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
@@ -27,7 +27,7 @@ PhysicalDeviceIdentity::PhysicalDeviceIdentity(VkInstance instance, VkPhysicalDe
     query(physical, &properties);
     uuid_ = DeviceUuid(identity.deviceUUID);
     render_minor_ = node.hasRender ? static_cast<int32_t>(node.renderMinor) : -1;
-    driver_ = driver.driverID;
+    driver_ = HostDriver(driver.driverID, driver.driverName, driver.driverInfo);
     known_ = true;
 }
 
@@ -43,7 +43,7 @@ int32_t PhysicalDeviceIdentity::render_minor() const
     return render_minor_;
 }
 
-VkDriverId PhysicalDeviceIdentity::driver() const
+const HostDriver &PhysicalDeviceIdentity::driver() const
 {
     AV_SCOPE("PhysicalDeviceIdentity::driver");
     return driver_;
