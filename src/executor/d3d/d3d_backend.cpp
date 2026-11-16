@@ -124,7 +124,8 @@ D3dBackend::D3dBackend(ExecutorLog &log)
       region_(guest_, lines_), imports_(nullptr), slices_(blocks_, lines_), d3d12_(guest_, objects_, wake_, fence_wake_, blocks_, log.d3d12()),
       d3d9_(guest_, objects_, blocks_, slices_, fence_wake_, log.d3d9()),
       published_(blocks_, guest_), progress11_(fence_wake_), constants_(blocks_),
-      missed_key_(0u), batches_(), queue_drain_(), submitted_(0u), drained_(false), mark_refused_(false), show_refused_(false), lost_(false)
+      missed_key_(0u), batches_(), queue_drain_(), submitted_(0u), drained_(false), mark_refused_(false), must_signal_(false), deferred_since_(0u), batch_ended_at_(0u),
+      show_refused_(false), lost_(false)
 {
     AV_SCOPE("D3dBackend::D3dBackend");
 }
@@ -204,10 +205,12 @@ bool D3dBackend::run(uint32_t command_id, WireReader &payload, WireWriter &reply
     drained_ = false;
     blocks_.forget();
     if (d3d12_.knows(command_id)) {
+        must_signal_ = true;
         finish_d3d11();
         return d3d12_.run(command_id, payload, reply, arena);
     }
     if (d3d9_.knows(command_id)) {
+        must_signal_ = true;
         finish_d3d11();
         return d3d9_.run(command_id, payload, reply, arena);
     }
@@ -238,6 +241,7 @@ bool D3dBackend::drain_queue(TeardownBudget &budget)
     AV_SCOPE("D3dBackend::drain_queue");
     if (lost_ || device11_->lost()) return false;
     device11_->lock(nullptr);
+    if (progress11_.deferred()) signal_batches();
     const bool marked = queue_drain_.mark(device11_->vulkan(), submitted_);
     device11_->unlock();
     const bool reached = marked && queue_drain_.reached(device11_->vulkan(), budget.remaining());
@@ -260,7 +264,7 @@ D3dBatchCounter::Marks D3dBackend::issued() const
     uint64_t marked12 = 0u;
     uint64_t reached12 = 0u;
     d3d12_.gpu_progress(marked12, reached12);
-    return D3dBatchCounter::Marks{progress11_.marked(), marked12, d3d9_.marked()};
+    return D3dBatchCounter::Marks{progress11_.issued(), marked12, d3d9_.marked()};
 }
 
 D3dBatchCounter::Marks D3dBackend::completed() const
@@ -277,36 +281,69 @@ void D3dBackend::finish_d3d11()
     AV_SCOPE("D3dBackend::finish_d3d11");
     if (!held_) return;
     if (progress11_.fence() == nullptr) progress11_.adopt(device11_->make_fence(progress11_.marked()));
-    if (device11_->signal(progress11_.fence(), progress11_.next())) {
-        progress11_.signalled();
-        published_.flushed();
-        slices_.reclaim();
+    const uint64_t now = clock_.now_nanoseconds();
+    if (defers(now)) {
+        if (!progress11_.deferred()) deferred_since_ = now;
+        progress11_.defer();
     } else {
-        if (!mark_refused_)
-            LogLine(lines_).text("no fence marks the session's batches: they complete as recorded").write();
-        mark_refused_ = true;
-        if (published_.needs_flush()) {
-            device11_->context()->Flush();
-            published_.flushed();
-        }
+        signal_batches();
     }
+    must_signal_ = false;
+    batch_ended_at_ = now;
     static_cast<void>(published_.publish(device11_->context()));
     held_ = false;
     device11_->unlock();
 }
 
+bool D3dBackend::defers(uint64_t now) const
+{
+    AV_SCOPE("D3dBackend::defers");
+    if (must_signal_ || progress11_.fence() == nullptr || published_.needs_flush()) return false;
+    return !progress11_.deferred() || now - deferred_since_ < most_deferred_nanoseconds;
+}
+
+void D3dBackend::signal_batches()
+{
+    AV_SCOPE("D3dBackend::signal_batches");
+    if (device11_->signal(progress11_.fence(), progress11_.next())) {
+        progress11_.signalled();
+        published_.flushed();
+        slices_.reclaim();
+        return;
+    }
+    if (!mark_refused_)
+        LogLine(lines_).text("no fence marks the session's batches: they complete as recorded").write();
+    mark_refused_ = true;
+    if (published_.needs_flush()) {
+        device11_->context()->Flush();
+        published_.flushed();
+    }
+}
+
+bool D3dBackend::signal_when_idle()
+{
+    AV_SCOPE("D3dBackend::signal_when_idle");
+    if (device11_ == nullptr || held_ || !progress11_.deferred()) return false;
+    if (clock_.now_nanoseconds() - batch_ended_at_ < idle_signal_nanoseconds) return true;
+    device11_->lock(nullptr);
+    signal_batches();
+    device11_->unlock();
+    return progress11_.deferred();
+}
+
 bool D3dBackend::poll()
 {
     AV_SCOPE("D3dBackend::poll");
+    const bool deferred = signal_when_idle();
     const bool unwatched = progress11_.polled() || d3d9_.polled();
     batches_.retire(completed());
-    if (unwatched) fence_wake_.retry_later();
+    if (unwatched || deferred) fence_wake_.retry_later();
     else fence_wake_.settled();
-    if (device11_ == nullptr || held_ || !published_.pending()) return unwatched;
+    if (device11_ == nullptr || held_ || !published_.pending()) return unwatched || deferred;
     device11_->lock(nullptr);
     const bool pending = published_.publish(device11_->context());
     device11_->unlock();
-    return pending || unwatched;
+    return pending || unwatched || deferred;
 }
 
 void D3dBackend::bind_signal(void (*signal)(void *context), void *context)
@@ -790,6 +827,7 @@ bool D3dBackend::on_Flush11()
     if (!has_device()) return false;
     device11_->context()->Flush();
     published_.flushed();
+    must_signal_ = true;
     return true;
 }
 
@@ -798,6 +836,7 @@ bool D3dBackend::on_Finish11(uint32_t &hresult)
     AV_SCOPE("D3dBackend::on_Finish11");
     if (!has_device()) return false;
     device11_->context()->Flush();
+    must_signal_ = true;
     const HRESULT removed = device11_->device()->GetDeviceRemovedReason();
     lost_ = FAILED(removed);
     const uint32_t own = states_.removed_reason(states_.selected_id());
@@ -2022,6 +2061,7 @@ bool D3dBackend::on_PresentPoint(uint32_t resource, uint32_t subresource, uint32
     ID3D11Resource *const found = objects_.find_as<ID3D11Resource>(resource, D3dObjectKind::resource);
     if (!ready() || found == nullptr) return false;
     const SurfacePoint frame(SurfaceIdentity(found).surface(), point);
+    must_signal_ = true;
     D3D11_RESOURCE_DIMENSION dimension = D3D11_RESOURCE_DIMENSION_UNKNOWN;
     found->GetType(&dimension);
     if (point == 0u) {

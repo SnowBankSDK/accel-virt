@@ -237,7 +237,29 @@ void count_batch_wake(void *count)
 
 }
 
-TEST(d3d_backend_device, a_batch_the_gpu_finishes_wakes_the_worker_instead_of_being_polled_for)
+namespace {
+
+void pause_milliseconds(long milliseconds)
+{
+    const timespec pause = {0, milliseconds * 1000000};
+    nanosleep(&pause, nullptr);
+}
+
+bool settles(av::D3dBackend &backend, bool polling)
+{
+    std::uint64_t marked = 0u, reached = 0u;
+    for (std::uint32_t tries = 0u; tries < 2000u; tries++) {
+        if (polling) static_cast<void>(backend.poll());
+        backend.gpu_progress(marked, reached);
+        if (marked >= 1u && reached == marked) return true;
+        pause_milliseconds(1);
+    }
+    return false;
+}
+
+}
+
+TEST(d3d_backend_device, a_batch_left_unsignalled_stays_outstanding_until_the_idle_worker_signals_it)
 {
     av::ExecutorLogRig rig;
     av::LoaderHostApis apis(rig.log);
@@ -256,17 +278,67 @@ TEST(d3d_backend_device, a_batch_the_gpu_finishes_wakes_the_worker_instead_of_be
     bind_triangle(wire);
     CHECK(av_d3d_Draw(wire, 3u, 0u));
     CHECK_EQ(wire.refused(), 0u);
-    CHECK(!backend.poll());
     std::uint64_t marked = 0u, reached = 0u;
-    for (std::uint32_t tries = 0u; tries < 2000u; tries++) {
-        backend.gpu_progress(marked, reached);
-        if (reached == marked && batch_wakes.load() != 0u) break;
-        const timespec pause = {0, 1000000};
-        nanosleep(&pause, nullptr);
-    }
+    backend.gpu_progress(marked, reached);
     CHECK(marked >= 1u);
-    CHECK(reached == marked);
+    CHECK(reached < marked);
+    CHECK(backend.poll());
+    pause_milliseconds(20);
+    backend.gpu_progress(marked, reached);
+    CHECK(reached < marked);
+    CHECK(settles(backend, true));
     CHECK(batch_wakes.load() >= 1u);
+    CHECK(backend.invariants_hold());
+    backend.shut_down();
+}
+
+TEST(d3d_backend_device, a_flushed_batch_is_signalled_at_once_and_wakes_the_worker_without_being_polled_for)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice *const device = host_device(apis);
+    if (device == nullptr) return;
+    HeldBackend     held(first_backend, rig.log);
+    av::D3dBackend &backend = held.backend();
+    av::SessionShares unshared;
+    CHECK(backend.initialize(unshared, rig.imports, device));
+    batch_wakes = 0u;
+    backend.bind_signal(&count_batch_wake, &batch_wakes);
+    av::D3dLoopback wire(backend, rig.imports);
+    std::uint32_t hresult = 1u, level = 0u;
+    CHECK(av_d3d_CreateDevice11(wire, 1u, 0u, 0u, &hresult, &level));
+    make_triangle(wire);
+    bind_triangle(wire);
+    CHECK(av_d3d_Draw(wire, 3u, 0u));
+    CHECK(av_d3d_Flush11(wire));
+    CHECK_EQ(wire.refused(), 0u);
+    CHECK(settles(backend, false));
+    CHECK(batch_wakes.load() >= 1u);
+    CHECK(backend.invariants_hold());
+    backend.shut_down();
+}
+
+TEST(d3d_backend_device, work_left_unsignalled_past_its_budget_is_signalled_by_the_next_batch)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice *const device = host_device(apis);
+    if (device == nullptr) return;
+    HeldBackend     held(first_backend, rig.log);
+    av::D3dBackend &backend = held.backend();
+    av::SessionShares unshared;
+    CHECK(backend.initialize(unshared, rig.imports, device));
+    av::D3dLoopback wire(backend, rig.imports);
+    std::uint32_t hresult = 1u, level = 0u;
+    CHECK(av_d3d_CreateDevice11(wire, 1u, 0u, 0u, &hresult, &level));
+    make_triangle(wire);
+    bind_triangle(wire);
+    CHECK(av_d3d_Draw(wire, 3u, 0u));
+    pause_milliseconds(10);
+    CHECK(av_d3d_Draw(wire, 3u, 0u));
+    CHECK_EQ(wire.refused(), 0u);
+    CHECK(settles(backend, false));
+    CHECK(backend.invariants_hold());
     backend.shut_down();
 }
 

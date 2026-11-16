@@ -182,3 +182,37 @@ TEST(d3d11_batch_progress_signalled, a_mark_the_runtime_refuses_to_watch_is_poll
   CHECK(!progress.polled());
   CHECK(progress.invariants_hold());
   wake.unbind(); }
+
+TEST(d3d11_batch_progress_defer, is_a_no_op_without_a_fence)
+{ EventfdWake        wake;
+  D3d11BatchProgress progress(wake);
+  progress.defer();
+  CHECK(!progress.deferred());
+  CHECK(progress.issued() == 0u);
+  CHECK(progress.invariants_hold()); }
+
+TEST(d3d11_batch_progress_defer, issues_the_next_mark_until_a_signal_covers_it)
+{ ScriptedFence fence;
+  { EventfdWake        wake;
+    D3d11BatchProgress progress(wake);
+    progress.adopt(&fence);
+    progress.signalled();
+    CHECK(progress.issued() == 1u);
+    progress.defer();
+    progress.defer();
+    CHECK(progress.deferred());
+    CHECK(progress.issued() == 2u);
+    CHECK(progress.marked() == 1u);
+    CHECK(progress.next() == 2u);
+    CHECK(progress.invariants_hold());
+    progress.signalled();
+    CHECK(!progress.deferred());
+    CHECK(progress.marked() == 2u);
+    CHECK(progress.issued() == 2u);
+    progress.defer();
+    progress.release();
+    CHECK(!progress.deferred());
+    CHECK(progress.issued() == 2u);
+    CHECK(progress.invariants_hold()); }
+  CHECK_EQ(fence.references, 0u); }
+

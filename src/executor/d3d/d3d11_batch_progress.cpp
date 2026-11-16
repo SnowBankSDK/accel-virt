@@ -8,7 +8,7 @@
 namespace av {
 
 D3d11BatchProgress::D3d11BatchProgress(EventfdWake &wake)
-    : wake_(wake), fence_(nullptr), marked_(0u), released_at_(0u), watched_(false)
+    : wake_(wake), fence_(nullptr), marked_(0u), released_at_(0u), watched_(false), deferred_(false)
 {
     AV_SCOPE("D3d11BatchProgress::D3d11BatchProgress");
 }
@@ -47,7 +47,14 @@ void D3d11BatchProgress::signalled()
     AV_SCOPE("D3d11BatchProgress::signalled");
     if (fence_ == nullptr) return;
     marked_++;
+    deferred_ = false;
     watched_ = wake_.watch(*fence_, marked_);
+}
+
+void D3d11BatchProgress::defer()
+{
+    AV_SCOPE("D3d11BatchProgress::defer");
+    if (fence_ != nullptr) deferred_ = true;
 }
 
 void D3d11BatchProgress::release()
@@ -58,12 +65,25 @@ void D3d11BatchProgress::release()
     fence_ = nullptr;
     released_at_ = marked_;
     watched_ = false;
+    deferred_ = false;
 }
 
 uint64_t D3d11BatchProgress::marked() const
 {
     AV_SCOPE("D3d11BatchProgress::marked");
     return marked_;
+}
+
+uint64_t D3d11BatchProgress::issued() const
+{
+    AV_SCOPE("D3d11BatchProgress::issued");
+    return deferred_ ? marked_ + 1u : marked_;
+}
+
+bool D3d11BatchProgress::deferred() const
+{
+    AV_SCOPE("D3d11BatchProgress::deferred");
+    return deferred_;
 }
 
 uint64_t D3d11BatchProgress::reached() const
@@ -89,7 +109,7 @@ bool D3d11BatchProgress::polled() const
 bool D3d11BatchProgress::invariants_hold() const
 {
     AV_SCOPE("D3d11BatchProgress::invariants_hold");
-    return released_at_ <= marked_ && (fence_ != nullptr || (released_at_ == marked_ && !watched_));
+    return released_at_ <= marked_ && (fence_ != nullptr || (released_at_ == marked_ && !watched_ && !deferred_));
 }
 
 }

@@ -200,6 +200,8 @@ private:
     friend struct D3dBackendProbe;
 
     static constexpr uint32_t stage_count = 6u;
+    static constexpr uint64_t idle_signal_nanoseconds = 1000000u;
+    static constexpr uint64_t most_deferred_nanoseconds = 4000000u;
 
     void             describe_shared_image(uint64_t shared_key, IUnknown *made);
     ID3D11Texture2D         *shareable(const D3D11_TEXTURE2D_DESC &texture, uint32_t guest_misc);
@@ -223,6 +225,9 @@ private:
     bool                     extent_of(ID3D11Resource *resource, uint32_t subresource, uint32_t &width,
                                        uint32_t &height, uint32_t &depth, uint32_t &format) const;
     void                     await_gpu_unlocked();
+    bool                     defers(uint64_t now) const;
+    void                     signal_batches();
+    bool                     signal_when_idle();
     ID3D11Resource          *staging_for(ID3D11Resource *resource, uint32_t subresource, uint32_t width,
                                          uint32_t height, uint32_t depth, uint32_t format);
 
@@ -261,6 +266,9 @@ private:
     uint64_t                submitted_;
     bool                    drained_;
     bool                    mark_refused_;
+    bool                    must_signal_;
+    uint64_t                deferred_since_;
+    uint64_t                batch_ended_at_;
     bool                    show_refused_;
     bool                    lost_;
 };

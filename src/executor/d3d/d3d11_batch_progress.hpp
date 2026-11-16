@@ -22,9 +22,12 @@ public:
     ID3D11Fence *fence() const;
     uint64_t     next() const override;
     void         signalled();
+    void         defer();
     void         release();
 
     uint64_t marked() const;
+    uint64_t issued() const;
+    bool     deferred() const;
     uint64_t reached() const override;
     bool     pending() const;
     bool     polled() const;
@@ -37,6 +40,7 @@ private:
     uint64_t     marked_;
     uint64_t     released_at_;
     bool         watched_;
+    bool         deferred_;
 };
 
 }
