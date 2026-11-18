@@ -185,6 +185,7 @@ bool ScriptedGl::swap_buffers()
         if (pacing_kmt_->wait_for_vertical_blank(pacing_adapter_, pacing_device_, 0u) != Status::ok) break;
         paced_blanks_++;
     }
+    std::memset(back_, 0, sizeof back_);
     return true;
 }
 

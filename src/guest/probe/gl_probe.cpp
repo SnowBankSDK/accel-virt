@@ -142,10 +142,10 @@ void GlProbe::judge_frame(const char *name)
     AV_SCOPE("GlProbe::judge_frame");
     const uint32_t width = gl_.width() < max_extent ? gl_.width() : max_extent;
     const uint32_t height = gl_.height() < max_extent ? gl_.height() : max_extent;
-    const bool     swapped = gl_.swap_buffers();
     uint8_t        pixels[max_extent * max_extent * bytes_per_pixel] = {};
     gl_.read_pixels(static_cast<int32_t>(width), static_cast<int32_t>(height), pixels);
     const uint32_t error = gl_.error();
+    const bool     swapped = gl_.swap_buffers();
     char           picture[ImageSink::max_name];
     TextBuffer     named(picture, sizeof picture);
     named.append("opengl-");
