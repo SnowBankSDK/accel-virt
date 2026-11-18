@@ -329,8 +329,8 @@ static void av_remove_from_hostmem(void *opaque, uint64_t offset, uint64_t size)
 {
     VirtIOGPUAv *r = opaque;
 
-    if (mmap((char *)r->hostmem_mmap + offset, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
-             -1, 0) == MAP_FAILED) {
+    if (mmap((char *)r->hostmem_mmap + offset, size, PROT_READ | PROT_WRITE,
+             MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED, -1, 0) == MAP_FAILED) {
         warn_report("virtio-gpu-av: hostmem at 0x%" PRIx64 " could not be restored: %s", offset, strerror(errno));
     }
 }

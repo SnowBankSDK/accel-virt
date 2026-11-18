@@ -149,7 +149,11 @@ static void virtio_gpu_av_realize(DeviceState *qdev, Error **errp)
         r->showing[head] = -1;
     }
     if (virtio_gpu_hostmem_enabled(b->conf)) {
-        void *map = qemu_ram_mmap(-1, b->conf.hostmem, qemu_real_host_page_size(), 0, 0);
+        void *map = qemu_ram_mmap(-1, b->conf.hostmem, qemu_real_host_page_size(), QEMU_MAP_NORESERVE, 0);
+
+        if (map == MAP_FAILED) {
+            map = qemu_ram_mmap(-1, b->conf.hostmem, qemu_real_host_page_size(), 0, 0);
+        }
 
         if (map == MAP_FAILED) {
             error_setg_errno(errp, errno, "virtio-gpu-av: the hostmem region could not be reserved");
