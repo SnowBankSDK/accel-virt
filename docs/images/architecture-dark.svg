@@ -1,0 +1,137 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="752" viewBox="0 0 1200 752" role="img" aria-label="accel-virt: Windows programs in the guest run on the Linux host GPU">
+<defs>
+<marker id="a-3fb950" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#3fb950"/></marker>
+<marker id="a-3fb950s" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10,0 L0,5 L10,10 z" fill="#3fb950"/></marker>
+<marker id="a-ab7df8" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#ab7df8"/></marker>
+<marker id="a-ab7df8s" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10,0 L0,5 L10,10 z" fill="#ab7df8"/></marker>
+<marker id="a-e3b341" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#e3b341"/></marker>
+<marker id="a-e3b341s" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10,0 L0,5 L10,10 z" fill="#e3b341"/></marker>
+<marker id="a-9198a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#9198a1"/></marker>
+<marker id="a-9198a1s" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10,0 L0,5 L10,10 z" fill="#9198a1"/></marker>
+<marker id="a-4493f8" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4493f8"/></marker>
+<marker id="a-4493f8s" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10,0 L0,5 L10,10 z" fill="#4493f8"/></marker>
+</defs>
+<rect x="16" y="16" width="470" height="584" rx="14" fill="#0f1d33" stroke="#264b80" stroke-width="1.2"/>
+<rect x="714" y="16" width="470" height="584" rx="14" fill="#0e2418" stroke="#24583a" stroke-width="1.2"/>
+<text x="36" y="48" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="18" font-weight="700" fill="#4493f8" text-anchor="start">Windows 11 guest</text>
+<text x="466" y="48" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9198a1" text-anchor="end" font-style="italic">programs run unmodified</text>
+<text x="734" y="48" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="18" font-weight="700" fill="#3fb950" text-anchor="start">Linux host</text>
+<text x="1164" y="48" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9198a1" text-anchor="end" font-style="italic">QEMU / KVM</text>
+<rect x="36" y="66" width="430" height="64" rx="8" fill="#0d1117" stroke="#3d444d" stroke-width="1.2"/>
+<text x="50" y="90" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#e6edf3" text-anchor="start">Applications and games</text>
+<rect x="50" y="100" width="156.0" height="22" rx="11" fill="#132f57" stroke="#132f57" stroke-width="1.2"/>
+<text x="128.0" y="116" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#cfe2ff" text-anchor="middle">Direct3D 9 · 11 · 12</text>
+<rect x="214.0" y="100" width="56.599999999999994" height="22" rx="11" fill="#132f57" stroke="#132f57" stroke-width="1.2"/>
+<text x="242.3" y="116" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#cfe2ff" text-anchor="middle">Vulkan</text>
+<rect x="278.6" y="100" width="56.599999999999994" height="22" rx="11" fill="#132f57" stroke="#132f57" stroke-width="1.2"/>
+<text x="306.90000000000003" y="116" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#cfe2ff" text-anchor="middle">OpenGL</text>
+<rect x="343.20000000000005" y="100" width="56.599999999999994" height="22" rx="11" fill="#132f57" stroke="#132f57" stroke-width="1.2"/>
+<text x="371.50000000000006" y="116" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#cfe2ff" text-anchor="middle">OpenCL</text>
+<rect x="36.0" y="168" width="100.0" height="62" rx="8" fill="#0d1117" stroke="#3d444d" stroke-width="1.2"/>
+<rect x="36.0" y="176" width="3" height="46" rx="1.5" fill="#4493f8"/>
+<text x="86.0" y="195.0" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="14" font-weight="600" fill="#e6edf3" text-anchor="middle">avumd.dll</text>
+<text x="86.0" y="213.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9198a1" text-anchor="middle">Direct3D, DXGI</text>
+<path d="M86.0,130 L86.0,166" fill="none" stroke="#9198a1" stroke-width="1.6" marker-end="url(#a-9198a1)"/>
+<rect x="146.0" y="168" width="100.0" height="62" rx="8" fill="#0d1117" stroke="#3d444d" stroke-width="1.2"/>
+<rect x="146.0" y="176" width="3" height="46" rx="1.5" fill="#4493f8"/>
+<text x="196.0" y="195.0" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="14" font-weight="600" fill="#e6edf3" text-anchor="middle">avvk.dll</text>
+<text x="196.0" y="213.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9198a1" text-anchor="middle">Vulkan ICD</text>
+<path d="M196.0,130 L196.0,166" fill="none" stroke="#9198a1" stroke-width="1.6" marker-end="url(#a-9198a1)"/>
+<rect x="256.0" y="168" width="100.0" height="62" rx="8" fill="#0d1117" stroke="#3d444d" stroke-width="1.2"/>
+<rect x="256.0" y="176" width="3" height="46" rx="1.5" fill="#4493f8"/>
+<text x="306.0" y="195.0" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="14" font-weight="600" fill="#e6edf3" text-anchor="middle">avgl.dll</text>
+<text x="306.0" y="213.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9198a1" text-anchor="middle">OpenGL ICD</text>
+<path d="M306.0,130 L306.0,166" fill="none" stroke="#9198a1" stroke-width="1.6" marker-end="url(#a-9198a1)"/>
+<rect x="366.0" y="168" width="100.0" height="62" rx="8" fill="#0d1117" stroke="#3d444d" stroke-width="1.2"/>
+<rect x="366.0" y="176" width="3" height="46" rx="1.5" fill="#4493f8"/>
+<text x="416.0" y="195.0" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="14" font-weight="600" fill="#e6edf3" text-anchor="middle">avcl.dll</text>
+<text x="416.0" y="213.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9198a1" text-anchor="middle">OpenCL ICD</text>
+<path d="M416.0,130 L416.0,166" fill="none" stroke="#9198a1" stroke-width="1.6" marker-end="url(#a-9198a1)"/>
+<text x="466" y="248" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9198a1" text-anchor="end">user-mode drivers, for x64 and x86 processes</text>
+<rect x="36" y="330" width="120" height="58" rx="8" fill="#0d1117" stroke="#3d444d" stroke-width="1.2"/>
+<text x="96.0" y="355.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#e6edf3" text-anchor="middle">DWM, GDI</text>
+<text x="96.0" y="373.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9198a1" text-anchor="middle">the desktop</text>
+<rect x="186" y="330" width="100" height="58" rx="8" fill="#0d1117" stroke="#3d444d" stroke-width="1.2"/>
+<text x="236.0" y="355.0" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="14" font-weight="600" fill="#e6edf3" text-anchor="middle">dxgkrnl</text>
+<text x="236.0" y="373.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9198a1" text-anchor="middle">Windows</text>
+<rect x="316" y="330" width="150" height="58" rx="8" fill="#0d1117" stroke="#3d444d" stroke-width="1.2"/>
+<rect x="316" y="338" width="3" height="42" rx="1.5" fill="#4493f8"/>
+<text x="391.0" y="355.0" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="14" font-weight="600" fill="#e6edf3" text-anchor="middle">avgpu.sys</text>
+<text x="391.0" y="373.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9198a1" text-anchor="middle">WDDM 3.2 miniport</text>
+<path d="M156,359 L184,359" fill="none" stroke="#9198a1" stroke-width="1.6" marker-end="url(#a-9198a1)"/>
+<path d="M286,359 L314,359" fill="none" stroke="#9198a1" stroke-width="1.6" marker-end="url(#a-9198a1)"/>
+<text x="391.0" y="410" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9198a1" text-anchor="middle">modes · memory · scheduling</text>
+<text x="391.0" y="426" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9198a1" text-anchor="middle">scanout · cursor · fences</text>
+<path d="M76,328 L76,232" fill="none" stroke="#9198a1" stroke-width="1.4" stroke-dasharray="4 4" marker-end="url(#a-9198a1)"/>
+<text x="84" y="300" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#9198a1" text-anchor="start" font-style="italic">composes with</text>
+<text x="84" y="314" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#9198a1" text-anchor="start" font-style="italic">Direct3D 11</text>
+<rect x="36" y="470" width="430" height="106" rx="8" fill="#0d1117" stroke="#3d444d" stroke-width="1.2" stroke-dasharray="5 4"/>
+<text x="50" y="496" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#e6edf3" text-anchor="start">One test-signed driver package</text>
+<text x="50" y="518" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9198a1" text-anchor="start">avgpu.sys, and avumd, avvk, avgl and avcl for x64 and x86.</text>
+<text x="50" y="536" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9198a1" text-anchor="start">The adapter is named after the host GPU: Device Manager,</text>
+<text x="50" y="554" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9198a1" text-anchor="start">dxdiag and every program see its name, IDs and VRAM.</text>
+<rect x="734" y="160" width="170" height="228" rx="8" fill="#0d1117" stroke="#3d444d" stroke-width="1.2"/>
+<rect x="734" y="168" width="3" height="212" rx="1.5" fill="#3fb950"/>
+<text x="819.0" y="248" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="14" font-weight="600" fill="#e6edf3" text-anchor="middle">virtio-gpu-av-pci</text>
+<text x="819.0" y="272" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9198a1" text-anchor="middle">QEMU device</text>
+<text x="819.0" y="290" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9198a1" text-anchor="middle">one per host GPU</text>
+<text x="819.0" y="308" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9198a1" text-anchor="middle">a worker per context</text>
+<rect x="924" y="160" width="240" height="100" rx="8" fill="#0d1117" stroke="#3d444d" stroke-width="1.2"/>
+<rect x="924" y="168" width="3" height="84" rx="1.5" fill="#3fb950"/>
+<text x="1044.0" y="197.0" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="14" font-weight="600" fill="#e6edf3" text-anchor="middle">libav_executor.so</text>
+<text x="1044.0" y="215.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9198a1" text-anchor="middle">judges every command,</text>
+<text x="1044.0" y="231.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9198a1" text-anchor="middle">then runs it on the host</text>
+<rect x="924" y="288" width="240" height="100" rx="8" fill="#0d1117" stroke="#3d444d" stroke-width="1.2" stroke-dasharray="5 4"/>
+<text x="1044.0" y="318" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="14" font-weight="600" fill="#e6edf3" text-anchor="middle">av-renderer</text>
+<text x="1044.0" y="338" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9198a1" text-anchor="middle">optional: the executor in its own</text>
+<text x="1044.0" y="354" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9198a1" text-anchor="middle">process, so a host driver crash</text>
+<text x="1044.0" y="370" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9198a1" text-anchor="middle">resets the device, not the VM</text>
+<path d="M904,210 L922,210" fill="none" stroke="#9198a1" stroke-width="1.6" marker-end="url(#a-9198a1)"/>
+<path d="M1044.0,262 L1044.0,286" fill="none" stroke="#9198a1" stroke-width="1.2" stroke-dasharray="3 3" marker-end="url(#a-9198a1)"/>
+<rect x="734.0" y="420" width="100.0" height="66" rx="8" fill="#0d1117" stroke="#3d444d" stroke-width="1.2"/>
+<text x="784.0" y="449.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#e6edf3" text-anchor="middle">DXVK</text>
+<text x="784.0" y="467.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9198a1" text-anchor="middle">vkd3d-proton</text>
+<rect x="844.0" y="420" width="100.0" height="66" rx="8" fill="#0d1117" stroke="#3d444d" stroke-width="1.2"/>
+<text x="894.0" y="449.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#e6edf3" text-anchor="middle">Vulkan</text>
+<text x="894.0" y="467.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9198a1" text-anchor="middle">host driver</text>
+<rect x="954.0" y="420" width="100.0" height="66" rx="8" fill="#0d1117" stroke="#3d444d" stroke-width="1.2"/>
+<text x="1004.0" y="449.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#e6edf3" text-anchor="middle">EGL</text>
+<text x="1004.0" y="467.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9198a1" text-anchor="middle">+ OpenGL</text>
+<rect x="1064.0" y="420" width="100.0" height="66" rx="8" fill="#0d1117" stroke="#3d444d" stroke-width="1.2"/>
+<text x="1114.0" y="449.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#e6edf3" text-anchor="middle">OpenCL</text>
+<text x="1114.0" y="467.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9198a1" text-anchor="middle">e.g. rusticl</text>
+<path d="M784.0,398 L784.0,418" fill="none" stroke="#9198a1" stroke-width="1.6" marker-end="url(#a-9198a1)"/>
+<path d="M894.0,398 L894.0,418" fill="none" stroke="#9198a1" stroke-width="1.6" marker-end="url(#a-9198a1)"/>
+<path d="M1004.0,398 L1004.0,418" fill="none" stroke="#9198a1" stroke-width="1.6" marker-end="url(#a-9198a1)"/>
+<path d="M1114.0,398 L1114.0,418" fill="none" stroke="#9198a1" stroke-width="1.6" marker-end="url(#a-9198a1)"/>
+<path d="M734,398 L1164,398" fill="none" stroke="#9198a1" stroke-width="1.6"/>
+<path d="M1044.0,388 L1044.0,398" fill="none" stroke="#9198a1" stroke-width="1.6"/>
+<path d="M834.0,453.0 L842.0,453.0" fill="none" stroke="#9198a1" stroke-width="1.6" marker-end="url(#a-9198a1)"/>
+<text x="784.0" y="502" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#9198a1" text-anchor="middle" font-style="italic">Direct3D</text>
+<rect x="734" y="520" width="430" height="56" rx="8" fill="#e6edf3" stroke="#e6edf3" stroke-width="1.2"/>
+<text x="949.0" y="544" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="700" fill="#0d1117" text-anchor="middle">Host GPU</text>
+<text x="949.0" y="563" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#0d1117" text-anchor="middle">AMD · Intel · NVIDIA, through its own Linux driver</text>
+<path d="M894.0,486 L894.0,518" fill="none" stroke="#9198a1" stroke-width="1.6" marker-end="url(#a-9198a1)"/>
+<path d="M1004.0,486 L1004.0,518" fill="none" stroke="#9198a1" stroke-width="1.6" marker-end="url(#a-9198a1)"/>
+<path d="M1114.0,486 L1114.0,518" fill="none" stroke="#9198a1" stroke-width="1.6" marker-end="url(#a-9198a1)"/>
+<rect x="504.0" y="160" width="192" height="92" rx="10" fill="#1d1430" stroke="#ab7df8" stroke-width="1.2"/>
+<text x="600.0" y="182" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#ab7df8" text-anchor="middle">av context</text>
+<text x="600.0" y="201" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#e6edf3" text-anchor="middle">ring in guest RAM</text>
+<text x="600.0" y="218" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#e6edf3" text-anchor="middle">doorbell · ioeventfd</text>
+<text x="600.0" y="235" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#e6edf3" text-anchor="middle">fence page · MSI-X</text>
+<path d="M468,199.0 L502.0,199.0" fill="none" stroke="#ab7df8" stroke-width="2" marker-end="url(#a-ab7df8)"/>
+<path d="M696.0,199.0 L732,199.0" fill="none" stroke="#ab7df8" stroke-width="2" marker-end="url(#a-ab7df8)"/>
+<text x="600.0" y="146" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#ab7df8" text-anchor="middle">user-mode submission</text>
+<text x="600.0" y="270" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#9198a1" text-anchor="middle" font-style="italic">bypasses the kernel</text>
+<rect x="504.0" y="318" width="192" height="70" rx="10" fill="#0d1117" stroke="#3d444d" stroke-width="1.2"/>
+<text x="600.0" y="342" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#e6edf3" text-anchor="middle">virtio-gpu</text>
+<text x="600.0" y="360" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#e6edf3" text-anchor="middle">control queue</text>
+<text x="600.0" y="376" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#9198a1" text-anchor="middle">contexts · modes · scanout</text>
+<path d="M468,359 L502.0,359" fill="none" stroke="#9198a1" stroke-width="1.8" marker-end="url(#a-9198a1)"/>
+<path d="M696.0,359 L732,359" fill="none" stroke="#9198a1" stroke-width="1.8" marker-end="url(#a-9198a1)"/>
+<rect x="16" y="624" width="1168" height="112" rx="14" fill="#2a2210" stroke="#7a5d17" stroke-width="1.2"/>
+<text x="36" y="654" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="16" font-weight="700" fill="#e3b341" text-anchor="start">Shared memory: the host window</text>
+<text x="36" y="678" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#e6edf3" text-anchor="start">Every byte the guest CPU and the host GPU share is host GPU memory, allocated on demand and exported as a dma-buf.</text>
+<text x="36" y="698" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#e6edf3" text-anchor="start">QEMU maps it into the hostmem= BAR, which the guest maps with the host&#x27;s own caching: no copies in between.</text>
+<text x="36" y="718" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#9198a1" text-anchor="start">Guest RAM is never handed to a host GPU, and the frames the desktop composes are scanned out zero-copy.</text>
+</svg>

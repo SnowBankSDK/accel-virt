@@ -1,157 +1,225 @@
 # accel-virt
 
-A paravirtual GPU for Windows 11 guests on QEMU/KVM.
+**A paravirtual GPU for Windows 11 guests on QEMU/KVM.**
 
-Programs in the guest use Direct3D 11 and 12, Vulkan, OpenGL and OpenCL as they
-would on a physical card. Every command crosses to the host and runs on the
-host's own GPU stack: its Vulkan driver, its OpenGL through EGL, its OpenCL,
-and DXVK and vkd3d-proton (built natively for Linux) for Direct3D. The desktop
-runs on it too. DWM composes on the host GPU, and the host scans the result out
-without copying it back into the guest.
+Programs in a Windows VM use Direct3D 9, 11 and 12, Vulkan, OpenGL and OpenCL as
+they would on a physical card, and every command runs on the Linux host's own GPU.
 
-In the guest, the adapter is named after the host GPU it runs on. Device
-Manager, `dxdiag`, DXGI and every application see "AMD Radeon RX 9070 XT", or
-whichever GPU the host has, with its vendor and device IDs and its VRAM as the
-dedicated video memory.
+[![ci](https://github.com/acceleration3/accel-virt/actions/workflows/ci.yml/badge.svg)](https://github.com/acceleration3/accel-virt/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+![Guest: Windows 11 24H2+](https://img.shields.io/badge/guest-Windows%2011%2024H2%2B-0078d4)
+![Host: Linux x86--64 with KVM](https://img.shields.io/badge/host-Linux%20x86--64%20%2B%20KVM-1a7f37)
 
-| Piece | What it is | Source |
-|---|---|---|
-| `avgpu.sys` | A WDDM 3.2 kernel-mode display miniport. It speaks virtio-gpu plus this project's av protocol. | `src/miniport/` (portable), `src/km/` (Windows shim) |
-| `avumd.dll` | The Direct3D 9, 11 and 12 user-mode driver, with DXGI | `src/icd/d3d/`, `src/um/d3d/` |
-| `avvk.dll` | The Vulkan installable client driver | `src/icd/vulkan/`, `src/um/vulkan/` |
-| `avgl.dll` | The OpenGL installable client driver (the `Drv*` interface) | `src/icd/opengl/`, `src/um/opengl/` |
-| `avcl.dll` | The OpenCL installable client driver | `src/icd/opencl/`, `src/um/opencl/` |
-| `avumd32.dll`, `avvk32.dll`, `avgl32.dll`, `avcl32.dll` | The same four, built for x86, which 32-bit processes load | the same sources, built with `AV_GUEST_ARCH=x86` |
-| `virtio-gpu-av-pci` | A QEMU device, built into a patched QEMU 11.1.1 | `src/device/` |
-| `libav_executor.so` | The host library that runs guest commands on the host GPU | `src/executor/` |
-| `av-renderer` | An optional separate process for the executor, so that a host driver crash cannot take the VM | `src/device/renderer/`, `src/device/isolation/` |
-| the av protocol | Shared by both sides | `src/proto/` |
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/architecture-dark.svg">
+    <img alt="Windows programs and the desktop submit commands through accel-virt's user-mode drivers and avgpu.sys; QEMU's virtio-gpu-av-pci device hands them to libav_executor.so, which runs them through DXVK, vkd3d-proton, Vulkan, EGL and OpenCL on the host GPU, with shared memory in the host window." src="docs/images/architecture-light.svg" width="100%">
+  </picture>
+</p>
 
-Everything is written from the WDK headers and from reverse engineering
-Microsoft's shipping binaries (`dxgkrnl.sys`, `dxgmms2.sys`, `cdd.dll`,
-`basicrender.sys`, ...) against their public symbols.
-
-**Contents:**
-[How it works](#how-it-works) ·
-[Status](#status) ·
-[Limitations and nuances](#limitations-and-nuances) ·
-[Requirements](#requirements) ·
-[Building](#building) ·
-[Installing](#installing) ·
-[Device parameters](#device-parameters) ·
-[Resolutions](#resolutions) ·
-[Environment variables](#environment-variables) ·
-[What the driver package installs](#what-the-driver-package-installs) ·
-[Debugging](#debugging) ·
-[Testing](#testing) ·
-[Working on the code](#working-on-the-code) ·
-[Source layout](#source-layout) ·
-[Documentation](#documentation)
+<p align="center">
+  <a href="#at-a-glance">At a glance</a> ·
+  <a href="#what-works">What works</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#limitations-and-nuances">Limitations</a> ·
+  <a href="#requirements">Requirements</a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#building">Building</a> ·
+  <a href="#installing">Installing</a> ·
+  <a href="#configuration">Configuration</a> ·
+  <a href="#debugging">Debugging</a> ·
+  <a href="#testing">Testing</a> ·
+  <a href="#working-on-the-code">Working on the code</a>
+</p>
 
 ---
 
-## How it works
+## At a glance
 
-```
- Windows 11 guest                                                    Linux host
- ───────────────────────────────────────────────────                ──────────────────────────────────────────────
- application
-   ├─ d3d11.dll / D3D12Core.dll ─→ avumd.dll ┐
-   ├─ vulkan-1.dll ──────────────→ avvk.dll  │  one av context each:          QEMU  ─ virtio-gpu-av-pci
-   ├─ opengl32.dll ──────────────→ avgl.dll  ├─ ring in guest RAM ──────────→        (libav_device.a)
-   └─ OpenCL.dll ────────────────→ avcl.dll  ┘  doorbell (BAR 0, ioeventfd)          │ per-context workers
-                                                  fence page + MSI-X ←──────────────  │
- DWM, GDI (cdd.dll) ─→ dxgkrnl ─→ avgpu.sys ── virtio-gpu control queue ──→   libav_executor.so
-                                  (VidPn, VidMm, VidSch,                        (in QEMU, or in av-renderer)
-                                   scanout, cursor, fences)                       ├─ Vulkan      → host Vulkan driver
-                                                                                  ├─ OpenGL      → EGL + host GL
-                                                                                  ├─ OpenCL      → host OpenCL (e.g. rusticl)
-                                                                                  └─ Direct3D    → DXVK (11), vkd3d-proton (12)
-                                                                                                    → host Vulkan
-```
+- **The host's own GPU stack does the work.** Every command crosses to the host
+  and runs there: Vulkan on the host's Vulkan driver, OpenGL through EGL,
+  OpenCL on the host's OpenCL, and Direct3D on DXVK and vkd3d-proton, built
+  natively for Linux.
+- **The desktop runs on it too.** DWM composes on the host GPU, and the host
+  scans the result out without copying it back into the guest.
+- **The guest sees the real card's identity.** The adapter is named after the
+  host GPU it runs on. Device Manager, `dxdiag`, DXGI and every application see
+  "AMD Radeon RX 9070 XT", or whichever GPU the host has, with its vendor and
+  device IDs, and its VRAM as the dedicated video memory.
+- **The guest is untrusted.** The host checks every command against generated
+  bounds before a host driver sees it. A bad command faults its own context and
+  nothing else.
+- **32-bit programs work too.** Each user-mode driver also ships as an x86
+  build, which Windows gives to WoW64 processes.
+- **Written from first principles.** Everything is written from the WDK headers
+  and from reverse engineering Microsoft's shipping binaries (`dxgkrnl.sys`,
+  `dxgmms2.sys`, `cdd.dll`, `basicrender.sys`, ...) against their public
+  symbols.
 
-**One adapter per host GPU.** Each `virtio-gpu-av-pci` device binds one host
-GPU by its Vulkan device UUID, which survives reboots and driver updates where
-enumeration order does not. The PCI function presents that GPU's vendor, device
-and revision as its own. Its subsystem stays `1af4:5256`, which is how the
-driver package recognises the device. The adapter's name comes from the GPU's
-Vulkan device name. A second host GPU can be added as a second device. With
-`display=off` it is a render-only adapter, and frames rendered on it are shown
-through the display adapter.
-
-**av contexts.** Each API context a process creates, whether a Vulkan device,
-a GL context, a CL context or a D3D device, gets an av context:
-
-- a ring in guest memory that the process writes command batches into;
-- a doorbell page in BAR 0, which is a KVM ioeventfd, so a 4-byte store wakes
-  the host worker without passing through QEMU's main loop;
-- a fence page and a reply slot, with completion reported through MSI-X fence
-  queues.
-
-The kernel driver creates and destroys contexts, but steady-state submission
-bypasses it. This is WDDM 3.1 user-mode submission, with doorbells and native
-fences, both enabled by the driver package.
-
-**Commands are generated, and the guest is untrusted.** The serialization for
-Vulkan (386 commands), OpenGL (1375 entry points) and OpenCL (105 commands) is
-generated from the Khronos registries by `tools/codegen/`. Direct3D's is
-generated from this project's own registries (`tools/codegen/registry/*.toml`).
-The output is committed under `src/proto/generated/` and never hand-edited.
-The host decodes every command against the registry's bounds and judges it
-before a host driver sees it. An object ID of the wrong kind, an address in no
-allocation, or a length past the frame faults that context and nothing else.
-Host drivers trust their callers; a guest is not a caller to trust.
-
-**Memory.** Every byte the guest CPU and a host GPU share is host GPU memory.
-The executor allocates it on demand, one allocation per request, on each GPU's
-compositing Vulkan device, and exports it as a dma-buf. QEMU maps it into the
-`hostmem=` window, a BAR the guest maps with the host's own caching, and the
-context's host API imports it. Upload heaps, readback heaps, API arenas and
-`HOST_VISIBLE` Vulkan allocations all live there. Guest RAM is never handed to
-a host GPU. The host GPU's VRAM is reported to Windows as dedicated video
-memory. Nothing is ever placed in that segment; it is a budget, and what lives
-there stays on the host.
-
-**Display.** The host decides the resolutions ([Resolutions](#resolutions)).
-The desktop's primary surface is a blob the host shows directly, as a display
-surface over the device's own mapping of its pages, when the display backend
-has a GL context (`gtk,gl=on` or `egl-headless`). Otherwise it is transferred.
-Vsync is the device's own clock at the refresh rate it is given (60 Hz unless
-the `refresh` property says another), and the cursor is a 64x64 hardware cursor.
-
-**Isolation.** With `renderer=`, the whole host GPU stack runs in
-`av-renderer`. A crash there loses the device's contexts, which the guest sees
-as a device reset that Windows already recovers from, and QEMU starts a new
-renderer.
-
-## Status
+## What works
 
 | API | Guest path | Host path | What is offered |
 |---|---|---|---|
-| Desktop (DWM, GDI) | `avumd.dll` (Direct3D 11) | DXVK | composited on the host GPU, scanned out zero-copy, 60 fps |
-| Direct3D 11 | `d3d11.dll` → `avumd.dll` (`OpenAdapter10_2`, the D3D11 DDI at WDDM 3.2) | DXVK's `d3d11`, native | feature levels up to 12_1 |
-| Direct3D 12 | `D3D12Core.dll` → `avumd.dll` (`OpenAdapter12`) | vkd3d-proton, native and patched | what vkd3d-proton offers on the host GPU |
-| Vulkan | Khronos loader → `avvk.dll` | the host's Vulkan driver | Vulkan 1.3, with the host device's extensions under the ICD's extension policy |
-| OpenGL | `opengl32.dll` → `avgl.dll` | EGL + the host's GL | up to 4.6, core and compatibility profiles, WGL pixel formats and sharing |
-| OpenCL | Khronos loader → `avcl.dll` | the host's OpenCL | OpenCL 3.0, including SVM and `cl_khr_gl_sharing` |
-| Direct3D 9 | `d3d9.dll` → `avumd.dll` (`OpenAdapter`) | DXVK's `d3d9` | a native user-mode driver |
+| **Desktop** (DWM, GDI) | `avumd.dll` (Direct3D 11) | DXVK | composited on the host GPU, scanned out zero-copy, 60 fps |
+| **Direct3D 11** | `d3d11.dll` → `avumd.dll` (`OpenAdapter10_2`, the D3D11 DDI at WDDM 3.2) | DXVK's `d3d11`, native | feature levels up to 12_1 |
+| **Direct3D 12** | `D3D12Core.dll` → `avumd.dll` (`OpenAdapter12`) | vkd3d-proton, native and patched | what vkd3d-proton offers on the host GPU |
+| **Vulkan** | Khronos loader → `avvk.dll` | the host's Vulkan driver | Vulkan 1.3, with the host device's extensions under the ICD's extension policy |
+| **OpenGL** | `opengl32.dll` → `avgl.dll` | EGL + the host's GL | up to 4.6, core and compatibility profiles, WGL pixel formats and sharing |
+| **OpenCL** | Khronos loader → `avcl.dll` | the host's OpenCL | OpenCL 3.0, including SVM and `cl_khr_gl_sharing` |
+| **Direct3D 9** | `d3d9.dll` → `avumd.dll` (`OpenAdapter`) | DXVK's `d3d9` | a native user-mode driver |
 
 Every row works in 32-bit processes too. The package installs an x86 build of
 each user-mode driver, and Windows gives it to a WoW64 process through the
 adapter's `*Wow` registry values. A 32-bit game on Direct3D 11 runs on the host
 GPU as a 64-bit one does.
 
-Tested beyond the probes and sample suites:
+Beyond the probes and sample suites, these have been tested:
+
 - the Windows desktop;
 - Minecraft's Vulkan renderer;
-- Photoshop CS6's OpenCL path (Blur Gallery, whose GPU check times OpenCL
-  copies and needs 12 GB/s);
+- Photoshop CS6's OpenCL path: Blur Gallery, whose GPU check times OpenCL
+  copies and needs 12 GB/s;
 - the D3D11, D3D12, OpenGL, OpenCL and Vulkan sample suites under `samples/`,
   side by side with the same programs run natively on the host.
 
+## How it works
+
+### The pieces
+
+| Piece | Runs in | What it is | Source |
+|---|---|---|---|
+| `avgpu.sys` | guest kernel | A WDDM 3.2 kernel-mode display miniport. It speaks virtio-gpu plus this project's av protocol. | `src/miniport/` (portable), `src/km/` (Windows shim) |
+| `avumd.dll` | guest processes | The Direct3D 9, 11 and 12 user-mode driver, with DXGI | `src/icd/d3d/`, `src/um/d3d/` |
+| `avvk.dll` | guest processes | The Vulkan installable client driver | `src/icd/vulkan/`, `src/um/vulkan/` |
+| `avgl.dll` | guest processes | The OpenGL installable client driver (the `Drv*` interface) | `src/icd/opengl/`, `src/um/opengl/` |
+| `avcl.dll` | guest processes | The OpenCL installable client driver | `src/icd/opencl/`, `src/um/opencl/` |
+| `avumd32.dll`, `avvk32.dll`, `avgl32.dll`, `avcl32.dll` | 32-bit guest processes | The same four, built for x86 | the same sources, built with `AV_GUEST_ARCH=x86` |
+| `virtio-gpu-av-pci` | QEMU | A QEMU device, built into a patched QEMU 11.1.1 from `libav_device.a` | `src/device/` |
+| `libav_executor.so` | QEMU, or `av-renderer` | The host library that runs guest commands on the host GPU | `src/executor/` |
+| `av-renderer` | its own host process | An optional home for the executor, so that a host driver crash cannot take the VM | `src/device/renderer/`, `src/device/isolation/` |
+| the av protocol | both sides | What crosses the boundary | `src/proto/` |
+
+### One adapter per host GPU
+
+Each `virtio-gpu-av-pci` device binds one host GPU by its Vulkan device UUID,
+which survives reboots and driver updates where enumeration order does not.
+
+- The PCI function presents that GPU's vendor, device and revision as its own.
+  Its subsystem stays `1af4:5256`, which is how the driver package recognises
+  the device.
+- The adapter's name comes from the GPU's Vulkan device name.
+- A second host GPU can be added as a second device. With `display=off` it is a
+  render-only adapter, and frames rendered on it are shown through the display
+  adapter.
+
+### av contexts: how a command reaches the host
+
+Each API context a process creates, whether a Vulkan device, a GL context, a CL
+context or a D3D device, gets an **av context**:
+
+- a **ring** in guest memory that the process writes command batches into;
+- a **doorbell** page in BAR 0, which is a KVM ioeventfd, so a 4-byte store
+  wakes the host worker without passing through QEMU's main loop;
+- a **fence page** and a reply slot, with completion reported through MSI-X
+  fence queues.
+
+The kernel driver creates and destroys contexts, but steady-state submission
+bypasses it. This is WDDM 3.1 user-mode submission, with doorbells and native
+fences, both enabled by the driver package.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant App as Program
+    participant UMD as avumd / avvk / avgl / avcl
+    participant Ctx as av context<br/>ring, doorbell, fence page
+    participant KMD as avgpu.sys
+    participant Dev as QEMU device<br/>context worker
+    participant Exe as libav_executor.so
+    participant GPU as Host GPU
+    App->>UMD: draw, dispatch, submit, present
+    UMD->>Ctx: write a command batch into the ring
+    UMD->>Ctx: 4-byte store to the doorbell
+    Note over UMD,KMD: no kernel call on this path
+    Ctx-->>Dev: the KVM ioeventfd wakes the worker
+    Dev->>Exe: the batch
+    Note over Exe: decode and judge every command<br/>against the registry's bounds
+    Exe->>GPU: run it through the host API
+    GPU-->>Exe: done
+    Exe-->>Ctx: write the fence page
+    Dev-->>KMD: MSI-X fence queue interrupt
+    KMD-->>App: the native fence signals
+```
+
+### Commands are generated, and the guest is untrusted
+
+The serialization for Vulkan (386 commands), OpenGL (1375 entry points) and
+OpenCL (105 commands) is generated from the Khronos registries by
+`tools/codegen/`. Direct3D's is generated from this project's own registries
+(`tools/codegen/registry/*.toml`). The output is committed under
+`src/proto/generated/` and never hand-edited.
+
+The host decodes every command against the registry's bounds and judges it
+before a host driver sees it. An object ID of the wrong kind, an address in no
+allocation, or a length past the frame faults that context and nothing else.
+Host drivers trust their callers; a guest is not a caller to trust.
+
+### Memory
+
+Every byte the guest CPU and a host GPU share is host GPU memory.
+
+```mermaid
+flowchart LR
+    A["a guest request<br/>for shared memory"] --> B["the executor allocates it<br/>on the GPU's compositing<br/>Vulkan device"]
+    B --> C["exported as a dma-buf"]
+    C --> D["QEMU maps it into the<br/>hostmem= window, a BAR"]
+    D --> E["the guest maps the BAR<br/>with the host's own caching"]
+    C --> F["the context's host API<br/>imports it"]
+```
+
+- The executor allocates on demand, one allocation per request, on each GPU's
+  compositing Vulkan device.
+- Upload heaps, readback heaps, API arenas and `HOST_VISIBLE` Vulkan
+  allocations all live there.
+- Guest RAM is never handed to a host GPU.
+- The host GPU's VRAM is reported to Windows as dedicated video memory. Nothing
+  is ever placed in that segment; it is a budget, and what lives there stays on
+  the host.
+
+### Display
+
+The host decides the resolutions (see [Resolutions](#resolutions)). The
+desktop's primary surface is a blob the host shows directly, as a display
+surface over the device's own mapping of its pages, when the display backend has
+a GL context. Otherwise it is transferred.
+
+```mermaid
+flowchart LR
+    DWM["DWM composes the desktop<br/>Direct3D 11 on DXVK"] --> P["the primary surface<br/>a blob in host GPU memory"]
+    P -- "display gtk,gl=on<br/>or egl-headless" --> Z["shown directly<br/>zero-copy"]
+    P -- "other display backends" --> T["transferred"]
+```
+
+Vsync is the device's own clock at the refresh rate it is given (60 Hz unless
+the `refresh` property says another), and the cursor is a 64x64 hardware cursor.
+
+### Isolation
+
+With `renderer=`, the whole host GPU stack runs in `av-renderer` instead of
+QEMU.
+
+```mermaid
+flowchart LR
+    Q["QEMU<br/>virtio-gpu-av-pci"] <--> R["av-renderer<br/>the executor and the host drivers"]
+    R -- "a host driver crashes" --> L["the device's contexts are lost"]
+    L --> G["Windows sees a device reset,<br/>which it already recovers from"]
+    L --> N["QEMU starts a new renderer"]
+```
+
 ## Limitations and nuances
 
-**Guest version and signing:**
+**Guest version and signing**
+
 - **Windows 11 24H2 (build 26100) or later.** The driver declares WDDM 3.2
   (`0x11007`), and Windows 11 refuses to load a driver that declares an older
   level. So there is no Windows 10 or 23H2 build.
@@ -159,12 +227,14 @@ Tested beyond the probes and sample suites:
   enrolled Secure Boot keys. `tools/guest/provision.ps1` makes a self-signed
   certificate, trusts it, and signs the package.
 
-**Coverage gaps:**
+**Coverage gaps**
+
 - **32-bit processes need their own loaders.** A 32-bit Vulkan or OpenCL
   application finds `vulkan-1.dll` and `OpenCL.dll` in `C:\Windows\SysWOW64`,
   and Windows ships neither (see [Installing](#installing)).
 
-**Display:**
+**Display**
+
 - **One display per adapter**, and one refresh rate for all its modes: 60 Hz by
   default, or the `refresh` property's (see [Resolutions](#resolutions)).
 - **Resolutions have hard limits.** From 100x100, the smallest source mode
@@ -177,64 +247,104 @@ Tested beyond the probes and sample suites:
   games want for mouse-look, loops on GTK and flickers on SDL under a Wayland
   host.
 
-**Driver behaviour:**
+**Driver behaviour**
+
 - **No preemption.** A batch handed to the host cannot be taken back, so the
   package sets `EnablePreemption=0`. A preemption request is answered once the
   node runs dry, and held work is bounded by a deadline instead.
 
-**Setup pitfalls:**
-- **Windows Update will replace the driver.** The device presents the host
-  GPU's PCI IDs, so Windows Update offers that vendor's real driver. On this
-  device the real driver bugchecks. `provision.ps1` turns driver searches off
-  (`NoDriverUpdates`), both at `prepare` and at `install`. Keep them off in any
-  guest that has network access.
-- **The host must find DXVK and vkd3d-proton** (`AV_D3D_PATH`, below).
-  Without them the host offers no Direct3D, and DWM crash-loops with
-  `0x889800B2` ("the host answers no Direct3D 11 on this adapter").
+**Setup pitfalls**
+
+> [!WARNING]
+> **Windows Update will replace the driver.** The device presents the host
+> GPU's PCI IDs, so Windows Update offers that vendor's real driver, and on this
+> device the real driver bugchecks. `provision.ps1` turns driver searches off
+> (`NoDriverUpdates`), both at `prepare` and at `install`. Keep them off in any
+> guest that has network access.
+
+- **The host must find DXVK and vkd3d-proton** (`AV_D3D_PATH`, see
+  [Environment variables](#environment-variables)). Without them the host
+  offers no Direct3D, and DWM crash-loops with `0x889800B2` ("the host answers
+  no Direct3D 11 on this adapter").
 - **The distribution's QEMU cannot load the device.** Its compiled-in module
   table has no entry for these types, so QEMU itself is rebuilt from the pinned
   source.
 - **Guest RAM must be a shared memfd**
   (`-object memory-backend-memfd,...,share=on`). The renderer process maps it
-  to reach the rings, fence pages and other guest blobs, and vhost-user
-  devices such as virtiofsd need it too. No host GPU imports it.
+  to reach the rings, fence pages and other guest blobs, and vhost-user devices
+  such as virtiofsd need it too. No host GPU imports it.
 - **Give the host window room.** `hostmem=8192M` is what runs real
   applications. The window holds every host-visible byte: with too little,
-  arenas shrink, and Vulkan and Direct3D 12 allocations fail as they would on
-  a full GPU.
+  arenas shrink, and Vulkan and Direct3D 12 allocations fail as they would on a
+  full GPU.
 
 ## Requirements
 
-**Host:**
+<table>
+<tr><th width="50%">Host</th><th width="50%">Guest</th></tr>
+<tr valign="top"><td>
+
 - Linux, x86-64, with KVM. Nothing uses `/dev/udmabuf`.
 - On each host GPU, a Vulkan driver that exports memory as dma-bufs
   (`VK_EXT_external_memory_dma_buf`). Every API's guest-mapped memory comes
   from it; without it a GPU's arenas cross inline in the ring and its Vulkan
   allocations have no host-visible memory.
-- Per API you want served:
+- Per API you want served (an API the host lacks is not offered):
   - a Vulkan loader and driver (Mesa RADV or ANV, NVIDIA, ...);
   - EGL with desktop OpenGL;
   - an OpenCL ICD (Mesa rusticl or a vendor's).
+- OVMF (edk2) UEFI firmware.
 
-  An API the host lacks is not offered.
+</td><td>
+
+- Windows 11 24H2 (26100) or later, x64.
+- Installed on UEFI without enrolled Secure Boot keys, with BitLocker off.
+- About 25 GB of disk.
+- For the automated flow:
+  - the QEMU guest agent from the virtio-win guest tools, set to start
+    automatically;
+  - PowerShell 5 or later (inbox).
+
+</td></tr>
+</table>
+
+**To build:**
+
 - clang and clang++ (C++23), clang-cl, lld (`lld-link`), `llvm-lib`,
   `llvm-rc`, `llvm-mt`, CMake 3.24 or later, Ninja, and Python 3.11 or later
   (standard library only).
-- For QEMU: its own build dependencies (glib2, pixman), plus:
-  - gtk3 and libepoxy for `-display gtk,gl=on`;
-  - libslirp for `-nic user`;
-  - PipeWire for audio.
-- For Direct3D on the host: DXVK's and vkd3d-proton's build dependencies
-  (meson, glslang). SDL3 is also needed at run time: DXVK's native build loads
-  its window-system backend even when it shows no window.
-- OVMF (edk2) UEFI firmware.
+- For QEMU, its own build dependencies (glib2, pixman), plus gtk3 and libepoxy
+  for `-display gtk,gl=on`, libslirp for `-nic user`, and PipeWire for audio.
+- For Direct3D on the host, DXVK's and vkd3d-proton's build dependencies (meson,
+  glslang). SDL3 is also needed at run time: DXVK's native build loads its
+  window-system backend even when it shows no window.
 
-**Guest:**
-- Windows 11 24H2 (26100) or later, x64, installed on UEFI without enrolled
-  Secure Boot keys, with BitLocker off.
-- For the automated flow: the QEMU guest agent from the virtio-win guest tools,
-  set to start automatically, and PowerShell 5 or later (inbox).
-- About 25 GB of disk.
+## Quick start
+
+The shortest way from a clone to a Windows VM running on the host GPU:
+
+```bash
+# fetch what the build needs
+git submodule update --init third_party/dxvk third_party/vkd3d-proton
+tools/fetch_windows_kit.sh
+tools/fetch_khronos_registries.py
+tools/fetch_qemu.sh
+
+# build the guest drivers, QEMU with the device, and the host's Direct3D
+cmake -S . -B build -G Ninja -DCMAKE_CXX_COMPILER=clang++
+cmake --build build
+cmake -S . -B build-qemu -G Ninja -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Release -DAV_QEMU=ON
+cmake --build build-qemu
+tools/build_d3d_runtime.sh
+
+# prepare a Windows 11 image once, then boot it with the driver installed
+tools/guest/run_guest_suite.py --image /path/to/windows.qcow2 --prepare-image
+tools/guest/run_guest_suite.py --image /path/to/windows.qcow2 --work build-guest-render \
+    --executor build-qemu/libav_executor.so --all-gpus --hostmem 8192 \
+    --quick --keep --no-collect --display gtk --net --audio
+```
+
+Each step is explained below: [Building](#building) and [the runner](#1-the-runner-recommended).
 
 ## Building
 
@@ -247,7 +357,11 @@ git submodule update --init third_party/dxvk third_party/vkd3d-proton
 tools/fetch_windows_kit.sh            # the WDK/SDK header and import-library subset (the licence forbids committing it)
 tools/fetch_khronos_registries.py     # vk.xml, gl.xml, cl.xml and the Khronos headers
 tools/fetch_qemu.sh                   # QEMU 11.1.1's release tarball
+```
 
+Then three builds:
+
+```bash
 # 1. avgpu.sys, the guest DLLs and programs, and the host unit tests
 cmake -S . -B build -G Ninja -DCMAKE_CXX_COMPILER=clang++
 cmake --build build
@@ -260,6 +374,9 @@ cmake --build build-qemu
 tools/build_d3d_runtime.sh
 ```
 
+A core change that would not build in the guest kernel fails the build. That
+covers a hosted header, a C runtime call, `new`, `throw` or `typeid`.
+
 Optional fetches, for the guest side of the flow:
 
 ```bash
@@ -270,7 +387,8 @@ tools/fetch_cts.py                    # the Vulkan CTS, for --cts runs
 tools/fetch_dxc.sh                    # Microsoft's DXC, for the D3D12 samples
 ```
 
-What comes out:
+<details>
+<summary><b>What comes out, and where it goes</b></summary>
 
 | File | Built by | Goes |
 |---|---|---|
@@ -288,8 +406,7 @@ What comes out:
 | `build-qemu/avrecord` | `build-qemu` | the host: prints and replays wire recordings |
 | `build-d3d/lib/` | `tools/build_d3d_runtime.sh` | the host, named by `AV_D3D_PATH` |
 
-A core change that would not build in the guest kernel fails the build. That
-covers a hosted header, a C runtime call, `new`, `throw` or `typeid`.
+</details>
 
 ### The driver package
 
@@ -308,49 +425,60 @@ build/av-drivers/
     └── package.sha256     what the sign stage checks the package against
 ```
 
-`--prefix DIR` installs it anywhere else. A build directory configured before
-this existed has `/usr/local` cached as its prefix: configure it once with
-`-DCMAKE_INSTALL_PREFIX=$PWD/build/av-drivers`. `cmake --install` installs
-what is already built, so build `drivers` first. `adapters.txt` comes from `tools/host/list_gpus.py --adapter-names`
-on the host doing the install. It is left out, with a warning, when
-`vulkaninfo` fails, and the INF's models then take its static name. Copy the
-tree to the guest's `C:\av` and run route 2 below from `provision.ps1`.
+- `--prefix DIR` installs it anywhere else. A build directory configured before
+  this existed has `/usr/local` cached as its prefix: configure it once with
+  `-DCMAKE_INSTALL_PREFIX=$PWD/build/av-drivers`.
+- `cmake --install` installs what is already built, so build `drivers` first.
+- `adapters.txt` comes from `tools/host/list_gpus.py --adapter-names` on the
+  host doing the install. It is left out, with a warning, when `vulkaninfo`
+  fails, and the INF's models then take its static name.
+
+Copy the tree to the guest's `C:\av` and run [route 2](#2-by-hand-on-an-existing-windows-11-vm)
+below from `provision.ps1`.
 
 ## Installing
 
-There are three routes. The first is how the project tests itself. The second
-is for a Windows VM you already have. The third updates a driver that is
-already installed.
+There are three routes:
+
+```mermaid
+flowchart TD
+    S(["What are you starting from?"])
+    S -- "a Windows 11 image,<br/>for a test or a VM to use" --> R1["1 · The runner<br/>run_guest_suite.py does everything"]
+    S -- "a Windows 11 VM<br/>you already use" --> R2["2 · By hand<br/>the QEMU device, then provision.ps1"]
+    S -- "the driver installed,<br/>and a newer build" --> R3["3 · Update in place"]
+```
 
 ### 1. The runner (recommended)
 
-`tools/guest/run_guest_suite.py` drives everything through the QEMU guest
-agent. It boots a copy-on-write overlay of an image, pushes the package, signs
-it, installs it, reboots, checks the adapter started on `avgpu`, and runs the
-suite.
+`tools/guest/run_guest_suite.py` drives everything through the QEMU guest agent,
+and is how the project tests itself:
 
-Prepare the image once. This is the one run that writes the image:
+```mermaid
+flowchart LR
+    A["copy-on-write overlay<br/>of the image"] --> B["push the<br/>package"] --> C["sign"] --> D["install"] --> E["reboot"] --> F["check the adapter<br/>started on avgpu"] --> G["run the suite"]
+```
+
+**Prepare the image once.** This is the one run that writes the image:
 
 ```bash
 tools/guest/run_guest_suite.py --image /path/to/windows.qcow2 --prepare-image
 ```
 
-`provision.ps1 -Stage prepare` then sets the image up:
+`provision.ps1 -Stage prepare` then sets the image up, idempotently:
+
 - the test-signing certificate and test signing (one reboot);
 - kernel memory dumps with automatic reboot, and verbose `setupapi.dev.log`;
-- nothing that interrupts a run: no fast startup, hibernation, sleep,
-  automatic updates, automatic maintenance, driver searches or boot recovery;
+- nothing that interrupts a run: no fast startup, hibernation, sleep, automatic
+  updates, automatic maintenance, driver searches or boot recovery;
 - a Defender exclusion for `C:\av`.
 
-It is idempotent.
-
-A test run:
+**A test run:**
 
 ```bash
 AV_GUEST_IMAGE=/path/to/windows.qcow2 tools/guest/run_guest_suite.py --quick
 ```
 
-A VM to use:
+**A VM to use:**
 
 ```bash
 tools/guest/run_guest_suite.py --image /path/to/windows.qcow2 --work build-guest-render \
@@ -358,16 +486,20 @@ tools/guest/run_guest_suite.py --image /path/to/windows.qcow2 --work build-guest
     --quick --keep --no-collect --display gtk --net --audio
 ```
 
-`--display gtk` means `gtk,gl=on`. `--all-gpus` adds one device per host GPU,
-the second render-only. `--net` is user-mode NAT on an e1000e, and `--audio` is
-Intel HD Audio to PipeWire, both on Windows' inbox drivers. `--keep` leaves the
-guest running until you press Enter.
+| Option | Meaning |
+|---|---|
+| `--display gtk` | `gtk,gl=on` |
+| `--all-gpus` | one device per host GPU, the second render-only |
+| `--net` | user-mode NAT on an e1000e, on Windows' inbox driver |
+| `--audio` | Intel HD Audio to PipeWire, on Windows' inbox driver |
+| `--keep` | leave the guest running until you press Enter |
 
+> [!CAUTION]
 > **The runner treats its overlay as scratch.** It deletes
-> `<work>/overlay.qcow2` when it starts, and again when its QEMU exits,
-> `--keep` or not. If you install software in a runner's guest that you want
-> to keep, copy the overlay first (`cp --reflink=always`, with `vars.fd` beside
-> it). From then on, relaunch QEMU yourself from its saved command line
+> `<work>/overlay.qcow2` when it starts, and again when its QEMU exits, `--keep`
+> or not. If you install software in a runner's guest that you want to keep,
+> copy the overlay first (`cp --reflink=always`, with `vars.fd` beside it). From
+> then on, relaunch QEMU yourself from its saved command line
 > (`tr '\0' '\n' < /proc/<pid>/cmdline`) with the runner's environment
 > (`QEMU_MODULE_DIR`, `AV_D3D_PATH`).
 
@@ -393,27 +525,26 @@ build-qemu/qemu/qemu-system-x86_64 \
   -qmp unix:qmp.sock,server=on,wait=off
 ```
 
-`vars.fd` is the VM's own writable copy of `OVMF_VARS.4m.fd`. For an existing
-VM, use the variables file it already boots with.
-`tools/host/list_gpus.py --qemu` prints one `-device` argument per host GPU,
-bound by UUID, and `--libvirt` prints the same as a libvirt domain fragment.
-Keep `-vga none`: another display adapter would take the desktop. The
-`isa-debugcon` line gives you the driver's log.
+- `vars.fd` is the VM's own writable copy of `OVMF_VARS.4m.fd`. For an existing
+  VM, use the variables file it already boots with.
+- `tools/host/list_gpus.py --qemu` prints one `-device` argument per host GPU,
+  bound by UUID, and `--libvirt` prints the same as a libvirt domain fragment.
+- Keep `-vga none`: another display adapter would take the desktop.
+- The `isa-debugcon` line gives you the driver's log.
 
 **In the guest,** as Administrator:
 
-1. Copy `build/av-drivers` from `cmake --install build` ([The driver
-   package](#the-driver-package)) to `C:\av`, which puts everything below in
-   place with its `package.sha256` and `adapters.txt`. By hand, copy the
-   package into `C:\av\package`:
-   - `avgpu.sys`, `avgpu.inf`, `avvk.dll`, `avvk.json`, `avgl.dll`,
-     `avcl.dll`, `avumd.dll`;
+1. **Copy the package.** Copy `build/av-drivers` from `cmake --install build`
+   ([The driver package](#the-driver-package)) to `C:\av`, which puts
+   everything below in place with its `package.sha256` and `adapters.txt`. By
+   hand, copy into `C:\av\package`:
+   - `avgpu.sys`, `avgpu.inf`, `avvk.dll`, `avvk.json`, `avgl.dll`, `avcl.dll`,
+     `avumd.dll`;
    - the 32-bit drivers from `build/guest32`: `avvk32.dll`, `avgl32.dll`,
-     `avcl32.dll` and `avumd32.dll`, with `src/um/vulkan/avvk32.json`. The
-     INF names them all, and `pnputil` refuses a package missing a file it
-     names;
-   - `tools/guest/provision.ps1` into `C:\av`.
-2. Sign the package:
+     `avcl32.dll` and `avumd32.dll`, with `src/um/vulkan/avvk32.json`. The INF
+     names them all, and `pnputil` refuses a package missing a file it names;
+   - and `tools/guest/provision.ps1` into `C:\av`.
+2. **Sign the package.**
 
    ```powershell
    powershell -ExecutionPolicy Bypass -File C:\av\provision.ps1 -Stage sign
@@ -422,26 +553,24 @@ Keep `-vga none`: another display adapter would take the desktop. The
    This names every present `virtio-gpu-av-pci` in the INF, makes and trusts
    the test certificate, catalogs and signs the package, and turns test signing
    on. Exit code 3010 means reboot, then continue.
-3. Install:
+3. **Install.**
 
    ```powershell
    powershell -ExecutionPolicy Bypass -File C:\av\provision.ps1 -Stage install -NoVerifier
    ```
 
    This turns driver updates off, enables user-mode submission and native
-   fences, and runs `pnputil /add-driver ... /install`. Without `-NoVerifier`
-   it also puts Driver Verifier's standard checks on `avgpu.sys`, which is
-   right for testing and slow for use. Reboot.
-4. Put the loaders in place:
-   - the Vulkan loader: either run LunarG's Vulkan Runtime installer, or copy
-     `third_party/vulkan-runtime/vulkan-1.dll` to `C:\Windows\System32`;
-   - the OpenCL loader: copy `build/guest/OpenCL.dll` to `C:\Windows\System32`.
-   - for 32-bit applications, the same again: LunarG's Vulkan Runtime installer
+   fences, and runs `pnputil /add-driver ... /install`. Without `-NoVerifier` it
+   also puts Driver Verifier's standard checks on `avgpu.sys`, which is right
+   for testing and slow for use. Reboot.
+4. **Put the loaders in place.** Windows ships none of them.
+   - The Vulkan loader: either run LunarG's Vulkan Runtime installer, or copy
+     `third_party/vulkan-runtime/vulkan-1.dll` to `C:\Windows\System32`.
+   - The OpenCL loader: copy `build/guest/OpenCL.dll` to `C:\Windows\System32`.
+   - For 32-bit applications, the same again: LunarG's Vulkan Runtime installer
      also puts a 32-bit `vulkan-1.dll` in `C:\Windows\SysWOW64`, and
      `build/guest32/OpenCL.dll` goes there too.
-
-   Windows ships none of them.
-5. Check:
+5. **Check.**
 
    ```powershell
    C:\av\provision.ps1 -Stage check
@@ -456,27 +585,27 @@ interrupts an automated run, which you may not want on a VM you use.
 
 ### 3. Updating an installed driver
 
-- **As an update would arrive, with no reboot.** Put the new files in
-  `C:\av\package`, run `-Stage sign` (it signs `avgpu.sys` and the catalog),
-  then `-Stage upgrade -Minutes 1`. That raises `DriverVer`'s build number by
-  1, installs over the running driver, and checks the adapter runs the new
-  version. The count starts from the INF in `C:\av\package`, which each
-  upgrade rewrites. Copying the repository's INF over it resets the count, and
-  an upgrade to a version already installed keeps the old files without saying
-  so: compare a file's hash in the driver store after installing.
-- **A user-mode driver only.** Replace the DLL in the driver store directory
-  below. The next process to load it gets the new one, with no reboot and no
-  signature check, since user-mode DLLs are verified only at install.
-- **Quickest, for a kernel-only change.** Sign as above, then replace
-  `avgpu.sys` in the driver store and reboot. The driver store copy is
-  `C:\Windows\System32\DriverStore\FileRepository\avgpu.inf_amd64_*\`; rename
-  the old file, don't delete it. Windows loads the store's copy at the next
-  start.
+| How | Steps | Reboot |
+|---|---|---|
+| **As an update would arrive** | Put the new files in `C:\av\package`, run `-Stage sign` (it signs `avgpu.sys` and the catalog), then `-Stage upgrade -Minutes 1`. That raises `DriverVer`'s build number by 1, installs over the running driver, and checks the adapter runs the new version. | no |
+| **A user-mode driver only** | Replace the DLL in the driver store directory below. The next process to load it gets the new one, with no signature check, since user-mode DLLs are verified only at install. | no |
+| **Quickest, for a kernel-only change** | Sign as above, then replace `avgpu.sys` in the driver store. Rename the old file, don't delete it. Windows loads the store's copy at the next start. | yes |
 
-If the new driver bugchecks at boot, boot the same disk without the device
-(drop `virtio-gpu-av-pci` and add `-vga std`) and put the old file back.
+The driver store copy is
+`C:\Windows\System32\DriverStore\FileRepository\avgpu.inf_amd64_*\`.
 
-## Device parameters
+> [!NOTE]
+> The upgrade count starts from the INF in `C:\av\package`, which each upgrade
+> rewrites. Copying the repository's INF over it resets the count, and an
+> upgrade to a version already installed keeps the old files without saying so:
+> compare a file's hash in the driver store after installing.
+
+If the new driver bugchecks at boot, boot the same disk without the device (drop
+`virtio-gpu-av-pci` and add `-vga std`) and put the old file back.
+
+## Configuration
+
+### Device parameters
 
 `-device virtio-gpu-av-pci,<property>=<value>,...` takes these properties.
 
@@ -488,9 +617,9 @@ If the new driver bugchecks at boot, boot the same disk without the device
 | `modes` | empty | The display's resolutions: `WxH` between commas, the first preferred, e.g. `2560x1440,1920x1080,1000x600`. Empty means the host monitors' own modes. It can be changed while the guest runs (see [Resolutions](#resolutions)). |
 | `refresh` | `60000` | The display's refresh rate in millihertz, 1000 to 1000000, the same for every mode: what Windows is told and what the display's blanks run at. It can be changed while the guest runs (see [Resolutions](#resolutions)). |
 | `display` | `on` | `off` makes a render-only adapter with no outputs, for a second host GPU. |
+| `vram-reserve` | `0` (auto) | MiB of host VRAM kept from guests. Auto keeps the larger of 1 GiB and an eighth of the card. Explicit values keep at least 256 MiB and leave at least 512 MiB. |
 | `record` | none | A file to write a wire recording to: everything the executor received. |
 | `record-limit` | `0` (256 MiB) | The recording's ceiling in bytes. |
-| `vram-reserve` | `0` (auto) | MiB of host VRAM kept from guests. Auto keeps the larger of 1 GiB and an eighth of the card. Explicit values keep at least 256 MiB and leave at least 512 MiB. |
 | `record-kinds` | all but `blob_bytes` | Comma-separated: `setup`, `batch`, `reply`, `fence`, `fault`, `blob`, `blob_bytes`, `all`. |
 | `record-wrap` | `off` | At the ceiling, wrap back to the file header instead of stopping. |
 
@@ -503,30 +632,30 @@ Stock virtio-gpu properties that matter here:
 | `vectors` | `11` | MSI-X vectors: 3 for the device's own sources (control, cursor, configuration) and 8 the contexts' fence queues share. This matches the INF's `MessageNumberLimit`. |
 | `xres`, `yres` | `1280`, `800` | The scanout size. The driver's standard list is clipped to it when the host offers no modes at all. |
 
-The runner's own options (`run_guest_suite.py --help`) cover the same ground
-for its VMs:
-- `--host-gpu` and `--all-gpus`;
-- `--executor` and `--renderer`;
-- `--hostmem`, `--outputs`, `--memory` and `--cpus`;
-- `--display` and `--vnc`;
-- `--net` and `--audio`;
-- `--record`, `--perfetto`, `--trace`, `--gdb` and `--hold`;
-- `--drivers32`, where the 32-bit drivers are (`build/guest32` by default).
+The runner's own options (`run_guest_suite.py --help`) cover the same ground for
+its VMs: `--host-gpu` and `--all-gpus`; `--executor` and `--renderer`;
+`--hostmem`, `--outputs`, `--memory` and `--cpus`; `--display` and `--vnc`;
+`--net` and `--audio`; `--record`, `--perfetto`, `--trace`, `--gdb` and
+`--hold`; and `--drivers32`, where the 32-bit drivers are (`build/guest32` by
+default).
 
-## Resolutions
+### Resolutions
 
 The host decides which resolutions the guest's display offers, and any size
-works, not only the standard ones. The rules:
+works, not only the standard ones:
 
-- **`modes=` set:** exactly those, in that order, with the first preferred.
-- **`modes=` empty (the default):** the modes of the monitors connected to the
-  host, read from `/sys/class/drm/<card>-<connector>/modes`. Interlaced modes
-  and those under 640x480 are left out, and the largest monitor's best mode is
-  preferred.
-- **No host monitor and no list:** the standard list, clipped to
-  `xres`x`yres`.
+```mermaid
+flowchart LR
+    A{"modes= set?"} -- yes --> B["exactly those, in that order,<br/>the first preferred"]
+    A -- "no (the default)" --> C{"a monitor on<br/>the host?"}
+    C -- yes --> D["the host monitors' modes,<br/>the largest monitor's best preferred"]
+    C -- no --> E["the standard list,<br/>clipped to xres x yres"]
+```
 
-On a running VM, over QMP:
+The host monitors' modes are read from `/sys/class/drm/<card>-<connector>/modes`;
+interlaced modes and those under 640x480 are left out.
+
+**On a running VM**, over QMP:
 
 ```bash
 tools/vm_resolution.py                        # what the display offers
@@ -542,29 +671,30 @@ Windows is showing makes it switch to the preferred mode, so offering one size
 sets the resolution. Offered modes appear in Settings → Display like a real
 monitor's.
 
-The refresh rate is one number for every mode, the device's `refresh` property
-in millihertz (`60000` is 60 Hz; `359980` is 359.98 Hz). It is given the same
-way, on the command line or live (`qom-set` on `refresh`), and a change
+**The refresh rate** is one number for every mode, the device's `refresh`
+property in millihertz (`60000` is 60 Hz; `359980` is 359.98 Hz). It is given the
+same way, on the command line or live (`qom-set` on `refresh`), and a change
 takes the same path as one of the modes: the device sets the display clock for
 every head to the new rate, raises the display event, and the driver offers
 exactly one rate at each resolution, so Windows switches to it with no restart.
 `modes=` stays `WxH`.
 
 What the driver does with the list:
+
 - **Size limits.** It keeps what Windows can use: 100x100 and up, and what an
-  EDID detailed timing can describe (up to 4095 per edge). Anything else is
-  left out, and the driver log says how many were taken. The detailed timing's
-  pixel clock holds 655.35 MHz at most, so a mode too fast for it at the
-  refresh rate (2560x1440 at 360 Hz) is stated there at the fastest rate that
-  fits; the monitor source modes Windows validates against carry the real one.
+  EDID detailed timing can describe (up to 4095 per edge). Anything else is left
+  out, and the driver log says how many were taken. The detailed timing's pixel
+  clock holds 655.35 MHz at most, so a mode too fast for it at the refresh rate
+  (2560x1440 at 360 Hz) is stated there at the fastest rate that fits; the
+  monitor source modes Windows validates against carry the real one.
 - **Pixel format.** Source modes are A8R8G8B8, because `cdd.dll` lists only
   R8G8B8, A8R8G8B8, R5G6B5 and P8 modes. Any other format leaves Windows a
   single made-up 800x600 and a greyed-out resolution setting.
 - **Saved configurations.** A configuration Windows saved for a mode the host
-  does not offer is refused before it is committed, so Windows falls back to
-  the preferred mode rather than failing at boot.
+  does not offer is refused before it is committed, so Windows falls back to the
+  preferred mode rather than failing at boot.
 
-## Environment variables
+### Environment variables
 
 These are read by QEMU, the executor library and `av-renderer`.
 
@@ -583,13 +713,16 @@ These are read by QEMU, the executor library and `av-renderer`.
 `VKD3D_VULKAN_DEVICE` is set by the executor itself, per device, to pin
 vkd3d-proton to the adapter's GPU. Don't set it yourself.
 
-## What the driver package installs
+### What the driver package installs
 
 `avgpu.inf` matches `PCI\VEN_1AF4&DEV_1050&SUBSYS_52561AF4`: the device on a
-host GPU with no PCI function, such as llvmpipe. The `sign` stage adds one
-model line for each present `PCI\VEN_xxxx&DEV_yyyy&SUBSYS_52561AF4`, named
-after the host GPU, because the IDs differ from host to host. It installs into
-the driver store and writes these values:
+host GPU with no PCI function, such as llvmpipe. The `sign` stage adds one model
+line for each present `PCI\VEN_xxxx&DEV_yyyy&SUBSYS_52561AF4`, named after the
+host GPU, because the IDs differ from host to host. At every start, the driver
+writes the host GPU's name to the device's description.
+
+<details>
+<summary><b>The registry values it writes, and why</b></summary>
 
 | Value | Where | Why |
 |---|---|---|
@@ -602,26 +735,38 @@ the driver store and writes these values:
 | `Scheduler\EnablePreemption = 0` | `GraphicsDrivers` | See [Limitations and nuances](#limitations-and-nuances). |
 | `MSISupported`, `MessageNumberLimit = 11` | device hardware key | MSI-X, one vector per interrupt source |
 
-At every start, the driver writes the host GPU's name to the device's
-description.
+</details>
 
 ## Debugging
 
-**Driver log.** `avgpu.sys` writes `avgpu: ...` lines to I/O port 0x402.
-With `-device isa-debugcon,iobase=0x402,chardev=...` they land in a host file
-(the runner's `<work>/avgpu.log`), across reboots and up to the moment of a
-bugcheck.
+| To see | Use |
+|---|---|
+| what the kernel driver is doing | the [driver log](#driver-log) on I/O port 0x402 |
+| why a guest call failed | the [guest user-mode logs](#guest-user-mode-logs) |
+| which thread is where, live | the [trace tables and `av_inspect.py`](#live-state-without-stopping-anything) |
+| where a frame's time went | the [timelines](#timelines) |
+| what crossed the wire, and replaying it | [wire recordings](#wire-recordings) |
+| a bugcheck | [bugchecks](#bugchecks) |
+| a shell in the guest | [`guest_shell.py`](#talking-to-the-guest) |
 
-**Guest user-mode logs.** Each driver appends to
-`C:\ProgramData\av\<module>-<pid>.log`, where the module is `avvk`, `avgl`,
-`avcl` or `avumd`. The logs name each refused or failed call, shader and
-kernel build errors, and the host's reason for a fault. An unhandled exception
-writes `C:\ProgramData\av\crash-<module>-<pid>.txt`.
+### Driver log
 
-**Live state, without stopping anything.** Every function opens with
-`AV_SCOPE("Class::method")`. Each binary keeps a table of which thread is in
-which function, since when, and which lock it holds or waits for, and a reader
-maps that table from outside:
+`avgpu.sys` writes `avgpu: ...` lines to I/O port 0x402. With
+`-device isa-debugcon,iobase=0x402,chardev=...` they land in a host file (the
+runner's `<work>/avgpu.log`), across reboots and up to the moment of a bugcheck.
+
+### Guest user-mode logs
+
+Each driver appends to `C:\ProgramData\av\<module>-<pid>.log`, where the module
+is `avvk`, `avgl`, `avcl` or `avumd`. The logs name each refused or failed call,
+shader and kernel build errors, and the host's reason for a fault. An unhandled
+exception writes `C:\ProgramData\av\crash-<module>-<pid>.txt`.
+
+### Live state, without stopping anything
+
+Every function opens with `AV_SCOPE("Class::method")`. Each binary keeps a table
+of which thread is in which function, since when, and which lock it holds or
+waits for, and a reader maps that table from outside:
 
 | Binary | Where its table is | Reader |
 |---|---|---|
@@ -633,23 +778,20 @@ maps that table from outside:
 threads, driver and device state, crash reports and the driver log. Add it with
 `claude mcp add av-inspect -- python3 tools/mcp/av_inspect.py`.
 
-**Timelines.**
-- `tools/perfetto_trace.py <qemu pid>` writes the host's scopes for
-  ui.perfetto.dev (QEMU started with `AV_PERFETTO=1`, or the runner's
-  `--perfetto`). With `--guest` it merges the guest's own scopes onto the same
-  clock.
-- `tools/frame_breakdown.py` cuts the result into frames and shows where each
-  one's time went.
-- `tools/profile_sample.sh` does all of the above for one sample.
-- `tools/frame_pacing.py run` records one WPR trace of the guest - scheduling,
-  CPU samples with stacks, DPCs and ISRs, dxgkrnl, DWM and the flip manager -
-  under a Windows.Graphics.Capture workload, and accounts for every DWM frame:
-  the capture rule, and where the render thread's time went in the slow ones.
-- `tools/guest_cpu_profile.py <process>` names a guest process's hottest
-  functions, the kernel's included.
+### Timelines
 
-**Wire recordings.** Record what crossed the wire, then print it or replay it
-into an executor library, on this GPU or another one:
+| Tool | What it gives |
+|---|---|
+| `tools/perfetto_trace.py <qemu pid>` | the host's scopes for ui.perfetto.dev (QEMU started with `AV_PERFETTO=1`, or the runner's `--perfetto`); with `--guest` it merges the guest's own scopes onto the same clock |
+| `tools/frame_breakdown.py` | the result cut into frames, with where each one's time went |
+| `tools/profile_sample.sh` | all of the above for one sample |
+| `tools/frame_pacing.py run` | one WPR trace of the guest (scheduling, CPU samples with stacks, DPCs and ISRs, dxgkrnl, DWM and the flip manager) under a Windows.Graphics.Capture workload, accounting for every DWM frame: the capture rule, and where the render thread's time went in the slow ones |
+| `tools/guest_cpu_profile.py <process>` | a guest process's hottest functions, the kernel's included |
+
+### Wire recordings
+
+Record what crossed the wire, then print it or replay it into an executor
+library, on this GPU or another one:
 
 ```bash
 -device virtio-gpu-av-pci,...,record=/tmp/run.av
@@ -660,15 +802,19 @@ build-qemu/avrecord replay /tmp/run.av --executor build-qemu/libav_executor.so
 The replay names every answer that differs. Records are flushed as they are
 taken, so a QEMU that dies inside a host driver leaves the batch that killed it.
 
-**Bugchecks.** QEMU with `hv-crash` reports the bugcheck code and parameters
-through the Hyper-V crash MSRs, and the runner names it without a dump. The
-runner collects minidumps, live kernel reports and, with `--memory-dump`,
-`MEMORY.DMP`, with the matching `avgpu.pdb` in `<work>/symbols/`. When the
-guest stops at a bugcheck (`-action panic=pause`),
-`tools/guest/read_bugcheck.py` reads it out through QEMU's gdbstub.
+### Bugchecks
 
-**Talking to the guest.** `tools/guest/guest_shell.py --work <dir>` runs
-PowerShell and programs and moves files over the guest agent:
+QEMU with `hv-crash` reports the bugcheck code and parameters through the
+Hyper-V crash MSRs, and the runner names it without a dump. The runner collects
+minidumps, live kernel reports and, with `--memory-dump`, `MEMORY.DMP`, with the
+matching `avgpu.pdb` in `<work>/symbols/`. When the guest stops at a bugcheck
+(`-action panic=pause`), `tools/guest/read_bugcheck.py` reads it out through
+QEMU's gdbstub.
+
+### Talking to the guest
+
+`tools/guest/guest_shell.py --work <dir>` runs PowerShell and programs and moves
+files over the guest agent:
 
 ```bash
 tools/guest/guest_shell.py --work build-guest-render ps 'Get-PnpDevice -Class Display'
@@ -682,12 +828,14 @@ A display miniport can be unit tested thoroughly on Linux, without booting
 Windows, if it is built for that from the first commit. That is the point of
 splitting `src/core`, which is portable, from `src/km`, which only translates.
 
-```
- L5  in-guest integration      real Windows, real dxgkrnl        run_guest_suite.py
- L4  loopback protocol         guest core ↔ device core, one process
- L3  fuzzing                   libFuzzer + ASan/UBSan on every parser
- L2  DDI conformance harness   a fake dxgkrnl drives the real DDI table
- L1  unit tests                every function, every branch, invariants, garbage
+```mermaid
+flowchart BT
+    L1["<b>L1 · unit tests</b><br/>every function, every branch, invariants, garbage"]
+    L2["<b>L2 · DDI conformance harness</b><br/>a fake dxgkrnl drives the real DDI table"]
+    L3["<b>L3 · fuzzing</b><br/>libFuzzer with ASan and UBSan on every parser"]
+    L4["<b>L4 · loopback protocol</b><br/>guest core and device core in one process"]
+    L5["<b>L5 · in-guest integration</b><br/>real Windows, real dxgkrnl: run_guest_suite.py"]
+    L1 --> L2 --> L3 --> L4 --> L5
 ```
 
 ```bash
@@ -706,23 +854,20 @@ tools/gate.sh                          # the full verdict: all configurations, a
 
 The 32-bit build of every guest program is in `build/guest32`, for testing the
 drivers a WoW64 process loads. One part of it is 64-bit only by nature:
-`avtest.exe av`'s raw-wire Vulkan scenarios hold the host's dispatchable
-handles (64-bit values) in Vulkan's pointer-sized handle types, which a 32-bit
-process cannot. The Vulkan ICD itself maps those handles through its own
-objects, so `avvk32.dll` is not affected.
+`avtest.exe av`'s raw-wire Vulkan scenarios hold the host's dispatchable handles
+(64-bit values) in Vulkan's pointer-sized handle types, which a 32-bit process
+cannot. The Vulkan ICD itself maps those handles through its own objects, so
+`avvk32.dll` is not affected.
 
-Side-by-side reports run the same program on the host natively and in the
-guest, and write the frames, their difference and the timings to HTML:
-- `tools/vulkan_report.py`
-- `tools/opengl_report.py`
-- `tools/opencl_report.py`
-- `tools/d3d11_report.py`
-- `tools/d3d12_report.py`
-- `tools/clgl_samples.py`
+**Side by side.** These reports run the same program on the host natively and in
+the guest, and write the frames, their difference and the timings to HTML:
+`tools/vulkan_report.py`, `tools/opengl_report.py`, `tools/opencl_report.py`,
+`tools/d3d11_report.py`, `tools/d3d12_report.py` and `tools/clgl_samples.py`.
 
 ## Working on the code
 
 Read these before writing code:
+
 - [`CLAUDE.md`](CLAUDE.md): the C++ rules;
 - [`docs/constitution.md`](docs/constitution.md): the principles.
 
@@ -737,21 +882,22 @@ The short version:
   assert.
 - **Everything is an object with state,** and dependencies are injected at
   construction. There are no static member functions, no stateless classes and
-  no free-function dumping grounds. The only process-lifetime state is at the
-  C entry points that have nowhere to put a `this`.
+  no free-function dumping grounds. The only process-lifetime state is at the C
+  entry points that have nowhere to put a `this`.
 - **IRQL is part of the signature.** Each public method declares its ceiling
   with `platform_.require_irql_at_most(...)`. `MockPlatform` enforces the
-  ceiling, and also fails any allocation, block or mutex at `Irql::dispatch`,
-  so a violation fails a unit test instead of bugchecking a VM.
+  ceiling, and also fails any allocation, block or mutex at `Irql::dispatch`, so
+  a violation fails a unit test instead of bugchecking a VM.
 - **Every function opens with `AV_SCOPE`.** `tools/scope_marks.py --apply`
   writes the marks.
 - **Never hand-edit `src/proto/generated/`.** Fix the generator
   (`tools/codegen/`) and regenerate. A protocol ID change is a wire change.
 
-`tools/check_design.py` and `tools/check_symbol_tests.py` enforce the rules,
-and `tools/gate.sh` runs every gate.
+`tools/check_design.py` and `tools/check_symbol_tests.py` enforce the rules, and
+`tools/gate.sh` runs every gate.
 
-## Source layout
+<details>
+<summary><b>Source layout</b></summary>
 
 ```
 src/core/                     the foundation every binary links: support/, trace/, log/, platform/
@@ -787,10 +933,15 @@ tools/                        gates, fetches, generators, reports, profilers
   dxvk-patches/  vkd3d-proton-patches/   what the host's Direct3D is patched with
 cmake/                        the Windows kernel and user-mode cross toolchains (clang-cl, lld-link; user mode x64 or x86)
 third_party/                  fetched and pinned: windows-kit, khronos, qemu, dxvk, vkd3d-proton, loaders, CTS
+docs/images/                  the diagrams in this README; architecture-*.svg come from tools/readme_diagram.py
 ```
+
+</details>
 
 ## License
 
 accel-virt is licensed under the [Apache License 2.0](LICENSE).
 
-Files that name their own license keep it: the QEMU device in `src/device/qemu/` is GPL-2.0-or-later, as it is built into QEMU, and the projects fetched into `third_party/` keep their own licenses.
+Files that name their own license keep it: the QEMU device in `src/device/qemu/`
+is GPL-2.0-or-later, as it is built into QEMU, and the projects fetched into
+`third_party/` keep their own licenses.
