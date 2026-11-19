@@ -788,3 +788,9 @@ tools/                        gates, fetches, generators, reports, profilers
 cmake/                        the Windows kernel and user-mode cross toolchains (clang-cl, lld-link; user mode x64 or x86)
 third_party/                  fetched and pinned: windows-kit, khronos, qemu, dxvk, vkd3d-proton, loaders, CTS
 ```
+
+## License
+
+accel-virt is licensed under the [Apache License 2.0](LICENSE).
+
+Files that name their own license keep it: the QEMU device in `src/device/qemu/` is GPL-2.0-or-later, as it is built into QEMU, and the projects fetched into `third_party/` keep their own licenses.
