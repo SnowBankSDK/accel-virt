@@ -1,0 +1,28 @@
+From: accel-virt
+Subject: [PATCH] spirv: a 16-bit shader input or output declares the StorageInputOutput16 capability
+
+SpirvBuilder emits 16-bit input and output variables without the
+StorageInputOutput16 capability that allows them, so the module uses a
+feature it does not declare (spirv-val does not flag it) and a driver may
+run it without having enabled that feature. emitDclIoVar now enables the
+capability for an f16, i16 or u16 I/O variable. Applied to DXVK's
+subprojects/dxbc-spirv by tools/build_d3d_runtime.sh; goes with
+dxvk-patches/0017.
+---
+diff --git a/spirv/spirv_builder.cpp b/spirv/spirv_builder.cpp
+index c43a987..36b4d46 100644
+--- a/spirv/spirv_builder.cpp
++++ b/spirv/spirv_builder.cpp
+@@ -855,6 +855,12 @@ void SpirvBuilder::emitDclIoVar(const ir::Op& op) {
+   uint32_t typeId = getIdForType(op.getType());
+   uint32_t varId = getIdForDef(op.getDef());
+ 
++  /* A 16-bit input or output is storage the device must have enabled */
++  auto ioScalar = op.getType().getBaseType(0u).getBaseType();
++
++  if (ioScalar == ir::ScalarType::eF16 || ioScalar == ir::ScalarType::eI16 || ioScalar == ir::ScalarType::eU16)
++    enableCapability(spv::CapabilityStorageInputOutput16);
++
+   emitDebugName(op.getDef(), varId);
+ 
+   uint32_t ptrTypeId = getIdForPtrType(typeId, storageClass);

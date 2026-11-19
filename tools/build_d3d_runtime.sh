@@ -49,6 +49,7 @@ apply_series() {
 }
 
 apply_series "$ROOT/third_party/dxvk" "$ROOT"/tools/dxvk-patches/*.patch
+apply_series "$ROOT/third_party/dxvk/subprojects/dxbc-spirv" "$ROOT"/tools/dxvk-patches/dxbc-spirv/*.patch
 
 apply_series "$ROOT/third_party/vkd3d-proton" "$ROOT"/tools/vkd3d-proton-patches/*.patch
 
