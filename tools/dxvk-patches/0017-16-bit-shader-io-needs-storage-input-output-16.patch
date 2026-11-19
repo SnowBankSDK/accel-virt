@@ -1,0 +1,44 @@
+From: accel-virt
+Subject: [PATCH] shaders: 16-bit types in shader inputs and outputs only where the device has storageInputOutput16
+
+DxvkDevice sets Supports16BitArithmetic on shaderFloat16 alone, and the
+shader compiler then lowers min-precision types to 16-bit ones in shader
+inputs and outputs too, which needs storageInputOutput16. A device with
+16-bit arithmetic but no 16-bit I/O (Intel gen 9 with ANV, a UHD 630 on
+Mesa 26.0.8) runs such shaders with a feature it does not have: the result
+is undefined, and Direct2D's glyph shader draws noise or nothing, so
+DirectWrite text, font icons and the boot spinner are garbled while GDI text
+is clean. The flag now needs both features, and storageInputOutput16 is
+requested where the device has it. Devices with both (Radeon) keep 16-bit
+types. The SPIR-V side, the capability on the I/O variables, is
+dxvk-patches/dxbc-spirv/0001.
+---
+diff --git a/src/dxvk/dxvk_device.cpp b/src/dxvk/dxvk_device.cpp
+index 02218254..f8b591a7 100644
+--- a/src/dxvk/dxvk_device.cpp
++++ b/src/dxvk/dxvk_device.cpp
+@@ -765,7 +765,11 @@ namespace dxvk {
+     m_shaderOptions.minStorageBufferAlignment =
+       m_properties.core.properties.limits.minStorageBufferOffsetAlignment;
+ 
+-    if (m_features.vk12.shaderFloat16)
++    // Min-precision types become 16-bit ones in shader inputs and outputs too,
++    // which takes storageInputOutput16: a device with 16-bit arithmetic but no
++    // 16-bit I/O (Intel gen 9) keeps 32-bit types, or its shaders use a feature
++    // it does not have (Direct2D's glyph shader draws noise on a UHD 630).
++    if (m_features.vk12.shaderFloat16 && m_features.vk11.storageInputOutput16)
+       m_shaderOptions.flags.set(DxvkShaderCompileFlag::Supports16BitArithmetic);
+ 
+     if (m_features.vk11.storagePushConstant16 && m_features.vk12.storagePushConstant8)
+diff --git a/src/dxvk/dxvk_device_info.cpp b/src/dxvk/dxvk_device_info.cpp
+index 60ce074d..854ffb42 100644
+--- a/src/dxvk/dxvk_device_info.cpp
++++ b/src/dxvk/dxvk_device_info.cpp
+@@ -877,6 +877,7 @@ namespace dxvk {
+ 
+       ENABLE_FEATURE(vk11, shaderDrawParameters, true),
+       ENABLE_FEATURE(vk11, storageBuffer16BitAccess, true),
++      ENABLE_FEATURE(vk11, storageInputOutput16, false),
+       ENABLE_FEATURE(vk11, storagePushConstant16, false),
+ 
+       ENABLE_FEATURE(vk12, bufferDeviceAddress, true),
