@@ -1,0 +1,33 @@
+"area: kernel driver":
+  - changed-files:
+      - any-glob-to-any-file: ["src/miniport/**", "src/km/**"]
+"area: user-mode drivers":
+  - changed-files:
+      - any-glob-to-any-file: ["src/icd/**", "src/um/**"]
+"area: device":
+  - changed-files:
+      - any-glob-to-any-file: ["src/device/**"]
+"area: executor":
+  - changed-files:
+      - any-glob-to-any-file: ["src/executor/**"]
+"area: protocol":
+  - changed-files:
+      - any-glob-to-any-file: ["src/proto/**", "tools/codegen/**"]
+"api: direct3d":
+  - changed-files:
+      - any-glob-to-any-file: ["src/icd/d3d/**", "src/um/d3d/**", "src/executor/d3d/**", "tools/dxvk-patches/**", "tools/vkd3d-proton-patches/**"]
+"api: vulkan":
+  - changed-files:
+      - any-glob-to-any-file: ["src/icd/vulkan/**", "src/um/vulkan/**", "src/executor/vulkan/**"]
+"api: opengl":
+  - changed-files:
+      - any-glob-to-any-file: ["src/icd/opengl/**", "src/um/opengl/**", "src/executor/opengl/**"]
+"api: opencl":
+  - changed-files:
+      - any-glob-to-any-file: ["src/icd/opencl/**", "src/um/opencl/**", "src/executor/opencl/**"]
+"tests":
+  - changed-files:
+      - any-glob-to-any-file: ["tests/**"]
+"documentation":
+  - changed-files:
+      - any-glob-to-any-file: ["**/*.md", "docs/**"]

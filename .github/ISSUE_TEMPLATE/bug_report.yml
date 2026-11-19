@@ -1,0 +1,72 @@
+name: Bug report
+description: A driver, device or executor bug in accel-virt.
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If you use accel-virt through LSW, report there first: [LSW issues](https://github.com/acceleration3/linux-subsystem-windows/issues/new/choose). Its log archive carries everything below.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Direct3D 11
+        - Direct3D 12
+        - Direct3D 9
+        - Vulkan
+        - OpenGL
+        - OpenCL
+        - Desktop, display or modes
+        - Kernel driver (avgpu.sys) or a bugcheck
+        - QEMU device or executor
+        - Host GPU fault, hang or reset
+        - Building
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What ran, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: A program, sample or probe that shows it (`avd3d11probe`, a `samples/` program, ...), and the QEMU command line or runner options.
+      render: shell
+  - type: input
+    id: commit
+    attributes:
+      label: accel-virt commit
+      description: "`git rev-parse --short HEAD`, or the LSW version it came with."
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: Host GPU, driver and kernel
+      placeholder: AMD Radeon RX 9070 XT, Mesa 26.2.6 RADV, Linux 7.3
+    validations:
+      required: true
+  - type: input
+    id: guest
+    attributes:
+      label: Windows build
+      placeholder: 10.0.26200
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        Attach what applies: the driver log (`avgpu.log` from `isa-debugcon`), the guest user-mode logs (`C:\ProgramData\av\*.log`), QEMU's output, a host kernel log for a GPU fault (`journalctl -k`), or a small wire recording (`record=`).
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched the existing issues and this is not one of them.
+          required: true
