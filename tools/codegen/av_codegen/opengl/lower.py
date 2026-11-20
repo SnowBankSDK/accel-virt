@@ -140,7 +140,8 @@ def _lower_command(raw: RawCommand, prof: Profile, tier: str) -> Command:
         if role is Role.STRING_IN:
             length = Length(LengthKind.STRING)
         param = Param(name=raw_param.name, type=raw_param.type, role=role,
-                      length=length, element=raw_param.type.base)
+                      length=length, element=raw_param.type.base,
+                      object_class=raw_param.object_class or "")
         if role is Role.STRING_ARRAY_IN:
             param.has_lengths = any(other.name == "length"
                                     for other in raw.params)
@@ -159,7 +160,10 @@ def lower(raw: RawRegistry, prof: Profile) -> Registry:
                    handwritten=set(prof.handwritten),
                    answered_by_guest=set(prof.answered_by_guest),
                    synchronous=set(prof.synchronous),
-                   read_into_blob=set(prof.read_into_blob))
+                   read_into_blob=set(prof.read_into_blob),
+                   reads_window=set(prof.reads_window),
+                   reads_buffers=set(prof.reads_buffers),
+                   orders_mappings=set(prof.orders_mappings))
     wanted: list[tuple[str, str]] = []
     seen: set[str] = set()
     for tier, features in prof.tiers.items():

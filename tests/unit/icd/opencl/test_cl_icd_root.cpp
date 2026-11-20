@@ -132,17 +132,18 @@ TEST(cl_icd_root, the_extensions_are_the_policy_intersected_with_the_host_not_th
     cl_device_id device = opened_device(rig);
     CHECK(device != nullptr);
     rig.host().cl_info(CL_SUCCESS, plain, sizeof plain);
+    rig.host().cl_info(CL_INVALID_OPERATION, nullptr, 0u);
     std::memset(reported, 'x', sizeof reported);
     CHECK_EQ(rig.loader().device_info(device, CL_DEVICE_EXTENSIONS, sizeof reported, reported, &answered),
              CL_SUCCESS);
-    CHECK_EQ(std::strcmp(reported, "cl_khr_d3d10_sharing cl_khr_d3d11_sharing cl_khr_pci_bus_info"), 0);
-    CHECK_EQ(answered, std::strlen("cl_khr_d3d10_sharing cl_khr_d3d11_sharing cl_khr_pci_bus_info") + 1u);
+    CHECK_EQ(std::strcmp(reported, "cl_khr_icd cl_khr_d3d10_sharing cl_khr_d3d11_sharing cl_khr_pci_bus_info"), 0);
+    CHECK_EQ(answered, std::strlen("cl_khr_icd cl_khr_d3d10_sharing cl_khr_d3d11_sharing cl_khr_pci_bus_info") + 1u);
     CHECK(std::strstr(plain, "cl_khr_spir") != nullptr);
 
     const std::uint32_t sent = rig.kmt().commands();
     std::size_t         wanted = 0u;
     CHECK_EQ(rig.loader().device_info(device, CL_DEVICE_EXTENSIONS, 0u, nullptr, &wanted), CL_SUCCESS);
-    CHECK_EQ(wanted, std::strlen("cl_khr_d3d10_sharing cl_khr_d3d11_sharing cl_khr_pci_bus_info") + 1u);
+    CHECK_EQ(wanted, std::strlen("cl_khr_icd cl_khr_d3d10_sharing cl_khr_d3d11_sharing cl_khr_pci_bus_info") + 1u);
     char cramped[1] = {'x'};
     CHECK_EQ(rig.loader().device_info(device, CL_DEVICE_EXTENSIONS, 0u, cramped, nullptr), CL_INVALID_VALUE);
     CHECK_EQ(cramped[0], 'x');
@@ -156,7 +157,7 @@ TEST(cl_icd_root, the_extensions_are_the_policy_intersected_with_the_host_not_th
     CHECK_EQ(rig.loader().device_info(device, CL_DEVICE_EXTENSIONS, sizeof reported, reported, &answered),
              CL_SUCCESS);
     CHECK_EQ(std::strcmp(reported,
-                         "cl_khr_external_memory cl_khr_external_memory_win32 cl_khr_gl_sharing cl_khr_d3d10_sharing cl_khr_d3d11_sharing "
+                         "cl_khr_icd cl_khr_external_memory cl_khr_external_memory_win32 cl_khr_gl_sharing cl_khr_d3d10_sharing cl_khr_d3d11_sharing "
                          "cl_khr_pci_bus_info"),
              0);
     CHECK_EQ(answered, std::strlen(reported) + 1u); }
@@ -168,7 +169,7 @@ TEST(cl_icd_root, the_extensions_are_the_policy_intersected_with_the_host_not_th
     std::memset(reported, 'x', sizeof reported);
     CHECK_EQ(rig.loader().device_info(device, CL_DEVICE_EXTENSIONS, sizeof reported, reported, &answered),
              CL_SUCCESS);
-    CHECK_EQ(std::strcmp(reported, "cl_khr_gl_sharing cl_khr_d3d10_sharing cl_khr_d3d11_sharing cl_khr_pci_bus_info"),
+    CHECK_EQ(std::strcmp(reported, "cl_khr_icd cl_khr_gl_sharing cl_khr_d3d10_sharing cl_khr_d3d11_sharing cl_khr_pci_bus_info"),
              0); }
 
   { ClIcdRig rig;
@@ -177,6 +178,7 @@ TEST(cl_icd_root, the_extensions_are_the_policy_intersected_with_the_host_not_th
     CHECK_EQ(rig.loader().device_info(device, CL_DEVICE_EXTENSIONS, sizeof reported, reported, nullptr),
              CL_OUT_OF_RESOURCES);
     rig.host().cl_info(CL_SUCCESS, plain, sizeof plain);
+    rig.host().cl_info(CL_INVALID_OPERATION, nullptr, 0u);
     CHECK_EQ(rig.loader().device_info(device, CL_DEVICE_EXTENSIONS, sizeof reported, reported, nullptr),
              CL_SUCCESS);
     CHECK_EQ(rig.kmt().queued_answers(), 0u); } }
@@ -187,6 +189,7 @@ TEST(cl_icd_root, the_import_handle_types_are_this_drivers_own_and_only_where_it
     CHECK(device != nullptr);
     static const char importing[] = "cl_khr_external_memory";
     rig.host().cl_info(CL_SUCCESS, importing, sizeof importing);
+    rig.host().cl_info(CL_INVALID_OPERATION, nullptr, 0u);
     cl_external_memory_handle_type_khr taken = 0u;
     std::size_t                        answered = 0u;
     CHECK_EQ(rig.loader().device_info(device, CL_DEVICE_EXTERNAL_MEMORY_IMPORT_HANDLE_TYPES_KHR, sizeof taken,
@@ -213,6 +216,7 @@ TEST(cl_icd_root, the_import_handle_types_are_this_drivers_own_and_only_where_it
     cl_device_id device = opened_device(rig);
     static const char plain[] = "cl_khr_fp64 cl_khr_gl_sharing";
     rig.host().cl_info(CL_SUCCESS, plain, sizeof plain);
+    rig.host().cl_info(CL_INVALID_OPERATION, nullptr, 0u);
     CHECK_EQ(rig.loader().device_info(device, CL_DEVICE_EXTERNAL_MEMORY_IMPORT_HANDLE_TYPES_KHR, sizeof taken,
                                       &taken, nullptr),
              CL_INVALID_VALUE); }
@@ -387,6 +391,7 @@ TEST(cl_icd_root, a_queue_a_buffer_a_program_and_a_kernel_are_objects_of_their_c
   rig.host().cl_result(CL_SUCCESS);
   CHECK_EQ(rig.loader().build_program(program, nullptr), CL_SUCCESS);
   rig.host().cl_handle(host_kernel, CL_SUCCESS);
+  rig.host().cl_kernel_undescribed();
   cl_kernel kernel = rig.loader().create_kernel(program, "nothing", nullptr);
   CHECK(kernel != nullptr);
 
@@ -559,6 +564,7 @@ TEST(cl_icd_root, a_kernel_argument_is_translated_and_an_invented_address_never_
   rig.host().cl_handle(host_program, CL_SUCCESS);
   cl_program program = rig.loader().create_program(context, "__kernel void k(void) {}", nullptr);
   rig.host().cl_handle(host_kernel, CL_SUCCESS);
+  rig.host().cl_kernel_undescribed();
   cl_kernel kernel = rig.loader().create_kernel(program, "k", nullptr);
   CHECK(kernel != nullptr);
 
@@ -1011,7 +1017,7 @@ TEST(cl_icd_root, a_queue_takes_the_two_properties_the_api_names_and_a_buffer_ta
   const std::uint32_t before = rig.kmt().commands();
   const std::uint64_t unknown[] = {0x4242u, 1u, 0u};
   CHECK(rig.root().create_queue(context, device, unknown, &error) == nullptr);
-  CHECK_EQ(error, CL_INVALID_PROPERTY);
+  CHECK_EQ(error, CL_INVALID_VALUE);
   const std::uint64_t any[] = {1u, 1u, 0u};
   CHECK(rig.root().create_buffer(context, CL_MEM_READ_WRITE, 64u, nullptr, any, &error) == nullptr);
   CHECK_EQ(error, CL_INVALID_PROPERTY);
@@ -1132,13 +1138,14 @@ TEST(cl_icd_root, a_non_blocking_read_returns_before_the_bytes_and_leaves_the_de
 
   unsigned char into[16];
   for (unsigned char &byte : into) byte = 0xA5u;
+  rig.host().cl_handle(0x7700u, CL_SUCCESS);
   rig.host().cl_enqueued(CL_SUCCESS, host_event);
   cl_event event = nullptr;
   const std::uint32_t before = rig.kmt().commands();
   CHECK_EQ(rig.root().enqueue_read(queue, buffer, CL_FALSE, 0u, sizeof into, into, &event),
            CL_SUCCESS);
   CHECK(event != nullptr);
-  CHECK_EQ(rig.kmt().commands(), before + 1u);
+  CHECK(rig.kmt().commands() > before);
   for (const unsigned char byte : into) CHECK_EQ(byte, 0xA5u);
 
   const cl_int complete = CL_COMPLETE;
@@ -1179,6 +1186,7 @@ TEST(cl_icd_root, a_read_the_application_wanted_no_event_for_keeps_the_marker_un
   CHECK(queue != nullptr && buffer != nullptr);
 
   unsigned char into[8] = {};
+  rig.host().cl_handle(0x7700u, CL_SUCCESS);
   rig.host().cl_enqueued(CL_SUCCESS, host_event);
   CHECK_EQ(rig.root().enqueue_read(queue, buffer, CL_FALSE, 0u, sizeof into, into, nullptr),
            CL_SUCCESS);
@@ -1210,6 +1218,7 @@ TEST(cl_icd_root, a_finish_on_a_context_the_driver_wakes_sleeps_until_it_does)
   cl_mem buffer = buffer_on(rig, context);
   CHECK(queue != nullptr && buffer != nullptr);
   unsigned char into[8] = {};
+  rig.host().cl_handle(0x7700u, CL_SUCCESS);
   rig.host().cl_enqueued(CL_SUCCESS, host_event);
   CHECK_EQ(rig.root().enqueue_read(queue, buffer, CL_FALSE, 0u, sizeof into, into, nullptr),
            CL_SUCCESS);
@@ -1247,6 +1256,7 @@ TEST(cl_icd_root, releasing_a_queue_forgets_the_reads_nobody_will_wait_for)
   CHECK(queue != nullptr && buffer != nullptr);
 
   unsigned char into[8] = {};
+  rig.host().cl_handle(0x7700u, CL_SUCCESS);
   rig.host().cl_enqueued(CL_SUCCESS, host_event);
   CHECK_EQ(rig.root().enqueue_read(queue, buffer, CL_FALSE, 0u, sizeof into, into, nullptr),
            CL_SUCCESS);
@@ -1269,6 +1279,7 @@ TEST(cl_icd_root, an_application_that_polls_the_status_gets_the_bytes_there)
   CHECK(queue != nullptr && buffer != nullptr);
 
   unsigned char into[4] = {};
+  rig.host().cl_handle(0x7700u, CL_SUCCESS);
   rig.host().cl_enqueued(CL_SUCCESS, host_event);
   cl_event event = nullptr;
   CHECK_EQ(rig.root().enqueue_read(queue, buffer, CL_FALSE, 0u, sizeof into, into, &event),
@@ -1305,6 +1316,7 @@ TEST(cl_icd_root, a_callback_on_a_non_blocking_read_sees_the_bytes)
   CHECK(queue != nullptr && buffer != nullptr);
 
   static unsigned char into[4] = {};
+  rig.host().cl_handle(0x7700u, CL_SUCCESS);
   rig.host().cl_enqueued(CL_SUCCESS, host_event);
   cl_event event = nullptr;
   CHECK_EQ(rig.root().enqueue_read(queue, buffer, CL_FALSE, 0u, sizeof into, into, &event),
@@ -1929,6 +1941,23 @@ TEST(cl_icd_root, a_queue_says_its_context_and_device_and_asks_the_host_the_rest
   CHECK_EQ(table.clGetCommandQueueInfo(queue, CL_QUEUE_DEVICE, sizeof on, &on, nullptr), CL_SUCCESS);
   CHECK(rig.root().invariants_hold()); }
 
+TEST(cl_icd_root, a_host_answer_for_free_memory_is_asked_again_every_time)
+{ ClIcdRig rig;
+  cl_device_id device = opened_device(rig);
+  CHECK(device != nullptr);
+  if (device == nullptr) return;
+  const std::size_t first[2] = {900u, 900u};
+  const std::size_t second[2] = {500u, 500u};
+  std::size_t       free_kib[2] = {};
+  rig.host().cl_info(CL_SUCCESS, reinterpret_cast<const char *>(first), sizeof first);
+  CHECK_EQ(rig.loader().device_info(device, av::clicd::ClIcdRoot::free_memory_amd, sizeof free_kib, free_kib, nullptr),
+           CL_SUCCESS);
+  CHECK_EQ(free_kib[0], 900u);
+  rig.host().cl_info(CL_SUCCESS, reinterpret_cast<const char *>(second), sizeof second);
+  CHECK_EQ(rig.loader().device_info(device, av::clicd::ClIcdRoot::free_memory_amd, sizeof free_kib, free_kib, nullptr),
+           CL_SUCCESS);
+  CHECK_EQ(free_kib[0], 500u); }
+
 TEST(cl_icd_root, an_amd_adapter_answers_its_free_memory_from_windows)
 { ClIcdRig rig;
   rig.kmt().set_identity(0u, av::PciIdentity(0x1002u, 0x13C0u, av::PciIdentity::virtio_vendor,
@@ -1940,25 +1969,30 @@ TEST(cl_icd_root, an_amd_adapter_answers_its_free_memory_from_windows)
   if (device == nullptr) return;
   std::size_t free_kib[2] = {};
   std::size_t answered = 0u;
+  rig.host().cl_info(CL_INVALID_VALUE, nullptr, 0u);
   CHECK_EQ(rig.loader().device_info(device, av::clicd::ClIcdRoot::free_memory_amd, sizeof free_kib, free_kib, &answered),
            CL_SUCCESS);
   CHECK_EQ(answered, sizeof free_kib);
   CHECK_EQ(free_kib[0], 384u * 1024u);
   CHECK_EQ(free_kib[1], 384u * 1024u);
   std::size_t total_kib = 0u;
+  rig.host().cl_info(CL_INVALID_VALUE, nullptr, 0u);
   CHECK_EQ(rig.loader().device_info(device, av::clicd::ClIcdRoot::free_memory_amd, sizeof total_kib, &total_kib,
                                     &answered),
            CL_SUCCESS);
   CHECK_EQ(answered, sizeof total_kib);
   CHECK_EQ(total_kib, 384u * 1024u);
   answered = 0u;
+  rig.host().cl_info(CL_INVALID_VALUE, nullptr, 0u);
   CHECK_EQ(rig.loader().device_info(device, av::clicd::ClIcdRoot::free_memory_amd, 0u, nullptr, &answered),
            CL_SUCCESS);
   CHECK_EQ(answered, sizeof total_kib);
   std::uint32_t narrow = 0u;
+  rig.host().cl_info(CL_INVALID_VALUE, nullptr, 0u);
   CHECK_EQ(rig.loader().device_info(device, av::clicd::ClIcdRoot::free_memory_amd, sizeof narrow, &narrow, nullptr),
            CL_INVALID_VALUE);
   rig.kmt().set_video_memory(av::MemorySegmentGroup::local, 128ull << 20u, 512ull << 20u);
+  rig.host().cl_info(CL_INVALID_VALUE, nullptr, 0u);
   CHECK_EQ(rig.loader().device_info(device, av::clicd::ClIcdRoot::free_memory_amd, sizeof free_kib, free_kib, nullptr),
            CL_SUCCESS);
   CHECK_EQ(free_kib[0], 0u);

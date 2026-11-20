@@ -30,7 +30,7 @@ MockExecutorOps::MockExecutorOps(std::uint32_t sub_apis)
       held_(false), waiting_(0u), executors_{}, fail_create_(0u), created_(0u), destroyed_(0u), executed_(0u), kept_(nullptr), kept_length_(0u), ids_{},
       sizes_{}, last_sub_api_(0u), misuses_(0u), imports_{}, refuse_import_(0u), withhold_handle_(0u),
       answered_handle_(0u), option_creates_(0u), signals_set_(0u), signal_(nullptr), signal_context_(nullptr),
-      last_options_{}, last_share_(nullptr), last_share_live_(false), creates_held_(false), creates_waiting_(0u)
+      last_options_{}, last_share_(nullptr), last_share_live_(false), creates_held_(false), held_sub_apis_(0u), creates_waiting_(0u)
 {
     pthread_mutex_init(&lock_, nullptr);
     pthread_cond_init(&released_, nullptr);
@@ -54,6 +54,19 @@ MockExecutorOps::MockExecutorOps(std::uint32_t sub_apis)
         memory->held = false;
         mock.settle(*memory);
     };
+    table_.place_memory = [](void *opaque, AvExecutor *handle, std::uint64_t size, std::uint32_t request,
+                             AvHostMemory *memory) -> std::uint32_t {
+        MockExecutorOps &mock = mock_of(opaque);
+        Executor *const  executor = mock.executor_of(handle);
+        if (executor == nullptr || memory == nullptr) return 1u;
+        {
+            Lock lock(mock.lock_);
+            mock.placements_++;
+            mock.last_placement_ = MemoryRequest{executor->domain, 0u, size, request};
+            if (mock.fires(mock.refuse_placement_)) return 1u;
+        }
+        return mock.allocate(executor->domain, 0x7000000000000000ull + mock.placements_, size, request, *memory);
+    };
     table_.import_blob = [](void *opaque, AvExecutor *handle, std::uint64_t blob_id,
                             std::uint64_t memory_key, std::uint32_t role, std::uint64_t arena_base) -> std::uint32_t {
         MockExecutorOps &mock = mock_of(opaque);
@@ -63,6 +76,8 @@ MockExecutorOps::MockExecutorOps(std::uint32_t sub_apis)
         if (mock.fires(mock.refuse_import_)) return AV_UNDECODABLE;
         Memory *const memory = mock.held_memory_of(executor->domain, memory_key);
         if (memory == nullptr) return AV_UNDECODABLE;
+        for (const Import &import : mock.imports_)
+            if (import.live && import.executor == handle && import.blob_id == blob_id) return AV_UNDECODABLE;
         for (Import &import : mock.imports_) {
             if (import.live) continue;
             import = Import{blob_id, memory_key, memory, handle, true};
@@ -255,6 +270,31 @@ MockExecutorOps::MockExecutorOps(std::uint32_t sub_apis)
         mock.lose_host_device();
         return AV_EXECUTED;
     };
+    table_.extend_lease = [](void *opaque, AvExecutor *, std::uint32_t kind, std::uint64_t bytes,
+                             std::uint64_t least) -> std::uint64_t {
+        MockExecutorOps &mock = mock_of(opaque);
+        mock.lease_extensions_++;
+        mock.last_lease_kind_.store(kind);
+        mock.last_lease_least_.store(least);
+        const std::uint64_t room = mock.lease_room_.load();
+        const std::uint64_t granted = bytes <= room ? bytes : least <= room ? least : 0u;
+        mock.lease_room_.store(room == UINT64_MAX ? room : room - granted);
+        return granted;
+    };
+    table_.leave_thread = [](void *opaque) -> void * {
+        MockExecutorOps &mock = mock_of(opaque);
+        mock.threads_left_++;
+        return &mock.threads_left_;
+    };
+    table_.thread_joined = [](void *opaque, void *left) {
+        MockExecutorOps &mock = mock_of(opaque);
+        if (left == &mock.threads_left_) mock.threads_joined_++;
+    };
+    table_.return_lease = [](void *opaque, AvExecutor *, std::uint32_t kind, std::uint64_t bytes) {
+        MockExecutorOps &mock = mock_of(opaque);
+        mock.last_lease_kind_.store(kind);
+        mock.lease_returned_ += bytes;
+    };
     table_.gpu_progress = [](void *, AvExecutor *, std::uint64_t *marked, std::uint64_t *reached) {
         *marked = 0u;
         *reached = 0u;
@@ -268,7 +308,8 @@ MockExecutorOps::MockExecutorOps(std::uint32_t sub_apis)
             mock.last_options_ = options != nullptr ? *options : AvContextOptions{};
             mock.last_share_ = share;
             mock.creates_waiting_++;
-            while (mock.creates_held_) pthread_cond_wait(&mock.released_, &mock.lock_);
+            while (mock.creates_held_ || (mock.held_sub_apis_ & sub_api) != 0u)
+                pthread_cond_wait(&mock.released_, &mock.lock_);
             mock.creates_waiting_--;
         }
         const bool live = mock.alive(share);
@@ -394,10 +435,16 @@ void MockExecutorOps::hold_creates()
     Lock lock(lock_);
     creates_held_ = true;
 }
+void MockExecutorOps::hold_creates_of(std::uint32_t sub_api)
+{
+    Lock lock(lock_);
+    held_sub_apis_ |= sub_api;
+}
 void MockExecutorOps::release_creates()
 {
     Lock lock(lock_);
     creates_held_ = false;
+    held_sub_apis_ = 0u;
     pthread_cond_broadcast(&released_);
 }
 std::uint32_t     MockExecutorOps::creates_waiting() { Lock lock(lock_); return creates_waiting_; }
@@ -497,6 +544,9 @@ void MockExecutorOps::withhold_memory_descriptor_at(std::uint32_t nth)
 void MockExecutorOps::shrink_memory_at(std::uint32_t nth) { Lock lock(lock_); shrink_memory_ = nth; }
 void MockExecutorOps::round_memory_to(std::uint64_t bytes) { Lock lock(lock_); memory_rounding_ = bytes; }
 void MockExecutorOps::set_memory_caching(std::uint32_t caching) { Lock lock(lock_); memory_caching_ = caching; }
+std::uint32_t MockExecutorOps::placements() { Lock lock(lock_); return placements_; }
+MockExecutorOps::MemoryRequest MockExecutorOps::last_placement() { Lock lock(lock_); return last_placement_; }
+void MockExecutorOps::refuse_placement_at(std::uint32_t nth) { Lock lock(lock_); refuse_placement_ = nth; }
 std::uint32_t MockExecutorOps::memory_allocations() { Lock lock(lock_); return memory_allocations_; }
 std::uint32_t MockExecutorOps::memory_frees() { Lock lock(lock_); return memory_frees_; }
 
@@ -602,6 +652,12 @@ void MockExecutorOps::lose_host_device()
 void MockExecutorOps::set_losable(bool losable) { losable_.store(losable); }
 
 std::uint32_t MockExecutorOps::losses() { return losses_.load(); }
+
+void          MockExecutorOps::set_lease_room(std::uint64_t bytes) { lease_room_.store(bytes); }
+std::uint32_t MockExecutorOps::lease_extensions() { return lease_extensions_.load(); }
+std::uint64_t MockExecutorOps::lease_returned() { return lease_returned_.load(); }
+std::uint32_t MockExecutorOps::last_lease_kind() { return last_lease_kind_.load(); }
+std::uint64_t MockExecutorOps::last_lease_least() { return last_lease_least_.load(); }
 
 bool MockExecutorOps::fire_signal()
 {

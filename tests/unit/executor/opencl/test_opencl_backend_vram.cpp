@@ -4,6 +4,7 @@
 #include "executor/opencl/opencl_backend.hpp"
 #include "executor/host_ram_ledger.hpp"
 #include "harness/executor/fake_memory_gauge.hpp"
+#include "executor/vram_budget_source.hpp"
 #include "executor/vram_ledger.hpp"
 #include "harness/framework/test_registry.hpp"
 #include "harness/icd/recording_log.hpp"
@@ -263,16 +264,52 @@ TEST(opencl_backend_vram, a_card_smaller_than_the_cap_keeps_its_own_size)
            CL_SUCCESS);
   CHECK_EQ(global, host_global); }
 
-TEST(opencl_backend_vram, the_free_memory_the_guest_reads_is_what_is_left_under_the_cap)
+TEST(opencl_backend_vram, the_free_memory_the_guest_reads_is_what_is_left_under_the_cap_whatever_the_host_says)
 { Rig rig;
   cl_int error = CL_SUCCESS;
+  fake.free_kib = 1ull * 1024u * 1024u;
   CHECK(rig.buffer(10 * gib, CL_MEM_READ_WRITE, error) != nullptr);
   size_t free_kib[2] = {};
   CHECK_EQ(rig.backend().on_clGetDeviceInfo(nullptr, CL_DEVICE_GLOBAL_FREE_MEMORY_AMD, sizeof free_kib, free_kib,
                                             nullptr),
            CL_SUCCESS);
   CHECK_EQ(free_kib[0], 4u * 1024u * 1024u);
-  CHECK_EQ(free_kib[1], fake.free_kib); }
+  CHECK_EQ(free_kib[1], 4u * 1024u * 1024u);
+  CHECK(rig.buffer(gib, CL_MEM_READ_WRITE, error) != nullptr);
+  CHECK_EQ(rig.backend().on_clGetDeviceInfo(nullptr, CL_DEVICE_GLOBAL_FREE_MEMORY_AMD, sizeof free_kib, free_kib,
+                                            nullptr),
+           CL_SUCCESS);
+  CHECK_EQ(free_kib[0], 3u * 1024u * 1024u); }
+
+namespace {
+
+class MovingSource final : public av::VramBudgetSource {
+public:
+    bool device_local(std::uint64_t &budget_out, std::uint64_t &usage_out) override
+    { budget_out = budget; usage_out = 0u; return true; }
+
+    std::uint64_t budget = 0u;
+};
+
+}
+
+TEST(opencl_backend_vram, the_global_size_does_not_move_when_the_live_budget_does)
+{ Rig rig;
+  MovingSource source;
+  source.budget = 2 * gib;
+  rig.ledger().follow(&source);
+  cl_int error = CL_SUCCESS;
+  static_cast<void>(rig.buffer(1u, CL_MEM_READ_WRITE, error));
+  CHECK(rig.ledger().cap() < 14 * gib);
+  cl_ulong global = 0u;
+  CHECK_EQ(rig.backend().on_clGetDeviceInfo(nullptr, CL_DEVICE_GLOBAL_MEM_SIZE, sizeof global, &global, nullptr),
+           CL_SUCCESS);
+  CHECK_EQ(global, 14 * gib);
+  cl_ulong largest = 0u;
+  CHECK_EQ(rig.backend().on_clGetDeviceInfo(nullptr, CL_DEVICE_MAX_MEM_ALLOC_SIZE, sizeof largest, &largest, nullptr),
+           CL_SUCCESS);
+  CHECK_EQ(largest, 14 * gib);
+  rig.ledger().follow(nullptr); }
 
 TEST(opencl_backend_vram, other_device_queries_pass_through_untouched)
 { Rig rig;

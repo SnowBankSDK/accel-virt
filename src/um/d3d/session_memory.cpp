@@ -11,10 +11,10 @@
 
 namespace av::d3d {
 
-SessionMemory::SessionMemory(BlockSource &memory, icd::HostChannel &channel, ThreadLock &channel_lock,
+SessionMemory::SessionMemory(BlockSource &memory, icd::HostChannel &channel, ThreadLock &channel_lock, Kmt &kmt,
                              DriverLog &lines, const SliceOffer *offer, const void *owner)
     : memory_(memory), channel_(channel), channel_lock_(channel_lock), lines_(lines), offer_(offer), owner_(owner),
-      slices_lock_(), timeline_(), streams_{}, lent_pages_(memory, slices_lock_), clock_()
+      slices_lock_(), kmt_(kmt), timeline_lock_(), session_timeline_(), timeline_(), slices_(false), streams_{}, lent_pages_(memory, slices_lock_), clock_()
 {
     AV_SCOPE("SessionMemory::SessionMemory");
 }
@@ -22,7 +22,29 @@ SessionMemory::SessionMemory(BlockSource &memory, icd::HostChannel &channel, Thr
 void SessionMemory::open(ClientTransport &host)
 {
     AV_SCOPE("SessionMemory::open");
-    if (host_grants_slices(host)) static_cast<void>(timeline_.construct(channel_, channel_lock_));
+    slices_ = host_grants_slices(host);
+    if (slices_) make_timeline();
+}
+
+void SessionMemory::make_timeline()
+{
+    AV_SCOPE("SessionMemory::make_timeline");
+    if (timeline_.constructed()) return;
+    static_cast<void>(session_timeline_.construct(channel_, channel_lock_));
+    static_cast<void>(timeline_.construct(session_timeline_.object(), timeline_lock_, channel_lock_, kmt_));
+}
+
+void SessionMemory::join(icd::LaneProgress &lane)
+{
+    AV_SCOPE("SessionMemory::join");
+    make_timeline();
+    timeline_.object().join(lane);
+}
+
+void SessionMemory::leave(const icd::LaneProgress &lane)
+{
+    AV_SCOPE("SessionMemory::leave");
+    if (timeline_.constructed()) timeline_.object().leave(lane);
 }
 
 bool SessionMemory::host_grants_slices(ClientTransport &host)
@@ -37,6 +59,8 @@ void SessionMemory::close_streams()
     AV_SCOPE("SessionMemory::close_streams");
     for (ObjectStorage<icd::StreamMemory> &stream : streams_) stream.destroy();
     if (timeline_.constructed()) timeline_.destroy();
+    if (session_timeline_.constructed()) session_timeline_.destroy();
+    slices_ = false;
 }
 
 void SessionMemory::release_pages()
@@ -48,7 +72,8 @@ void SessionMemory::release_pages()
 icd::StreamMemory *SessionMemory::stream(HostMemoryRequest::Kind kind)
 {
     AV_SCOPE("SessionMemory::stream");
-    if (!timeline_.constructed() || (kind != HostMemoryRequest::Kind::upload && kind != HostMemoryRequest::Kind::readback))
+    if (!slices_ || !timeline_.constructed() ||
+        (kind != HostMemoryRequest::Kind::upload && kind != HostMemoryRequest::Kind::readback))
         return nullptr;
     ObjectStorage<icd::StreamMemory> &made = streams_[static_cast<uint32_t>(kind) - 1u];
     const ThreadLockHold              held(slices_lock_);

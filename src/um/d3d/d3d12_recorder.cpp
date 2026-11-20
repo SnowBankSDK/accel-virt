@@ -6,6 +6,7 @@
 #include "proto/generated/d3d12/d3d12_dispatch_client.h"
 #include "um/d3d/d3d12_ddi_tile_source.hpp"
 #include "um/d3d/d3d12_device.hpp"
+#include "um/d3d/d3d12_geometry_wire.hpp"
 #include "um/d3d/d3d12_records.hpp"
 
 namespace av::d3d12 {
@@ -23,6 +24,7 @@ constexpr uint32_t barrier_transition = 0u;
 constexpr uint32_t barrier_aliasing = 1u;
 constexpr uint32_t barrier_uav = 2u;
 constexpr uint32_t most_barriers = 128u;
+constexpr uint32_t barrier_buffer = 2u;
 constexpr uint32_t most_views = 16u;
 constexpr uint32_t most_sample_positions = 64u;
 constexpr uint32_t most_stream_outputs = 4u;
@@ -34,6 +36,9 @@ constexpr uint32_t most_targets = 8u;
 constexpr uint32_t most_constants = 64u;
 constexpr uint32_t location_subresource = 0u;
 constexpr uint32_t location_footprint = 1u;
+constexpr uint32_t most_postbuilds = 8u;
+constexpr uint32_t most_postbuild_sources = 4096u;
+constexpr uint32_t structure_top = 0u;
 
 }
 
@@ -82,7 +87,7 @@ VOID D3d12Recorder::reset_command_list(D3D12DDI_HCOMMANDLIST handle, const D3D12
              "CreateCommandList12");
         return;
     }
-    sent(av_d3d12_ResetCommandList12(device_.wire(), made.header.stamp.id(), pool->header.stamp.id(), 0u), "ResetCommandList12");
+    device_.reset_list(made, pool->header.stamp.id(), made.type);
 }
 
 VOID D3d12Recorder::clear_root_arguments(D3D12DDI_HCOMMANDLIST)
@@ -121,6 +126,12 @@ VOID D3d12Recorder::dispatch(D3D12DDI_HCOMMANDLIST handle, UINT x, UINT y, UINT 
 {
     AV_SCOPE("D3d12Recorder::dispatch");
     sent(av_d3d12_Dispatch12(device_.wire(), list(handle), x, y, z), "Dispatch12");
+}
+
+VOID D3d12Recorder::dispatch_mesh(D3D12DDI_HCOMMANDLIST handle, UINT x, UINT y, UINT z)
+{
+    AV_SCOPE("D3d12Recorder::dispatch_mesh");
+    sent(av_d3d12_DispatchMesh12(device_.wire(), list(handle), x, y, z), "DispatchMesh12");
 }
 
 VOID D3d12Recorder::clear_render_target_view(D3D12DDI_HCOMMANDLIST handle, D3D12DDI_CPU_DESCRIPTOR_HANDLE view,
@@ -363,7 +374,7 @@ VOID D3d12Recorder::set_sample_positions(D3D12DDI_HCOMMANDLIST handle, UINT samp
     AV_SCOPE("D3d12Recorder::set_sample_positions");
     SamplePosition made[most_sample_positions] = {};
     const uint64_t total = static_cast<uint64_t>(samples) * pixels;
-    if (positions == nullptr || total > most_sample_positions) {
+    if (total != 0u && (positions == nullptr || total > most_sample_positions)) {
         device_.lost("sample positions that do not fit the most a pixel grid holds");
         return;
     }
@@ -396,6 +407,12 @@ VOID D3d12Recorder::om_set_depth_bounds(D3D12DDI_HCOMMANDLIST handle, FLOAT mini
     sent(av_d3d12_SetDepthBounds12(device_.wire(), list(handle), minimum, maximum), "SetDepthBounds12");
 }
 
+VOID D3d12Recorder::om_set_front_and_back_stencil_ref(D3D12DDI_HCOMMANDLIST handle, UINT front, UINT back)
+{
+    AV_SCOPE("D3d12Recorder::om_set_front_and_back_stencil_ref");
+    sent(av_d3d12_SetFrontAndBackStencilRef12(device_.wire(), list(handle), front, back), "SetFrontAndBackStencilRef12");
+}
+
 VOID D3d12Recorder::set_predication(D3D12DDI_HCOMMANDLIST handle, D3D12DDI_HRESOURCE buffer, UINT64 offset,
                                     D3D12DDI_PREDICATION_OP op)
 {
@@ -405,16 +422,33 @@ VOID D3d12Recorder::set_predication(D3D12DDI_HCOMMANDLIST handle, D3D12DDI_HRESO
          "SetPredication12");
 }
 
+VOID D3d12Recorder::rs_set_shading_rate(D3D12DDI_HCOMMANDLIST handle, D3D12DDI_SHADING_RATE_0062 rate,
+                                        const D3D12DDI_SHADING_RATE_COMBINER_0062 *combiners)
+{
+    AV_SCOPE("D3d12Recorder::rs_set_shading_rate");
+    const uint32_t first = combiners == nullptr ? 0u : static_cast<uint32_t>(combiners[0]);
+    const uint32_t second = combiners == nullptr ? 0u : static_cast<uint32_t>(combiners[1]);
+    sent(av_d3d12_SetShadingRate12(device_.wire(), list(handle), static_cast<uint32_t>(rate), first, second),
+         "SetShadingRate12");
+}
+
+VOID D3d12Recorder::rs_set_shading_rate_image(D3D12DDI_HCOMMANDLIST handle, D3D12DDI_HRESOURCE image)
+{
+    AV_SCOPE("D3d12Recorder::rs_set_shading_rate_image");
+    const uint32_t named = image.pDrvPrivate == nullptr ? 0u : device_.id_of(image.pDrvPrivate);
+    sent(av_d3d12_SetShadingRateImage12(device_.wire(), list(handle), named), "SetShadingRateImage12");
+}
+
 VOID D3d12Recorder::so_set_targets(D3D12DDI_HCOMMANDLIST handle, UINT start, UINT count,
                                    const D3D12DDI_STREAM_OUTPUT_BUFFER_VIEW *views)
 {
     AV_SCOPE("D3d12Recorder::so_set_targets");
     StreamOutputView made[most_stream_outputs] = {};
-    if (views == nullptr ? count != 0u : count > most_stream_outputs) {
+    if (count > most_stream_outputs) {
         device_.lost("stream output targets that name more buffers than a pipeline writes");
         return;
     }
-    for (UINT index = 0u; index < count; index++)
+    for (UINT index = 0u; views != nullptr && index < count; index++)
         made[index] = StreamOutputView{views[index].BufferLocation, views[index].SizeInBytes,
                                        views[index].BufferFilledSizeLocation};
     sent(av_d3d12_SetStreamOutputTargets12(device_.wire(), list(handle), start, count, made),
@@ -454,6 +488,53 @@ VOID D3d12Recorder::resource_barrier(D3D12DDI_HCOMMANDLIST handle, UINT count,
             }
         }
         sent(av_d3d12_ResourceBarrier12(device_.wire(), list(handle), taken, batch), "ResourceBarrier12");
+    }
+}
+
+VOID D3d12Recorder::barrier(D3D12DDI_HCOMMANDLIST handle, UINT32 count, const D3D12DDIARG_BARRIER_0094 *barriers)
+{
+    AV_SCOPE("D3d12Recorder::barrier");
+    icd::Pieces pieces(barriers == nullptr ? 0u : count, most_barriers);
+    while (pieces.next()) {
+        LayoutBarrier batch[most_barriers] = {};
+        uint32_t      taken = 0u;
+        for (UINT index = 0u; index < static_cast<UINT>(pieces.count()); index++) {
+            const D3D12DDIARG_BARRIER_0094 &from = barriers[pieces.offset() + index];
+            if (static_cast<uint32_t>(from.Type) > barrier_buffer) continue;
+            LayoutBarrier &to = batch[taken++];
+            to.type = static_cast<uint32_t>(from.Type);
+            if (from.Type == D3D12DDI_BARRIER_TYPE_GLOBAL) {
+                const D3D12DDI_GLOBAL_BARRIER_0088 &g = from.GlobalBarrier;
+                to.sync_before = static_cast<uint32_t>(g.SyncBefore);
+                to.sync_after = static_cast<uint32_t>(g.SyncAfter);
+                to.access_before = static_cast<uint32_t>(g.AccessBefore);
+                to.access_after = static_cast<uint32_t>(g.AccessAfter);
+            } else if (from.Type == D3D12DDI_BARRIER_TYPE_TEXTURE) {
+                const D3D12DDI_TEXTURE_BARRIER_0088 &t = from.TextureBarrier;
+                to.sync_before = static_cast<uint32_t>(t.SyncBefore);
+                to.sync_after = static_cast<uint32_t>(t.SyncAfter);
+                to.access_before = static_cast<uint32_t>(t.AccessBefore);
+                to.access_after = static_cast<uint32_t>(t.AccessAfter);
+                to.layout_before = static_cast<uint32_t>(t.LayoutBefore);
+                to.layout_after = static_cast<uint32_t>(t.LayoutAfter);
+                to.resource = device_.id_of(t.hResource.pDrvPrivate);
+                to.flags = static_cast<uint32_t>(t.Flags);
+                to.first_mip = t.Subresources.IndexOrFirstMipLevel;
+                to.mip_count = t.Subresources.NumMipLevels;
+                to.first_slice = t.Subresources.FirstArraySlice;
+                to.slice_count = t.Subresources.NumArraySlices;
+                to.first_plane = t.Subresources.FirstPlane;
+                to.plane_count = t.Subresources.NumPlanes;
+            } else {
+                const D3D12DDI_BUFFER_BARRIER_0088 &b = from.BufferBarrier;
+                to.sync_before = static_cast<uint32_t>(b.SyncBefore);
+                to.sync_after = static_cast<uint32_t>(b.SyncAfter);
+                to.access_before = static_cast<uint32_t>(b.AccessBefore);
+                to.access_after = static_cast<uint32_t>(b.AccessAfter);
+                to.resource = device_.id_of(b.hResource.pDrvPrivate);
+            }
+        }
+        if (taken != 0u) sent(av_d3d12_Barrier12(device_.wire(), list(handle), taken, batch), "Barrier12");
     }
 }
 
@@ -690,6 +771,79 @@ VOID D3d12Recorder::set_graphics_root_unordered_access_view(D3D12DDI_HCOMMANDLIS
 {
     AV_SCOPE("D3d12Recorder::set_graphics_root_unordered_access_view");
     set_root_view(handle, graphics, parameter, view_unordered, address);
+}
+
+VOID D3d12Recorder::build_raytracing_acceleration_structure(D3D12DDI_HCOMMANDLIST handle,
+                                                            const D3D12DDIARG_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_0054 *args)
+{
+    AV_SCOPE("D3d12Recorder::build_raytracing_acceleration_structure");
+    if (args == nullptr) return;
+    D3d12GeometryWire geometries(device_.memory());
+    RaytracingPostbuild postbuilds[most_postbuilds] = {};
+    if (args->NumPostbuildInfoDescs > most_postbuilds ||
+        (args->NumPostbuildInfoDescs != 0u && args->pPostbuildInfoDescs == nullptr) || !geometries.read(args->Inputs)) {
+        device_.lost("a raytracing acceleration structure build the driver cannot carry");
+        return;
+    }
+    for (UINT index = 0u; index < args->NumPostbuildInfoDescs; index++)
+        postbuilds[index] = RaytracingPostbuild{args->pPostbuildInfoDescs[index].DestBuffer,
+                                                static_cast<uint32_t>(args->pPostbuildInfoDescs[index].InfoType), 0u};
+    const bool top = static_cast<uint32_t>(args->Inputs.Type) == structure_top;
+    sent(av_d3d12_BuildAccelerationStructure12(
+             device_.wire(), list(handle), static_cast<uint32_t>(args->Inputs.Type),
+             static_cast<uint32_t>(args->Inputs.Flags), args->Inputs.NumDescs, geometries.layout(),
+             args->DestAccelerationStructureData, args->SourceAccelerationStructureData,
+             args->ScratchAccelerationStructureData, top ? args->Inputs.InstanceDescs : 0u, geometries.count(),
+             geometries.geometries(), args->NumPostbuildInfoDescs, postbuilds),
+         "BuildAccelerationStructure12");
+}
+
+VOID D3d12Recorder::emit_raytracing_acceleration_structure_postbuild_info(
+    D3D12DDI_HCOMMANDLIST handle, const D3D12DDIARG_EMIT_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_0054 *args)
+{
+    AV_SCOPE("D3d12Recorder::emit_raytracing_acceleration_structure_postbuild_info");
+    if (args == nullptr) return;
+    if (args->NumSourceAccelerationStructures > most_postbuild_sources ||
+        (args->NumSourceAccelerationStructures != 0u && args->pSourceAccelerationStructureData == nullptr)) {
+        device_.lost("a postbuild information request the driver cannot carry");
+        return;
+    }
+    sent(av_d3d12_EmitAccelerationStructurePostbuild12(
+             device_.wire(), list(handle), static_cast<uint32_t>(args->Desc.InfoType), args->Desc.DestBuffer,
+             args->NumSourceAccelerationStructures, args->pSourceAccelerationStructureData),
+         "EmitAccelerationStructurePostbuild12");
+}
+
+VOID D3d12Recorder::copy_raytracing_acceleration_structure(
+    D3D12DDI_HCOMMANDLIST handle, const D3D12DDIARG_COPY_RAYTRACING_ACCELERATION_STRUCTURE_0054 *args)
+{
+    AV_SCOPE("D3d12Recorder::copy_raytracing_acceleration_structure");
+    if (args == nullptr) return;
+    sent(av_d3d12_CopyAccelerationStructure12(device_.wire(), list(handle), args->DestAccelerationStructureData,
+                                              args->SourceAccelerationStructureData, static_cast<uint32_t>(args->Mode)),
+         "CopyAccelerationStructure12");
+}
+
+VOID D3d12Recorder::set_pipeline_state1(D3D12DDI_HCOMMANDLIST handle, D3D12DDI_HSTATEOBJECT_0054 state)
+{
+    AV_SCOPE("D3d12Recorder::set_pipeline_state1");
+    sent(av_d3d12_SetStateObject12(device_.wire(), list(handle), device_.id_of(state.pDrvPrivate)), "SetStateObject12");
+}
+
+VOID D3d12Recorder::dispatch_rays(D3D12DDI_HCOMMANDLIST handle, const D3D12DDIARG_DISPATCH_RAYS_0054 *args)
+{
+    AV_SCOPE("D3d12Recorder::dispatch_rays");
+    if (args == nullptr) return;
+    const RayTable raygen = {args->RayGenerationShaderRecord.StartAddress, args->RayGenerationShaderRecord.SizeInBytes, 0u};
+    const RayTable miss = {args->MissShaderTable.StartAddress, args->MissShaderTable.SizeInBytes,
+                           args->MissShaderTable.StrideInBytes};
+    const RayTable hit = {args->HitGroupTable.StartAddress, args->HitGroupTable.SizeInBytes,
+                          args->HitGroupTable.StrideInBytes};
+    const RayTable callable = {args->CallableShaderTable.StartAddress, args->CallableShaderTable.SizeInBytes,
+                               args->CallableShaderTable.StrideInBytes};
+    sent(av_d3d12_DispatchRays12(device_.wire(), list(handle), raygen, miss, hit, callable, args->Width, args->Height,
+                                 args->Depth),
+         "DispatchRays12");
 }
 
 }

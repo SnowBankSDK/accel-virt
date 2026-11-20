@@ -19,32 +19,41 @@ using namespace av::d3d;
 namespace {
 
 constexpr std::uint32_t win7_interface = 0x2003u;
+constexpr std::uint32_t win8_interface = 0x3004u;
+constexpr std::uint32_t wddm1_3_interface = 0x4002u;
 constexpr std::uint32_t vista_interface = 0x000cu;
 constexpr std::uint32_t caps_d3d9 = 13u;
 
 }
 
-TEST(umd_root_open_adapter9, opens_at_the_newest_version_and_answers_windows_7s)
+TEST(umd_root_open_adapter9, opens_at_the_newest_version_and_answers_wddm_1_3_which_brings_cross_adapter_resources)
 {
     UmdRig         rig;
     FakeD3dRuntime runtime(rig.root(), RuntimeKind::d3d9);
     CHECK_EQ(runtime.open(), hr_ok);
     CHECK(runtime.table_is_whole());
-    CHECK_EQ(runtime.driver_version(), win7_interface);
+    CHECK_EQ(runtime.driver_version(), wddm1_3_interface);
     CHECK(rig.root().invariants_hold());
     CHECK_EQ(runtime.close_adapter(), hr_ok);
     CHECK_EQ(rig.kmt().open_objects(), 0u);
 }
 
-TEST(umd_root_open_adapter9, refuses_what_is_not_interface_9_at_windows_7_or_later)
+TEST(umd_root_open_adapter9, refuses_what_is_not_interface_9_at_wddm_1_3_or_later)
 {
     UmdRig         rig;
     FakeD3dRuntime old_runtime(rig.root(), RuntimeKind::d3d9);
     old_runtime.ask_for_version(vista_interface);
     CHECK_EQ(old_runtime.open(), hr_no_interface);
+    FakeD3dRuntime seven(rig.root(), RuntimeKind::d3d9);
+    seven.ask_for_version(win7_interface);
+    CHECK_EQ(seven.open(), hr_no_interface);
+    FakeD3dRuntime eight_zero(rig.root(), RuntimeKind::d3d9);
+    eight_zero.ask_for_version(win8_interface);
+    CHECK_EQ(eight_zero.open(), hr_no_interface);
     FakeD3dRuntime exact(rig.root(), RuntimeKind::d3d9);
-    exact.ask_for_version(win7_interface);
+    exact.ask_for_version(wddm1_3_interface);
     CHECK_EQ(exact.open(), hr_ok);
+    CHECK_EQ(exact.driver_version(), wddm1_3_interface);
     CHECK_EQ(exact.close_adapter(), hr_ok);
     FakeD3dRuntime eight(rig.root(), RuntimeKind::d3d9);
     eight.ask_for_interface(8u);
@@ -64,7 +73,7 @@ TEST(umd_root_open_adapter9, a_refused_open_fills_none_of_the_records)
     D3dddiAdapterFuncsRecord   table = {};
     D3dddiargOpenAdapterRecord args = {};
     args.Interface = 9u;
-    args.Version = win7_interface;
+    args.Version = wddm1_3_interface;
     args.pAdapterFuncs = &table;
     args.DriverVersion = untouched;
     CHECK_EQ(rig.root().open_adapter9(&args), hr_invalid_arg);

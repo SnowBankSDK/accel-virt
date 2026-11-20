@@ -38,8 +38,8 @@ KmtTransport::KmtTransport(GuestConnection &connection, BlockSource &memory, Sub
       staging_(staging), staging_bytes_(staging != nullptr ? staging_bytes : 0u),
       room_(staging != nullptr ? staging_bytes : 0u, reply_bytes), allocations_{},
       dma_address_(0u), context_(0u), hardware_scheduled_(false), ring_(), newest_end_(0u), newest_fence_(0u), previous_end_(0u), doorbell_(connection.kmt()),
-      path_(connection.kmt(), doorbell_, ring_), reply_(), watch_(connection.kmt(), ring_), fences_(), fence_ends_{}, faulted_(false), held_{}, route_(nullptr), standby_(nullptr), gates_busy_(0u), pending_(nullptr, 0u), unpublished_(0u), answered_(false), answered_fence_(0u),
-      decode_arena_(nullptr, 0u), blobs_(), arena_(nullptr), room_pressure_(0u), room_wait_ticks_(0u), window_began_(0u), windowed_(false), spill_(memory), answer_(memory)
+      path_(connection.kmt(), doorbell_, ring_), reply_(), watch_(connection.kmt(), ring_), fences_(), fence_ends_{}, faulted_(false), held_{}, session_(nullptr), lane_route_(nullptr), quiet_(false), gates_busy_(0u), pending_(nullptr, 0u), unpublished_(0u), answered_(false), answered_fence_(0u),
+      decode_arena_(nullptr, 0u), blobs_(), arena_(nullptr), room_pressure_(0u), room_wait_ticks_(0u), window_began_(0u), windowed_(false), calls_sent_(0u), spill_(memory), answer_(memory)
 {
     AV_SCOPE("KmtTransport::KmtTransport");
 }
@@ -50,8 +50,8 @@ KmtTransport::KmtTransport(GuestConnection &connection, SubApi sub_api, uint8_t 
       staging_(staging), staging_bytes_(staging != nullptr ? staging_bytes : 0u),
       room_(staging != nullptr ? staging_bytes : 0u, reply_bytes), allocations_{},
       dma_address_(0u), context_(0u), hardware_scheduled_(false), ring_(), newest_end_(0u), newest_fence_(0u), previous_end_(0u), doorbell_(connection.kmt()),
-      path_(connection.kmt(), doorbell_, ring_), reply_(), watch_(connection.kmt(), ring_), fences_(), fence_ends_{}, faulted_(false), held_{}, route_(nullptr), standby_(nullptr), gates_busy_(0u), pending_(nullptr, 0u), unpublished_(0u), answered_(false), answered_fence_(0u),
-      decode_arena_(nullptr, 0u), blobs_(), arena_(nullptr), room_pressure_(0u), room_wait_ticks_(0u), window_began_(0u), windowed_(false), spill_(), answer_()
+      path_(connection.kmt(), doorbell_, ring_), reply_(), watch_(connection.kmt(), ring_), fences_(), fence_ends_{}, faulted_(false), held_{}, session_(nullptr), lane_route_(nullptr), quiet_(false), gates_busy_(0u), pending_(nullptr, 0u), unpublished_(0u), answered_(false), answered_fence_(0u),
+      decode_arena_(nullptr, 0u), blobs_(), arena_(nullptr), room_pressure_(0u), room_wait_ticks_(0u), window_began_(0u), windowed_(false), calls_sent_(0u), spill_(), answer_()
 {
     AV_SCOPE("KmtTransport::KmtTransport");
 }
@@ -94,6 +94,47 @@ Status KmtTransport::setup_allocation(uint32_t index, AllocationKind kind, uint6
 Status KmtTransport::initialize(const GlContextOptions &options)
 {
     AV_SCOPE("KmtTransport::initialize");
+    return open(options, false);
+}
+
+Status KmtTransport::initialize_lane(KmtTransport &session, ReleaseRoute &route)
+{
+    AV_SCOPE("KmtTransport::initialize_lane");
+    if (context_ != 0u || &session == this || session.lane() || !session.established() || session.ring() == 0u ||
+        session.hardware_scheduled_)
+        return Status::invalid_state;
+    const Status opened = open(GlContextOptions().sharing(session.ring()), true);
+    if (opened != Status::ok) return opened;
+    session_ = &session;
+    lane_route_ = &route;
+    path_.keep_order_of(ring());
+    return Status::ok;
+}
+
+bool KmtTransport::lane() const
+{
+    AV_SCOPE("KmtTransport::lane");
+    return session_ != nullptr;
+}
+
+uint64_t KmtTransport::published_end() const
+{
+    AV_SCOPE("KmtTransport::published_end");
+    return newest_end_;
+}
+
+TransportResult KmtTransport::flush_quietly()
+{
+    AV_SCOPE("KmtTransport::flush_quietly");
+    quiet_ = true;
+    const TransportResult sent = flush();
+    quiet_ = false;
+    return sent;
+}
+
+Status KmtTransport::open(const GlContextOptions &options, bool lane)
+{
+    AV_SCOPE("KmtTransport::open");
     if (context_ != 0u) return Status::invalid_state;
     if (staging_bytes_ <= CommandHeader::encoded_size) return Status::invalid_parameter;
     if (!record_carries(options)) return Status::invalid_parameter;
@@ -107,7 +148,7 @@ Status KmtTransport::initialize(const GlContextOptions &options)
     uint8_t      private_data[AvContextRecord::encoded_size] = {};
     static_cast<void>(record.encode(private_data, sizeof private_data));
     bool doorbells = false;
-    static_cast<void>(connection_.kmt().query_native_gpu_fences(connection_.adapter(), doorbells));
+    if (!lane) static_cast<void>(connection_.kmt().query_native_gpu_fences(connection_.adapter(), doorbells));
     Status made = doorbells ? connection_.kmt().create_hw_queue_context(connection_.device(), private_data,
                                                                         sizeof private_data, context_)
                             : Status::not_supported;
@@ -129,7 +170,7 @@ Status KmtTransport::initialize(const GlContextOptions &options)
     }
     const Status viewed = adopt_views();
     if (viewed != Status::ok) return viewed;
-    if (!doorbell_.established()) {
+    if (!lane && !doorbell_.established()) {
         uint8_t escape[TailPublishRecord::encoded_size] = {};
         static_cast<void>(TailPublishRecord(ring()).encode(escape, sizeof escape));
         if (connection_.kmt().escape(connection_.adapter(), connection_.device(), context_, escape, sizeof escape) ==
@@ -276,49 +317,6 @@ void KmtTransport::hold(PublishGate &gate)
     if (free_slot == nullptr) gate.pass();
 }
 
-Status KmtTransport::release_by(ReleaseRoute &route)
-{
-    AV_SCOPE("KmtTransport::release_by");
-    if (!established() || faulted_ || !watch_.reads_page()) return watch_.reads_page() ? Status::invalid_state : Status::not_supported;
-    if (routed_by(route)) return Status::ok;
-    if (route_ != nullptr) {
-        if (standby_ != nullptr) return Status::no_space;
-        standby_ = &route;
-        return Status::ok;
-    }
-    path_.release_through(&route, ring());
-    route_ = &route;
-    return Status::ok;
-}
-
-void KmtTransport::release_directly(const ReleaseRoute &route)
-{
-    AV_SCOPE("KmtTransport::release_directly");
-    if (standby_ == &route) standby_ = nullptr;
-    if (route_ != &route) return;
-    if (standby_ != nullptr) {
-        route_ = standby_;
-        standby_ = nullptr;
-        path_.release_through(const_cast<ReleaseRoute *>(route_), ring());
-        return;
-    }
-    if (!faulted_) static_cast<void>(await_gpu(newest_fence_));
-    path_.release_through(nullptr, 0u);
-    route_ = nullptr;
-}
-
-bool KmtTransport::routed_by(const ReleaseRoute &route) const
-{
-    AV_SCOPE("KmtTransport::routed_by");
-    return route_ == &route || standby_ == &route;
-}
-
-bool KmtTransport::releases_by_packet() const
-{
-    AV_SCOPE("KmtTransport::releases_by_packet");
-    return path_.releases();
-}
-
 void KmtTransport::forget(const PublishGate &gate)
 {
     AV_SCOPE("KmtTransport::forget");
@@ -441,6 +439,12 @@ uint64_t KmtTransport::submissions() const
     return path_.submitted();
 }
 
+uint64_t KmtTransport::calls_sent() const
+{
+    AV_SCOPE("KmtTransport::calls_sent");
+    return calls_sent_;
+}
+
 uint32_t KmtTransport::ring() const
 {
     AV_SCOPE("KmtTransport::ring");
@@ -473,9 +477,10 @@ void KmtTransport::teardown()
     fences_ = TransportFence();
     faulted_ = false;
     for (PublishGate *&held : held_) held = nullptr;
-    path_.release_through(nullptr, 0u);
-    route_ = nullptr;
-    standby_ = nullptr;
+    path_.keep_order_of(0u);
+    session_ = nullptr;
+    lane_route_ = nullptr;
+    quiet_ = false;
     pending_.clear();
     __atomic_store_n(&unpublished_, 0u, __ATOMIC_RELEASE);
     answered_ = false;
@@ -743,7 +748,7 @@ Status KmtTransport::wait_on_page(uint64_t fence)
         if (!told &&
             connection_.kmt().performance_counter(frequency) - began > frequency * slow_wait_seconds) {
             told = true;
-            const_cast<ReleaseRoute *>(route_)->waited_long();
+            if (lane_route_ != nullptr) lane_route_->waited_long();
         }
         if (spin.lasts()) spin_once();
         else connection_.kmt().sleep_briefly();
@@ -797,13 +802,14 @@ TransportResult KmtTransport::publish_batch(const uint8_t *batch, uint32_t lengt
     unlock_gates();
     for (uint32_t index = 0u; index < passes; index++) passing[index]->pass();
     if (fences_.full() && !room_for_fence()) return TransportResult::failed;
+    if (session_ != nullptr && session_->flush_quietly() != TransportResult::ok) return TransportResult::failed;
     uint64_t next = fences_.peek();
     uint64_t       begin = 0u;
     uint64_t       end = 0u;
     uint8_t        trailer[ChannelStats::command_bytes] = {};
     const uint64_t now = published_now();
     const uint32_t trailer_length = stats_trailer(batch, length, now, trailer);
-    Status written = ring_.write_batch(batch, length, trailer, trailer_length, next, now, begin, end);
+    Status written = ring_.write_batch(batch, length, trailer, trailer_length, next, now, session_after(), begin, end);
     if (written == Status::no_space)
         written = write_when_room(batch, length, trailer, trailer_length, next, begin, end);
     if (written != Status::ok) return TransportResult::failed;
@@ -818,14 +824,16 @@ Status KmtTransport::write_when_room(const uint8_t *batch, uint32_t length, cons
     const uint64_t began = published_now();
     Status         written = Status::no_space;
     if (room_within_spin(BatchHeader(length + trailer_length, next, 0u).span()))
-        written = ring_.write_batch(batch, length, trailer, trailer_length, next, published_now(), begin, end);
+        written = ring_.write_batch(batch, length, trailer, trailer_length, next, published_now(), session_after(), begin,
+                                    end);
     if (written == Status::no_space) {
         if (!drain()) {
             note_wait(began, ChannelCounter::ring_waits, ChannelCounter::ring_wait_us);
             return Status::invalid_state;
         }
         next = fences_.peek();
-        written = ring_.write_batch(batch, length, trailer, trailer_length, next, published_now(), begin, end);
+        written = ring_.write_batch(batch, length, trailer, trailer_length, next, published_now(), session_after(), begin,
+                                    end);
     }
     note_wait(began, ChannelCounter::ring_waits, ChannelCounter::ring_wait_us);
     return written;
@@ -843,12 +851,18 @@ TransportResult KmtTransport::submit_written(uint64_t begin, uint64_t end, uint6
     uint8_t      descriptor[SubmissionDescriptor::encoded_size] = {};
     static_cast<void>(SubmissionDescriptor(fence, begin, end).encode(descriptor, sizeof descriptor));
     const Status submitted = path_.submit(context_, dma_address_, descriptor, SubmissionDescriptor::encoded_size,
-                                          fence);
+                                          fence, lane_route_, quiet_);
     if (submitted != Status::ok) {
         faulted_ = true;
         return TransportResult::failed;
     }
     return TransportResult::ok;
+}
+
+uint64_t KmtTransport::session_after() const
+{
+    AV_SCOPE("KmtTransport::session_after");
+    return session_ != nullptr ? session_->published_end() : 0u;
 }
 
 uint32_t KmtTransport::stats_trailer(const uint8_t *batch, uint32_t length, uint64_t now, uint8_t *into)
@@ -888,9 +902,20 @@ TransportResult KmtTransport::send_async(uint32_t command_id, WireWriter &writer
 {
     AV_SCOPE("KmtTransport::send_async");
     if (faulted_) return TransportResult::failed;
+    calls_sent_++;
     if (pending_.capacity() != 0u) return hold(command_id, writer, 0u);
     uint64_t fence = 0u;
     return publish(command_id, writer, 0u, fence);
+}
+
+TransportResult KmtTransport::send_restoring(uint32_t command_id, WireWriter &writer)
+{
+    AV_SCOPE("KmtTransport::send_restoring");
+    if (faulted_) return TransportResult::failed;
+    calls_sent_++;
+    if (pending_.capacity() != 0u) return hold(command_id, writer, CommandHeader::restores_context);
+    uint64_t fence = 0u;
+    return publish(command_id, writer, CommandHeader::restores_context, fence);
 }
 
 void KmtTransport::end_call()
@@ -907,6 +932,7 @@ TransportResult KmtTransport::send_sync(uint32_t command_id, WireWriter &writer,
     AV_SCOPE("KmtTransport::send_sync");
     reply = WireReader(nullptr, 0u);
     if (faulted_) return TransportResult::failed;
+    calls_sent_++;
     if (pending_.capacity() != 0u) {
         if (!established() || hold(command_id, writer, CommandHeader::generate_reply) != TransportResult::ok)
             return TransportResult::failed;

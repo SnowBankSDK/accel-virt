@@ -4,6 +4,7 @@
 #include "device/abi/av_executor.h"
 #include "device/host/host.hpp"
 #include "harness/host/host_violation.hpp"
+#include "proto/context/context_capacity.hpp"
 #include "proto/context/gpu_identity.hpp"
 
 #include <atomic>
@@ -19,12 +20,12 @@ class RendererPeer;
 class MockHost final : public Host {
 public:
     static constexpr std::uint32_t no_gpu = 0xFFFFFFFFu;
-    static constexpr std::uint32_t max_threads = 128u;
-    static constexpr std::uint32_t max_events = 256u;
-    static constexpr std::uint32_t max_mutexes = 256u;
+    static constexpr std::uint32_t max_threads = 512u;
+    static constexpr std::uint32_t max_events = 1024u;
+    static constexpr std::uint32_t max_mutexes = 1024u;
     static constexpr std::uint32_t max_gpus = 8u;
     static constexpr std::uint32_t max_main_loop_work = 1024u;
-    static constexpr std::uint32_t max_doorbells = 64u;
+    static constexpr std::uint32_t max_doorbells = ContextCapacity::contexts;
     static constexpr std::uint32_t interrupt_lines = max_doorbells + 2u;
     static constexpr std::uint32_t max_scanout_heads = 16u;
 
@@ -78,6 +79,8 @@ public:
     void     raise_fence_interrupt(std::uint32_t line) override;
     std::size_t read_request(void *request, std::size_t offset, std::uint8_t *buffer, std::size_t size) override;
     void     respond(void *request, const std::uint8_t *bytes, std::size_t size) override;
+    void    *keep_request(void *request) override;
+    void     release_request(void *kept, bool answered) override;
     bool     resource_exists(std::uint32_t id) override;
     Status   create_recording(const char *path, void *&file) override;
     Status   append_recording(void *file, const std::uint8_t *bytes, std::size_t size) override;
@@ -233,6 +236,9 @@ public:
     std::uint32_t run_main_loop();
 
     bool          holds_main_loop() const;
+    std::uint32_t kept_requests() const;
+    std::uint32_t dropped_requests() const;
+    void          fail_keep_at(std::uint32_t nth);
     bool          claim(HostViolation kind);
     std::uint32_t unclaimed_violations();
     std::uint32_t logged();
@@ -457,6 +463,9 @@ private:
     const void     *watched_ = nullptr;
     std::uint64_t   watched_when_landed_ = 0u;
     std::uint32_t   store_fences_ = 0u;
+    std::atomic<std::uint32_t> kept_{0u};
+    std::atomic<std::uint32_t> dropped_{0u};
+    std::uint32_t   fail_keep_ = 0u;
 };
 
 }

@@ -13,6 +13,7 @@
 #include "executor/opencl/spirv_argument_kinds.hpp"
 #include "executor/opencl/cl_bounced_rect.hpp"
 #include "executor/opencl/cl_read_ahead.hpp"
+#include "executor/opencl/cl_transfer_pacer.hpp"
 #include "executor/opencl/copied_gl_sharing.hpp"
 #include "executor/opencl/direct_gl_sharing.hpp"
 #include "executor/guest_region.hpp"
@@ -37,6 +38,8 @@
 
 namespace av {
 
+class SessionLease;
+
 class DriverLog;
 class OwnedFd;
 class SharedImageShape;
@@ -44,6 +47,7 @@ class SharedImageShape;
 class OpenGlBackend;
 
 class GlDisplay;
+class HostLifecycleGate;
 class ImportTable;
 class OpenClDevice;
 class ClFreedMemory;
@@ -100,6 +104,7 @@ public:
                                           cl_int *errcode_ret) override;
     cl_context on_clCreateContext(const cl_context_properties *properties, cl_uint num_devices,
                                   const cl_device_id *devices, cl_int *errcode_ret) override;
+    cl_int     on_clReleaseContext(cl_context context) override;
 
     void *on_clSVMAlloc(cl_context context, cl_svm_mem_flags flags, size_t size,
                         cl_uint alignment) override;
@@ -148,6 +153,23 @@ public:
                                    size_t offset, size_t size, const void *ptr,
                                    cl_uint num_events_in_wait_list, const cl_event *event_wait_list,
                                    cl_event *event) override;
+    cl_sampler on_clCreateSamplerWithProperties(cl_context context, const cl_sampler_properties *sampler_properties,
+                                                cl_int *errcode_ret) override;
+    cl_sampler on_clCreateSampler(cl_context context, cl_bool normalized_coords, cl_addressing_mode addressing_mode,
+                                  cl_filter_mode filter_mode, cl_int *errcode_ret) override;
+    cl_int on_clEnqueueCopyBuffer(cl_command_queue command_queue, cl_mem src_buffer, cl_mem dst_buffer,
+                                  size_t src_offset, size_t dst_offset, size_t size,
+                                  cl_uint num_events_in_wait_list, const cl_event *event_wait_list,
+                                  cl_event *event) override;
+    cl_int on_clEnqueueCopyBufferRect(cl_command_queue command_queue, cl_mem src_buffer, cl_mem dst_buffer,
+                                      const size_t *src_origin, const size_t *dst_origin, const size_t *region,
+                                      size_t src_row_pitch, size_t src_slice_pitch, size_t dst_row_pitch,
+                                      size_t dst_slice_pitch, cl_uint num_events_in_wait_list,
+                                      const cl_event *event_wait_list, cl_event *event) override;
+    cl_int on_clEnqueueFillBuffer(cl_command_queue command_queue, cl_mem buffer, const void *pattern,
+                                  size_t pattern_size, size_t offset, size_t size,
+                                  cl_uint num_events_in_wait_list, const cl_event *event_wait_list,
+                                  cl_event *event) override;
     cl_int on_clEnqueueReadImage(cl_command_queue command_queue, cl_mem image, cl_bool blocking_read,
                                  const size_t *origin, const size_t *region, size_t row_pitch,
                                  size_t slice_pitch, void *ptr, cl_uint num_events_in_wait_list,
@@ -209,9 +231,11 @@ public:
     void bind_signal(void (*signal)(void *context), void *context) override;
 
     void use_host_ram(ByteLedger *ledger, uint64_t limit) override;
+    void lease_from(SessionLease *lease) override;
 
     void     shut_down() override;
     void     let_go_of_thread() override;
+    void     leave_device() override;
     uint64_t ran() const;
 
 private:
@@ -246,6 +270,7 @@ private:
     BudgetedHeap            heap_;
     BlockSource        &blocks_;
     const OpenClDevice *bound_;
+    HostLifecycleGate  *lifecycle_;
     ClBinaryEnvelope    envelope_;
     ClArgumentRetention arguments_;
     StagingBytes        binaries_;
@@ -279,6 +304,7 @@ private:
     ClQueueWait      queue_wait_;
     ClFreshBytes     fresh_;
     KernelPacer      pacer_;
+    ClTransferPacer  transfers_;
     void            *paced_queue_;
     void            *marker_;
     uint64_t       ran_;

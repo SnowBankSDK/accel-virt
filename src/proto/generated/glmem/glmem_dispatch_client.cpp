@@ -17,7 +17,7 @@ constexpr uint64_t inline_reply_bytes = 32768u;
 constexpr uint8_t tag_inline = 0u;
 constexpr uint8_t tag_blob = 1u;
 
-[[maybe_unused]] bool put_bytes(::av::ClientTransport& t, ::av::WireWriter& b, const void* data, uint64_t size) {
+bool put_bytes(::av::ClientTransport& t, ::av::WireWriter& b, const void* data, uint64_t size) {
     if (size != 0u && data == nullptr) return false;
     b.write_pod<uint64_t>(size);
     ::av::ClientBlobArena& arena = t.blobs();
@@ -110,6 +110,16 @@ bool av_glmem_ForgetBufferSlice(::av::ClientTransport& t, uint32_t buffer) {
     ::av::WireWriter b = t.request_writer();
     b.write_pod<uint32_t>(buffer);
     return t.send_async(kCmd_ForgetBufferSlice, b) == ::av::TransportResult::ok;
+}
+
+bool av_glmem_WriteBufferSlice(::av::ClientTransport& t, uint32_t buffer, uint64_t offset, const void* data, uint64_t data_size) {
+    AV_SCOPE("av_glmem_WriteBufferSlice");
+    const uint64_t blob_sizes[] = {data_size > inline_bytes ? data_size : 0u};
+    ::av::WireWriter b = (blob_sizes[0]) != 0u ? t.request_writer_with_room(blob_sizes, 1u) : t.request_writer();
+    b.write_pod<uint32_t>(buffer);
+    b.write_pod<uint64_t>(offset);
+    if (!put_bytes(t, b, data, data_size)) return abandon(t);
+    return t.send_async(kCmd_WriteBufferSlice, b) == ::av::TransportResult::ok;
 }
 
 }  // namespace av::glmemproto

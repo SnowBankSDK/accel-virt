@@ -140,7 +140,19 @@ bool av_d3d12_QueryHeapSlices12(::av::ClientTransport& t, uint32_t* supported) {
     return r.remaining() == 0u;
 }
 
-bool av_d3d12_CreateHeap12(::av::ClientTransport& t, uint32_t heap, const HeapProperties& properties, uint32_t flags, uint64_t size, uint64_t alignment, uint64_t memory, uint64_t offset, uint32_t* hresult) {
+bool av_d3d12_QueryHeapPlacement12(::av::ClientTransport& t, uint32_t* placed) {
+    AV_SCOPE("av_d3d12_QueryHeapPlacement12");
+    ::av::WireWriter b = t.request_writer();
+    const ::av::SyncCallScope call{t};
+    ::av::WireReader r{nullptr, 0u};
+    if (t.send_sync(kCmd_QueryHeapPlacement12, b, r) != ::av::TransportResult::ok) return false;
+    { uint32_t value{};
+      if (!r.read_pod(value)) return false;
+      if (placed != nullptr) *placed = value; }
+    return r.remaining() == 0u;
+}
+
+bool av_d3d12_CreateHeap12(::av::ClientTransport& t, uint32_t heap, const HeapProperties& properties, uint32_t flags, uint64_t size, uint64_t alignment, uint64_t memory, uint64_t offset, uint32_t* hresult, uint64_t* placed) {
     AV_SCOPE("av_d3d12_CreateHeap12");
     ::av::WireWriter b = t.request_writer();
     b.write_pod<uint32_t>(heap);
@@ -156,6 +168,9 @@ bool av_d3d12_CreateHeap12(::av::ClientTransport& t, uint32_t heap, const HeapPr
     { uint32_t value{};
       if (!r.read_pod(value)) return false;
       if (hresult != nullptr) *hresult = value; }
+    { uint64_t value{};
+      if (!r.read_pod(value)) return false;
+      if (placed != nullptr) *placed = value; }
     return r.remaining() == 0u;
 }
 
@@ -210,6 +225,72 @@ bool av_d3d12_ShareResource12(::av::ClientTransport& t, uint32_t resource, uint6
     b.write_pod<uint32_t>(resource);
     b.write_pod<uint64_t>(key);
     return t.send_async(kCmd_ShareResource12, b) == ::av::TransportResult::ok;
+}
+
+bool av_d3d12_ShareObject12(::av::ClientTransport& t, uint32_t object, uint64_t key) {
+    AV_SCOPE("av_d3d12_ShareObject12");
+    ::av::WireWriter b = t.request_writer();
+    b.write_pod<uint32_t>(object);
+    b.write_pod<uint64_t>(key);
+    return t.send_async(kCmd_ShareObject12, b) == ::av::TransportResult::ok;
+}
+
+bool av_d3d12_OpenObject12(::av::ClientTransport& t, uint32_t object, uint64_t key, uint64_t address, uint32_t* kind, uint32_t* dimension, uint32_t* height, uint32_t* depth_or_array, uint32_t* mip_levels, uint32_t* format, uint32_t* sample_count, uint32_t* flags, uint64_t* width, uint64_t* size) {
+    AV_SCOPE("av_d3d12_OpenObject12");
+    ::av::WireWriter b = t.request_writer();
+    b.write_pod<uint32_t>(object);
+    b.write_pod<uint64_t>(key);
+    b.write_pod<uint64_t>(address);
+    const ::av::SyncCallScope call{t};
+    ::av::WireReader r{nullptr, 0u};
+    if (t.send_sync(kCmd_OpenObject12, b, r) != ::av::TransportResult::ok) return false;
+    { uint32_t value{};
+      if (!r.read_pod(value)) return false;
+      if (kind != nullptr) *kind = value; }
+    { uint32_t value{};
+      if (!r.read_pod(value)) return false;
+      if (dimension != nullptr) *dimension = value; }
+    { uint32_t value{};
+      if (!r.read_pod(value)) return false;
+      if (height != nullptr) *height = value; }
+    { uint32_t value{};
+      if (!r.read_pod(value)) return false;
+      if (depth_or_array != nullptr) *depth_or_array = value; }
+    { uint32_t value{};
+      if (!r.read_pod(value)) return false;
+      if (mip_levels != nullptr) *mip_levels = value; }
+    { uint32_t value{};
+      if (!r.read_pod(value)) return false;
+      if (format != nullptr) *format = value; }
+    { uint32_t value{};
+      if (!r.read_pod(value)) return false;
+      if (sample_count != nullptr) *sample_count = value; }
+    { uint32_t value{};
+      if (!r.read_pod(value)) return false;
+      if (flags != nullptr) *flags = value; }
+    { uint64_t value{};
+      if (!r.read_pod(value)) return false;
+      if (width != nullptr) *width = value; }
+    { uint64_t value{};
+      if (!r.read_pod(value)) return false;
+      if (size != nullptr) *size = value; }
+    return r.remaining() == 0u;
+}
+
+bool av_d3d12_AdoptLentImage12(::av::ClientTransport& t, uint32_t resource, uint64_t memory, const ResourceDesc& desc, uint32_t row_pitch, uint32_t* hresult) {
+    AV_SCOPE("av_d3d12_AdoptLentImage12");
+    ::av::WireWriter b = t.request_writer();
+    b.write_pod<uint32_t>(resource);
+    b.write_pod<uint64_t>(memory);
+    b.write_pod(desc);
+    b.write_pod<uint32_t>(row_pitch);
+    const ::av::SyncCallScope call{t};
+    ::av::WireReader r{nullptr, 0u};
+    if (t.send_sync(kCmd_AdoptLentImage12, b, r) != ::av::TransportResult::ok) return false;
+    { uint32_t value{};
+      if (!r.read_pod(value)) return false;
+      if (hresult != nullptr) *hresult = value; }
+    return r.remaining() == 0u;
 }
 
 bool av_d3d12_CreatePlacedResource12(::av::ClientTransport& t, uint32_t resource, uint32_t heap, uint64_t offset, const ResourceDesc& desc, uint32_t state, const ClearValue& clear, uint64_t address) {
@@ -372,10 +453,10 @@ bool av_d3d12_CreateCommandSignature12(::av::ClientTransport& t, uint32_t signat
     return t.send_async(kCmd_CreateCommandSignature12, b) == ::av::TransportResult::ok;
 }
 
-bool av_d3d12_CreateGraphicsPipeline12(::av::ClientTransport& t, uint32_t pipeline, uint32_t root, const GraphicsState& state, uint32_t element_count, const InputElement* elements, uint32_t signature_count, const SignatureEntry* signatures, const void* vs, uint64_t vs_size, const void* hs, uint64_t hs_size, const void* ds, uint64_t ds_size, const void* gs, uint64_t gs_size, const void* ps, uint64_t ps_size) {
+bool av_d3d12_CreateGraphicsPipeline12(::av::ClientTransport& t, uint32_t pipeline, uint32_t root, const GraphicsState& state, uint32_t element_count, const InputElement* elements, uint32_t signature_count, const SignatureEntry* signatures, uint32_t stream_out_count, const StreamOutDeclaration* stream_out, uint32_t stride_count, const uint32_t* strides, uint32_t rasterized_stream, const void* vs, uint64_t vs_size, const void* hs, uint64_t hs_size, const void* ds, uint64_t ds_size, const void* gs, uint64_t gs_size, const void* ps, uint64_t ps_size, const void* ms, uint64_t ms_size, const void* as, uint64_t as_size) {
     AV_SCOPE("av_d3d12_CreateGraphicsPipeline12");
-    const uint64_t blob_sizes[] = {vs_size > inline_bytes ? vs_size : 0u, hs_size > inline_bytes ? hs_size : 0u, ds_size > inline_bytes ? ds_size : 0u, gs_size > inline_bytes ? gs_size : 0u, ps_size > inline_bytes ? ps_size : 0u};
-    ::av::WireWriter b = (blob_sizes[0] | blob_sizes[1] | blob_sizes[2] | blob_sizes[3] | blob_sizes[4]) != 0u ? t.request_writer_with_room(blob_sizes, 5u) : t.request_writer();
+    const uint64_t blob_sizes[] = {vs_size > inline_bytes ? vs_size : 0u, hs_size > inline_bytes ? hs_size : 0u, ds_size > inline_bytes ? ds_size : 0u, gs_size > inline_bytes ? gs_size : 0u, ps_size > inline_bytes ? ps_size : 0u, ms_size > inline_bytes ? ms_size : 0u, as_size > inline_bytes ? as_size : 0u};
+    ::av::WireWriter b = (blob_sizes[0] | blob_sizes[1] | blob_sizes[2] | blob_sizes[3] | blob_sizes[4] | blob_sizes[5] | blob_sizes[6]) != 0u ? t.request_writer_with_room(blob_sizes, 7u) : t.request_writer();
     b.write_pod<uint32_t>(pipeline);
     b.write_pod<uint32_t>(root);
     b.write_pod(state);
@@ -385,11 +466,20 @@ bool av_d3d12_CreateGraphicsPipeline12(::av::ClientTransport& t, uint32_t pipeli
     b.write_pod<uint32_t>(signature_count);
     if (signature_count > 1024u || (signature_count != 0u && signatures == nullptr)) return abandon(t);
     if (signature_count != 0u) b.write(signatures, sizeof(*signatures) * signature_count);
+    b.write_pod<uint32_t>(stream_out_count);
+    if (stream_out_count > 128u || (stream_out_count != 0u && stream_out == nullptr)) return abandon(t);
+    if (stream_out_count != 0u) b.write(stream_out, sizeof(*stream_out) * stream_out_count);
+    b.write_pod<uint32_t>(stride_count);
+    if (stride_count > 4u || (stride_count != 0u && strides == nullptr)) return abandon(t);
+    if (stride_count != 0u) b.write(strides, sizeof(*strides) * stride_count);
+    b.write_pod<uint32_t>(rasterized_stream);
     if (!put_bytes(t, b, vs, vs_size)) return abandon(t);
     if (!put_bytes(t, b, hs, hs_size)) return abandon(t);
     if (!put_bytes(t, b, ds, ds_size)) return abandon(t);
     if (!put_bytes(t, b, gs, gs_size)) return abandon(t);
     if (!put_bytes(t, b, ps, ps_size)) return abandon(t);
+    if (!put_bytes(t, b, ms, ms_size)) return abandon(t);
+    if (!put_bytes(t, b, as, as_size)) return abandon(t);
     return t.send_async(kCmd_CreateGraphicsPipeline12, b) == ::av::TransportResult::ok;
 }
 
@@ -718,6 +808,44 @@ bool av_d3d12_Dispatch12(::av::ClientTransport& t, uint32_t list, uint32_t x, ui
     return t.send_async(kCmd_Dispatch12, b) == ::av::TransportResult::ok;
 }
 
+bool av_d3d12_DispatchMesh12(::av::ClientTransport& t, uint32_t list, uint32_t x, uint32_t y, uint32_t z) {
+    AV_SCOPE("av_d3d12_DispatchMesh12");
+    ::av::WireWriter b = t.request_writer();
+    b.write_pod<uint32_t>(list);
+    b.write_pod<uint32_t>(x);
+    b.write_pod<uint32_t>(y);
+    b.write_pod<uint32_t>(z);
+    return t.send_async(kCmd_DispatchMesh12, b) == ::av::TransportResult::ok;
+}
+
+bool av_d3d12_SetShadingRate12(::av::ClientTransport& t, uint32_t list, uint32_t base_rate, uint32_t combiner0, uint32_t combiner1) {
+    AV_SCOPE("av_d3d12_SetShadingRate12");
+    ::av::WireWriter b = t.request_writer();
+    b.write_pod<uint32_t>(list);
+    b.write_pod<uint32_t>(base_rate);
+    b.write_pod<uint32_t>(combiner0);
+    b.write_pod<uint32_t>(combiner1);
+    return t.send_async(kCmd_SetShadingRate12, b) == ::av::TransportResult::ok;
+}
+
+bool av_d3d12_SetShadingRateImage12(::av::ClientTransport& t, uint32_t list, uint32_t image) {
+    AV_SCOPE("av_d3d12_SetShadingRateImage12");
+    ::av::WireWriter b = t.request_writer();
+    b.write_pod<uint32_t>(list);
+    b.write_pod<uint32_t>(image);
+    return t.send_async(kCmd_SetShadingRateImage12, b) == ::av::TransportResult::ok;
+}
+
+bool av_d3d12_Barrier12(::av::ClientTransport& t, uint32_t list, uint32_t count, const LayoutBarrier* barriers) {
+    AV_SCOPE("av_d3d12_Barrier12");
+    ::av::WireWriter b = t.request_writer();
+    b.write_pod<uint32_t>(list);
+    b.write_pod<uint32_t>(count);
+    if (count > 128u || (count != 0u && barriers == nullptr)) return abandon(t);
+    if (count != 0u) b.write(barriers, sizeof(*barriers) * count);
+    return t.send_async(kCmd_Barrier12, b) == ::av::TransportResult::ok;
+}
+
 bool av_d3d12_CopyBufferRegion12(::av::ClientTransport& t, uint32_t list, uint32_t destination, uint64_t destination_offset, uint32_t source, uint64_t source_offset, uint64_t bytes) {
     AV_SCOPE("av_d3d12_CopyBufferRegion12");
     ::av::WireWriter b = t.request_writer();
@@ -923,6 +1051,15 @@ bool av_d3d12_SetDepthBounds12(::av::ClientTransport& t, uint32_t list, float mi
     return t.send_async(kCmd_SetDepthBounds12, b) == ::av::TransportResult::ok;
 }
 
+bool av_d3d12_SetFrontAndBackStencilRef12(::av::ClientTransport& t, uint32_t list, uint32_t front, uint32_t back) {
+    AV_SCOPE("av_d3d12_SetFrontAndBackStencilRef12");
+    ::av::WireWriter b = t.request_writer();
+    b.write_pod<uint32_t>(list);
+    b.write_pod<uint32_t>(front);
+    b.write_pod<uint32_t>(back);
+    return t.send_async(kCmd_SetFrontAndBackStencilRef12, b) == ::av::TransportResult::ok;
+}
+
 bool av_d3d12_SetPredication12(::av::ClientTransport& t, uint32_t list, uint32_t buffer, uint64_t offset, uint32_t op) {
     AV_SCOPE("av_d3d12_SetPredication12");
     ::av::WireWriter b = t.request_writer();
@@ -978,6 +1115,167 @@ bool av_d3d12_ExecuteBundle12(::av::ClientTransport& t, uint32_t list, uint32_t 
     b.write_pod<uint32_t>(list);
     b.write_pod<uint32_t>(bundle);
     return t.send_async(kCmd_ExecuteBundle12, b) == ::av::TransportResult::ok;
+}
+
+bool av_d3d12_CreateStateObject12(::av::ClientTransport& t, uint32_t object, uint32_t parent, uint32_t type, uint32_t subobject_count, const StateSubobject* subobjects, uint32_t export_count, const StateExport* exports, uint32_t association_count, const StateAssociation* associations, const void* names, uint64_t names_size, const void* libraries, uint64_t libraries_size, uint32_t* hresult) {
+    AV_SCOPE("av_d3d12_CreateStateObject12");
+    const uint64_t blob_sizes[] = {names_size > inline_bytes ? names_size : 0u, libraries_size > inline_bytes ? libraries_size : 0u};
+    ::av::WireWriter b = (blob_sizes[0] | blob_sizes[1]) != 0u ? t.request_writer_with_room(blob_sizes, 2u) : t.request_writer();
+    b.write_pod<uint32_t>(object);
+    b.write_pod<uint32_t>(parent);
+    b.write_pod<uint32_t>(type);
+    b.write_pod<uint32_t>(subobject_count);
+    if (subobject_count > 1024u || (subobject_count != 0u && subobjects == nullptr)) return abandon(t);
+    if (subobject_count != 0u) b.write(subobjects, sizeof(*subobjects) * subobject_count);
+    b.write_pod<uint32_t>(export_count);
+    if (export_count > 16384u || (export_count != 0u && exports == nullptr)) return abandon(t);
+    if (export_count != 0u) b.write(exports, sizeof(*exports) * export_count);
+    b.write_pod<uint32_t>(association_count);
+    if (association_count > 16384u || (association_count != 0u && associations == nullptr)) return abandon(t);
+    if (association_count != 0u) b.write(associations, sizeof(*associations) * association_count);
+    if (!put_bytes(t, b, names, names_size)) return abandon(t);
+    if (!put_bytes(t, b, libraries, libraries_size)) return abandon(t);
+    const ::av::SyncCallScope call{t};
+    ::av::WireReader r{nullptr, 0u};
+    if (t.send_sync(kCmd_CreateStateObject12, b, r) != ::av::TransportResult::ok) return false;
+    { uint32_t value{};
+      if (!r.read_pod(value)) return false;
+      if (hresult != nullptr) *hresult = value; }
+    return r.remaining() == 0u;
+}
+
+bool av_d3d12_StateObjectIdentifier12(::av::ClientTransport& t, uint32_t object, const void* name, uint64_t name_size, uint32_t* found, ShaderIdentifier* identifier) {
+    AV_SCOPE("av_d3d12_StateObjectIdentifier12");
+    const uint64_t blob_sizes[] = {name_size > inline_bytes ? name_size : 0u};
+    ::av::WireWriter b = (blob_sizes[0]) != 0u ? t.request_writer_with_room(blob_sizes, 1u) : t.request_writer();
+    b.write_pod<uint32_t>(object);
+    if (!put_bytes(t, b, name, name_size)) return abandon(t);
+    const ::av::SyncCallScope call{t};
+    ::av::WireReader r{nullptr, 0u};
+    if (t.send_sync(kCmd_StateObjectIdentifier12, b, r) != ::av::TransportResult::ok) return false;
+    { uint32_t value{};
+      if (!r.read_pod(value)) return false;
+      if (found != nullptr) *found = value; }
+    { ShaderIdentifier value{};
+      if (!r.read_pod(value)) return false;
+      if (identifier != nullptr) *identifier = value; }
+    return r.remaining() == 0u;
+}
+
+bool av_d3d12_StateObjectStackSize12(::av::ClientTransport& t, uint32_t object, const void* name, uint64_t name_size, uint32_t* size) {
+    AV_SCOPE("av_d3d12_StateObjectStackSize12");
+    const uint64_t blob_sizes[] = {name_size > inline_bytes ? name_size : 0u};
+    ::av::WireWriter b = (blob_sizes[0]) != 0u ? t.request_writer_with_room(blob_sizes, 1u) : t.request_writer();
+    b.write_pod<uint32_t>(object);
+    if (!put_bytes(t, b, name, name_size)) return abandon(t);
+    const ::av::SyncCallScope call{t};
+    ::av::WireReader r{nullptr, 0u};
+    if (t.send_sync(kCmd_StateObjectStackSize12, b, r) != ::av::TransportResult::ok) return false;
+    { uint32_t value{};
+      if (!r.read_pod(value)) return false;
+      if (size != nullptr) *size = value; }
+    return r.remaining() == 0u;
+}
+
+bool av_d3d12_SetPipelineStackSize12(::av::ClientTransport& t, uint32_t object, uint32_t bytes) {
+    AV_SCOPE("av_d3d12_SetPipelineStackSize12");
+    ::av::WireWriter b = t.request_writer();
+    b.write_pod<uint32_t>(object);
+    b.write_pod<uint32_t>(bytes);
+    return t.send_async(kCmd_SetPipelineStackSize12, b) == ::av::TransportResult::ok;
+}
+
+bool av_d3d12_AccelerationStructurePrebuild12(::av::ClientTransport& t, uint32_t type, uint32_t flags, uint32_t num_descs, uint32_t layout, uint32_t geometry_count, const RaytracingGeometry* geometries, uint32_t* hresult, uint64_t* result_bytes, uint64_t* scratch_bytes, uint64_t* update_scratch_bytes) {
+    AV_SCOPE("av_d3d12_AccelerationStructurePrebuild12");
+    ::av::WireWriter b = t.request_writer();
+    b.write_pod<uint32_t>(type);
+    b.write_pod<uint32_t>(flags);
+    b.write_pod<uint32_t>(num_descs);
+    b.write_pod<uint32_t>(layout);
+    b.write_pod<uint32_t>(geometry_count);
+    if (geometry_count > 8192u || (geometry_count != 0u && geometries == nullptr)) return abandon(t);
+    if (geometry_count != 0u) b.write(geometries, sizeof(*geometries) * geometry_count);
+    const ::av::SyncCallScope call{t};
+    ::av::WireReader r{nullptr, 0u};
+    if (t.send_sync(kCmd_AccelerationStructurePrebuild12, b, r) != ::av::TransportResult::ok) return false;
+    { uint32_t value{};
+      if (!r.read_pod(value)) return false;
+      if (hresult != nullptr) *hresult = value; }
+    { uint64_t value{};
+      if (!r.read_pod(value)) return false;
+      if (result_bytes != nullptr) *result_bytes = value; }
+    { uint64_t value{};
+      if (!r.read_pod(value)) return false;
+      if (scratch_bytes != nullptr) *scratch_bytes = value; }
+    { uint64_t value{};
+      if (!r.read_pod(value)) return false;
+      if (update_scratch_bytes != nullptr) *update_scratch_bytes = value; }
+    return r.remaining() == 0u;
+}
+
+bool av_d3d12_BuildAccelerationStructure12(::av::ClientTransport& t, uint32_t list, uint32_t type, uint32_t flags, uint32_t num_descs, uint32_t layout, uint64_t destination, uint64_t source, uint64_t scratch, uint64_t instances, uint32_t geometry_count, const RaytracingGeometry* geometries, uint32_t postbuild_count, const RaytracingPostbuild* postbuilds) {
+    AV_SCOPE("av_d3d12_BuildAccelerationStructure12");
+    ::av::WireWriter b = t.request_writer();
+    b.write_pod<uint32_t>(list);
+    b.write_pod<uint32_t>(type);
+    b.write_pod<uint32_t>(flags);
+    b.write_pod<uint32_t>(num_descs);
+    b.write_pod<uint32_t>(layout);
+    b.write_pod<uint64_t>(destination);
+    b.write_pod<uint64_t>(source);
+    b.write_pod<uint64_t>(scratch);
+    b.write_pod<uint64_t>(instances);
+    b.write_pod<uint32_t>(geometry_count);
+    if (geometry_count > 8192u || (geometry_count != 0u && geometries == nullptr)) return abandon(t);
+    if (geometry_count != 0u) b.write(geometries, sizeof(*geometries) * geometry_count);
+    b.write_pod<uint32_t>(postbuild_count);
+    if (postbuild_count > 8u || (postbuild_count != 0u && postbuilds == nullptr)) return abandon(t);
+    if (postbuild_count != 0u) b.write(postbuilds, sizeof(*postbuilds) * postbuild_count);
+    return t.send_async(kCmd_BuildAccelerationStructure12, b) == ::av::TransportResult::ok;
+}
+
+bool av_d3d12_EmitAccelerationStructurePostbuild12(::av::ClientTransport& t, uint32_t list, uint32_t type, uint64_t destination, uint32_t source_count, const uint64_t* sources) {
+    AV_SCOPE("av_d3d12_EmitAccelerationStructurePostbuild12");
+    ::av::WireWriter b = t.request_writer();
+    b.write_pod<uint32_t>(list);
+    b.write_pod<uint32_t>(type);
+    b.write_pod<uint64_t>(destination);
+    b.write_pod<uint32_t>(source_count);
+    if (source_count > 4096u || (source_count != 0u && sources == nullptr)) return abandon(t);
+    if (source_count != 0u) b.write(sources, sizeof(*sources) * source_count);
+    return t.send_async(kCmd_EmitAccelerationStructurePostbuild12, b) == ::av::TransportResult::ok;
+}
+
+bool av_d3d12_CopyAccelerationStructure12(::av::ClientTransport& t, uint32_t list, uint64_t destination, uint64_t source, uint32_t mode) {
+    AV_SCOPE("av_d3d12_CopyAccelerationStructure12");
+    ::av::WireWriter b = t.request_writer();
+    b.write_pod<uint32_t>(list);
+    b.write_pod<uint64_t>(destination);
+    b.write_pod<uint64_t>(source);
+    b.write_pod<uint32_t>(mode);
+    return t.send_async(kCmd_CopyAccelerationStructure12, b) == ::av::TransportResult::ok;
+}
+
+bool av_d3d12_SetStateObject12(::av::ClientTransport& t, uint32_t list, uint32_t object) {
+    AV_SCOPE("av_d3d12_SetStateObject12");
+    ::av::WireWriter b = t.request_writer();
+    b.write_pod<uint32_t>(list);
+    b.write_pod<uint32_t>(object);
+    return t.send_async(kCmd_SetStateObject12, b) == ::av::TransportResult::ok;
+}
+
+bool av_d3d12_DispatchRays12(::av::ClientTransport& t, uint32_t list, const RayTable& raygen, const RayTable& miss, const RayTable& hit, const RayTable& callable, uint32_t width, uint32_t height, uint32_t depth) {
+    AV_SCOPE("av_d3d12_DispatchRays12");
+    ::av::WireWriter b = t.request_writer();
+    b.write_pod<uint32_t>(list);
+    b.write_pod(raygen);
+    b.write_pod(miss);
+    b.write_pod(hit);
+    b.write_pod(callable);
+    b.write_pod<uint32_t>(width);
+    b.write_pod<uint32_t>(height);
+    b.write_pod<uint32_t>(depth);
+    return t.send_async(kCmd_DispatchRays12, b) == ::av::TransportResult::ok;
 }
 
 }  // namespace av::d3d12proto

@@ -4,6 +4,8 @@
 #include "core/trace/function_scope.hpp"
 #include "executor/d3d/d3d12_copy_formats.hpp"
 #include "executor/d3d/d3d12_list_cast.hpp"
+#include "executor/d3d/d3d12_shading_rate.hpp"
+#include "executor/shim/d3d12_host_device.hpp"
 #include "executor/d3d/d3d12_subresource_extent.hpp"
 #include "executor/shim/d3d_headers.hpp"
 #include "proto/d3d/dxgi_format_layout.hpp"
@@ -145,6 +147,49 @@ bool D3d12Session::on_SetDepthBounds12(uint32_t id, float minimum, float maximum
     return true;
 }
 
+bool D3d12Session::on_SetFrontAndBackStencilRef12(uint32_t id, uint32_t front, uint32_t back)
+{
+    AV_SCOPE("D3d12Session::on_SetFrontAndBackStencilRef12");
+    const D3d12ListCast<ID3D12GraphicsCommandList8> stencil(list(id));
+    if (stencil.get() == nullptr) return false;
+    stencil.get()->OMSetFrontAndBackStencilRef(front, back);
+    return true;
+}
+
+bool D3d12Session::on_SetShadingRate12(uint32_t id, uint32_t base_rate, uint32_t combiner0, uint32_t combiner1)
+{
+    AV_SCOPE("D3d12Session::on_SetShadingRate12");
+    const D3d12ListCast<ID3D12GraphicsCommandList5> shading(list(id));
+    if (shading.get() == nullptr) return false;
+    const d3d12proto::Caps12 &caps = device_->capabilities().caps();
+    const D3d12ShadingRate rate(base_rate, combiner0, combiner1);
+    if (!rate.holds(caps.vrs_tier, caps.vrs_additional_rates != 0u, caps.vrs_sum_combiner != 0u)) {
+        LogLine(lines_).text("SetShadingRate12 on list ").number(id).text(" with a rate or combiner the host does not offer").write();
+        return false;
+    }
+    const UINT combiners[2] = {caps.vrs_tier >= 2u ? combiner0 : 0u, caps.vrs_tier >= 2u ? combiner1 : 0u};
+    shading.get()->RSSetShadingRate(base_rate, combiners);
+    return true;
+}
+
+bool D3d12Session::on_SetShadingRateImage12(uint32_t id, uint32_t image)
+{
+    AV_SCOPE("D3d12Session::on_SetShadingRateImage12");
+    const D3d12ListCast<ID3D12GraphicsCommandList5> shading(list(id));
+    ID3D12Resource *const resource =
+        image == 0u ? nullptr : objects_.find_as<ID3D12Resource>(image, D3dObjectKind::resource12);
+    if (shading.get() == nullptr || device_->capabilities().caps().vrs_tier < 2u || (image != 0u && resource == nullptr))
+        return false;
+    if (resource != nullptr) {
+        const D3D12_RESOURCE_DESC desc = resource->GetDesc();
+        if (desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || desc.Format != DXGI_FORMAT_R8_UINT ||
+            desc.SampleDesc.Count != 1u || !retain_resource(id, image))
+            return false;
+    }
+    shading.get()->RSSetShadingRateImage(resource);
+    return true;
+}
+
 bool D3d12Session::on_SetPredication12(uint32_t id, uint32_t buffer, uint64_t offset, uint32_t op)
 {
     AV_SCOPE("D3d12Session::on_SetPredication12");
@@ -177,7 +222,8 @@ bool D3d12Session::on_SetStreamOutputTargets12(uint32_t id, uint32_t start, uint
         if (view.address == 0u) continue;
         const uint64_t host = addresses_.translate(view.address, view.size);
         const uint64_t filled = view.filled_address == 0u ? 0u : addresses_.translate(view.filled_address, counter_bytes);
-        if (host == 0u || view.size == 0u || (view.filled_address != 0u && filled == 0u) ||
+        if (host == 0u || view.size == 0u || host % counter_bytes != 0u || filled % counter_bytes != 0u ||
+            (view.filled_address != 0u && filled == 0u) ||
             !retain_address(id, view.address) || (view.filled_address != 0u && !retain_address(id, view.filled_address)))
             return false;
         made[index] = {host, view.size, filled};

@@ -20,7 +20,7 @@ public:
         gl_invalid_enum = 0x0500u, gl_invalid_value = 0x0501u, gl_invalid_operation = 0x0502u,
         gl_read_only = 0x88B8u, gl_write_only = 0x88B9u, gl_read_write = 0x88BAu, gl_dynamic_storage_bit = 0x0100u,
         gl_extensions = 0x1F03u, gl_num_extensions = 0x821Du, gl_debug_callback_function = 0x8244u, gl_debug_callback_user_param = 0x8245u,
-        gl_vertex_attrib_array_pointer = 0x8645u, gl_buffer_map_pointer = 0x88BDu, gl_uniform = 0x8E17u,
+        gl_vertex_attrib_array_pointer = 0x8645u, gl_buffer_map_pointer = 0x88BDu, gl_uniform = 0x92E1u,
         gl_type = 0x92FAu, gl_invalid_index = 0xFFFFFFFFu, gl_texture_width = 0x1000u, gl_texture_height = 0x1001u,
         gl_texture_depth = 0x8071u, gl_texture_compressed_image_size = 0x86A0u,
     };
@@ -147,17 +147,40 @@ public:
     void vertex_attrib_pointer(uint32_t index, int32_t size, uint32_t type, uint8_t normalized, int32_t stride,
                                const void *pointer);
     void enable_vertex_attrib_array(uint32_t index, bool enable);
+    void program_string(uint32_t target, uint32_t pname, void *string);
+    void array_pointer(uint32_t slot, int32_t size, uint32_t type, int32_t stride, const void *pointer);
+    void client_state(uint32_t capability, bool enable);
+    void client_active_texture(uint32_t texture);
+    void interleaved_arrays(uint32_t format, int32_t stride, const void *pointer);
+    void array_element(int32_t index);
+    void begin_primitives();
+    bool stage_arrays(int32_t first, int32_t count);
+    bool stage_elements(uint32_t type, int32_t count, const void *&indices, int32_t base_vertex);
+    bool stage_multi_arrays(const int32_t *first, const int32_t *count, int32_t draws);
+    bool stage_multi_elements(const int32_t *count, uint32_t type, const void *const *indices, int32_t draws,
+                              const int32_t *base_vertex, const uint64_t *&host_indices);
+    bool refuse_indirect_draw();
+    void finish_client_draw();
     void draw_arrays(uint32_t mode, int32_t first, int32_t count, int32_t instances);
     void draw_elements(uint32_t mode, int32_t count, uint32_t type, const void *indices, int32_t instances);
     void draw_range_elements(uint32_t mode, uint32_t start, uint32_t end, int32_t count, uint32_t type,
                              const void *indices);
     void flush();
     void bind_framebuffer(uint32_t target, uint32_t framebuffer);
+    bool is_framebuffer(uint32_t framebuffer);
     void draw_buffer(uint32_t buffer);
     void read_buffer(uint32_t buffer);
     uint32_t client_wait_sync(void *sync, uint32_t flags, uint64_t timeout);
     void     finish();
     void debug_message_callback(void *callback, const void *user);
+    void capability(uint32_t cap, bool on);
+    uint64_t texture_handle(uint32_t texture, uint32_t sampler, bool with_sampler);
+    uint64_t image_handle(uint32_t texture, int32_t level, bool layered, int32_t layer, uint32_t format);
+    void     make_handle_resident(uint64_t handle, bool image, bool resident, uint32_t access);
+    bool     handle_resident(uint64_t handle, bool image);
+    void     uniform_handles(uint32_t program, bool with_program, int32_t location, int32_t count,
+                             const uint64_t *values);
+    void     delete_textures(int32_t count, const uint32_t *textures);
     void link_program(uint32_t program);
     void delete_program(uint32_t program);
     int32_t attrib_location(uint32_t program, const char *name);
@@ -174,7 +197,6 @@ private:
     GuestGlContext *sending();
     bool            substituted(uint32_t kind, uint32_t name, GuestGlContext *&context, uint32_t &made);
     void            record(uint32_t error);
-    bool            indices_cross(const void *indices);
     bool            bound_to(GuestGlContext &context, uint32_t target, uint32_t &buffer);
     void           *map_name(GuestGlContext &context, uint32_t buffer, int64_t offset, int64_t length,
                              uint32_t access);

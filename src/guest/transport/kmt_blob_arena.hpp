@@ -19,16 +19,19 @@ struct KmtBlobArenaProbe;
 class KmtBlobArena {
 public:
     static constexpr uint64_t default_bytes = uint64_t{16} << 20u;
+    static constexpr uint64_t min_bytes = uint64_t{1} << 20u;
     static constexpr uint64_t max_bytes = uint64_t{1} << 30u;
     static constexpr uint32_t max_regions = 8u;
     static constexpr uint64_t idle_release_ticks = uint64_t{100000000};
 
     KmtBlobArena(GuestConnection &connection, KmtTransport &transport, DriverLog &lines);
+    KmtBlobArena(GuestConnection &connection, KmtTransport &transport, DriverLog &lines, KmtBlobArena &session);
     ~KmtBlobArena();
     KmtBlobArena(const KmtBlobArena &) = delete;
     KmtBlobArena &operator=(const KmtBlobArena &) = delete;
 
     [[nodiscard]] Status open(uint64_t bytes);
+    [[nodiscard]] Status open_small(uint64_t bytes);
     [[nodiscard]] Status close();
     [[nodiscard]] Status abandon();
     [[nodiscard]] Status grow(uint64_t need);
@@ -45,6 +48,7 @@ public:
     bool invariants_hold() const;
 
 private:
+    [[nodiscard]] Status start(uint64_t size);
     [[nodiscard]] Status open_control();
     [[nodiscard]] Status settle(bool abandoning);
     [[nodiscard]] Status add_ring(uint64_t want);
@@ -54,7 +58,9 @@ private:
     GuestConnection               &connection_;
     KmtTransport                  &transport_;
     DriverLog                     &lines_;
-    ArenaSlots                     slots_;
+    ArenaSlots                     own_slots_;
+    ArenaSlots                    &slots_;
+    bool                           member_;
     ObjectStorage<ArenaSegment>    control_;
     ObjectStorage<ArenaSegment>    rings_[ClientBlobArena::max_segments];
     ObjectStorage<ArenaSegment>    regions_[max_regions];

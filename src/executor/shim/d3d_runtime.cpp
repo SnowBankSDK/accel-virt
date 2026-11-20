@@ -32,8 +32,9 @@ void *D3dRuntime::open_library(const char *name) const
 D3dRuntime::D3dRuntime()
     : dxgi_(nullptr), d3d11_(nullptr), d3d12core_(nullptr), d3d12_(nullptr), d3d9_(nullptr), create_factory_(nullptr),
       create_device11_(nullptr), get_interface12_(nullptr), create9_(nullptr),
-      open_dmabuf_heap_(nullptr),
-      serialize_root_(nullptr), export_image_(nullptr), export_fence_(nullptr), abandon_waits_(nullptr)
+      open_dmabuf_heap_(nullptr), create_exported_heap_(nullptr),
+      serialize_root_(nullptr), export_image_(nullptr), export_fence_(nullptr), abandon_waits_(nullptr), set_indirect_table_(nullptr),
+      take_memory11_(nullptr), take_memory9_(nullptr)
 {
     AV_SCOPE("D3dRuntime::D3dRuntime");
 }
@@ -59,6 +60,7 @@ bool D3dRuntime::open()
     }
     create_factory_ = reinterpret_cast<CreateFactory>(dlsym(dxgi_, "CreateDXGIFactory1"));
     create_device11_ = reinterpret_cast<CreateDevice11>(dlsym(d3d11_, "D3D11CreateDevice"));
+    take_memory11_ = reinterpret_cast<TakeOutOfMemory>(dlsym(d3d11_, "dxvk_take_out_of_memory"));
     if (create_factory_ == nullptr || create_device11_ == nullptr) {
         close();
         return false;
@@ -69,13 +71,18 @@ bool D3dRuntime::open()
         get_interface12_ = reinterpret_cast<GetInterface12>(dlsym(d3d12_, "D3D12GetInterface"));
         open_dmabuf_heap_ =
             reinterpret_cast<OpenDmabufHeap>(dlsym(d3d12core_, "vkd3d_proton_open_heap_from_dmabuf"));
+        create_exported_heap_ =
+            reinterpret_cast<CreateExportedHeap>(dlsym(d3d12core_, "vkd3d_proton_create_exported_heap"));
         serialize_root_ = reinterpret_cast<SerializeRoot>(dlsym(d3d12_, "D3D12SerializeVersionedRootSignature"));
         export_image_ = reinterpret_cast<ExportImage>(dlsym(d3d12core_, "vkd3d_proton_export_image"));
         export_fence_ = reinterpret_cast<ExportFence>(dlsym(d3d12core_, "vkd3d_proton_export_fence"));
         abandon_waits_ = reinterpret_cast<AbandonWaits>(dlsym(d3d12core_, "vkd3d_proton_abandon_waits"));
+        set_indirect_table_ =
+            reinterpret_cast<SetIndirectTable>(dlsym(d3d12core_, "vkd3d_proton_set_indirect_va_table"));
     }
     d3d9_ = open_library("libdxvk_d3d9.so");
     if (d3d9_ != nullptr) create9_ = reinterpret_cast<Create9>(dlsym(d3d9_, "Direct3DCreate9"));
+    if (d3d9_ != nullptr) take_memory9_ = reinterpret_cast<TakeOutOfMemory>(dlsym(d3d9_, "dxvk_take_out_of_memory"));
     return true;
 }
 
@@ -86,11 +93,15 @@ void D3dRuntime::close()
     create_device11_ = nullptr;
     get_interface12_ = nullptr;
     create9_ = nullptr;
+    take_memory11_ = nullptr;
+    take_memory9_ = nullptr;
     open_dmabuf_heap_ = nullptr;
+    create_exported_heap_ = nullptr;
     serialize_root_ = nullptr;
     export_image_ = nullptr;
     export_fence_ = nullptr;
     abandon_waits_ = nullptr;
+    set_indirect_table_ = nullptr;
     dxgi_ = nullptr;
     d3d11_ = nullptr;
     d3d12core_ = nullptr;
@@ -110,6 +121,27 @@ void D3dRuntime::give_vram_gate(const AvVramGate &gate) const
     if (d3d12core_ == nullptr) return;
     const SetVramGate set12 = reinterpret_cast<SetVramGate>(dlsym(d3d12core_, "vkd3d_proton_set_vram_gate"));
     if (set12 != nullptr) set12(&gate);
+}
+
+uint32_t D3dRuntime::give_lifecycle_gates(const AvLifecycleGates &gates) const
+{
+    AV_SCOPE("D3dRuntime::give_lifecycle_gates");
+    uint32_t taken = 0u;
+    void *const libraries[] = {d3d11_, d3d9_};
+    for (void *library : libraries) {
+        if (library == nullptr) continue;
+        const SetLifecycleGates set =
+            reinterpret_cast<SetLifecycleGates>(dlsym(library, "dxvk_proton_set_lifecycle_gates"));
+        if (set == nullptr) continue;
+        set(&gates);
+        taken++;
+    }
+    if (d3d12core_ == nullptr) return taken;
+    const SetLifecycleGates set12 =
+        reinterpret_cast<SetLifecycleGates>(dlsym(d3d12core_, "vkd3d_proton_set_lifecycle_gates"));
+    if (set12 == nullptr) return taken;
+    set12(&gates);
+    return taken + 1u;
 }
 
 IDirect3D9 *D3dRuntime::create_d3d9() const
@@ -160,7 +192,7 @@ int32_t D3dRuntime::create_device11(IDXGIAdapter1 *adapter, ID3D11Device *&devic
                             &feature_level, &context);
 }
 
-uint32_t D3dRuntime::vulkan_index(const uint8_t *uuid) const
+uint32_t D3dRuntime::vulkan_index(const uint8_t *uuid, uint32_t &count) const
 {
     AV_SCOPE("D3dRuntime::vulkan_index");
     constexpr uint32_t most_devices = 16u;
@@ -172,11 +204,13 @@ uint32_t D3dRuntime::vulkan_index(const uint8_t *uuid) const
     create.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     create.pApplicationInfo = &application;
     VkInstance instance = VK_NULL_HANDLE;
+    count = 0u;
     if (vkCreateInstance(&create, nullptr, &instance) != VK_SUCCESS) return ~0u;
     VkPhysicalDevice devices[most_devices] = {};
-    uint32_t count = most_devices;
+    count = most_devices;
     uint32_t found = ~0u;
-    if (vkEnumeratePhysicalDevices(instance, &count, devices) >= 0) {
+    if (vkEnumeratePhysicalDevices(instance, &count, devices) < 0) count = 0u;
+    else {
         for (uint32_t index = 0u; index < count && found == ~0u; index++)
             if (PhysicalDeviceIdentity(instance, devices[index]).is(uuid)) found = index;
     }
@@ -187,11 +221,46 @@ uint32_t D3dRuntime::vulkan_index(const uint8_t *uuid) const
 int32_t D3dRuntime::create_device12(const uint8_t *uuid, void *&device) const
 {
     AV_SCOPE("D3dRuntime::create_device12");
-    constexpr size_t index_bytes = 16u;
     device = nullptr;
     if (get_interface12_ == nullptr || uuid == nullptr) return E_FAIL;
-    const uint32_t index = vulkan_index(uuid);
-    if (index == ~0u) return E_FAIL;
+    uint32_t       count = 0u;
+    const uint32_t first = vulkan_index(uuid, count);
+    if (first == ~0u) return E_FAIL;
+    int32_t made = E_FAIL;
+    for (uint32_t tried = 0u; tried < count; tried++) {
+        void *candidate = nullptr;
+        made = create_device12_at((first + tried) % count, candidate);
+        if (FAILED(made) || candidate == nullptr) continue;
+        if (made_on(candidate, uuid)) {
+            device = candidate;
+            return made;
+        }
+        static_cast<IUnknown *>(candidate)->Release();
+        made = E_FAIL;
+    }
+    return made;
+}
+
+bool D3dRuntime::made_on(void *device, const uint8_t *uuid) const
+{
+    AV_SCOPE("D3dRuntime::made_on");
+    ID3D12DeviceExt *ext = nullptr;
+    if (FAILED(static_cast<IUnknown *>(device)->QueryInterface(__uuidof(ID3D12DeviceExt),
+                                                               reinterpret_cast<void **>(&ext))))
+        return false;
+    VkInstance       instance = VK_NULL_HANDLE;
+    VkPhysicalDevice physical = VK_NULL_HANDLE;
+    VkDevice         vulkan = VK_NULL_HANDLE;
+    const bool       asked = SUCCEEDED(ext->GetVulkanHandles(&instance, &physical, &vulkan));
+    ext->Release();
+    return asked && PhysicalDeviceIdentity(instance, physical).is(uuid);
+}
+
+int32_t D3dRuntime::create_device12_at(uint32_t index, void *&device) const
+{
+    AV_SCOPE("D3dRuntime::create_device12_at");
+    constexpr size_t index_bytes = 16u;
+    device = nullptr;
     ID3D12DeviceFactory *factory = nullptr;
     const GUID factory_class = clsid_d3d12_device_factory;
     const GUID factory_id = __uuidof(ID3D12DeviceFactory);
@@ -221,6 +290,24 @@ int32_t D3dRuntime::open_dmabuf_heap(void *device, void *address, int fd, uint64
     return made;
 }
 
+int32_t D3dRuntime::create_exported_heap(void *device, const void *desc, int &fd, void *&heap) const
+{
+    AV_SCOPE("D3dRuntime::create_exported_heap");
+    heap = nullptr;
+    fd = -1;
+    if (create_exported_heap_ == nullptr || device == nullptr || desc == nullptr) return E_NOTIMPL;
+    const GUID    heap_id = __uuidof(ID3D12Heap);
+    const int32_t made = create_exported_heap_(device, desc, &fd, &heap_id, &heap);
+    if (FAILED(made)) heap = nullptr;
+    return made;
+}
+
+bool D3dRuntime::exports_heaps() const
+{
+    AV_SCOPE("D3dRuntime::exports_heaps");
+    return create_exported_heap_ != nullptr;
+}
+
 int32_t D3dRuntime::export_image(void *resource, Vkd3dImageExport &image) const
 {
     AV_SCOPE("D3dRuntime::export_image");
@@ -228,10 +315,28 @@ int32_t D3dRuntime::export_image(void *resource, Vkd3dImageExport &image) const
     return export_image_(resource, &image);
 }
 
+uint32_t D3dRuntime::take_out_of_memory() const
+{
+    AV_SCOPE("D3dRuntime::take_out_of_memory");
+    return (take_memory11_ != nullptr ? take_memory11_() : 0u) + (take_memory9_ != nullptr ? take_memory9_() : 0u);
+}
+
 void D3dRuntime::abandon_waits(void *device) const
 {
     AV_SCOPE("D3dRuntime::abandon_waits");
     if (abandon_waits_ != nullptr && device != nullptr) abandon_waits_(device);
+}
+
+bool D3dRuntime::translates_indirect_addresses() const
+{
+    AV_SCOPE("D3dRuntime::translates_indirect_addresses");
+    return set_indirect_table_ != nullptr;
+}
+
+void D3dRuntime::set_indirect_va_table(void *list, uint64_t table) const
+{
+    AV_SCOPE("D3dRuntime::set_indirect_va_table");
+    if (set_indirect_table_ != nullptr && list != nullptr) static_cast<void>(set_indirect_table_(list, table));
 }
 
 int32_t D3dRuntime::export_fence(void *fence, int &fd) const

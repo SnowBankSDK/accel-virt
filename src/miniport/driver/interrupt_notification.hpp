@@ -26,7 +26,7 @@ public:
     [[nodiscard]] Status report_multiplane_vsync(uint32_t target, const DxgkMultiplaneOverlayVsyncInfoRecord *layers,
                                                  uint32_t count);
     [[nodiscard]] Status report_presented_vsync(uint32_t target, const DxgkMultiplaneOverlayVsyncInfo2Record *layers,
-                                                uint32_t count);
+                                                uint32_t count, uint64_t ago_ns);
     uint8_t              notify();
 
 private:
@@ -39,6 +39,7 @@ private:
         monitored_fence_signaled = 11
     };
     static constexpr uint32_t physical_adapter_mask = 1u;
+    static constexpr uint64_t nanoseconds_per_second = 1000000000u;
 
     [[nodiscard]] Status report();
 

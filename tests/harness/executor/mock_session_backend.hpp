@@ -71,12 +71,15 @@ public:
     void               release_object(std::uint32_t kind, std::uint64_t wire_handle, std::uint64_t detail) override;
 
     void          use_host_ram(ByteLedger *ledger, std::uint64_t limit) override;
+    void          lease_from(SessionLease *lease) override;
     ByteLedger   *host_ram_ledger() const;
     std::uint64_t host_ram_limit() const;
     void          shut_down() override;
     std::uint32_t shut_downs() const;
     void          let_go_of_thread() override;
     std::uint32_t let_goes() const;
+    void          leave_device() override;
+    std::uint32_t left_devices() const;
     std::uint32_t abandoned_before_shut_down() const;
     std::uint32_t released_before_shut_down() const;
 
@@ -108,6 +111,7 @@ private:
     std::uint64_t last_released_detail_ = 0u;
     std::uint32_t shut_downs_ = 0u;
     std::uint32_t let_goes_ = 0u;
+    std::uint32_t left_devices_ = 0u;
     std::uint32_t drains_ = 0u;
     std::uint32_t finished_drains_ = 0u;
     bool          drains_in_time_ = true;

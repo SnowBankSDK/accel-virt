@@ -25,6 +25,7 @@ public:
     void write(uint32_t target, intptr_t offset, size_t bytes, const uint8_t *from);
     void write_named(uint32_t buffer, intptr_t offset, size_t bytes, const uint8_t *from);
     void write_named_ext(uint32_t buffer, intptr_t offset, size_t bytes, const uint8_t *from);
+    void write_slice(uint32_t buffer, uint64_t offset, size_t bytes, const uint8_t *from);
     void read(uint32_t target, intptr_t offset, size_t bytes, uint8_t *into);
     void read_named(uint32_t buffer, intptr_t offset, size_t bytes, uint8_t *into);
     void read_named_ext(uint32_t buffer, intptr_t offset, size_t bytes, uint8_t *into);

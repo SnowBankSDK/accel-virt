@@ -14,15 +14,21 @@
 #include "executor/shim/d3d9_host_device.hpp"
 #include "executor/shim/loader_host_apis.hpp"
 #include "executor/d3d/shared_surfaces.hpp"
+#include "proto/resources/cross_adapter_layout.hpp"
 #include "proto/resources/surface_point.hpp"
 #include "harness/executor/d3d_loopback.hpp"
 #include "harness/executor/executor_log_rig.hpp"
+#include "harness/executor/lease_rig.hpp"
+#include "proto/d3d/resource_footprint.hpp"
 #include "executor/shim/host_heap.hpp"
 #include "harness/framework/test_registry.hpp"
 #include "proto/resources/host_memory_request.hpp"
 #include "harness/platform/mock_platform.hpp"
 #include "proto/generated/d3d9/d3d9_dispatch_client.h"
 
+#include <unistd.h>
+
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -60,13 +66,28 @@ bool host_devices(av::LoaderHostApis &apis, av::D3d11HostDevice *&device11, av::
 {
     if (std::getenv("AV_D3D_PATH") == nullptr) setenv("AV_D3D_PATH", AV_FIXTURE_DIR "/../../build-d3d/lib", 1);
     apis.open();
+    const char *const wanted = std::getenv("AV_TEST_HOST_GPU");
     for (std::uint32_t index = 0u; index < apis.gpu_count(); index++) {
+        if (wanted != nullptr) {
+            std::uint8_t candidate[16] = {};
+            apis.gpu_uuid(index, candidate);
+            char text[33] = {};
+            for (std::uint32_t at = 0u; at < 16u; at++) std::snprintf(text + 2u * at, 3u, "%02x", candidate[at]);
+            if (std::strcmp(text, wanted) != 0) continue;
+        }
         device11 = apis.d3d11_device(index);
         device9 = apis.d3d9_device(index);
         if (device11 != nullptr && device9 != nullptr) return true;
     }
     std::fprintf(stderr, "no GPU here runs DXVK's d3d9: nothing judged\n");
     return false;
+}
+
+std::uint32_t gpu_of(av::LoaderHostApis &apis, const av::D3d9HostDevice *device9)
+{
+    std::uint32_t index = 0u;
+    while (index < apis.gpu_count() && apis.d3d9_device(index) != device9) index++;
+    return index;
 }
 
 struct Pixels {
@@ -321,6 +342,53 @@ TEST(d3d9_session_device, a_pretransformed_triangle_needs_no_shader)
     CHECK_EQ(wire.refused(), 0u);
 }
 
+TEST(d3d9_session_device, the_last_pixel_of_a_line_is_drawn_only_while_last_pixel_is_on)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice    *device11 = nullptr;
+    av::D3d9HostDevice     *device9 = nullptr;
+    if (!host_devices(apis, device11, device9)) return;
+    av::D3dBackend backend(rig.log);
+    av::SessionShares unshared;
+    CHECK(backend.initialize(unshared, rig.imports, device11, nullptr, nullptr, device9));
+    av::D3dLoopback wire(backend, rig.imports);
+    make_target(wire);
+
+    constexpr std::uint32_t line_list = 2u;
+    constexpr std::uint32_t line_strip = 3u;
+    constexpr std::uint32_t render_state_last_pixel = 16u;
+    const ScreenVertex lines[4] = {{10.0f, 10.0f, 0.5f, 1.0f, green},
+                                   {30.0f, 10.0f, 0.5f, 1.0f, green},
+                                   {10.0f, 20.0f, 0.5f, 1.0f, green},
+                                   {30.0f, 20.0f, 0.5f, 1.0f, green}};
+    CHECK(av_d3d9_CreateVertexBuffer9(wire, vertices, sizeof(lines), usage_write_only, fvf_xyzrhw_diffuse,
+                                      pool_managed));
+    CHECK(av_d3d9_WriteBuffer9(wire, vertices, 0u, 0u, reinterpret_cast<const std::uint8_t *>(lines), sizeof(lines)));
+    CHECK(av_d3d9_SetFvf9(wire, fvf_xyzrhw_diffuse));
+    CHECK(av_d3d9_SetStreamSource9(wire, 0u, vertices, 0u, sizeof(ScreenVertex)));
+    const std::uint32_t off[] = {render_state_last_pixel, 0u};
+    CHECK(av_d3d9_SetRenderStates9(wire, 2u, off));
+    CHECK(av_d3d9_DrawPrimitive9(wire, line_list, 0u, 2u));
+    Pixels pixels;
+    CHECK(read(wire, draw_target, pixels));
+    CHECK_EQ(pixels.at(20u, 10u), green);
+    CHECK_EQ(pixels.at(30u, 10u), black);
+    CHECK_EQ(pixels.at(30u, 20u), black);
+    const std::uint32_t on[] = {render_state_last_pixel, 1u};
+    CHECK(av_d3d9_SetRenderStates9(wire, 2u, on));
+    CHECK(av_d3d9_DrawPrimitive9(wire, line_list, 0u, 2u));
+    CHECK(read(wire, draw_target, pixels));
+    CHECK_EQ(pixels.at(30u, 10u), green);
+    CHECK_EQ(pixels.at(30u, 20u), green);
+    CHECK_EQ(pixels.at(31u, 10u), black);
+    CHECK(av_d3d9_Clear9(wire, 0u, nullptr, clear_target, black, 1.0f, 0u));
+    CHECK(av_d3d9_DrawPrimitive9(wire, line_strip, 1u, 2u));
+    CHECK(read(wire, draw_target, pixels));
+    CHECK_EQ(pixels.at(30u, 20u), green);
+    CHECK_EQ(wire.refused(), 0u);
+}
+
 TEST(d3d9_session_device, a_texture_write_reads_back_where_it_was_written)
 {
     av::ExecutorLogRig rig;
@@ -518,7 +586,7 @@ TEST(d3d9_session_device, a_flipped_primary_is_shared_under_its_key_as_it_was_dr
     av::D3d11HostDevice *device11 = nullptr;
     av::D3d9HostDevice  *device9 = nullptr;
     if (!host_devices(apis, device11, device9)) return;
-    av::HostShares *const shares = apis.shares(0u);
+    av::HostShares *const shares = apis.shares(gpu_of(apis, device9));
     constexpr std::uint64_t key = 0x9160u, other_key = 0x9161u;
     constexpr std::uint32_t domain = 1u, format_r5g6b5 = 23u;
     av::HostHeap       surfaces_heap;
@@ -563,6 +631,105 @@ TEST(d3d9_session_device, a_flipped_primary_is_shared_under_its_key_as_it_was_dr
     shares->release(domain, 0u);
 }
 
+TEST(d3d9_session_device,
+     a_shared_render_target_is_the_image_direct3d_11_and_a_second_direct3d_9_device_read_with_no_present_point)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice *device11 = nullptr;
+    av::D3d9HostDevice  *device9 = nullptr;
+    if (!host_devices(apis, device11, device9)) return;
+    av::HostShares *const shares = apis.shares(gpu_of(apis, device9));
+    constexpr std::uint64_t key = 0x9170u, texture_key = 0x9171u, nobodys_key = 0x9172u;
+    constexpr std::uint32_t domain = 1u, kind_surface = 1u, kind_texture = 2u;
+    constexpr std::uint32_t opened = 30u, copy = 31u, shared_texture = 32u, never_opened = 33u;
+    av::HostHeap       surfaces_heap;
+    av::SharedSurfaces surfaces(surfaces_heap);
+    av::D3dBackend     backend(rig.log);
+    av::SessionShares  session;
+    session.bind(*shares, domain, backend);
+    CHECK(backend.initialize(session, rig.imports, device11, nullptr, &surfaces, device9));
+    av::D3dLoopback wire(backend, rig.imports);
+    const Rect all = {0, 0, static_cast<std::int32_t>(size), static_cast<std::int32_t>(size)};
+    const Rect right = {static_cast<std::int32_t>(size / 2u), 0, static_cast<std::int32_t>(size),
+                        static_cast<std::int32_t>(size)};
+    std::uint32_t seen[size * size] = {};
+    const auto through_d3d11 = [&](std::uint64_t name, std::uint32_t left, std::uint32_t far_right) {
+        return device11->read_image(domain, name, seen, size * 4u, size, size) &&
+               (seen[size * (size / 2u)] & 0x00ffffffu) == (left & 0x00ffffffu) &&
+               (seen[size * (size / 2u) + size - 1u] & 0x00ffffffu) == (far_right & 0x00ffffffu);
+    };
+
+    std::uint32_t hresult = 1u;
+    CHECK(av_d3d9_CreateDevice9(wire, device, 0u, &hresult));
+    CHECK_EQ(hresult, 0u);
+    CHECK(av_d3d9_CreateSharedSurface9(wire, target, kind_surface, size, size, format_a8r8g8b8, key));
+    CHECK(av_d3d9_SetRenderTarget9(wire, 0u, target, 0u));
+    CHECK(av_d3d9_Clear9(wire, 0u, nullptr, clear_target, green, 1.0f, 0u));
+    CHECK(av_d3d9_PresentPoint9(wire, target, 0u, key, 0u));
+    bool presented = false;
+    for (int waited = 0; waited < 200 && !presented; waited++) {
+        presented = through_d3d11(key, green, green);
+        if (!presented) usleep(10000);
+    }
+    CHECK(presented);
+    Pixels drawn;
+    CHECK(av_d3d9_Clear9(wire, 0u, nullptr, clear_target, red, 1.0f, 0u));
+    CHECK(av_d3d9_Clear9(wire, 1u, &right, clear_target, blue, 1.0f, 0u));
+    CHECK(read(wire, target, drawn));
+    CHECK_EQ(drawn.hresult, 0u);
+    CHECK_EQ(drawn.at(1u, size / 2u), red);
+    CHECK_EQ(wire.refused(), 0u);
+    CHECK(through_d3d11(key, red, blue));
+
+    CHECK(av_d3d9_SelectDevice9(wire, other_device));
+    hresult = 1u;
+    CHECK(av_d3d9_CreateDevice9(wire, other_device, 0u, &hresult));
+    CHECK_EQ(hresult, 0u);
+    hresult = 1u;
+    CHECK(av_d3d9_OpenSharedSurface9(wire, opened, key, &hresult));
+    CHECK_EQ(hresult, 0u);
+    CHECK(av_d3d9_CreateSurface9(wire, copy, kind_render_target, size, size, format_a8r8g8b8, 0u, 0u, 0u));
+    CHECK(av_d3d9_StretchRect9(wire, opened, 0u, all, copy, 0u, all, 0u));
+    Pixels copied;
+    CHECK(read(wire, copy, copied));
+    CHECK_EQ(copied.hresult, 0u);
+    CHECK_EQ(copied.at(1u, size / 2u), red);
+    CHECK_EQ(copied.at(size - 2u, size / 2u), blue);
+
+    CHECK(av_d3d9_SelectDevice9(wire, device));
+    CHECK(av_d3d9_Clear9(wire, 0u, nullptr, clear_target, green, 1.0f, 0u));
+    CHECK(read(wire, target, drawn));
+    CHECK_EQ(drawn.at(1u, size / 2u), green);
+    CHECK(through_d3d11(key, green, green));
+    CHECK(av_d3d9_PresentPoint9(wire, target, 0u, key, 0u));
+    CHECK(av_d3d9_Finish9(wire, &hresult));
+    CHECK_EQ(hresult, 0u);
+    CHECK(through_d3d11(key, green, green));
+    CHECK(av_d3d9_SelectDevice9(wire, other_device));
+    CHECK(av_d3d9_StretchRect9(wire, opened, 0u, all, copy, 0u, all, 0u));
+    CHECK(read(wire, copy, copied));
+    CHECK_EQ(copied.at(1u, size / 2u), green);
+    CHECK_EQ(copied.at(size - 2u, size / 2u), green);
+    hresult = 0u;
+    CHECK(av_d3d9_OpenSharedSurface9(wire, never_opened, nobodys_key, &hresult));
+    CHECK(hresult != 0u);
+
+    CHECK(av_d3d9_SelectDevice9(wire, device));
+    CHECK(av_d3d9_CreateSharedSurface9(wire, shared_texture, kind_texture, size, size, format_a8r8g8b8, texture_key));
+    CHECK(av_d3d9_SetRenderTarget9(wire, 0u, shared_texture, 0u));
+    CHECK(av_d3d9_Clear9(wire, 0u, nullptr, clear_target, blue, 1.0f, 0u));
+    CHECK(read(wire, shared_texture, drawn));
+    CHECK_EQ(drawn.at(1u, size / 2u), blue);
+    CHECK(through_d3d11(texture_key, blue, blue));
+    CHECK(through_d3d11(key, green, green));
+    CHECK(av_d3d9_Finish9(wire, &hresult));
+    CHECK_EQ(hresult, 0u);
+    CHECK_EQ(wire.refused(), 0u);
+    backend.shut_down();
+    shares->release(domain, 0u);
+}
+
 TEST(d3d9_session_device, a_flip_with_no_compositor_crosses_through_the_cpu)
 {
     av::ExecutorLogRig rig;
@@ -572,7 +739,7 @@ TEST(d3d9_session_device, a_flip_with_no_compositor_crosses_through_the_cpu)
     if (!host_devices(apis, device11, device9)) return;
     av::CompositorDevice *const compositor = device11->compositor();
     device11->use_compositor(nullptr);
-    av::HostShares *const shares = apis.shares(0u);
+    av::HostShares *const shares = apis.shares(gpu_of(apis, device9));
     constexpr std::uint64_t key = 0x9170u;
     constexpr std::uint32_t domain = 1u;
     {
@@ -610,7 +777,7 @@ TEST(d3d9_session_device, each_flipping_device_has_a_lane_of_its_own_and_gives_i
     av::D3d11HostDevice *device11 = nullptr;
     av::D3d9HostDevice  *device9 = nullptr;
     if (!host_devices(apis, device11, device9)) return;
-    av::HostShares *const shares = apis.shares(0u);
+    av::HostShares *const shares = apis.shares(gpu_of(apis, device9));
     constexpr std::uint32_t domain = 1u, devices = 8u;
     av::MockPlatform platform;
     {
@@ -693,6 +860,201 @@ void fill_buffer(IDirect3DVertexBuffer9 *buffer, std::uint8_t byte)
     buffer->Unlock();
 }
 
+}
+
+TEST(d3d9_session_device, a_render_target_is_copied_into_lent_memory_row_by_row_and_a_copy_that_does_not_fit_is_refused)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice  *device11 = nullptr;
+    av::D3d9HostDevice   *device9 = nullptr;
+    av::HostMemorySource *source = nullptr;
+    if (!slice_host(apis, device11, device9, source)) return;
+    av::D3dBackend backend(rig.log);
+    av::SessionShares unshared;
+    CHECK(backend.initialize(unshared, rig.imports, device11, nullptr, nullptr, device9));
+    av::D3dLoopback wire(backend, rig.imports, source, 16u << 20u, 8u << 20u);
+    constexpr std::uint32_t pitch = size * 4u + 32u;
+    const std::uint64_t memory = wire.open_memory(av::HostMemoryRequest(av::HostMemoryRequest::Kind::readback, 0u),
+                                                  std::size_t{pitch} * size);
+    av::SourceMemory *const store = rig.imports.named(memory);
+    CHECK(store != nullptr);
+    std::memset(store->pointer(), 0x5a, store->size());
+
+    std::uint32_t hresult = 1u;
+    CHECK(av_d3d9_CreateDevice9(wire, device, 0u, &hresult));
+    CHECK(av_d3d9_CreateSurface9(wire, target, kind_render_target, size, size, format_a8r8g8b8, 0u, 0u, 0u));
+    CHECK(av_d3d9_SetRenderTarget9(wire, 0u, target, 0u));
+    CHECK(av_d3d9_Clear9(wire, 0u, nullptr, clear_target, red, 1.0f, 0u));
+    const Rect right = {static_cast<std::int32_t>(size / 2u), 0, static_cast<std::int32_t>(size),
+                        static_cast<std::int32_t>(size)};
+    CHECK(av_d3d9_Clear9(wire, 1u, &right, clear_target, blue, 1.0f, 0u));
+    const Rect all = {0, 0, static_cast<std::int32_t>(size), static_cast<std::int32_t>(size)};
+    CHECK(av_d3d9_CopyToLent9(wire, target, 0u, all, memory, pitch, 0u, 0u));
+    CHECK(av_d3d9_Finish9(wire, &hresult));
+    CHECK_EQ(hresult, 0u);
+    CHECK_EQ(wire.refused(), 0u);
+    for (int waited = 0; waited < 2000; waited++) {
+        std::uint32_t last = 0u;
+        std::memcpy(&last, store->pointer() + std::size_t{size - 1u} * pitch + (size / 2u) * 4u, sizeof(last));
+        if (last == blue) break;
+        usleep(1000);
+    }
+    for (std::uint32_t y = 0u; y < size; y += 9u) {
+        const std::uint8_t *const row = store->pointer() + std::size_t{y} * pitch;
+        std::uint32_t left = 0u, edge = 0u;
+        std::memcpy(&left, row, sizeof(left));
+        std::memcpy(&edge, row + (size / 2u) * 4u, sizeof(edge));
+        CHECK_EQ(left, red);
+        CHECK_EQ(edge, blue);
+        CHECK_EQ(row[size * 4u], 0x5au);
+    }
+    CHECK(av_d3d9_CopyToLent9(wire, target, 0u, all, memory, size * 4u - 4u, 0u, 0u));
+    CHECK(av_d3d9_Finish9(wire, &hresult));
+    CHECK(hresult != 0u);
+    wire.close_memory(memory);
+    backend.shut_down();
+}
+
+TEST(d3d9_session_device,
+     a_flip_model_swap_chain_across_adapters_draws_into_lent_rows_and_the_device_that_opens_them_reads_them_in_place)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice  *device11 = nullptr;
+    av::D3d9HostDevice   *device9 = nullptr;
+    av::HostMemorySource *source = nullptr;
+    if (!slice_host(apis, device11, device9, source)) return;
+    av::D3dBackend backend(rig.log);
+    av::SessionShares unshared;
+    CHECK(backend.initialize(unshared, rig.imports, device11, nullptr, nullptr, device9));
+    av::D3dLoopback wire(backend, rig.imports, source, 16u << 20u, 8u << 20u);
+    enum : std::uint32_t {
+        display_device = 20,
+        display_target,
+        render_device,
+        shared_surface,
+        shared_texture,
+        opened_surface,
+        opened_texture,
+        refused_surface
+    };
+    constexpr std::uint32_t format_x8r8g8b8 = 22u;
+    constexpr std::uint32_t kind_lent_surface = 1u;
+    constexpr std::uint32_t kind_lent_texture = 2u;
+    constexpr std::uint32_t wide = 60u;
+    constexpr std::uint8_t  untouched = 0x5au;
+    const av::CrossAdapterLayout across(wide, size, format_a8r8g8b8, 4u);
+    CHECK(across.valid());
+    const std::uint32_t pitch = across.pitch();
+    CHECK(pitch > wide * 4u);
+    const av::HostMemoryRequest lend(av::HostMemoryRequest::Kind::readback, 0u);
+    const std::uint64_t surface_memory = wire.open_memory(lend, across.bytes());
+    const std::uint64_t texture_memory = wire.open_memory(lend, across.bytes());
+    av::SourceMemory *const surface_rows = rig.imports.named(surface_memory);
+    av::SourceMemory *const texture_rows = rig.imports.named(texture_memory);
+    CHECK(surface_rows != nullptr && texture_rows != nullptr);
+    std::memset(surface_rows->pointer(), untouched, surface_rows->size());
+    std::memset(texture_rows->pointer(), untouched, texture_rows->size());
+    const auto texel = [pitch](const av::SourceMemory *rows, std::uint32_t x, std::uint32_t y) {
+        std::uint32_t value = 0u;
+        std::memcpy(&value, rows->pointer() + std::size_t{y} * pitch + std::size_t{x} * 4u, sizeof(value));
+        return value;
+    };
+    const auto holds = [&texel, pitch](const av::SourceMemory *rows, std::uint32_t left, std::uint32_t right) {
+        for (std::uint32_t y = 0u; y < size; y += 7u) {
+            if (texel(rows, 0u, y) != left || texel(rows, wide / 2u - 1u, y) != left ||
+                texel(rows, wide / 2u, y) != right || texel(rows, wide - 1u, y) != right)
+                return false;
+            if (rows->pointer()[std::size_t{y} * pitch + wide * 4u] != untouched) return false;
+        }
+        return true;
+    };
+    const Rect all = {0, 0, static_cast<std::int32_t>(wide), static_cast<std::int32_t>(size)};
+    const Rect right_half = {static_cast<std::int32_t>(wide / 2u), 0, static_cast<std::int32_t>(wide),
+                             static_cast<std::int32_t>(size)};
+
+    std::uint32_t hresult = 1u;
+    CHECK(av_d3d9_CreateDevice9(wire, display_device, 0u, &hresult));
+    CHECK_EQ(hresult, 0u);
+    CHECK(av_d3d9_CreateSurface9(wire, display_target, kind_render_target, wide, size, format_x8r8g8b8, 0u, 0u, 0u));
+    CHECK(av_d3d9_SelectDevice9(wire, render_device));
+    hresult = 1u;
+    CHECK(av_d3d9_CreateDevice9(wire, render_device, 0u, &hresult));
+    CHECK_EQ(hresult, 0u);
+    CHECK(av_d3d9_CreateLentSurface9(wire, shared_surface, kind_lent_surface, wide, size, format_a8r8g8b8,
+                                     surface_memory, pitch));
+    CHECK(av_d3d9_CreateLentSurface9(wire, shared_texture, kind_lent_texture, wide, size, format_a8r8g8b8,
+                                     texture_memory, pitch));
+    CHECK(av_d3d9_Finish9(wire, &hresult));
+    CHECK_EQ(hresult, 0u);
+    CHECK_EQ(wire.refused(), 0u);
+    CHECK_EQ(surface_rows->pointer()[0], untouched);
+    CHECK_EQ(texture_rows->pointer()[0], untouched);
+
+    CHECK(av_d3d9_SetRenderTarget9(wire, 0u, shared_texture, 0u));
+    CHECK(av_d3d9_Clear9(wire, 0u, nullptr, clear_target, red, 1.0f, 0u));
+    CHECK(av_d3d9_Clear9(wire, 1u, &right_half, clear_target, blue, 1.0f, 0u));
+    CHECK(av_d3d9_StretchRect9(wire, shared_texture, 0u, all, shared_surface, 0u, all, 0u));
+    Pixels drawn;
+    CHECK(read(wire, shared_surface, drawn));
+    CHECK_EQ(drawn.hresult, 0u);
+    CHECK_EQ(drawn.at(1u, size / 2u), red);
+    CHECK_EQ(drawn.at(wide - 2u, size / 2u), blue);
+    CHECK(holds(texture_rows, red, blue));
+    CHECK(holds(surface_rows, red, blue));
+
+    CHECK(av_d3d9_SelectDevice9(wire, display_device));
+    CHECK(av_d3d9_CreateLentSurface9(wire, opened_surface, kind_lent_surface, wide, size, format_a8r8g8b8,
+                                     surface_memory, pitch));
+    CHECK(av_d3d9_CreateLentSurface9(wire, opened_texture, kind_lent_texture, wide, size, format_a8r8g8b8,
+                                     texture_memory, pitch));
+    CHECK(av_d3d9_StretchRect9(wire, opened_surface, 0u, all, display_target, 0u, all, 0u));
+    Pixels shown;
+    CHECK(read(wire, display_target, shown));
+    CHECK_EQ(shown.hresult, 0u);
+    CHECK_EQ(shown.at(1u, size / 2u), red);
+    CHECK_EQ(shown.at(wide - 2u, size / 2u), blue);
+    CHECK(holds(surface_rows, red, blue));
+    CHECK(holds(texture_rows, red, blue));
+
+    CHECK(av_d3d9_SelectDevice9(wire, render_device));
+    CHECK(av_d3d9_Clear9(wire, 0u, nullptr, clear_target, green, 1.0f, 0u));
+    CHECK(av_d3d9_Clear9(wire, 1u, &right_half, clear_target, red, 1.0f, 0u));
+    CHECK(read(wire, shared_texture, drawn));
+    CHECK_EQ(drawn.hresult, 0u);
+    CHECK_EQ(drawn.at(1u, size / 2u), green);
+    CHECK(holds(texture_rows, green, red));
+    CHECK(holds(surface_rows, red, blue));
+    CHECK(av_d3d9_SelectDevice9(wire, display_device));
+    CHECK(av_d3d9_StretchRect9(wire, opened_texture, 0u, all, display_target, 0u, all, 0u));
+    CHECK(read(wire, display_target, shown));
+    CHECK_EQ(shown.at(1u, size / 2u), green);
+    CHECK_EQ(shown.at(wide - 2u, size / 2u), red);
+    CHECK_EQ(wire.refused(), 0u);
+
+    CHECK(av_d3d9_Destroy9(wire, opened_surface));
+    CHECK(av_d3d9_Destroy9(wire, opened_texture));
+    CHECK(av_d3d9_Destroy9(wire, display_target));
+    CHECK(av_d3d9_Finish9(wire, &hresult));
+    CHECK_EQ(hresult, 0u);
+    CHECK(av_d3d9_SelectDevice9(wire, render_device));
+    CHECK(av_d3d9_SetRenderTarget9(wire, 0u, shared_surface, 0u));
+    CHECK(av_d3d9_Destroy9(wire, shared_texture));
+    CHECK(av_d3d9_Clear9(wire, 0u, nullptr, clear_target, blue, 1.0f, 0u));
+    CHECK(read(wire, shared_surface, drawn));
+    CHECK_EQ(drawn.hresult, 0u);
+    CHECK_EQ(drawn.at(1u, size / 2u), blue);
+    CHECK(holds(texture_rows, green, red));
+    CHECK(holds(surface_rows, blue, blue));
+
+    CHECK(av_d3d9_CreateLentSurface9(wire, refused_surface, kind_lent_surface, wide, size, format_a8r8g8b8,
+                                     surface_memory, wide * 4u - 4u));
+    CHECK(av_d3d9_Finish9(wire, &hresult));
+    CHECK(hresult != 0u);
+    wire.close_memory(surface_memory);
+    wire.close_memory(texture_memory);
+    backend.shut_down();
 }
 
 TEST(d3d9_session_device, a_buffer_on_a_slice_it_cannot_be_drawn_from_in_place_is_copied_into_before_each_draw)
@@ -805,5 +1167,500 @@ TEST(d3d9_session_device, a_device_that_can_draw_from_a_slice_in_place_is_probed
     buffer->Release();
     device->Release();
     wire.close_memory(memory);
+    backend.shut_down();
+}
+
+namespace {
+
+constexpr std::uint32_t fvf_xyzrhw_diffuse_tex1 = 0x004u | 0x040u | 0x100u;
+constexpr std::uint32_t fvf_xyzrhw_diffuse_tex2 = 0x004u | 0x040u | 0x200u;
+constexpr std::uint32_t render_state_wrap0 = 128u;
+constexpr std::uint32_t sampler_address_u = 1u;
+constexpr std::uint32_t sampler_address_v = 2u;
+constexpr std::uint32_t sampler_mag_filter = 5u;
+constexpr std::uint32_t sampler_min_filter = 6u;
+constexpr std::uint32_t texf_point = 1u;
+constexpr std::uint32_t texf_linear = 2u;
+constexpr std::uint32_t triangle_strip = 5u;
+constexpr std::uint32_t ring_offset = 256u;
+constexpr std::uint32_t taddress_wrap = 1u;
+constexpr std::uint32_t stage_texcoord_index = 11u;
+constexpr std::uint32_t wrap_coord_0 = 1u;
+constexpr std::uint32_t wrap_coord_1 = 2u;
+constexpr std::uint32_t texels = 8u;
+constexpr std::uint32_t decl_float2 = 1u;
+constexpr std::uint32_t usage_texcoord = 5u;
+constexpr std::uint32_t usage_positiont = 9u;
+
+constexpr std::uint32_t runtime_texture_ps_t0[] = {
+    0xffff0200u, 0x0002fffeu, 0x54584554u, 0x00464624u, 0x0200001fu, 0x80000000u, 0x900f0000u, 0x0200001fu,
+    0x80000000u, 0xb00f0000u, 0x0200001fu, 0x90000000u, 0xa00f0800u, 0x03000042u, 0x802f0001u, 0xb0e40000u,
+    0xa0e40800u, 0x03000005u, 0x80370005u, 0x80e40001u, 0x90e40000u, 0x02000001u, 0x80380005u, 0x80e40001u,
+    0x02000001u, 0x802f0001u, 0x80e40005u, 0x02000001u, 0x802f0800u, 0x80e40001u, 0x0000ffffu};
+constexpr std::uint32_t texture_ps_t1[] = {
+    0xffff0200u, 0x0200001fu, 0x80000000u, 0x900f0000u, 0x0200001fu, 0x80000000u, 0xb00f0001u, 0x0200001fu,
+    0x90000000u, 0xa00f0800u, 0x03000042u, 0x802f0001u, 0xb0e40001u, 0xa0e40800u, 0x03000005u, 0x80370005u,
+    0x80e40001u, 0x90e40000u, 0x02000001u, 0x80380005u, 0x80e40001u, 0x02000001u, 0x802f0800u, 0x80e40005u,
+    0x0000ffffu};
+constexpr std::uint32_t texcoord_vs[] = {
+    0xfffe0200u, 0x0200001fu, 0x80000000u, 0x900f0000u, 0x0200001fu, 0x8000000au, 0x900f0001u, 0x0200001fu,
+    0x80000005u, 0x900f0002u, 0x0200001fu, 0x80010005u, 0x900f0003u, 0x02000001u, 0xc00f0000u, 0x90e40000u,
+    0x02000001u, 0xd00f0000u, 0x90e40001u, 0x02000001u, 0xe00f0000u, 0x90e40002u, 0x02000001u, 0xe00f0001u,
+    0x90e40003u, 0x0000ffffu};
+
+struct WrapVertex {
+    float         x, y, z, rhw;
+    std::uint32_t color;
+    float         u0, v0, u1, v1;
+};
+
+std::uint32_t texel_color(std::uint32_t index) { return 0xff000000u | (index * 32u + 16u) << 16 | (255u - index * 32u) << 8 | index * 8u; }
+
+struct WrapDraw {
+    bool          along_u;
+    bool          second_set;
+    std::uint32_t wrap_state;
+    std::uint32_t wrap_value;
+    bool          expect_wrapped;
+};
+
+enum class WrapPath : std::uint8_t { list_point, strip_linear_at_offset, runtime_pixel_shader, vertex_and_pixel_shader };
+
+void draw_wrapped(av::D3dLoopback &wire, const WrapDraw &draw, WrapPath path)
+{
+    const bool          strip = path != WrapPath::list_point;
+    const bool          runtime_shader = path == WrapPath::runtime_pixel_shader;
+    const bool          programmable_vs = path == WrapPath::vertex_and_pixel_shader;
+    const std::uint32_t filter = strip ? texf_linear : texf_point;
+    CHECK(av_d3d9_CreateTexture9(wire, texture, 1u, texels, texels, 1u, 1u, 0u, format_a8r8g8b8, pool_managed));
+    std::uint32_t image[texels * texels];
+    for (std::uint32_t y = 0u; y < texels; y++)
+        for (std::uint32_t x = 0u; x < texels; x++) image[y * texels + x] = texel_color(draw.along_u ? x : y);
+    CHECK(av_d3d9_WriteTexture9(wire, texture, 0u, Box{0u, 0u, 0u, texels, texels, 1u}, texels * 4u, 0u, 0u,
+                                reinterpret_cast<const std::uint8_t *>(image), sizeof(image)));
+    CHECK(av_d3d9_SetTexture9(wire, 0u, texture));
+    const std::uint32_t samplers[] = {0u, sampler_min_filter, filter, 0u, sampler_mag_filter, filter,
+                                      0u, sampler_address_u, taddress_wrap, 0u, sampler_address_v, taddress_wrap};
+    CHECK(av_d3d9_SetSamplerStates9(wire, 12u, samplers));
+    if (draw.second_set && !programmable_vs) {
+        const std::uint32_t stage[] = {0u, stage_texcoord_index, 1u};
+        CHECK(av_d3d9_SetTextureStageStates9(wire, 3u, stage));
+    }
+    const std::uint32_t states[] = {draw.wrap_state, draw.wrap_value};
+    CHECK(av_d3d9_SetRenderStates9(wire, 2u, states));
+
+    const float edge = static_cast<float>(size);
+    const float a = draw.along_u ? 0.9f : 0.5f, b = draw.along_u ? 0.1f : 0.5f;
+    const float va = draw.along_u ? 0.5f : 0.9f, vb = draw.along_u ? 0.5f : 0.1f;
+    const float z = draw.second_set ? 0.0f : 1.0f;
+    const float half = edge / 2.0f;
+    const auto  vertex = [&](float x, float y, float u, float v) {
+        if (programmable_vs) return WrapVertex{x / half - 1.0f, 1.0f - y / half, 0.5f, 1.0f, 0xffffffffu, u * z, v * z, u, v};
+        return WrapVertex{x, y, 0.5f, 1.0f, 0xffffffffu, u * z, v * z, u, v};
+    };
+    const WrapVertex quad[6] = {vertex(0.0f, 0.0f, a, va),  vertex(edge, 0.0f, b, va),  vertex(0.0f, edge, a, vb),
+                                vertex(edge, 0.0f, b, va), vertex(edge, edge, b, vb), vertex(0.0f, edge, a, vb)};
+    const WrapVertex band[4] = {vertex(0.0f, 0.0f, a, va), vertex(edge, 0.0f, b, va), vertex(0.0f, edge, a, vb),
+                                vertex(edge, edge, b, vb)};
+    const std::uint32_t offset = strip ? ring_offset : 0u;
+    const std::uint32_t bytes = strip ? static_cast<std::uint32_t>(sizeof(band)) : static_cast<std::uint32_t>(sizeof(quad));
+    CHECK(av_d3d9_CreateVertexBuffer9(wire, vertices, offset + bytes, usage_write_only,
+                                      draw.second_set ? fvf_xyzrhw_diffuse_tex2 : fvf_xyzrhw_diffuse_tex1,
+                                      pool_managed));
+    CHECK(av_d3d9_WriteBuffer9(wire, vertices, offset, 0u,
+                               reinterpret_cast<const std::uint8_t *>(strip ? static_cast<const void *>(band)
+                                                                            : static_cast<const void *>(quad)),
+                               bytes));
+    if (runtime_shader || programmable_vs) {
+        const VertexElement elements[4] = {{0u, 0u, decl_float4, 0u, programmable_vs ? usage_position : usage_positiont, 0u},
+                                           {0u, 16u, decl_d3dcolor, 0u, usage_color, 0u},
+                                           {0u, 20u, decl_float2, 0u, usage_texcoord, 0u},
+                                           {0u, 28u, decl_float2, 0u, usage_texcoord, 1u}};
+        CHECK(av_d3d9_CreateVertexDeclaration9(wire, declaration, 4u, elements));
+        CHECK(av_d3d9_SetVertexDeclaration9(wire, declaration));
+        const bool          reads_t1 = programmable_vs && draw.second_set;
+        const std::uint32_t *const code = reads_t1 ? texture_ps_t1 : runtime_texture_ps_t0;
+        const std::uint64_t code_size = reads_t1 ? sizeof(texture_ps_t1) : sizeof(runtime_texture_ps_t0);
+        CHECK(av_d3d9_CreatePixelShader9(wire, pixel_shader, reinterpret_cast<const std::uint8_t *>(code), code_size));
+        CHECK(av_d3d9_SetPixelShader9(wire, pixel_shader));
+        if (programmable_vs) {
+            CHECK(av_d3d9_CreateVertexShader9(wire, vertex_shader, reinterpret_cast<const std::uint8_t *>(texcoord_vs),
+                                              sizeof(texcoord_vs)));
+            CHECK(av_d3d9_SetVertexShader9(wire, vertex_shader));
+        }
+    } else {
+        CHECK(av_d3d9_SetFvf9(wire, draw.second_set ? fvf_xyzrhw_diffuse_tex2 : fvf_xyzrhw_diffuse_tex1));
+    }
+    CHECK(av_d3d9_SetStreamSource9(wire, 0u, vertices, offset, sizeof(WrapVertex)));
+    CHECK(av_d3d9_DrawPrimitive9(wire, strip ? triangle_strip : triangle_list, 0u, 2u));
+}
+
+std::uint32_t red_of(std::uint32_t color) { return (color >> 16) & 0xffu; }
+
+std::uint32_t filtered_red(float coordinate)
+{
+    const float    texel = coordinate * static_cast<float>(texels) - 0.5f;
+    const float    lower = std::floor(texel);
+    const float    weight = texel - lower;
+    const auto     wrap = [](float index) {
+        const auto whole = static_cast<std::int32_t>(index);
+        return static_cast<std::uint32_t>(((whole % static_cast<std::int32_t>(texels)) + static_cast<std::int32_t>(texels)) %
+                                          static_cast<std::int32_t>(texels));
+    };
+    const float low = static_cast<float>(red_of(texel_color(wrap(lower))));
+    const float high = static_cast<float>(red_of(texel_color(wrap(lower + 1.0f))));
+    return static_cast<std::uint32_t>(low + (high - low) * weight + 0.5f);
+}
+
+float interpolated(float from, float to, std::uint32_t pixel, bool wrapped)
+{
+    const float span = wrapped && std::fabs(to - from) > 0.5f ? to - from + (to < from ? 1.0f : -1.0f) : to - from;
+    return from + span * (static_cast<float>(pixel) + 0.5f) / static_cast<float>(size);
+}
+
+std::uint32_t wrapped_texel(const Pixels &pixels, bool along_u, std::uint32_t along)
+{
+    return along_u ? pixels.at(along, size / 2u) : pixels.at(size / 2u, along);
+}
+
+void check_wrap(const WrapDraw &draw, WrapPath path = WrapPath::list_point, const char *withheld = nullptr)
+{
+    if (withheld != nullptr) setenv("AV_TEST_HOST_WITHOUT", withheld, 1);
+    struct Restore {
+        ~Restore() { unsetenv("AV_TEST_HOST_WITHOUT"); }
+    } restore;
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice    *device11 = nullptr;
+    av::D3d9HostDevice     *device9 = nullptr;
+    if (!host_devices(apis, device11, device9)) return;
+    av::D3dBackend backend(rig.log);
+    av::SessionShares unshared;
+    CHECK(backend.initialize(unshared, rig.imports, device11, nullptr, nullptr, device9));
+    av::D3dLoopback wire(backend, rig.imports);
+    make_target(wire);
+    draw_wrapped(wire, draw, path);
+
+    Pixels pixels;
+    CHECK(read(wire, draw_target, pixels));
+    CHECK_EQ(pixels.hresult, 0u);
+    const bool wrapped = draw.expect_wrapped;
+    if (path == WrapPath::list_point) {
+        CHECK_EQ(wrapped_texel(pixels, draw.along_u, 10u), texel_color(wrapped ? 7u : 6u));
+        CHECK_EQ(wrapped_texel(pixels, draw.along_u, 54u), texel_color(wrapped ? 0u : 1u));
+    } else {
+        for (const std::uint32_t along : {10u, 54u}) {
+            const std::uint32_t found = red_of(wrapped_texel(pixels, draw.along_u, along));
+            const std::uint32_t expected = filtered_red(interpolated(0.9f, 0.1f, along, wrapped));
+            CHECK(found + 4u >= expected && found <= expected + 4u);
+            if (found + 4u < expected || found > expected + 4u)
+                std::fprintf(stderr, "at %u red %u, expected %u\n", along, found, expected);
+        }
+    }
+    CHECK_EQ(wire.refused(), 0u);
+}
+
+}
+
+TEST(d3d9_session_device, a_wrapped_coordinate_takes_the_short_way_round_the_texture)
+{
+    check_wrap({true, false, render_state_wrap0, wrap_coord_0, true});
+}
+
+TEST(d3d9_session_device, a_wrapped_second_coordinate_takes_the_short_way_round_the_texture)
+{
+    check_wrap({false, false, render_state_wrap0, wrap_coord_1, true});
+}
+
+TEST(d3d9_session_device, a_wrap_of_another_set_leaves_the_interpolation_alone)
+{
+    check_wrap({true, false, render_state_wrap0 + 3u, wrap_coord_0, false});
+}
+
+TEST(d3d9_session_device, a_wrap_names_the_texture_coordinate_set_not_the_stage)
+{
+    check_wrap({true, true, render_state_wrap0 + 1u, wrap_coord_0, true});
+}
+
+TEST(d3d9_session_device, without_a_wrap_the_coordinate_runs_straight_across)
+{
+    check_wrap({true, false, render_state_wrap0, 0u, false});
+}
+
+TEST(d3d9_session_device, a_wrapped_coordinate_of_a_filtered_strip_drawn_from_a_ring_offset_takes_the_short_way_round)
+{
+    check_wrap({true, false, render_state_wrap0, wrap_coord_0, true}, WrapPath::strip_linear_at_offset);
+    check_wrap({false, false, render_state_wrap0, wrap_coord_1, true}, WrapPath::strip_linear_at_offset);
+    check_wrap({true, true, render_state_wrap0 + 1u, wrap_coord_0, true}, WrapPath::strip_linear_at_offset);
+    check_wrap({true, false, render_state_wrap0, 0u, false}, WrapPath::strip_linear_at_offset);
+}
+
+TEST(d3d9_session_device, a_wrapped_coordinate_read_by_the_runtimes_texturing_pixel_shader_takes_the_short_way_round)
+{
+    for (const char *const withheld : {static_cast<const char *>(nullptr), "fragmentShaderBarycentric"}) {
+        check_wrap({true, false, render_state_wrap0, wrap_coord_0, true}, WrapPath::runtime_pixel_shader, withheld);
+        check_wrap({false, false, render_state_wrap0, wrap_coord_1, true}, WrapPath::runtime_pixel_shader, withheld);
+        check_wrap({true, true, render_state_wrap0 + 1u, wrap_coord_0, true}, WrapPath::runtime_pixel_shader, withheld);
+        check_wrap({true, false, render_state_wrap0 + 3u, wrap_coord_0, false}, WrapPath::runtime_pixel_shader, withheld);
+        check_wrap({true, false, render_state_wrap0, 0u, false}, WrapPath::runtime_pixel_shader, withheld);
+    }
+}
+
+TEST(d3d9_session_device, a_wrapped_coordinate_a_vertex_shader_writes_takes_the_short_way_round_in_the_pixel_shader)
+{
+    for (const char *const withheld : {static_cast<const char *>(nullptr), "fragmentShaderBarycentric"}) {
+        check_wrap({true, false, render_state_wrap0, wrap_coord_0, true}, WrapPath::vertex_and_pixel_shader, withheld);
+        check_wrap({true, true, render_state_wrap0 + 1u, wrap_coord_0, true}, WrapPath::vertex_and_pixel_shader, withheld);
+        check_wrap({true, false, render_state_wrap0, 0u, false}, WrapPath::vertex_and_pixel_shader, withheld);
+    }
+}
+
+TEST(d3d9_session_device, a_host_without_fragment_shader_barycentrics_wraps_the_coordinate_the_same_way)
+{
+    const char *const without = "fragmentShaderBarycentric";
+    check_wrap({true, false, render_state_wrap0, wrap_coord_0, true}, WrapPath::list_point, without);
+    check_wrap({false, false, render_state_wrap0, wrap_coord_1, true}, WrapPath::list_point, without);
+    check_wrap({true, false, render_state_wrap0 + 3u, wrap_coord_0, false}, WrapPath::list_point, without);
+    check_wrap({true, true, render_state_wrap0 + 1u, wrap_coord_0, true}, WrapPath::list_point, without);
+    check_wrap({true, false, render_state_wrap0, 0u, false}, WrapPath::list_point, without);
+    check_wrap({true, false, render_state_wrap0, wrap_coord_0, true}, WrapPath::strip_linear_at_offset, without);
+    check_wrap({false, false, render_state_wrap0, wrap_coord_1, true}, WrapPath::strip_linear_at_offset, without);
+}
+
+
+TEST(d3d9_session_device, a_device_made_from_the_initial_lease_alone_draws)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice *device11 = nullptr;
+    av::D3d9HostDevice  *device9 = nullptr;
+    if (!host_devices(apis, device11, device9)) return;
+    const std::uint32_t index = gpu_of(apis, device9);
+    if (apis.vram_ledger(index) == nullptr) return;
+    av::D3dBackend    backend(rig.log);
+    av::SessionShares unshared;
+    CHECK(backend.initialize(unshared, rig.imports, device11, nullptr, nullptr, device9));
+    av::D3dLoopback wire(backend, rig.imports);
+    const std::uint64_t target_bytes =
+        av::ResourceFootprint(format_a8r8g8b8, size, size, 1u, 1u, 1u, 0u).bytes();
+    av::LeaseRig lease(apis.vram_ledger(index), apis.host_ram_ledger(),
+                       av::ResourceFootprint::direct3d9_device_bytes + target_bytes,
+                       av::LeaseRecord::direct3d_initial_bytes);
+    backend.lease_from(&lease.host());
+    const std::uint64_t before = lease.in_use();
+    CHECK_EQ(lease.room(), target_bytes);
+    CHECK(lease.admit(av::ResourceFootprint::direct3d9_device_bytes));
+    CHECK_EQ(lease.guest().extensions(), 0u);
+    std::uint32_t hresult = 1u;
+    CHECK(av_d3d9_CreateDevice9(wire, device, 0u, &hresult));
+    CHECK_EQ(hresult, 0u);
+    std::fprintf(stderr, "d3d9 lease: the device took %llu bytes of video memory\n",
+                 static_cast<unsigned long long>(lease.in_use() - before));
+    CHECK(lease.admit(target_bytes));
+    CHECK(av_d3d9_CreateSurface9(wire, target, kind_render_target, size, size, format_a8r8g8b8, 0u, 0u, 0u));
+    CHECK(av_d3d9_SetRenderTarget9(wire, 0u, target, 0u));
+    CHECK(av_d3d9_Clear9(wire, 0u, nullptr, clear_target, red, 1.0f, 0u));
+    Pixels pixels;
+    CHECK(read(wire, target, pixels));
+    CHECK_EQ(pixels.hresult, 0u);
+    CHECK_EQ(pixels.at(size / 2u, size / 2u), red);
+    CHECK(av_d3d9_Finish9(wire, &hresult));
+    CHECK_EQ(hresult, 0u);
+    CHECK_EQ(wire.refused(), 0u);
+    CHECK(av_d3d9_Destroy9(wire, target));
+    lease.credit(target_bytes);
+    CHECK(av_d3d9_Destroy9(wire, device));
+    lease.credit(av::ResourceFootprint::direct3d9_device_bytes);
+    CHECK_EQ(lease.guest().left(av::LeaseRecord::Kind::device), lease.host().idle(av::LeaseRecord::Kind::device));
+    backend.shut_down();
+}
+
+TEST(d3d9_session_device, textures_past_the_leased_room_are_refused_up_front_and_the_device_keeps_drawing)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice *device11 = nullptr;
+    av::D3d9HostDevice  *device9 = nullptr;
+    if (!host_devices(apis, device11, device9)) return;
+    const std::uint32_t index = gpu_of(apis, device9);
+    if (apis.vram_ledger(index) == nullptr) return;
+    av::D3dBackend    backend(rig.log);
+    av::SessionShares unshared;
+    CHECK(backend.initialize(unshared, rig.imports, device11, nullptr, nullptr, device9));
+    av::D3dLoopback wire(backend, rig.imports);
+    constexpr std::uint64_t room = std::uint64_t{96} << 20u;
+    av::LeaseRig lease(apis.vram_ledger(index), apis.host_ram_ledger(), room);
+    backend.lease_from(&lease.host());
+    std::uint32_t hresult = 1u;
+    CHECK(lease.admit(av::ResourceFootprint::direct3d9_device_bytes));
+    CHECK(av_d3d9_CreateDevice9(wire, device, 0u, &hresult));
+    CHECK_EQ(hresult, 0u);
+    const std::uint64_t target_bytes =
+        av::ResourceFootprint(format_a8r8g8b8, size, size, 1u, 1u, 1u, 0u).bytes();
+    CHECK(lease.admit(target_bytes));
+    CHECK(av_d3d9_CreateSurface9(wire, target, kind_render_target, size, size, format_a8r8g8b8, 0u, 0u, 0u));
+    CHECK(av_d3d9_SetRenderTarget9(wire, 0u, target, 0u));
+
+    constexpr std::uint32_t edge = 1024u;
+    constexpr std::uint32_t usage_render_target = 0x1u;
+    const std::uint64_t each = av::ResourceFootprint(format_a8r8g8b8, edge, edge, 1u, 1u, 1u, 0u).bytes();
+    CHECK_EQ(each, std::uint64_t{4} << 20u);
+    CHECK_EQ(av::ResourceFootprint(format_a8r8g8b8, edge, edge, 1u, 1u, 0u, 0u).bytes(),
+             std::uint64_t{86} << 16u);
+    CHECK_EQ(av::ResourceFootprint(100u, 0u).bytes(), std::uint64_t{64} << 10u);
+    const std::uint64_t before = lease.in_use();
+    constexpr std::uint32_t first = 100u;
+    std::uint32_t made = 0u, refused = 0u;
+    while (refused < 4u && made < 64u) {
+        if (!lease.admit(each)) {
+            refused++;
+            continue;
+        }
+        CHECK(av_d3d9_CreateTexture9(wire, first + made, 1u, edge, edge, 1u, 1u, usage_render_target, format_a8r8g8b8, 0u));
+        made++;
+    }
+    CHECK_EQ(refused, 4u);
+    CHECK(made >= 8u);
+    CHECK(av_d3d9_Finish9(wire, &hresult));
+    CHECK_EQ(hresult, 0u);
+    std::fprintf(stderr, "d3d9 lease: %u textures, %llu bytes estimated, %llu bytes the host runtime took\n", made,
+                 static_cast<unsigned long long>(each * made),
+                 static_cast<unsigned long long>(lease.in_use() - before));
+    CHECK(av_d3d9_Clear9(wire, 0u, nullptr, clear_target, red, 1.0f, 0u));
+    Pixels pixels;
+    CHECK(read(wire, target, pixels));
+    CHECK_EQ(pixels.hresult, 0u);
+    CHECK_EQ(pixels.at(size / 2u, size / 2u), red);
+
+    const std::uint32_t freed = made / 2u;
+    for (std::uint32_t at = 0u; at < freed; at++) {
+        CHECK(av_d3d9_Destroy9(wire, first + at));
+        lease.credit(each);
+    }
+    for (std::uint32_t at = 0u; at < freed; at++) {
+        CHECK(lease.admit(each));
+        CHECK(av_d3d9_CreateTexture9(wire, first + made + at, 1u, edge, edge, 1u, 1u, usage_render_target,
+                                     format_a8r8g8b8, 0u));
+    }
+    CHECK(av_d3d9_Clear9(wire, 0u, nullptr, clear_target, blue, 1.0f, 0u));
+    Pixels again;
+    CHECK(read(wire, target, again));
+    CHECK_EQ(again.hresult, 0u);
+    CHECK_EQ(again.at(size / 2u, size / 2u), blue);
+    CHECK(av_d3d9_Finish9(wire, &hresult));
+    CHECK_EQ(hresult, 0u);
+    CHECK_EQ(wire.refused(), 0u);
+    CHECK_EQ(lease.guest().left(av::LeaseRecord::Kind::device), lease.host().idle(av::LeaseRecord::Kind::device));
+    backend.shut_down();
+}
+
+TEST(d3d9_session_device, a_device_the_host_has_no_room_for_is_refused_and_the_session_runs_on)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice *device11 = nullptr;
+    av::D3d9HostDevice  *device9 = nullptr;
+    if (!host_devices(apis, device11, device9)) return;
+    const std::uint32_t index = gpu_of(apis, device9);
+    if (apis.vram_ledger(index) == nullptr) return;
+    av::D3dBackend    backend(rig.log);
+    av::SessionShares unshared;
+    CHECK(backend.initialize(unshared, rig.imports, device11, nullptr, nullptr, device9));
+    av::D3dLoopback wire(backend, rig.imports);
+    std::uint32_t hresult = 0u;
+    {
+        av::LeaseRig lease(apis.vram_ledger(index), apis.host_ram_ledger(), 0u);
+        backend.lease_from(&lease.host());
+        CHECK(av_d3d9_CreateDevice9(wire, device, 0u, &hresult));
+        CHECK(hresult != 0u);
+        backend.lease_from(nullptr);
+    }
+    hresult = 1u;
+    CHECK(av_d3d9_CreateDevice9(wire, other_device, 0u, &hresult));
+    CHECK_EQ(hresult, 0u);
+    CHECK(av_d3d9_CreateSurface9(wire, other_target, kind_render_target, size, size, format_a8r8g8b8, 0u, 0u, 0u));
+    CHECK(av_d3d9_SetRenderTarget9(wire, 0u, other_target, 0u));
+    CHECK(av_d3d9_Clear9(wire, 0u, nullptr, clear_target, blue, 1.0f, 0u));
+    Pixels pixels;
+    CHECK(read(wire, other_target, pixels));
+    CHECK_EQ(pixels.at(size / 2u, size / 2u), blue);
+    backend.shut_down();
+}
+
+TEST(d3d9_session_device, a_second_device_whose_create_extends_the_lease_leaves_the_first_drawing)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice *device11 = nullptr;
+    av::D3d9HostDevice  *device9 = nullptr;
+    if (!host_devices(apis, device11, device9)) return;
+    const std::uint32_t index = gpu_of(apis, device9);
+    if (apis.vram_ledger(index) == nullptr) return;
+    av::D3dBackend    backend(rig.log);
+    av::SessionShares unshared;
+    CHECK(backend.initialize(unshared, rig.imports, device11, nullptr, nullptr, device9));
+    av::D3dLoopback wire(backend, rig.imports);
+    const std::uint64_t target_bytes = av::ResourceFootprint(format_a8r8g8b8, size, size, 1u, 1u, 1u, 0u).bytes();
+    constexpr std::uint64_t room = std::uint64_t{96} << 20u;
+    av::LeaseRig lease(apis.vram_ledger(index), apis.host_ram_ledger(), room, av::LeaseRecord::direct3d_initial_bytes);
+    backend.lease_from(&lease.host());
+
+    std::uint32_t hresult = 1u;
+    CHECK(lease.admit(av::ResourceFootprint::direct3d9_device_bytes));
+    CHECK(av_d3d9_CreateDevice9(wire, device, 0u, &hresult));
+    CHECK_EQ(hresult, 0u);
+    CHECK(lease.admit(target_bytes));
+    CHECK(av_d3d9_CreateSurface9(wire, target, kind_render_target, size, size, format_a8r8g8b8, 0u, 0u, 0u));
+    CHECK(av_d3d9_SetRenderTarget9(wire, 0u, target, 0u));
+    CHECK(av_d3d9_Clear9(wire, 0u, nullptr, clear_target, red, 1.0f, 0u));
+
+    const std::uint64_t extended = lease.guest().extensions();
+    CHECK(av_d3d9_SelectDevice9(wire, other_device));
+    CHECK(lease.admit(av::ResourceFootprint::direct3d9_device_bytes));
+    CHECK(lease.guest().extensions() > extended);
+    hresult = 1u;
+    CHECK(av_d3d9_CreateDevice9(wire, other_device, 0u, &hresult));
+    CHECK_EQ(hresult, 0u);
+    CHECK(lease.admit(target_bytes));
+    CHECK(av_d3d9_CreateSurface9(wire, other_target, kind_render_target, size, size, format_a8r8g8b8, 0u, 0u, 0u));
+    CHECK(av_d3d9_SetRenderTarget9(wire, 0u, other_target, 0u));
+    CHECK(av_d3d9_Clear9(wire, 0u, nullptr, clear_target, blue, 1.0f, 0u));
+    Pixels other;
+    CHECK(read(wire, other_target, other));
+    CHECK_EQ(other.hresult, 0u);
+    CHECK_EQ(other.at(size / 2u, size / 2u), blue);
+
+    CHECK(av_d3d9_SelectDevice9(wire, device));
+    CHECK(av_d3d9_Finish9(wire, &hresult));
+    CHECK_EQ(hresult, 0u);
+    Pixels first;
+    CHECK(read(wire, target, first));
+    CHECK_EQ(first.hresult, 0u);
+    CHECK_EQ(first.at(size / 2u, size / 2u), red);
+    const Rect corner = {0, 0, 4, 4};
+    CHECK(av_d3d9_Clear9(wire, 1u, &corner, clear_target, blue, 1.0f, 0u));
+    CHECK(read(wire, target, first));
+    CHECK_EQ(first.at(1u, 1u), blue);
+    CHECK_EQ(first.at(size / 2u, size / 2u), red);
+    CHECK_EQ(wire.refused(), 0u);
+
+    constexpr std::uint32_t never_made = 43u;
+    CHECK(av_d3d9_SelectDevice9(wire, never_made));
+    CHECK(av_d3d9_Clear9(wire, 0u, nullptr, clear_target, red, 1.0f, 0u));
+    CHECK(av_d3d9_SelectDevice9(wire, other_device));
+    CHECK(av_d3d9_Finish9(wire, &hresult));
+    CHECK_EQ(hresult, 0u);
+    CHECK(read(wire, other_target, other));
+    CHECK_EQ(other.at(size / 2u, size / 2u), blue);
+    CHECK_EQ(rig.sink.holding("SelectDevice9 refused; device 43 is removed"), 1u);
+    CHECK_EQ(rig.sink.holding("device 1 is removed"), 0u);
+
+    CHECK(av_d3d9_Destroy9(wire, other_target));
+    lease.credit(target_bytes);
+    CHECK(av_d3d9_Destroy9(wire, other_device));
+    lease.credit(av::ResourceFootprint::direct3d9_device_bytes);
+    CHECK(av_d3d9_SelectDevice9(wire, device));
+    CHECK(av_d3d9_Finish9(wire, &hresult));
+    CHECK_EQ(hresult, 0u);
     backend.shut_down();
 }

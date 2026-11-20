@@ -2,6 +2,7 @@
 
 #include "core/platform/thread_lock_hold.hpp"
 #include "core/trace/report_gate.hpp"
+#include "icd/d3d/d3d9_level_caps.hpp"
 #include "icd/d3d/ddi/d3dddiarg_open_adapter_record.hpp"
 #include "icd/d3d/ddi/d3dddi_adapter_funcs_record.hpp"
 #include "icd/d3d/ddi/d3dddi_adapter_callbacks_record.hpp"
@@ -130,9 +131,9 @@ Hresult UmdRoot::open_adapter9(D3dddiargOpenAdapterRecord *args)
 {
     AV_SCOPE("UmdRoot::open_adapter9");
     constexpr uint32_t interface9 = 9u;
-    constexpr uint32_t win7_interface = 0x2003u;
+    constexpr uint32_t wddm1_3_interface = D3d9LevelCaps::interface_level;
     if (args == nullptr || args->pAdapterFuncs == nullptr) return hr_invalid_arg;
-    if (args->Interface != interface9 || args->Version < win7_interface) {
+    if (args->Interface != interface9 || args->Version < wddm1_3_interface) {
         lines_.note("open9 refused, version", args->Version);
         return hr_no_interface;
     }
@@ -143,7 +144,7 @@ Hresult UmdRoot::open_adapter9(D3dddiargOpenAdapterRecord *args)
     if (opened != hr_ok) return opened;
     fill_d3d9_adapter_funcs(*static_cast<D3dddiAdapterFuncsRecord *>(args->pAdapterFuncs));
     args->hAdapter = adapter;
-    args->DriverVersion = win7_interface;
+    args->DriverVersion = wddm1_3_interface;
     return hr_ok;
 }
 

@@ -16,8 +16,9 @@
 #include "proto/generated/d3d9/d3d9_wire_types.h"
 #include "um/common/performance_clock.hpp"
 #include "um/d3d/present_order.hpp"
-#include "um/d3d/packet_release.hpp"
+#include "um/d3d/kernel_lane.hpp"
 #include "um/d3d/d3d_call_trace.hpp"
+#include "um/d3d/allocation_lender.hpp"
 #include "um/d3d/d3d9_ddi.hpp"
 #include "um/d3d/kernel_device.hpp"
 #include "um/d3d/d3d9_records.hpp"
@@ -54,6 +55,7 @@ public:
 
     HRESULT initialize(uint32_t kmt_adapter, const D3DDDIARG_CREATEDEVICE &create);
     d3d::UmdAdapter &adapter() const;
+    const D3d9HostCaps &caps() const;
     void note_failure(const char *call, uint32_t hresult);
     void lock_calls();
     void unlock_calls();
@@ -122,6 +124,8 @@ private:
     HRESULT create_host_object(D3d9Resource &resource, const D3DDDIARG_CREATERESOURCE &create);
     HRESULT create_surfaces(D3d9Resource &resource, const D3DDDIARG_CREATERESOURCE &create);
     void    release_resource(D3d9Resource &resource);
+    [[nodiscard]] bool lease(uint64_t bytes);
+    void               give_lease(uint64_t &bytes);
     [[nodiscard]] bool refuses_opened(const D3d9Resource &resource, const char *call);
     HRESULT            refuse_open(const D3DDDIARG_OPENRESOURCE &args, uint32_t kind);
     uint32_t row_pitch(const D3d9Resource &resource, const D3d9Subresource &subresource) const;
@@ -150,6 +154,7 @@ private:
     HRESULT blt_level(const D3d9Resource &source, uint32_t source_index, const D3d9Resource &destination,
                       uint32_t destination_index, const RECT &area, POINT at);
     HRESULT blt_to_system(const D3d9Resource &source, const D3d9Resource &destination, const D3DDDIARG_BLT &blt);
+    HRESULT blt_to_cross_adapter(const D3d9Resource &source, const D3d9Resource &destination, const D3DDDIARG_BLT &blt);
 
     HRESULT prepare_streams(uint32_t first_vertex, uint32_t vertex_count, uint32_t stream0_bytes, bool &rebased);
     HRESULT prepare_indices(const void *user, uint32_t index_bytes, uint32_t first_index, uint32_t count,
@@ -161,7 +166,11 @@ private:
     uint32_t vertices_of(D3DPRIMITIVETYPE type, uint32_t primitives) const;
 
     HRESULT allocate(D3d9Resource &resource);
-    bool    shares_render_target(const D3d9Resource &resource, const D3DDDIARG_CREATERESOURCE &create) const;
+    HRESULT make_resource(D3DDDIARG_CREATERESOURCE &args, uint32_t flags2);
+    HRESULT create_shared_image(D3d9Resource &resource, const D3DDDIARG_CREATERESOURCE &create, bool texture);
+    HRESULT create_across_adapters(D3d9Resource &resource, const D3DDDIARG_CREATERESOURCE &create, bool texture);
+    [[nodiscard]] bool adopt_opened(D3d9Resource &resource);
+    HRESULT show_lent(const D3d9Resource &resource);
     HRESULT allocate_shared(D3d9Resource &resource, const D3DDDIARG_CREATERESOURCE &create);
     HRESULT allocate_primary(D3d9Resource &resource, const D3DDDIARG_CREATERESOURCE &create);
     HRESULT show_primary(D3d9Resource &primary, uint32_t index);
@@ -171,6 +180,7 @@ private:
     Status  send_point(const D3d9Resource &resource, uint32_t point, NextPointRecord::Action action);
     void    withdraw_point(D3d9Resource &resource);
     HRESULT follow_host();
+    void    engage();
 
     d3d::D3dSession                     &session_;
     BlockSource                         &memory_;
@@ -184,7 +194,8 @@ private:
     d3d::ReentrantCallLock                lock_;
     ObjectStorage<d3d::D3dDeviceChannel> channel_;
     ObjectStorage<d3d::PresentOrder>     present_order_;
-    ObjectStorage<d3d::PacketRelease> packets_;
+    ObjectStorage<d3d::KernelLane> lane_;
+    d3d::AllocationLender                lender_;
     ObjectPool<D3d9Resource>             resources_;
     ObjectPool<D3d9Query>                queries_;
     ObjectPool<d3d::D3d9StateBlock>      blocks_;
@@ -222,6 +233,7 @@ private:
     uint32_t                             null_shaders_;
     uint64_t                             written_;
     d3d::ContextSlices                   slices_;
+    uint64_t                             device_leased_;
 };
 
 template <typename... Arguments>

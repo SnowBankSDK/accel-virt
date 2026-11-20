@@ -3,6 +3,7 @@
 
 #include "core/support/status.hpp"
 #include "device/execution/host_poll.hpp"
+#include "device/execution/session_gate.hpp"
 #include "device/abi/av_executor.h"
 #include "proto/context/device_uuid.hpp"
 #include "proto/submission/blob_role.hpp"
@@ -34,7 +35,17 @@ public:
     void                 signals_through(ContextSignal &signal);
     [[nodiscard]] Status create();
     void                 destroy();
+    void                 withdraw();
     void                 end_batch();
+    [[nodiscard]] bool   enter(const void *runner);
+    void                 leave();
+    void                 consumed(uint64_t head);
+    [[nodiscard]] bool   session_reached(uint64_t end, uint64_t deadline);
+    bool                 session_gone() const;
+    void                 wake();
+    bool                 lane() const;
+    void                *leave_thread() const;
+    void                 thread_joined(void *left) const;
     HostPoll             poll();
     void                 gpu_progress(uint64_t &marked, uint64_t &reached) const;
     [[nodiscard]] Status execute(uint32_t command_id, const uint8_t *payload, size_t size, uint8_t *reply,
@@ -42,7 +53,10 @@ public:
     [[nodiscard]] Status import(uint64_t blob_id, uint64_t memory_key, uint64_t &device_memory,
                                 const BlobRole &role = BlobRole());
     void                 release(uint64_t blob_id);
+    [[nodiscard]] Status place(uint64_t size, uint32_t request, AvHostMemory &memory);
     void                 channel_stats(const uint8_t *body, size_t size);
+    [[nodiscard]] Status extend_lease(uint32_t kind, uint64_t bytes, uint64_t least, uint64_t &granted);
+    void                 return_lease(uint32_t kind, uint64_t bytes);
     size_t               answer_part(uint64_t offset, uint8_t *out, size_t capacity, uint64_t &length);
 
     [[nodiscard]] Status share_object(uint64_t object_id, uint32_t kind, uint64_t size, uint64_t wire_handle);
@@ -58,6 +72,8 @@ public:
 private:
     AvExecutor *make() const;
     Status      status_of(uint32_t answered) const;
+    [[nodiscard]] Status join_session();
+    [[nodiscard]] Status open_session();
 
     Host                  &host_;
     const ExecutorLibrary &library_;
@@ -69,6 +85,10 @@ private:
     DeviceUuid             uuid_;
     GlContextOptions       options_;
     bool                   configured_;
+    SessionGate            own_gate_;
+    SessionGate           *gate_;
+    bool                   entered_;
+    void                  *progress_;
 
     friend struct ContextExecutorProbe;
 };

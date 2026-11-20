@@ -11,6 +11,7 @@
 #include "harness/context/recording_context_plane.hpp"
 #include "harness/executor/mock_executor_ops.hpp"
 #include "harness/host/mock_host.hpp"
+#include "harness/memory/host_blob_maker.hpp"
 #include "proto/resources/host_memory_request.hpp"
 
 #include <cstdint>
@@ -31,6 +32,7 @@ public:
     MockHost              &host();
     MockExecutorOps       &ops();
     HostBlobTable         &host_blobs();
+    HostBlobMaker         &maker();
     RecordingContextPlane &plane();
     BlobImports           &imports();
     WireRecorder          &recorder();
@@ -54,6 +56,7 @@ private:
     ContextExecutor       executor_;
     RecordingContextPlane plane_;
     HostBlobTable         host_blobs_;
+    HostBlobMaker         maker_;
     BlobImports           imports_;
     void                 *start_;
     void                 *done_;

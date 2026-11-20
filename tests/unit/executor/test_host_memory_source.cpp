@@ -64,9 +64,19 @@ class Rig {
 public:
     Rig() : platform(), exporter(), source(exporter, platform) {}
 
-    static constexpr std::uint32_t guest_uncached = 3u;
-    static constexpr std::uint32_t guest_cached = 4u;
-    static constexpr std::uint32_t guest_bar = 5u;
+    std::uint32_t guest_type(std::uint32_t host_type, VkMemoryPropertyFlags flags)
+    {
+        av::GuestMemoryTypes types;
+        CHECK(source.vulkan_types(types));
+        VkPhysicalDeviceMemoryProperties shown = {};
+        types.properties(shown);
+        for (std::uint32_t type = 0u; type < shown.memoryTypeCount; type++)
+            if (types.host_type(type) == host_type && shown.memoryTypes[type].propertyFlags == flags) return type;
+        return av::GuestMemoryTypes::no_type;
+    }
+    std::uint32_t guest_uncached() { return guest_type(1u, visible | coherent); }
+    std::uint32_t guest_cached() { return guest_type(2u, visible | coherent | cached); }
+    std::uint32_t guest_bar() { return guest_type(3u, local | visible | coherent); }
 
     void discrete()
     {
@@ -223,7 +233,7 @@ TEST(host_memory_source_choice, upload_takes_a_bar_no_importer_can_map_last)
   rig.exporter.fail_allocations(2u);
   CHECK_STATUS(rig.allocate(3u, upload, memory), Status::no_memory);
   CHECK_EQ(rig.exporter.attempts(), 5u);
-  CHECK_STATUS(rig.allocate(4u, vulkan(Rig::guest_bar), memory), Status::ok);
+  CHECK_STATUS(rig.allocate(4u, vulkan(rig.guest_bar()), memory), Status::ok);
   CHECK_EQ(rig.exporter.last_type(), 3u);
   CHECK(rig.source.invariants_hold());
   rig.source.free_domain(domain);
@@ -267,6 +277,21 @@ TEST(host_memory_source_choice, upload_refused_by_every_choice_is_no_memory_and_
   rig.source.free(domain, 1u);
   CHECK_EQ(rig.exporter.live(), 0u); }
 
+TEST(host_memory_source_choice, upload_refused_by_two_types_is_tried_on_a_third_the_preferences_did_not_name)
+{ Rig rig;
+  const std::uint32_t card = rig.exporter.add_heap(VK_MEMORY_HEAP_DEVICE_LOCAL_BIT, 1u << 30);
+  const std::uint32_t system = rig.exporter.add_heap(0u, 2u << 30);
+  rig.exporter.add_type(visible | coherent, true, system);
+  rig.exporter.add_type(visible | coherent | cached, true, system);
+  rig.exporter.add_type(local | visible | coherent, true, card);
+  AvHostMemory memory = {};
+  CHECK_EQ(rig.source.mappable_types(), 0x7u);
+  rig.exporter.fail_allocations(2u);
+  CHECK_STATUS(rig.allocate(1u, upload, memory), Status::ok);
+  CHECK(rig.exporter.last_type() != 2u);
+  rig.source.free_domain(domain);
+  CHECK_EQ(rig.exporter.live(), 0u); }
+
 TEST(host_memory_source_choice, readback_prefers_cached_written_back_and_falls_back_to_any)
 { Rig rig;
   rig.discrete();
@@ -304,10 +329,10 @@ TEST(host_memory_source_choice, a_vulkan_request_is_the_host_type_behind_its_gue
 { Rig rig;
   rig.discrete();
   AvHostMemory memory = {};
-  CHECK_STATUS(rig.allocate(1u, vulkan(Rig::guest_cached), memory), Status::ok);
+  CHECK_STATUS(rig.allocate(1u, vulkan(rig.guest_cached()), memory), Status::ok);
   CHECK_EQ(rig.exporter.last_type(), 2u);
   CHECK_EQ(memory.caching, std::uint32_t{AV_MEMORY_WRITE_BACK});
-  CHECK_STATUS(rig.allocate(2u, vulkan(Rig::guest_bar), memory), Status::ok);
+  CHECK_STATUS(rig.allocate(2u, vulkan(rig.guest_bar()), memory), Status::ok);
   CHECK_EQ(rig.exporter.last_type(), 3u);
   CHECK_EQ(memory.caching, std::uint32_t{AV_MEMORY_WRITE_COMBINED});
   av::MemoryExporter              &exporter = rig.exporter;
@@ -317,10 +342,11 @@ TEST(host_memory_source_choice, a_vulkan_request_is_the_host_type_behind_its_gue
   CHECK((gpu.memoryTypes[2].propertyFlags & cached) != 0u);
   const std::uint32_t before = rig.exporter.attempts();
   rig.exporter.fail_allocation_at(1u);
-  CHECK_STATUS(rig.allocate(3u, vulkan(Rig::guest_uncached), memory), Status::no_memory);
+  CHECK_STATUS(rig.allocate(3u, vulkan(rig.guest_uncached()), memory), Status::no_memory);
   CHECK_EQ(rig.exporter.attempts(), before + 1u);
   CHECK_EQ(rig.exporter.last_type(), 1u);
-  constexpr std::uint32_t unmapped[] = {0u, 1u, 2u, 6u, 31u};
+  const std::uint32_t unmapped[] = {rig.guest_type(0u, local), rig.guest_type(4u, 0u), rig.guest_type(5u, 0u),
+                                    32u, 31u};
   for (const std::uint32_t type : unmapped) CHECK_STATUS(rig.allocate(4u, vulkan(type), memory), Status::invalid_parameter);
   CHECK_EQ(rig.exporter.attempts(), before + 1u);
   CHECK_EQ(rig.source.live(), 2u);
@@ -379,7 +405,7 @@ TEST(host_memory_source_allocate, a_request_or_size_no_blob_can_have_is_refused_
 { Rig rig;
   rig.discrete();
   AvHostMemory memory = {};
-  const HostMemoryRequest garbage[] = {HostMemoryRequest(), HostMemoryRequest(4u), HostMemoryRequest(0x102u),
+  const HostMemoryRequest garbage[] = {HostMemoryRequest(), HostMemoryRequest(6u), HostMemoryRequest(0x102u),
                                        HostMemoryRequest(0x2003u), HostMemoryRequest(0xFFFFFFFFu)};
   for (const HostMemoryRequest &request : garbage)
       CHECK_STATUS(rig.allocate(1u, request, memory), Status::invalid_parameter);
@@ -977,3 +1003,108 @@ TEST(host_memory_source_reuse, system_memory_is_never_cleared_because_the_kernel
   CHECK_EQ(first_byte_of(second), 0xABu);
   ::close(second.fd);
   rig.source.free(2u, 1u); }
+
+TEST(host_memory_source_placed, a_placed_allocation_is_taken_once_by_its_owner_and_the_type_and_pages_it_was_made_for)
+{ Rig rig;
+  int fds[2] = {-1, -1};
+  CHECK_EQ(::pipe(fds), 0);
+  CHECK_STATUS(rig.source.place(7u, 0x1000u, 3u, 2u * page - 5u, AV_MEMORY_WRITE_BACK, fds[0]), Status::ok);
+  CHECK_EQ(rig.source.placed(), 1u);
+  AvHostMemory memory = {-1, 0u, 0u};
+  CHECK_STATUS(rig.source.take_placed(8u, 3u, 2u * page, memory), Status::not_found);
+  CHECK_STATUS(rig.source.take_placed(7u, 4u, 2u * page, memory), Status::not_found);
+  CHECK_STATUS(rig.source.take_placed(7u, 3u, page, memory), Status::not_found);
+  CHECK_STATUS(rig.source.take_placed(7u, 3u, 2u * page, memory), Status::ok);
+  CHECK(memory.fd >= 0 && memory.fd != fds[0]);
+  CHECK_EQ(memory.size, 2u * page);
+  CHECK_EQ(memory.caching, static_cast<std::uint32_t>(AV_MEMORY_WRITE_BACK));
+  CHECK_EQ(rig.source.placed(), 0u);
+  CHECK_STATUS(rig.source.take_placed(7u, 3u, 2u * page, memory), Status::not_found);
+  ::close(memory.fd);
+  ::close(fds[0]);
+  ::close(fds[1]); }
+
+TEST(host_memory_source_placed, the_oldest_of_equal_allocations_is_taken_first_and_a_freed_one_is_never_taken)
+{ Rig rig;
+  const int first = ::open("/dev/null", O_RDONLY);
+  const int second = ::open("/dev/null", O_RDONLY);
+  CHECK_STATUS(rig.source.place(7u, 0x1000u, 3u, page, AV_MEMORY_WRITE_COMBINED, first), Status::ok);
+  CHECK_STATUS(rig.source.place(7u, 0x2000u, 3u, page, AV_MEMORY_WRITE_BACK, second), Status::ok);
+  rig.source.drop_placed(9u, 0x1000u);
+  CHECK_EQ(rig.source.placed(), 2u);
+  AvHostMemory memory = {-1, 0u, 0u};
+  CHECK_STATUS(rig.source.take_placed(7u, 3u, page, memory), Status::ok);
+  CHECK_EQ(memory.caching, static_cast<std::uint32_t>(AV_MEMORY_WRITE_COMBINED));
+  ::close(memory.fd);
+  rig.source.drop_placed(7u, 0x2000u);
+  CHECK_EQ(rig.source.placed(), 0u);
+  CHECK_STATUS(rig.source.take_placed(7u, 3u, page, memory), Status::not_found);
+  ::close(first);
+  ::close(second); }
+
+TEST(host_memory_source_placed, an_owner_keeps_a_bounded_number_and_gives_all_up_together_and_bad_arguments_are_refused)
+{ Rig rig;
+  const int fd = ::open("/dev/null", O_RDONLY);
+  for (std::uint64_t handle = 1u; handle <= 40u; handle++)
+      CHECK_STATUS(rig.source.place(7u, handle, 2u, page, AV_MEMORY_WRITE_COMBINED, fd), Status::ok);
+  CHECK_EQ(rig.source.placed(), 16u);
+  CHECK_STATUS(rig.source.place(8u, 1u, 2u, page, AV_MEMORY_WRITE_COMBINED, fd), Status::ok);
+  rig.source.drop_placed_of(7u);
+  CHECK_EQ(rig.source.placed(), 1u);
+  CHECK_STATUS(rig.source.place(0u, 1u, 2u, page, AV_MEMORY_WRITE_COMBINED, fd), Status::invalid_parameter);
+  CHECK_STATUS(rig.source.place(7u, 0u, 2u, page, AV_MEMORY_WRITE_COMBINED, fd), Status::invalid_parameter);
+  CHECK_STATUS(rig.source.place(7u, 1u, 32u, page, AV_MEMORY_WRITE_COMBINED, fd), Status::invalid_parameter);
+  CHECK_STATUS(rig.source.place(7u, 1u, 2u, 0u, AV_MEMORY_WRITE_COMBINED, fd), Status::invalid_parameter);
+  CHECK_STATUS(rig.source.place(7u, 1u, 2u, page, AV_MEMORY_WRITE_COMBINED, -1), Status::invalid_parameter);
+  CHECK_EQ(rig.source.placed(), 1u);
+  rig.source.drop_placed_of(8u);
+  ::close(fd); }
+
+TEST(host_memory_source_placed, a_placed_heap_is_taken_as_a_heap_and_never_as_a_vulkan_type)
+{ Rig rig;
+  const int fd = ::open("/dev/null", O_RDONLY);
+  CHECK_STATUS(rig.source.place_heap(7u, 0x40u, 3u * page, AV_MEMORY_WRITE_COMBINED, fd), Status::ok);
+  CHECK_STATUS(rig.source.place_heap(0u, 0x40u, page, AV_MEMORY_WRITE_COMBINED, fd), Status::invalid_parameter);
+  CHECK_STATUS(rig.source.place_heap(7u, 0u, page, AV_MEMORY_WRITE_COMBINED, fd), Status::invalid_parameter);
+  CHECK_STATUS(rig.source.place_heap(7u, 0x41u, 0u, AV_MEMORY_WRITE_COMBINED, fd), Status::invalid_parameter);
+  CHECK_STATUS(rig.source.place_heap(7u, 0x41u, page, AV_MEMORY_WRITE_COMBINED, -1), Status::invalid_parameter);
+  CHECK_EQ(rig.source.placed(), 1u);
+  AvHostMemory memory = {-1, 0u, 0u};
+  CHECK_STATUS(rig.source.take_placed(7u, 0u, 3u * page, memory), Status::not_found);
+  CHECK_STATUS(rig.source.take_placed(7u, HostMemorySource::heap_type, 2u * page, memory), Status::not_found);
+  CHECK_STATUS(rig.source.take_placed(7u, HostMemorySource::heap_type, 3u * page, memory), Status::ok);
+  CHECK(memory.fd >= 0 && memory.fd != fd);
+  CHECK_EQ(memory.caching, static_cast<std::uint32_t>(AV_MEMORY_WRITE_COMBINED));
+  CHECK_EQ(rig.source.placed(), 0u);
+  CHECK_STATUS(rig.source.place(7u, 0x42u, HostMemorySource::heap_type, page, AV_MEMORY_WRITE_BACK, fd),
+               Status::invalid_parameter);
+  ::close(memory.fd);
+  ::close(fd); }
+
+TEST(host_memory_source_placed, a_destroyed_heap_s_placement_is_dropped_by_its_handle)
+{ Rig rig;
+  const int fd = ::open("/dev/null", O_RDONLY);
+  CHECK_STATUS(rig.source.place_heap(7u, 0x40u, page, AV_MEMORY_WRITE_BACK, fd), Status::ok);
+  rig.source.drop_placed(7u, 0x40u);
+  CHECK_EQ(rig.source.placed(), 0u);
+  ::close(fd); }
+
+TEST(host_memory_source_imports_heaps, a_driver_that_lists_no_type_like_the_exported_one_is_not_asked_to_import)
+{ Rig rig;
+  const std::uint32_t plain = rig.exporter.add_type(local, true);
+  const std::uint32_t host = rig.exporter.add_type(visible | coherent, true);
+  const std::uint32_t twin = rig.exporter.add_type(visible | coherent | cached, true);
+  CHECK(plain != host && host != twin);
+  CHECK(rig.source.imports_heaps());
+  rig.exporter.refuse_alike(host);
+  CHECK(rig.source.imports_heaps());
+  Rig refused;
+  refused.exporter.add_type(local, true);
+  refused.exporter.add_type(visible | coherent, true);
+  refused.exporter.refuse_alike(1u);
+  CHECK(!refused.source.imports_heaps()); }
+
+TEST(host_memory_source_imports_heaps, a_source_with_nothing_to_map_imports_nothing)
+{ Rig rig;
+  rig.exporter.add_type(local, true);
+  CHECK(!rig.source.imports_heaps()); }

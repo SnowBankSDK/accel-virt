@@ -4,6 +4,7 @@
 
 #include "gl_dispatch_client.h"
 #include "gl_protocol_ids.h"
+#include "proto/generated/glmem/glmem_protocol_ids.h"
 
 #include <cstdint>
 #include <cstdlib>
@@ -108,6 +109,16 @@ TEST(buffer_pieces, a_write_of_any_size_lands_whole_at_its_offset)
       CHECK(std::memcmp(host.buffer(name) + 5, data.bytes(), awkward) == 0);
       CHECK_EQ(host.buffer(name)[4], 0u);
   } }
+
+TEST(buffer_pieces, a_slice_write_is_cut_into_pieces_one_request_holds)
+{ GlTransferHost host;
+  const std::size_t awkward = awkward_for(host);
+  Pattern        data(awkward);
+  BufferPieces   pieces(host);
+  pieces.write_slice(3u, 5u, awkward, data.bytes());
+  CHECK_EQ(pieces.commands(), 4u);
+  CHECK_EQ(host.count_of(av::glmemproto::kCmd_WriteBufferSlice), 4u);
+  CHECK(host.largest_request() <= 256u * 1024u); }
 
 TEST(buffer_pieces, a_read_of_any_size_comes_back_whole_from_its_offset)
 { for (std::uint32_t way = 0u; way < 3u; way++) {

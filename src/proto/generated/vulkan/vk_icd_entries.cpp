@@ -1185,6 +1185,12 @@ VKAPI_ATTR VkResult VKAPI_CALL Wrap_vkGetPhysicalDeviceToolProperties(VkPhysical
     return ::av::vkproto::av_vkGetPhysicalDeviceToolProperties(conn->transport(), ::av::icd::wire_handles(), physicalDevice, pToolCount, pToolProperties);
 }
 
+VKAPI_ATTR VkResult VKAPI_CALL Wrap_vkGetPipelineCacheData(VkDevice device, VkPipelineCache pipelineCache, size_t* pDataSize, void* pData) {
+    AV_SCOPE("vkGetPipelineCacheData");
+    auto* conn = ::av::icd::connection_of(device);
+    return ::av::vkproto::av_vkGetPipelineCacheData(conn->transport(), ::av::icd::wire_handles(), device, pipelineCache, pDataSize, pData);
+}
+
 VKAPI_ATTR void VKAPI_CALL Wrap_vkGetPrivateData(VkDevice device, VkObjectType objectType, uint64_t objectHandle, VkPrivateDataSlot privateDataSlot, uint64_t* pData) {
     AV_SCOPE("vkGetPrivateData");
     auto* conn = ::av::icd::connection_of(device);
@@ -1650,6 +1656,16 @@ VKAPI_ATTR VkResult VKAPI_CALL Wrap_vkBuildAccelerationStructuresKHR(VkDevice de
     return ::av::vkproto::av_vkBuildAccelerationStructuresKHR(conn->transport(), ::av::icd::wire_handles(), device, deferredOperation, infoCount, pInfos, ppBuildRangeInfos);
 }
 
+VKAPI_ATTR void VKAPI_CALL Wrap_vkCmdBindDescriptorBufferEmbeddedSamplersEXT(VkCommandBuffer commandBuffer, VkPipelineBindPoint pipelineBindPoint, VkPipelineLayout layout, uint32_t set) {
+    AV_SCOPE("vkCmdBindDescriptorBufferEmbeddedSamplersEXT");
+    ::av::vkproto::av_vkCmdBindDescriptorBufferEmbeddedSamplersEXT(::av::icd::record_target(commandBuffer), ::av::icd::wire_handles(), commandBuffer, pipelineBindPoint, layout, set);
+}
+
+VKAPI_ATTR void VKAPI_CALL Wrap_vkCmdBindDescriptorBuffersEXT(VkCommandBuffer commandBuffer, uint32_t bufferCount, const VkDescriptorBufferBindingInfoEXT* pBindingInfos) {
+    AV_SCOPE("vkCmdBindDescriptorBuffersEXT");
+    ::av::vkproto::av_vkCmdBindDescriptorBuffersEXT(::av::icd::record_target(commandBuffer), ::av::icd::wire_handles(), commandBuffer, bufferCount, pBindingInfos);
+}
+
 VKAPI_ATTR void VKAPI_CALL Wrap_vkCmdBindShadersEXT(VkCommandBuffer commandBuffer, uint32_t stageCount, const VkShaderStageFlagBits* pStages, const VkShaderEXT* pShaders) {
     AV_SCOPE("vkCmdBindShadersEXT");
     ::av::vkproto::av_vkCmdBindShadersEXT(::av::icd::record_target(commandBuffer), ::av::icd::wire_handles(), commandBuffer, stageCount, pStages, pShaders);
@@ -1813,6 +1829,11 @@ VKAPI_ATTR void VKAPI_CALL Wrap_vkCmdSetDepthTestEnableEXT(VkCommandBuffer comma
 VKAPI_ATTR void VKAPI_CALL Wrap_vkCmdSetDepthWriteEnableEXT(VkCommandBuffer commandBuffer, VkBool32 depthWriteEnable) {
     AV_SCOPE("vkCmdSetDepthWriteEnableEXT");
     ::av::vkproto::av_vkCmdSetDepthWriteEnableEXT(::av::icd::record_target(commandBuffer), ::av::icd::wire_handles(), commandBuffer, depthWriteEnable);
+}
+
+VKAPI_ATTR void VKAPI_CALL Wrap_vkCmdSetDescriptorBufferOffsetsEXT(VkCommandBuffer commandBuffer, VkPipelineBindPoint pipelineBindPoint, VkPipelineLayout layout, uint32_t firstSet, uint32_t setCount, const uint32_t* pBufferIndices, const VkDeviceSize* pOffsets) {
+    AV_SCOPE("vkCmdSetDescriptorBufferOffsetsEXT");
+    ::av::vkproto::av_vkCmdSetDescriptorBufferOffsetsEXT(::av::icd::record_target(commandBuffer), ::av::icd::wire_handles(), commandBuffer, pipelineBindPoint, layout, firstSet, setCount, pBufferIndices, pOffsets);
 }
 
 VKAPI_ATTR void VKAPI_CALL Wrap_vkCmdSetExtraPrimitiveOverestimationSizeEXT(VkCommandBuffer commandBuffer, float extraPrimitiveOverestimationSize) {
@@ -2058,6 +2079,24 @@ VKAPI_ATTR VkResult VKAPI_CALL Wrap_vkGetDeferredOperationResultKHR(VkDevice dev
     return ::av::vkproto::av_vkGetDeferredOperationResultKHR(conn->transport(), ::av::icd::wire_handles(), device, operation);
 }
 
+VKAPI_ATTR void VKAPI_CALL Wrap_vkGetDescriptorEXT(VkDevice device, const VkDescriptorGetInfoEXT* pDescriptorInfo, size_t dataSize, void* pDescriptor) {
+    AV_SCOPE("vkGetDescriptorEXT");
+    auto* conn = ::av::icd::connection_of(device);
+    ::av::vkproto::av_vkGetDescriptorEXT(conn->transport(), ::av::icd::wire_handles(), device, pDescriptorInfo, dataSize, pDescriptor);
+}
+
+VKAPI_ATTR void VKAPI_CALL Wrap_vkGetDescriptorSetLayoutBindingOffsetEXT(VkDevice device, VkDescriptorSetLayout layout, uint32_t binding, VkDeviceSize* pOffset) {
+    AV_SCOPE("vkGetDescriptorSetLayoutBindingOffsetEXT");
+    auto* conn = ::av::icd::connection_of(device);
+    ::av::vkproto::av_vkGetDescriptorSetLayoutBindingOffsetEXT(conn->transport(), ::av::icd::wire_handles(), device, layout, binding, pOffset);
+}
+
+VKAPI_ATTR void VKAPI_CALL Wrap_vkGetDescriptorSetLayoutSizeEXT(VkDevice device, VkDescriptorSetLayout layout, VkDeviceSize* pLayoutSizeInBytes) {
+    AV_SCOPE("vkGetDescriptorSetLayoutSizeEXT");
+    auto* conn = ::av::icd::connection_of(device);
+    ::av::vkproto::av_vkGetDescriptorSetLayoutSizeEXT(conn->transport(), ::av::icd::wire_handles(), device, layout, pLayoutSizeInBytes);
+}
+
 VKAPI_ATTR void VKAPI_CALL Wrap_vkGetDeviceAccelerationStructureCompatibilityKHR(VkDevice device, const VkAccelerationStructureVersionInfoKHR* pVersionInfo, VkAccelerationStructureCompatibilityKHR* pCompatibility) {
     AV_SCOPE("vkGetDeviceAccelerationStructureCompatibilityKHR");
     auto* conn = ::av::icd::connection_of(device);
@@ -2092,6 +2131,12 @@ VKAPI_ATTR VkDeviceSize VKAPI_CALL Wrap_vkGetRayTracingShaderGroupStackSizeKHR(V
     AV_SCOPE("vkGetRayTracingShaderGroupStackSizeKHR");
     auto* conn = ::av::icd::connection_of(device);
     return ::av::vkproto::av_vkGetRayTracingShaderGroupStackSizeKHR(conn->transport(), ::av::icd::wire_handles(), device, pipeline, group, groupShader);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL Wrap_vkGetShaderBinaryDataEXT(VkDevice device, VkShaderEXT shader, size_t* pDataSize, void* pData) {
+    AV_SCOPE("vkGetShaderBinaryDataEXT");
+    auto* conn = ::av::icd::connection_of(device);
+    return ::av::vkproto::av_vkGetShaderBinaryDataEXT(conn->transport(), ::av::icd::wire_handles(), device, shader, pDataSize, pData);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL Wrap_vkTransitionImageLayoutEXT(VkDevice device, uint32_t transitionCount, const VkHostImageLayoutTransitionInfo* pTransitions) {
@@ -2155,6 +2200,12 @@ VKAPI_ATTR void VKAPI_CALL Wrap_vkGetImageSubresourceLayout2KHR(VkDevice device,
     AV_SCOPE("vkGetImageSubresourceLayout2KHR");
     auto* conn = ::av::icd::connection_of(device);
     ::av::vkproto::av_vkGetImageSubresourceLayout2KHR(conn->transport(), ::av::icd::wire_handles(), device, image, pSubresource, pLayout);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL Wrap_vkGetPipelineBinaryDataKHR(VkDevice device, const VkPipelineBinaryDataInfoKHR* pInfo, VkPipelineBinaryKeyKHR* pPipelineBinaryKey, size_t* pPipelineBinaryDataSize, void* pPipelineBinaryData) {
+    AV_SCOPE("vkGetPipelineBinaryDataKHR");
+    auto* conn = ::av::icd::connection_of(device);
+    return ::av::vkproto::av_vkGetPipelineBinaryDataKHR(conn->transport(), ::av::icd::wire_handles(), device, pInfo, pPipelineBinaryKey, pPipelineBinaryDataSize, pPipelineBinaryData);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL Wrap_vkGetPipelineKeyKHR(VkDevice device, const VkPipelineCreateInfoKHR* pPipelineCreateInfo, VkPipelineBinaryKeyKHR* pPipelineKey) {
@@ -2268,6 +2319,11 @@ VKAPI_ATTR void VKAPI_CALL Wrap_vkCmdDrawMultiEXT(VkCommandBuffer commandBuffer,
     ::av::vkproto::av_vkCmdDrawMultiEXT(::av::icd::record_target(commandBuffer), ::av::icd::wire_handles(), commandBuffer, drawCount, pVertexInfo, instanceCount, firstInstance, stride);
 }
 
+VKAPI_ATTR void VKAPI_CALL Wrap_vkCmdDrawMultiIndexedEXT(VkCommandBuffer commandBuffer, uint32_t drawCount, const VkMultiDrawIndexedInfoEXT* pIndexInfo, uint32_t instanceCount, uint32_t firstInstance, uint32_t stride, const int32_t* pVertexOffset) {
+    AV_SCOPE("vkCmdDrawMultiIndexedEXT");
+    ::av::vkproto::av_vkCmdDrawMultiIndexedEXT(::av::icd::record_target(commandBuffer), ::av::icd::wire_handles(), commandBuffer, drawCount, pIndexInfo, instanceCount, firstInstance, stride, pVertexOffset);
+}
+
 VKAPI_ATTR void VKAPI_CALL Wrap_vkCmdPushConstants2KHR(VkCommandBuffer commandBuffer, const VkPushConstantsInfo* pPushConstantsInfo) {
     AV_SCOPE("vkCmdPushConstants2KHR");
     ::av::vkproto::av_vkCmdPushConstants2KHR(::av::icd::record_target(commandBuffer), ::av::icd::wire_handles(), commandBuffer, pPushConstantsInfo);
@@ -2349,8 +2405,60 @@ VKAPI_ATTR void VKAPI_CALL Wrap_vkGetShaderModuleIdentifierEXT(VkDevice device, 
     ::av::vkproto::av_vkGetShaderModuleIdentifierEXT(conn->transport(), ::av::icd::wire_handles(), device, shaderModule, pIdentifier);
 }
 
+VKAPI_ATTR void VKAPI_CALL Wrap_vkCmdExecuteGeneratedCommandsEXT(VkCommandBuffer commandBuffer, VkBool32 isPreprocessed, const VkGeneratedCommandsInfoEXT* pGeneratedCommandsInfo) {
+    AV_SCOPE("vkCmdExecuteGeneratedCommandsEXT");
+    ::av::vkproto::av_vkCmdExecuteGeneratedCommandsEXT(::av::icd::record_target(commandBuffer), ::av::icd::wire_handles(), commandBuffer, isPreprocessed, pGeneratedCommandsInfo);
+}
+
+VKAPI_ATTR void VKAPI_CALL Wrap_vkCmdPreprocessGeneratedCommandsEXT(VkCommandBuffer commandBuffer, const VkGeneratedCommandsInfoEXT* pGeneratedCommandsInfo, VkCommandBuffer stateCommandBuffer) {
+    AV_SCOPE("vkCmdPreprocessGeneratedCommandsEXT");
+    ::av::vkproto::av_vkCmdPreprocessGeneratedCommandsEXT(::av::icd::record_target(commandBuffer), ::av::icd::wire_handles(), commandBuffer, pGeneratedCommandsInfo, stateCommandBuffer);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL Wrap_vkCreateIndirectCommandsLayoutEXT(VkDevice device, const VkIndirectCommandsLayoutCreateInfoEXT* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkIndirectCommandsLayoutEXT* pIndirectCommandsLayout) {
+    AV_SCOPE("vkCreateIndirectCommandsLayoutEXT");
+    auto* conn = ::av::icd::connection_of(device);
+    return ::av::vkproto::av_vkCreateIndirectCommandsLayoutEXT(conn->transport(), ::av::icd::wire_handles(), device, pCreateInfo, pAllocator, pIndirectCommandsLayout);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL Wrap_vkCreateIndirectExecutionSetEXT(VkDevice device, const VkIndirectExecutionSetCreateInfoEXT* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkIndirectExecutionSetEXT* pIndirectExecutionSet) {
+    AV_SCOPE("vkCreateIndirectExecutionSetEXT");
+    auto* conn = ::av::icd::connection_of(device);
+    return ::av::vkproto::av_vkCreateIndirectExecutionSetEXT(conn->transport(), ::av::icd::wire_handles(), device, pCreateInfo, pAllocator, pIndirectExecutionSet);
+}
+
+VKAPI_ATTR void VKAPI_CALL Wrap_vkDestroyIndirectCommandsLayoutEXT(VkDevice device, VkIndirectCommandsLayoutEXT indirectCommandsLayout, const VkAllocationCallbacks* pAllocator) {
+    AV_SCOPE("vkDestroyIndirectCommandsLayoutEXT");
+    auto* conn = ::av::icd::connection_of(device);
+    ::av::vkproto::av_vkDestroyIndirectCommandsLayoutEXT(conn->transport(), ::av::icd::wire_handles(), device, indirectCommandsLayout, pAllocator);
+}
+
+VKAPI_ATTR void VKAPI_CALL Wrap_vkDestroyIndirectExecutionSetEXT(VkDevice device, VkIndirectExecutionSetEXT indirectExecutionSet, const VkAllocationCallbacks* pAllocator) {
+    AV_SCOPE("vkDestroyIndirectExecutionSetEXT");
+    auto* conn = ::av::icd::connection_of(device);
+    ::av::vkproto::av_vkDestroyIndirectExecutionSetEXT(conn->transport(), ::av::icd::wire_handles(), device, indirectExecutionSet, pAllocator);
+}
+
+VKAPI_ATTR void VKAPI_CALL Wrap_vkGetGeneratedCommandsMemoryRequirementsEXT(VkDevice device, const VkGeneratedCommandsMemoryRequirementsInfoEXT* pInfo, VkMemoryRequirements2* pMemoryRequirements) {
+    AV_SCOPE("vkGetGeneratedCommandsMemoryRequirementsEXT");
+    auto* conn = ::av::icd::connection_of(device);
+    ::av::vkproto::av_vkGetGeneratedCommandsMemoryRequirementsEXT(conn->transport(), ::av::icd::wire_handles(), device, pInfo, pMemoryRequirements);
+}
+
+VKAPI_ATTR void VKAPI_CALL Wrap_vkUpdateIndirectExecutionSetPipelineEXT(VkDevice device, VkIndirectExecutionSetEXT indirectExecutionSet, uint32_t executionSetWriteCount, const VkWriteIndirectExecutionSetPipelineEXT* pExecutionSetWrites) {
+    AV_SCOPE("vkUpdateIndirectExecutionSetPipelineEXT");
+    auto* conn = ::av::icd::connection_of(device);
+    ::av::vkproto::av_vkUpdateIndirectExecutionSetPipelineEXT(conn->transport(), ::av::icd::wire_handles(), device, indirectExecutionSet, executionSetWriteCount, pExecutionSetWrites);
+}
+
+VKAPI_ATTR void VKAPI_CALL Wrap_vkUpdateIndirectExecutionSetShaderEXT(VkDevice device, VkIndirectExecutionSetEXT indirectExecutionSet, uint32_t executionSetWriteCount, const VkWriteIndirectExecutionSetShaderEXT* pExecutionSetWrites) {
+    AV_SCOPE("vkUpdateIndirectExecutionSetShaderEXT");
+    auto* conn = ::av::icd::connection_of(device);
+    ::av::vkproto::av_vkUpdateIndirectExecutionSetShaderEXT(conn->transport(), ::av::icd::wire_handles(), device, indirectExecutionSet, executionSetWriteCount, pExecutionSetWrites);
+}
+
 namespace {
-const Entry kWrapperTable[407] = {
+const Entry kWrapperTable[426] = {
     Entry{ "vkDestroyInstance", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkDestroyInstance), DispatchLevel::instance },
     Entry{ "vkDestroyDevice", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkDestroyDevice), DispatchLevel::device },
     Entry{ "vkGetDeviceQueue", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkGetDeviceQueue), DispatchLevel::device },
@@ -2548,6 +2656,7 @@ const Entry kWrapperTable[407] = {
     Entry{ "vkGetPhysicalDeviceExternalSemaphoreProperties", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkGetPhysicalDeviceExternalSemaphoreProperties), DispatchLevel::physical_device },
     Entry{ "vkGetPhysicalDevicePresentRectanglesKHR", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkGetPhysicalDevicePresentRectanglesKHR), DispatchLevel::physical_device },
     Entry{ "vkGetPhysicalDeviceToolProperties", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkGetPhysicalDeviceToolProperties), DispatchLevel::physical_device },
+    Entry{ "vkGetPipelineCacheData", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkGetPipelineCacheData), DispatchLevel::device },
     Entry{ "vkGetPrivateData", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkGetPrivateData), DispatchLevel::device },
     Entry{ "vkGetQueryPoolResults", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkGetQueryPoolResults), DispatchLevel::device },
     Entry{ "vkGetRenderAreaGranularity", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkGetRenderAreaGranularity), DispatchLevel::device },
@@ -2628,6 +2737,8 @@ const Entry kWrapperTable[407] = {
     Entry{ "vkCmdSetRasterizerDiscardEnableEXT", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkCmdSetRasterizerDiscardEnableEXT), DispatchLevel::device },
     Entry{ "vkCmdSetVertexInputEXT", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkCmdSetVertexInputEXT), DispatchLevel::device },
     Entry{ "vkBuildAccelerationStructuresKHR", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkBuildAccelerationStructuresKHR), DispatchLevel::device },
+    Entry{ "vkCmdBindDescriptorBufferEmbeddedSamplersEXT", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkCmdBindDescriptorBufferEmbeddedSamplersEXT), DispatchLevel::device },
+    Entry{ "vkCmdBindDescriptorBuffersEXT", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkCmdBindDescriptorBuffersEXT), DispatchLevel::device },
     Entry{ "vkCmdBindShadersEXT", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkCmdBindShadersEXT), DispatchLevel::device },
     Entry{ "vkCmdBindVertexBuffers2EXT", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkCmdBindVertexBuffers2EXT), DispatchLevel::device },
     Entry{ "vkCmdBuildAccelerationStructuresIndirectKHR", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkCmdBuildAccelerationStructuresIndirectKHR), DispatchLevel::device },
@@ -2661,6 +2772,7 @@ const Entry kWrapperTable[407] = {
     Entry{ "vkCmdSetDepthCompareOpEXT", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkCmdSetDepthCompareOpEXT), DispatchLevel::device },
     Entry{ "vkCmdSetDepthTestEnableEXT", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkCmdSetDepthTestEnableEXT), DispatchLevel::device },
     Entry{ "vkCmdSetDepthWriteEnableEXT", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkCmdSetDepthWriteEnableEXT), DispatchLevel::device },
+    Entry{ "vkCmdSetDescriptorBufferOffsetsEXT", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkCmdSetDescriptorBufferOffsetsEXT), DispatchLevel::device },
     Entry{ "vkCmdSetExtraPrimitiveOverestimationSizeEXT", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkCmdSetExtraPrimitiveOverestimationSizeEXT), DispatchLevel::device },
     Entry{ "vkCmdSetFragmentShadingRateKHR", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkCmdSetFragmentShadingRateKHR), DispatchLevel::device },
     Entry{ "vkCmdSetFrontFaceEXT", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkCmdSetFrontFaceEXT), DispatchLevel::device },
@@ -2706,12 +2818,16 @@ const Entry kWrapperTable[407] = {
     Entry{ "vkGetAccelerationStructureDeviceAddressKHR", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkGetAccelerationStructureDeviceAddressKHR), DispatchLevel::device },
     Entry{ "vkGetDeferredOperationMaxConcurrencyKHR", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkGetDeferredOperationMaxConcurrencyKHR), DispatchLevel::device },
     Entry{ "vkGetDeferredOperationResultKHR", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkGetDeferredOperationResultKHR), DispatchLevel::device },
+    Entry{ "vkGetDescriptorEXT", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkGetDescriptorEXT), DispatchLevel::device },
+    Entry{ "vkGetDescriptorSetLayoutBindingOffsetEXT", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkGetDescriptorSetLayoutBindingOffsetEXT), DispatchLevel::device },
+    Entry{ "vkGetDescriptorSetLayoutSizeEXT", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkGetDescriptorSetLayoutSizeEXT), DispatchLevel::device },
     Entry{ "vkGetDeviceAccelerationStructureCompatibilityKHR", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkGetDeviceAccelerationStructureCompatibilityKHR), DispatchLevel::device },
     Entry{ "vkGetImageSubresourceLayout2EXT", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkGetImageSubresourceLayout2EXT), DispatchLevel::device },
     Entry{ "vkGetPhysicalDeviceFragmentShadingRatesKHR", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkGetPhysicalDeviceFragmentShadingRatesKHR), DispatchLevel::physical_device },
     Entry{ "vkGetRayTracingCaptureReplayShaderGroupHandlesKHR", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkGetRayTracingCaptureReplayShaderGroupHandlesKHR), DispatchLevel::device },
     Entry{ "vkGetRayTracingShaderGroupHandlesKHR", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkGetRayTracingShaderGroupHandlesKHR), DispatchLevel::device },
     Entry{ "vkGetRayTracingShaderGroupStackSizeKHR", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkGetRayTracingShaderGroupStackSizeKHR), DispatchLevel::device },
+    Entry{ "vkGetShaderBinaryDataEXT", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkGetShaderBinaryDataEXT), DispatchLevel::device },
     Entry{ "vkTransitionImageLayoutEXT", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkTransitionImageLayoutEXT), DispatchLevel::device },
     Entry{ "vkWriteAccelerationStructuresPropertiesKHR", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkWriteAccelerationStructuresPropertiesKHR), DispatchLevel::device },
     Entry{ "vkGetCalibratedTimestampsEXT", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkGetCalibratedTimestampsEXT), DispatchLevel::device },
@@ -2723,6 +2839,7 @@ const Entry kWrapperTable[407] = {
     Entry{ "vkDestroyPipelineBinaryKHR", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkDestroyPipelineBinaryKHR), DispatchLevel::device },
     Entry{ "vkGetDeviceImageSubresourceLayoutKHR", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkGetDeviceImageSubresourceLayoutKHR), DispatchLevel::device },
     Entry{ "vkGetImageSubresourceLayout2KHR", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkGetImageSubresourceLayout2KHR), DispatchLevel::device },
+    Entry{ "vkGetPipelineBinaryDataKHR", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkGetPipelineBinaryDataKHR), DispatchLevel::device },
     Entry{ "vkGetPipelineKeyKHR", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkGetPipelineKeyKHR), DispatchLevel::device },
     Entry{ "vkGetRenderingAreaGranularityKHR", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkGetRenderingAreaGranularityKHR), DispatchLevel::device },
     Entry{ "vkReleaseCapturedPipelineDataKHR", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkReleaseCapturedPipelineDataKHR), DispatchLevel::device },
@@ -2743,6 +2860,7 @@ const Entry kWrapperTable[407] = {
     Entry{ "vkCmdBindDescriptorBufferEmbeddedSamplers2EXT", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkCmdBindDescriptorBufferEmbeddedSamplers2EXT), DispatchLevel::device },
     Entry{ "vkCmdBindDescriptorSets2KHR", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkCmdBindDescriptorSets2KHR), DispatchLevel::device },
     Entry{ "vkCmdDrawMultiEXT", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkCmdDrawMultiEXT), DispatchLevel::device },
+    Entry{ "vkCmdDrawMultiIndexedEXT", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkCmdDrawMultiIndexedEXT), DispatchLevel::device },
     Entry{ "vkCmdPushConstants2KHR", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkCmdPushConstants2KHR), DispatchLevel::device },
     Entry{ "vkCmdPushDescriptorSet2KHR", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkCmdPushDescriptorSet2KHR), DispatchLevel::device },
     Entry{ "vkCmdPushDescriptorSetWithTemplate2KHR", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkCmdPushDescriptorSetWithTemplate2KHR), DispatchLevel::device },
@@ -2758,6 +2876,15 @@ const Entry kWrapperTable[407] = {
     Entry{ "vkGetPhysicalDeviceMultisamplePropertiesEXT", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkGetPhysicalDeviceMultisamplePropertiesEXT), DispatchLevel::physical_device },
     Entry{ "vkGetShaderModuleCreateInfoIdentifierEXT", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkGetShaderModuleCreateInfoIdentifierEXT), DispatchLevel::device },
     Entry{ "vkGetShaderModuleIdentifierEXT", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkGetShaderModuleIdentifierEXT), DispatchLevel::device },
+    Entry{ "vkCmdExecuteGeneratedCommandsEXT", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkCmdExecuteGeneratedCommandsEXT), DispatchLevel::device },
+    Entry{ "vkCmdPreprocessGeneratedCommandsEXT", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkCmdPreprocessGeneratedCommandsEXT), DispatchLevel::device },
+    Entry{ "vkCreateIndirectCommandsLayoutEXT", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkCreateIndirectCommandsLayoutEXT), DispatchLevel::device },
+    Entry{ "vkCreateIndirectExecutionSetEXT", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkCreateIndirectExecutionSetEXT), DispatchLevel::device },
+    Entry{ "vkDestroyIndirectCommandsLayoutEXT", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkDestroyIndirectCommandsLayoutEXT), DispatchLevel::device },
+    Entry{ "vkDestroyIndirectExecutionSetEXT", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkDestroyIndirectExecutionSetEXT), DispatchLevel::device },
+    Entry{ "vkGetGeneratedCommandsMemoryRequirementsEXT", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkGetGeneratedCommandsMemoryRequirementsEXT), DispatchLevel::device },
+    Entry{ "vkUpdateIndirectExecutionSetPipelineEXT", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkUpdateIndirectExecutionSetPipelineEXT), DispatchLevel::device },
+    Entry{ "vkUpdateIndirectExecutionSetShaderEXT", reinterpret_cast<PFN_vkVoidFunction>(&Wrap_vkUpdateIndirectExecutionSetShaderEXT), DispatchLevel::device },
 };
 }  // namespace
 
@@ -2768,6 +2895,6 @@ const Entry* EntryTable::begin() const noexcept { return first_; }
 const Entry* EntryTable::end() const noexcept { return first_ + count_; }
 size_t EntryTable::size() const noexcept { return count_; }
 
-EntryTable wrapper_entries() noexcept { return EntryTable{kWrapperTable, 407u}; }
+EntryTable wrapper_entries() noexcept { return EntryTable{kWrapperTable, 426u}; }
 
 }  // namespace av::vkicd::generated

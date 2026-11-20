@@ -1,5 +1,7 @@
 #include "core/log/keyed_log.hpp"
 #include "core/trace/function_scope.hpp"
+#include "icd/d3d/shader_code_extent.hpp"
+#include "um/common/readable_extent.hpp"
 #include "proto/generated/d3d12/d3d12_dispatch_client.h"
 #include "um/d3d/d3d12_device.hpp"
 
@@ -12,29 +14,28 @@ constexpr uint32_t stage_domain = 2u;
 constexpr uint32_t stage_geometry = 3u;
 constexpr uint32_t stage_pixel = 4u;
 constexpr uint32_t stage_compute = 5u;
+constexpr uint32_t stage_mesh = 6u;
+constexpr uint32_t stage_amplification = 7u;
+constexpr size_t   readable_most = size_t{1} << 28u;
 constexpr uint32_t roles = 3u;
 constexpr uint32_t role_input = 0u;
 constexpr uint32_t role_output = 1u;
 constexpr uint32_t role_patch = 2u;
-constexpr uint32_t container_magic = 0x43425844u;
-constexpr size_t   container_size_at = 24u;
 constexpr uint32_t most_parameters = 64u;
 constexpr uint32_t most_ranges = 512u;
 constexpr uint32_t most_samplers = 64u;
 constexpr uint32_t most_indirect_arguments = 16u;
 constexpr uint32_t most_signatures = 1024u;
+constexpr uint32_t most_stream_outputs = 128u;
+constexpr uint32_t most_strides = 4u;
+constexpr uint32_t no_rasterized_stream = 0xFFFFFFFFu;
 constexpr SIZE_T library_private_bytes = sizeof(uint64_t);
 
 uint32_t code_bytes(const UINT *code)
 {
     AV_SCOPE("code_bytes");
     if (code == nullptr) return 0u;
-    if (code[0] == container_magic) {
-        uint32_t bytes = 0u;
-        __builtin_memcpy(&bytes, reinterpret_cast<const uint8_t *>(code) + container_size_at, sizeof(bytes));
-        return bytes;
-    }
-    return code[1] * sizeof(UINT);
+    return static_cast<uint32_t>(d3d::ShaderCodeExtent(ReadableExtent(readable_most).from(code)).bytes(code));
 }
 
 const ShaderRecord *shader_of(D3D12DDI_HSHADER handle)
@@ -64,14 +65,10 @@ const d3d12proto::SignatureEntry *signatures_of(const ShaderRecord &shader)
                                                                 aligned);
 }
 
-bool argument_names_address(const D3D12DDI_INDIRECT_ARGUMENT_DESC &from)
+const d3d12proto::StreamOutDeclaration *stream_outputs_of(const ShaderRecord &shader)
 {
-    AV_SCOPE("argument_names_address");
-    return from.Type == D3D12DDI_INDIRECT_ARGUMENT_TYPE_VERTEX_BUFFER_VIEW ||
-           from.Type == D3D12DDI_INDIRECT_ARGUMENT_TYPE_INDEX_BUFFER_VIEW ||
-           from.Type == D3D12DDI_INDIRECT_ARGUMENT_TYPE_CONSTANT_BUFFER_VIEW ||
-           from.Type == D3D12DDI_INDIRECT_ARGUMENT_TYPE_SHADER_RESOURCE_VIEW ||
-           from.Type == D3D12DDI_INDIRECT_ARGUMENT_TYPE_UNORDERED_ACCESS_VIEW;
+    AV_SCOPE("stream_outputs_of");
+    return reinterpret_cast<const d3d12proto::StreamOutDeclaration *>(signatures_of(shader) + shader.signature_count);
 }
 
 d3d12proto::IndirectArgument indirect_argument(const D3D12DDI_INDIRECT_ARGUMENT_DESC &from)
@@ -193,17 +190,20 @@ VOID D3d12Device::destroy_element_layout(D3D12DDI_HELEMENTLAYOUT handle)
     *static_cast<LayoutRecord *>(handle.pDrvPrivate) = LayoutRecord{};
 }
 
-SIZE_T D3d12Device::shader_bytes(const D3D12DDIARG_CREATE_SHADER_0026 &args, bool tessellation) const
+SIZE_T D3d12Device::shader_bytes(const D3D12DDIARG_CREATE_SHADER_0026 &args, ShaderIo io) const
 {
     AV_SCOPE("D3d12Device::shader_bytes");
     const size_t code = (code_bytes(args.pShaderCode) + 7u) & ~size_t{7};
     size_t       entries = 0u;
-    if (tessellation && args.IOSignatures.Tessellation != nullptr) {
-        const D3D12DDIARG_TESSELLATION_IO_SIGNATURES &io = *args.IOSignatures.Tessellation;
-        entries = io.NumInputSignatureEntries + io.NumOutputSignatureEntries + io.NumPatchConstantSignatureEntries;
-    } else if (!tessellation && args.IOSignatures.Standard != nullptr) {
-        const D3D12DDIARG_STAGE_IO_SIGNATURES &io = *args.IOSignatures.Standard;
-        entries = io.NumInputSignatureEntries + io.NumOutputSignatureEntries;
+    if (io == ShaderIo::tessellation && args.IOSignatures.Tessellation != nullptr) {
+        const D3D12DDIARG_TESSELLATION_IO_SIGNATURES &sig = *args.IOSignatures.Tessellation;
+        entries = size_t{sig.NumInputSignatureEntries} + sig.NumOutputSignatureEntries + sig.NumPatchConstantSignatureEntries;
+    } else if (io == ShaderIo::standard && args.IOSignatures.Standard != nullptr) {
+        const D3D12DDIARG_STAGE_IO_SIGNATURES &sig = *args.IOSignatures.Standard;
+        entries = size_t{sig.NumInputSignatureEntries} + sig.NumOutputSignatureEntries;
+    } else if (io == ShaderIo::mesh && args.IOSignatures.Mesh != nullptr) {
+        const D3D12DDIARG_MESH_IO_SIGNATURES &sig = *args.IOSignatures.Mesh;
+        entries = size_t{sig.NumPrimitiveOutputSignatureEntries} + sig.NumVertexOutputSignatureEntries;
     }
     return sizeof(ShaderRecord) + code + entries * sizeof(d3d12proto::SignatureEntry);
 }
@@ -221,7 +221,7 @@ uint32_t D3d12Device::copy_signature(const D3D12DDIARG_SIGNATURE_ENTRY_0012 *ent
     return entries == nullptr ? 0u : count;
 }
 
-void D3d12Device::make_shader(uint32_t stage, const D3D12DDIARG_CREATE_SHADER_0026 &args, bool tessellation,
+void D3d12Device::make_shader(uint32_t stage, const D3D12DDIARG_CREATE_SHADER_0026 &args, ShaderIo io,
                               D3D12DDI_HSHADER handle)
 {
     AV_SCOPE("D3d12Device::make_shader");
@@ -233,68 +233,122 @@ void D3d12Device::make_shader(uint32_t stage, const D3D12DDIARG_CREATE_SHADER_00
     if (shader.code_bytes != 0u) __builtin_memcpy(&shader + 1, args.pShaderCode, shader.code_bytes);
     d3d12proto::SignatureEntry *const out = const_cast<d3d12proto::SignatureEntry *>(signatures_of(shader));
     uint32_t                          count = 0u;
-    if (tessellation && args.IOSignatures.Tessellation != nullptr) {
-        const D3D12DDIARG_TESSELLATION_IO_SIGNATURES &io = *args.IOSignatures.Tessellation;
-        count += copy_signature(io.pInputSignature, io.NumInputSignatureEntries, stage * roles + role_input, out);
-        count += copy_signature(io.pOutputSignature, io.NumOutputSignatureEntries, stage * roles + role_output,
+    if (io == ShaderIo::tessellation && args.IOSignatures.Tessellation != nullptr) {
+        const D3D12DDIARG_TESSELLATION_IO_SIGNATURES &sig = *args.IOSignatures.Tessellation;
+        count += copy_signature(sig.pInputSignature, sig.NumInputSignatureEntries, stage * roles + role_input, out);
+        count += copy_signature(sig.pOutputSignature, sig.NumOutputSignatureEntries, stage * roles + role_output,
                                 out + count);
-        count += copy_signature(io.pPatchConstantSignature, io.NumPatchConstantSignatureEntries,
+        count += copy_signature(sig.pPatchConstantSignature, sig.NumPatchConstantSignatureEntries,
                                 stage * roles + role_patch, out + count);
-    } else if (!tessellation && args.IOSignatures.Standard != nullptr) {
-        const D3D12DDIARG_STAGE_IO_SIGNATURES &io = *args.IOSignatures.Standard;
-        count += copy_signature(io.pInputSignature, io.NumInputSignatureEntries, stage * roles + role_input, out);
-        count += copy_signature(io.pOutputSignature, io.NumOutputSignatureEntries, stage * roles + role_output,
+    } else if (io == ShaderIo::standard && args.IOSignatures.Standard != nullptr) {
+        const D3D12DDIARG_STAGE_IO_SIGNATURES &sig = *args.IOSignatures.Standard;
+        count += copy_signature(sig.pInputSignature, sig.NumInputSignatureEntries, stage * roles + role_input, out);
+        count += copy_signature(sig.pOutputSignature, sig.NumOutputSignatureEntries, stage * roles + role_output,
                                 out + count);
+    } else if (io == ShaderIo::mesh && args.IOSignatures.Mesh != nullptr) {
+        const D3D12DDIARG_MESH_IO_SIGNATURES &sig = *args.IOSignatures.Mesh;
+        count += copy_signature(sig.pVertexOutputSignature, sig.NumVertexOutputSignatureEntries,
+                                stage * roles + role_output, out);
+        count += copy_signature(sig.pPrimitiveOutputSignature, sig.NumPrimitiveOutputSignatureEntries,
+                                stage * roles + role_patch, out + count);
     }
     shader.signature_count = count;
+}
+
+SIZE_T D3d12Device::calc_private_geometry_shader_with_stream_output(
+    const D3D12DDIARG_CREATE_GEOMETRY_SHADER_WITH_STREAM_OUTPUT_0026 *args)
+{
+    AV_SCOPE("D3d12Device::calc_private_geometry_shader_with_stream_output");
+    if (args == nullptr) return sizeof(ShaderRecord);
+    const UINT declared = args->NumEntries < most_stream_outputs ? args->NumEntries : most_stream_outputs;
+    return shader_bytes(args->CreateShader, ShaderIo::standard) + declared * sizeof(d3d12proto::StreamOutDeclaration);
+}
+
+VOID D3d12Device::create_geometry_shader_with_stream_output(
+    const D3D12DDIARG_CREATE_GEOMETRY_SHADER_WITH_STREAM_OUTPUT_0026 *args, D3D12DDI_HSHADER handle)
+{
+    AV_SCOPE("D3d12Device::create_geometry_shader_with_stream_output");
+    if (args == nullptr) return;
+    make_shader(stage_geometry, args->CreateShader, ShaderIo::standard, handle);
+    ShaderRecord &shader = *static_cast<ShaderRecord *>(handle.pDrvPrivate);
+    const UINT declared = args->NumEntries < most_stream_outputs ? args->NumEntries : most_stream_outputs;
+    d3d12proto::StreamOutDeclaration *const out = const_cast<d3d12proto::StreamOutDeclaration *>(stream_outputs_of(shader));
+    for (UINT index = 0u; args->pOutputStreamDecl != nullptr && index < declared; index++) {
+        const D3D12DDIARG_STREAM_OUTPUT_DECLARATION_ENTRY &from = args->pOutputStreamDecl[index];
+        out[index] = d3d12proto::StreamOutDeclaration{from.Stream, from.OutputSlot, from.RegisterIndex,
+                                                      static_cast<uint32_t>(from.RegisterMask)};
+    }
+    shader.stream_out_count = args->pOutputStreamDecl == nullptr ? 0u : declared;
+    shader.stride_count = args->NumStrides < most_strides ? args->NumStrides : most_strides;
+    for (uint32_t index = 0u; args->BufferStridesInBytes != nullptr && index < shader.stride_count; index++)
+        shader.strides[index] = args->BufferStridesInBytes[index];
+    shader.rasterized_stream = args->RasterizedStream;
 }
 
 SIZE_T D3d12Device::calc_private_shader_size(const D3D12DDIARG_CREATE_SHADER_0026 *args)
 {
     AV_SCOPE("D3d12Device::calc_private_shader_size");
-    return args == nullptr ? sizeof(ShaderRecord) : shader_bytes(*args, false);
+    return args == nullptr ? sizeof(ShaderRecord) : shader_bytes(*args, ShaderIo::standard);
 }
 
 SIZE_T D3d12Device::calc_private_tessellation_shader_size(const D3D12DDIARG_CREATE_SHADER_0026 *args)
 {
     AV_SCOPE("D3d12Device::calc_private_tessellation_shader_size");
-    return args == nullptr ? sizeof(ShaderRecord) : shader_bytes(*args, true);
+    return args == nullptr ? sizeof(ShaderRecord) : shader_bytes(*args, ShaderIo::tessellation);
 }
 
 VOID D3d12Device::create_vertex_shader(const D3D12DDIARG_CREATE_SHADER_0026 *args, D3D12DDI_HSHADER handle)
 {
     AV_SCOPE("D3d12Device::create_vertex_shader");
-    if (args != nullptr) make_shader(stage_vertex, *args, false, handle);
+    if (args != nullptr) make_shader(stage_vertex, *args, ShaderIo::standard, handle);
 }
 
 VOID D3d12Device::create_pixel_shader(const D3D12DDIARG_CREATE_SHADER_0026 *args, D3D12DDI_HSHADER handle)
 {
     AV_SCOPE("D3d12Device::create_pixel_shader");
-    if (args != nullptr) make_shader(stage_pixel, *args, false, handle);
+    if (args != nullptr) make_shader(stage_pixel, *args, ShaderIo::standard, handle);
 }
 
 VOID D3d12Device::create_geometry_shader(const D3D12DDIARG_CREATE_SHADER_0026 *args, D3D12DDI_HSHADER handle)
 {
     AV_SCOPE("D3d12Device::create_geometry_shader");
-    if (args != nullptr) make_shader(stage_geometry, *args, false, handle);
+    if (args != nullptr) make_shader(stage_geometry, *args, ShaderIo::standard, handle);
 }
 
 VOID D3d12Device::create_compute_shader(const D3D12DDIARG_CREATE_SHADER_0026 *args, D3D12DDI_HSHADER handle)
 {
     AV_SCOPE("D3d12Device::create_compute_shader");
-    if (args != nullptr) make_shader(stage_compute, *args, false, handle);
+    if (args != nullptr) make_shader(stage_compute, *args, ShaderIo::standard, handle);
 }
 
 VOID D3d12Device::create_hull_shader(const D3D12DDIARG_CREATE_SHADER_0026 *args, D3D12DDI_HSHADER handle)
 {
     AV_SCOPE("D3d12Device::create_hull_shader");
-    if (args != nullptr) make_shader(stage_hull, *args, true, handle);
+    if (args != nullptr) make_shader(stage_hull, *args, ShaderIo::tessellation, handle);
 }
 
 VOID D3d12Device::create_domain_shader(const D3D12DDIARG_CREATE_SHADER_0026 *args, D3D12DDI_HSHADER handle)
 {
     AV_SCOPE("D3d12Device::create_domain_shader");
-    if (args != nullptr) make_shader(stage_domain, *args, true, handle);
+    if (args != nullptr) make_shader(stage_domain, *args, ShaderIo::tessellation, handle);
+}
+
+SIZE_T D3d12Device::calc_private_mesh_shader_size(const D3D12DDIARG_CREATE_SHADER_0026 *args)
+{
+    AV_SCOPE("D3d12Device::calc_private_mesh_shader_size");
+    return args == nullptr ? sizeof(ShaderRecord) : shader_bytes(*args, ShaderIo::mesh);
+}
+
+VOID D3d12Device::create_mesh_shader(const D3D12DDIARG_CREATE_SHADER_0026 *args, D3D12DDI_HSHADER handle)
+{
+    AV_SCOPE("D3d12Device::create_mesh_shader");
+    if (args != nullptr) make_shader(stage_mesh, *args, ShaderIo::mesh, handle);
+}
+
+VOID D3d12Device::create_amplification_shader(const D3D12DDIARG_CREATE_SHADER_0026 *args, D3D12DDI_HSHADER handle)
+{
+    AV_SCOPE("D3d12Device::create_amplification_shader");
+    if (args != nullptr) make_shader(stage_amplification, *args, ShaderIo::none, handle);
 }
 
 VOID D3d12Device::destroy_shader(D3D12DDI_HSHADER handle)
@@ -395,10 +449,6 @@ HRESULT D3d12Device::create_command_signature(const D3D12DDIARG_CREATE_COMMAND_S
         return E_INVALIDARG;
     d3d12proto::IndirectArgument arguments[most_indirect_arguments] = {};
     for (UINT index = 0u; index < args->NumArgumentDescs; index++) {
-        if (argument_names_address(args->pArgumentDescs[index])) {
-            lines_.write("a command signature argument carries a GPU address the host cannot translate; refused");
-            return E_INVALIDARG;
-        }
         arguments[index] = indirect_argument(args->pArgumentDescs[index]);
     }
     ObjectRecord &signature = *static_cast<ObjectRecord *>(handle.pDrvPrivate);
@@ -449,10 +499,7 @@ void D3d12Device::graphics_state(const D3D12DDIARG_CREATE_PIPELINE_STATE_0099 &a
         state.rasterizer.depth_bias_clamp = from.DepthBiasClamp;
         state.rasterizer.slope_scaled_depth_bias = from.SlopeScaledDepthBias;
         state.rasterizer.depth_clip = from.DepthClipEnable ? 1u : 0u;
-        state.rasterizer.multisample =
-            from.LineRasterizationMode >= D3D12DDI_LINE_RASTERIZATION_MODE_QUADRILATERAL_WIDE ? 1u : 0u;
-        state.rasterizer.antialiased_line =
-            from.LineRasterizationMode == D3D12DDI_LINE_RASTERIZATION_MODE_ALPHA_ANTIALIASED ? 1u : 0u;
+        state.rasterizer.line_mode = static_cast<uint32_t>(from.LineRasterizationMode);
         state.rasterizer.forced_sample_count = from.ForcedSampleCount;
         state.rasterizer.conservative = static_cast<uint32_t>(from.ConservativeRasterizationMode);
     }
@@ -463,6 +510,9 @@ void D3d12Device::graphics_state(const D3D12DDIARG_CREATE_PIPELINE_STATE_0099 &a
         state.depth_stencil.depth_write_mask = static_cast<uint32_t>(from.DepthWriteMask);
         state.depth_stencil.depth_func = static_cast<uint32_t>(from.DepthFunc);
         state.depth_stencil.stencil_enable = from.StencilEnable ? 1u : 0u;
+        state.depth_stencil.depth_bounds_enable = from.DepthBoundsTestEnable ? 1u : 0u;
+        state.depth_stencil.back_read_mask = from.BackFaceStencilReadMask;
+        state.depth_stencil.back_write_mask = from.BackFaceStencilWriteMask;
         state.depth_stencil.stencil_read_mask = from.FrontFaceStencilReadMask;
         state.depth_stencil.stencil_write_mask = from.FrontFaceStencilWriteMask;
         state.depth_stencil.front = d3d12proto::StencilOp{
@@ -480,6 +530,16 @@ void D3d12Device::graphics_state(const D3D12DDIARG_CREATE_PIPELINE_STATE_0099 &a
     state.dsv_format = static_cast<uint32_t>(args.DSVFormat);
     state.sample_count = args.SampleDesc.Count;
     state.sample_quality = args.SampleDesc.Quality;
+    const D3D12DDI_VIEW_INSTANCING_DESC &views = args.ViewInstancingDesc;
+    if (views.ViewInstanceCount != 0u && views.pViewInstanceLocations != nullptr &&
+        views.ViewInstanceCount <= sizeof(state.view_instances) / sizeof(state.view_instances[0])) {
+        state.view_instance_count = views.ViewInstanceCount;
+        state.view_instancing_flags = static_cast<uint32_t>(views.Flags);
+        for (uint32_t view = 0u; view < views.ViewInstanceCount; view++)
+            state.view_instances[view] = d3d12proto::ViewInstanceLocation{
+                views.pViewInstanceLocations[view].ViewportArrayIndex,
+                views.pViewInstanceLocations[view].RenderTargetArrayIndex};
+    }
 }
 
 SIZE_T D3d12Device::calc_private_pipeline_state_size(const D3D12DDIARG_CREATE_PIPELINE_STATE_0099 *)
@@ -505,9 +565,10 @@ HRESULT D3d12Device::create_pipeline_state(const D3D12DDIARG_CREATE_PIPELINE_STA
                    ? S_OK
                    : E_OUTOFMEMORY;
     }
-    const ShaderRecord *const stages[5] = {shader_of(args->hVertexShader), shader_of(args->hHullShader),
+    const ShaderRecord *const stages[7] = {shader_of(args->hVertexShader), shader_of(args->hHullShader),
                                            shader_of(args->hDomainShader), shader_of(args->hGeometryShader),
-                                           shader_of(args->hPixelShader)};
+                                           shader_of(args->hPixelShader), shader_of(args->hMeshShader),
+                                           shader_of(args->hAmplificationShader)};
     d3d12proto::SignatureEntry signatures[most_signatures] = {};
     uint32_t                   signature_count = 0u;
     for (const ShaderRecord *const stage : stages) {
@@ -516,15 +577,20 @@ HRESULT D3d12Device::create_pipeline_state(const D3D12DDIARG_CREATE_PIPELINE_STA
         const d3d12proto::SignatureEntry *const from = signatures_of(*stage);
         for (uint32_t index = 0u; index < stage->signature_count; index++) signatures[signature_count++] = from[index];
     }
+    const ShaderRecord *const streamed = stages[3];
+    const uint32_t            stream_outs = streamed == nullptr ? 0u : streamed->stream_out_count;
     d3d12proto::GraphicsState state = {};
     graphics_state(*args, state);
     const LayoutRecord *const layout = static_cast<const LayoutRecord *>(args->hElementLayout.pDrvPrivate);
     const uint32_t            elements = layout == nullptr ? 0u : layout->count;
     if (!sent(d3d12proto::av_d3d12_CreateGraphicsPipeline12(
                   wire(), pipeline.header.stamp.id(), root, state, elements, layout == nullptr ? nullptr : layout->elements,
-                  signature_count, signatures, code_of(stages[0]), code_size_of(stages[0]), code_of(stages[1]),
+                  signature_count, signatures, stream_outs, stream_outs == 0u ? nullptr : stream_outputs_of(*streamed),
+                  stream_outs == 0u ? 0u : streamed->stride_count, stream_outs == 0u ? nullptr : streamed->strides,
+                  stream_outs == 0u ? no_rasterized_stream : streamed->rasterized_stream, code_of(stages[0]), code_size_of(stages[0]), code_of(stages[1]),
                   code_size_of(stages[1]), code_of(stages[2]), code_size_of(stages[2]), code_of(stages[3]),
-                  code_size_of(stages[3]), code_of(stages[4]), code_size_of(stages[4])),
+                  code_size_of(stages[3]), code_of(stages[4]), code_size_of(stages[4]),
+                  code_of(stages[5]), code_size_of(stages[5]), code_of(stages[6]), code_size_of(stages[6])),
               "CreateGraphicsPipeline12"))
         return E_OUTOFMEMORY;
     return S_OK;

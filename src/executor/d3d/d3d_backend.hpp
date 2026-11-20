@@ -4,12 +4,16 @@
 #include "executor/d3d/command_refusal.hpp"
 #include "executor/d3d/d3d_batch_counter.hpp"
 #include "executor/d3d/d3d11_batch_progress.hpp"
+#include "executor/d3d/d3d11_tiles.hpp"
 #include "executor/d3d/d3d12_session.hpp"
 #include "executor/d3d/d3d9_session.hpp"
 #include "executor/d3d/d3d_object_table.hpp"
+#include "executor/d3d/d3d_refused_creates.hpp"
 #include "executor/d3d/guest_devices.hpp"
+#include "executor/d3d/leased_objects.hpp"
 #include "executor/d3d/queue_drain.hpp"
 #include "executor/d3d/watched_blocks.hpp"
+#include "executor/gpu_work_window.hpp"
 #include "executor/guest_region.hpp"
 #include "proto/wire/guest_bytes.hpp"
 #include "executor/budgeted_heap.hpp"
@@ -33,6 +37,8 @@ struct D3D11_BOX;
 
 namespace av {
 
+class SessionLease;
+
 class ByteLedger;
 class DxgiFormatLayout;
 
@@ -46,6 +52,7 @@ class D3d11HostDevice;
 class D3d12HostDevice;
 class D3d9HostDevice;
 class ExecutorLog;
+class HostMemorySource;
 class ImportTable;
 class SourceMemory;
 class SessionShares;
@@ -59,10 +66,13 @@ public:
 
     [[nodiscard]] bool initialize(SessionShares &shares, ImportTable &imports, D3d11HostDevice *device11,
                                   D3d12HostDevice *device12 = nullptr, SharedSurfaces *surfaces = nullptr,
-                                  D3d9HostDevice *device9 = nullptr);
+                                  D3d9HostDevice *device9 = nullptr, HostMemorySource *source = nullptr);
     void use_host_ram(ByteLedger *ledger, uint64_t limit) override;
+    void lease_from(SessionLease *lease) override;
     void               shut_down() override;
     void               let_go_of_thread() override;
+    void               leave_device() override;
+    void               leave_lost_device();
 
     bool knows(uint32_t command_id) const override;
     [[nodiscard]] bool run(uint32_t command_id, WireReader &payload, WireWriter &reply,
@@ -95,6 +105,20 @@ public:
                         uint64_t &formats_size) override;
     bool on_Flush11() override;
     bool on_ClearState11() override;
+    bool on_ResourceTiling11(uint32_t resource, uint32_t &tiles, uint32_t &packed_mips,
+                             uint32_t &packed_tiles) override;
+    bool on_UpdateTileMappings11(uint32_t resource, uint32_t region_count, const d3dproto::TileRegion *regions,
+                                 uint32_t pool, uint32_t range_count, const d3dproto::TileRange *ranges,
+                                 uint32_t flags) override;
+    bool on_CopyTileMappings11(uint32_t destination, const d3dproto::TileCoordinate &destination_start,
+                               uint32_t source, const d3dproto::TileCoordinate &source_start,
+                               const d3dproto::TileSize &size, uint32_t flags) override;
+    bool on_CopyTiles11(uint32_t resource, const d3dproto::TileCoordinate &start, const d3dproto::TileSize &size,
+                        uint32_t buffer, uint64_t buffer_offset, uint32_t flags) override;
+    bool on_UpdateTiles11(uint32_t resource, const d3dproto::TileCoordinate &start, const d3dproto::TileSize &size,
+                          uint32_t flags, const uint8_t *data, uint64_t data_size) override;
+    bool on_ResizeTilePool11(uint32_t pool, uint64_t bytes) override;
+    bool on_TiledResourceBarrier11(uint32_t before, uint32_t after) override;
     bool on_Finish11(uint32_t &hresult) override;
     bool on_DestroyObject(uint32_t object) override;
     bool on_CreateResource(uint32_t resource, const d3dproto::ResourceDesc &desc, uint64_t shared_key, uint64_t memory,
@@ -176,6 +200,9 @@ public:
     bool on_ReadSubresource(uint32_t resource, uint32_t subresource, uint32_t &hresult, uint32_t &row_pitch,
                             uint32_t &depth_pitch, uint8_t *data, uint64_t data_capacity,
                             uint64_t &data_size) override;
+    bool on_ReadSubresourceRange(uint32_t resource, uint32_t subresource, uint64_t offset, uint32_t &hresult,
+                                 uint32_t &row_pitch, uint32_t &depth_pitch, uint8_t *data, uint64_t data_capacity,
+                                 uint64_t &data_size) override;
     bool on_PresentPoint(uint32_t resource, uint32_t subresource, uint32_t point) override;
     bool on_QueryBufferSlices11(uint32_t &supported) override;
     bool on_BindBufferSlice(uint32_t resource, uint64_t memory, uint64_t offset, uint64_t bytes) override;
@@ -188,6 +215,8 @@ public:
     bool invariants_hold() const;
 
 private:
+    bool refused_shader(const char *why) const;
+    bool refused_view(uint32_t id, HRESULT result);
     bool dynamic_buffer(ID3D11Resource *resource) const;
     bool detach_buffer_slice(uint32_t resource, uint64_t offset, uint64_t bytes);
     bool marks_batches();
@@ -207,6 +236,8 @@ private:
     ID3D11Texture2D         *shareable(const D3D11_TEXTURE2D_DESC &texture, uint32_t guest_misc);
     ID3D11Texture2D         *lent_texture(const D3D11_TEXTURE2D_DESC &texture, uint64_t memory, uint32_t row_pitch);
     void                     counted(ID3D11Resource *destination);
+    void                     pace(uint64_t bytes);
+    static uint64_t          copy_bytes(ID3D11Resource *resource, const D3D11_BOX *box);
     bool                     update_in_pieces(ID3D11Resource *resource, uint32_t subresource, const D3D11_BOX &whole,
                                               const DxgiFormatLayout &layout, uint32_t row_pitch, uint32_t depth_pitch,
                                               uint32_t copy_flags, const uint8_t *data);
@@ -228,6 +259,9 @@ private:
     bool                     defers(uint64_t now) const;
     void                     signal_batches();
     bool                     signal_when_idle();
+    bool                     read_packed(uint32_t resource, uint32_t subresource, uint64_t offset, uint32_t &hresult,
+                                         uint32_t &row_pitch, uint32_t &depth_pitch, uint8_t *data,
+                                         uint64_t data_capacity, uint64_t &data_size, uint64_t &total);
     ID3D11Resource          *staging_for(ID3D11Resource *resource, uint32_t subresource, uint32_t width,
                                          uint32_t height, uint32_t depth, uint32_t format);
 
@@ -251,26 +285,33 @@ private:
     CommandRefusal          refusal_;
     WireArena              *arena_;
     D3dObjectTable          objects_;
+    D3dRefusedCreates       refused_creates_;
+    LeasedObjects           leased_;
     GuestBytes              guest_;
     GuestRegion             region_;
     ImportTable            *imports_;
     SliceStorages           slices_;
     D3d12Session            d3d12_;
     D3d9Session             d3d9_;
+    D3d11Tiles              tiles_;
     QueryResultPublisher    published_;
     D3d11BatchProgress      progress11_;
     ConstantRing            constants_;
     uint64_t                missed_key_;
     D3dBatchCounter         batches_;
     QueueDrain              queue_drain_;
+    GpuWorkWindow           work_window_;
     uint64_t                submitted_;
     bool                    drained_;
+    bool                    predication_refusal_noted_;
     bool                    mark_refused_;
     bool                    must_signal_;
     uint64_t                deferred_since_;
     uint64_t                batch_ended_at_;
     bool                    show_refused_;
+    bool                    refused_use_noted_;
     bool                    lost_;
+    bool                    memory_refused_;
 };
 
 }

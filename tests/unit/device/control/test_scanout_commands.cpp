@@ -2,6 +2,7 @@
 #include "device/fence/fence_interrupts.hpp"
 #include "device/context/local_context_plane.hpp"
 #include "device/control/blob_commands.hpp"
+#include "device/control/held_requests.hpp"
 #include "device/recording/wire_recorder.hpp"
 #include "device/control/control_request.hpp"
 #include "device/control/scanout_commands.hpp"
@@ -216,7 +217,8 @@ TEST(scanout_commands, a_blob_a_head_shows_cannot_be_unreferenced_until_it_is_hi
   av::FenceInterrupts    interrupts(host);
   av::HostBlobTable      host_blobs(host);
   av::LocalContextPlane  plane(host, fixture.blobs(), host_blobs, interrupts, recorder);
-  av::BlobCommands       blobs(host, fixture.blobs(), host_blobs, recorder, plane);
+  av::HeldRequests       held(host);
+  av::BlobCommands       blobs(host, fixture.blobs(), host_blobs, held, recorder, plane);
   const auto       unref = [&](std::uint32_t id) {
       GpuRequestBuilder request(av::BlobCommands::resource_unref);
       request.u32(id).u32(0u);

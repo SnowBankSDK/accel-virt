@@ -2,6 +2,7 @@
 #define AV_VIRTIO_GPU_AV_HPP
 
 #include "core/support/status.hpp"
+#include "device/control/held_requests.hpp"
 #include "device/gpu/device_capset.hpp"
 #include "device/context/local_context_plane.hpp"
 #include "device/isolation/renderer_context_plane.hpp"
@@ -21,6 +22,7 @@
 #include "device/present/present_engine.hpp"
 #include "device/feasibility/host_feasibility.hpp"
 #include "device/recording/wire_recorder.hpp"
+#include "device/threading/service_thread.hpp"
 
 #include <stdint.h>
 
@@ -51,12 +53,14 @@ public:
     int                  offer_modes(const char *text, uint32_t *width, uint32_t *height);
     [[nodiscard]] Status set_refresh(uint32_t millihz);
     bool                 offer_refresh(uint32_t millihz);
+    void                 offer_hybrid(uint32_t role);
     uint32_t             capsets() const;
     bool                 export_image(uint64_t key, AvExportedImage &image);
     bool                 export_head(uint32_t head, uint64_t key, AvExportedImage &image);
     bool                 read_image(uint64_t key, void *pixels, uint32_t stride, uint32_t width, uint32_t height);
     bool                 post_frame(uint32_t head, uint32_t frame, uint64_t key);
     void                 show_latched_frames();
+    bool                 show_frame(uint32_t head, uint64_t key);
     void                 export_latched_frames();
     void                 show_exported_images();
     bool                 pci_identity(AvPciIdentity &identity) const;
@@ -65,6 +69,8 @@ public:
     [[nodiscard]] Status create_context(uint32_t id, const char *name);
     [[nodiscard]] Status destroy_context(uint32_t id);
     uint32_t             contexts() const;
+    uint32_t             reaping() const;
+    uint32_t             outstanding() const;
     void                 renderer_lost();
     bool                 export_accepted(int connection, bool same_user);
     bool                 realized() const;
@@ -83,6 +89,7 @@ private:
     HostFeasibility    feasibility_;
     DeviceCapset       capset_;
     WireRecorder       recorder_;
+    HeldRequests       held_;
     BlobTable          blobs_;
     HostBlobTable      host_blobs_;
     WindowStatsWindow  window_stats_;
@@ -98,6 +105,7 @@ private:
     ContextPlane        *contexts_;
     ExportService        exports_;
     DisplayShow          shower_;
+    ServiceThread        service_;
 
     friend struct VirtioGpuAvProbe;
 };

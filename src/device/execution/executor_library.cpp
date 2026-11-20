@@ -167,10 +167,42 @@ void ExecutorLibrary::release_blob(AvExecutor *executor, uint64_t blob_id) const
     ops_->release_blob(ops_->opaque, executor, blob_id);
 }
 
+Status ExecutorLibrary::place_memory(AvExecutor *executor, uint64_t size, uint32_t request, AvHostMemory &memory) const
+{
+    AV_SCOPE("ExecutorLibrary::place_memory");
+    if (ops_ == nullptr || ops_->place_memory == nullptr || executor == nullptr) return Status::not_supported;
+    return ops_->place_memory(ops_->opaque, executor, size, request, &memory) == 0u ? Status::ok : Status::no_memory;
+}
+
 void ExecutorLibrary::channel_stats(AvExecutor *executor, uint32_t context, const uint8_t *body, size_t size) const
 {
     AV_SCOPE("ExecutorLibrary::channel_stats");
     if (ops_->channel_stats != nullptr) ops_->channel_stats(ops_->opaque, executor, context, body, size);
+}
+
+uint64_t ExecutorLibrary::extend_lease(AvExecutor *executor, uint32_t kind, uint64_t bytes, uint64_t least) const
+{
+    AV_SCOPE("ExecutorLibrary::extend_lease");
+    if (ops_->extend_lease == nullptr) return bytes;
+    return ops_->extend_lease(ops_->opaque, executor, kind, bytes, least);
+}
+
+void *ExecutorLibrary::leave_thread() const
+{
+    AV_SCOPE("ExecutorLibrary::leave_thread");
+    return ops_ != nullptr && ops_->leave_thread != nullptr ? ops_->leave_thread(ops_->opaque) : nullptr;
+}
+
+void ExecutorLibrary::thread_joined(void *left) const
+{
+    AV_SCOPE("ExecutorLibrary::thread_joined");
+    if (left != nullptr && ops_ != nullptr && ops_->thread_joined != nullptr) ops_->thread_joined(ops_->opaque, left);
+}
+
+void ExecutorLibrary::return_lease(AvExecutor *executor, uint32_t kind, uint64_t bytes) const
+{
+    AV_SCOPE("ExecutorLibrary::return_lease");
+    if (ops_->return_lease != nullptr) ops_->return_lease(ops_->opaque, executor, kind, bytes);
 }
 
 size_t ExecutorLibrary::answer_part(AvExecutor *executor, uint64_t offset, uint8_t *out, size_t capacity,

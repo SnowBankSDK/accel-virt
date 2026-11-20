@@ -41,6 +41,16 @@ void ControlRequest::respond(const GpuResponse &response)
     responded_ = true;
 }
 
+void *ControlRequest::keep()
+{
+    AV_SCOPE("ControlRequest::keep");
+    host_.require_main_loop("ControlRequest::keep");
+    if (responded_) return nullptr;
+    void *const kept = host_.keep_request(request_);
+    if (kept != nullptr) responded_ = true;
+    return kept;
+}
+
 bool ControlRequest::responded() const
 {
     AV_SCOPE("ControlRequest::responded");

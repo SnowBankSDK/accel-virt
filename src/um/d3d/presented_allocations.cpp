@@ -3,6 +3,7 @@
 #include "core/log/keyed_log.hpp"
 #include "core/log/log_line.hpp"
 #include "core/trace/function_scope.hpp"
+#include "icd/d3d/kernel_heap.hpp"
 #include "icd/d3d/kernel_surface.hpp"
 #include "um/d3d/kernel_device.hpp"
 
@@ -37,6 +38,27 @@ HRESULT PresentedAllocations::make(KernelSurface &surface, HANDLE resource, D3DK
     return S_OK;
 }
 
+HRESULT PresentedAllocations::make_heap(KernelHeap &heap, HANDLE resource, D3DKMT_HANDLE &allocation)
+{
+    AV_SCOPE("PresentedAllocations::make_heap");
+    const HRESULT made = kernel_.allocate(heap, resource, allocation);
+    if (FAILED(made)) {
+        if (lines_.first("the kernel refused a resource's allocation", made))
+            LogLine(lines_)
+                .text("the kernel refused a resource's allocation ")
+                .hex(static_cast<uint32_t>(made), 8u)
+                .write();
+        return made;
+    }
+    if (!paging_.constructed()) static_cast<void>(paging_.construct(kernel_.callbacks(), kernel_.runtime(), clock_));
+    const HRESULT resident = paging_.object().queue_resident(allocation);
+    if (FAILED(resident)) {
+        give_back(allocation, resource);
+        allocation = 0u;
+    }
+    return resident;
+}
+
 void PresentedAllocations::give_back(D3DKMT_HANDLE allocation, HANDLE resource)
 {
     AV_SCOPE("PresentedAllocations::give_back");
@@ -68,6 +90,21 @@ HRESULT PresentedAllocations::make_context(HANDLE &context)
     if (FAILED(made))
         LogLine(lines_).text("the kernel refused the device's context ").hex(static_cast<uint32_t>(made), 8u).write();
     return made;
+}
+
+Hresult PresentedAllocations::make_surface(KernelSurface &surface, void *resource, uint32_t &allocation)
+{
+    AV_SCOPE("PresentedAllocations::make_surface");
+    D3DKMT_HANDLE made = 0u;
+    const HRESULT result = make(surface, resource, made);
+    allocation = made;
+    return static_cast<Hresult>(result);
+}
+
+void PresentedAllocations::return_surface(uint32_t allocation, void *resource)
+{
+    AV_SCOPE("PresentedAllocations::return_surface");
+    give_back(allocation, resource);
 }
 
 }

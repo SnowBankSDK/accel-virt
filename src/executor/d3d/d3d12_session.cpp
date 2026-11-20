@@ -1,10 +1,20 @@
 #include "executor/d3d/d3d12_session.hpp"
+#include "executor/d3d/leased_objects.hpp"
+#include "core/support/scope_exit.hpp"
+#include "executor/shim/d3d11_host_device.hpp"
+#include "executor/sharing/shared_image_shape.hpp"
+#include "proto/d3d/descriptor_heap_rules.hpp"
 
 #include "executor/teardown_budget.hpp"
 
+#include "executor/sharing/d3d_shares.hpp"
 #include "executor/sharing/session_shares.hpp"
 #include "executor/shim/d3d12_host_device.hpp"
 #include "executor/source_memory.hpp"
+#include "executor/host_memory_source.hpp"
+#include "executor/owned_fd.hpp"
+#include "device/abi/av_executor.h"
+#include "device/host/env_setting.hpp"
 #include "executor/import_table.hpp"
 
 #include "core/log/log_line.hpp"
@@ -43,6 +53,10 @@ constexpr uint32_t page_not_available = 1u;
 constexpr uint32_t most_heap_type = 4u;
 constexpr uint32_t most_dimension = 4u;
 constexpr uint32_t buffer_dimension = 1u;
+constexpr uint32_t texture2d_dimension = 3u;
+constexpr uint32_t no_object = 0u;
+constexpr uint32_t shared_resource = 1u;
+constexpr uint32_t shared_heap = 2u;
 constexpr uint32_t max_texture_dimension = 16384u;
 constexpr uint64_t max_heap_bytes = uint64_t{1} << 34u;
 constexpr uint64_t hung_after = 5000000000u;
@@ -131,25 +145,28 @@ StagedFrame *PresentedResource::stage()
 
 }
 
-D3d12Session::D3d12Session(const GuestBytes &guest, D3dObjectTable &objects, WakeSignal &tenant,
+D3d12Session::D3d12Session(const GuestBytes &guest, D3dObjectTable &objects, LeasedObjects &leased, WakeSignal &tenant,
                            EventfdWake &fence_wake, WatchedBlocks &blocks, DriverLog &lines)
-    : d3d12proto::ServerDispatch(guest), imports_(nullptr), device_(nullptr), shown_by_(nullptr), shares_(nullptr), tenant_(tenant),
-      joined_(false), surfaces_(nullptr), objects_(objects), blocks_(blocks), addresses_(blocks),
-      progress_(fence_wake, blocks), block_heaps_(blocks, progress_, lines), holds_(blocks), descriptors_(blocks, holds_), allocators_(blocks), queries_(blocks), refused_creates_(), views_(objects_, addresses_),
-      pipelines_(objects_), compiles_(blocks), presentation_(lines), tile_update_(), retained_(), removed_(0u), lines_(lines), refusal_(lines_), clock_(), hang_ns_(hung_after), commands_(0u), polled_at_(0u), drain_commands_(0u), drain_mark_(0u), drain_marked_(false)
+    : d3d12proto::ServerDispatch(guest), imports_(nullptr), source_(nullptr), placing_(false), device_(nullptr), shown_by_(nullptr), shares_(nullptr), tenant_(tenant),
+      joined_(false), left_lost_(false), surfaces_(nullptr), objects_(objects), leased_(leased), blocks_(blocks), addresses_(blocks), indirect_table_(addresses_),
+      progress_(fence_wake, blocks), block_heaps_(blocks, progress_, lines), holds_(blocks), descriptors_(blocks, holds_), allocators_(blocks), queries_(blocks), refused_creates_(blocks), views_(objects_, addresses_),
+      pipelines_(objects_), compiles_(blocks), presentation_(lines), tile_update_(), retained_(), state_builder_(blocks, objects_), inputs_(blocks, addresses_), sizes_(blocks), removed_(0u), lines_(lines), refusal_(lines_), clock_(), hang_ns_(hung_after), commands_(0u), polled_at_(0u), drain_commands_(0u), drain_mark_(0u), drain_marked_(false), oversized_heaps_(), refused_heaps_()
 {
     AV_SCOPE("D3d12Session::D3d12Session");
 }
 
 void D3d12Session::initialize(const ImportTable &imports, D3d12HostDevice *device, D3d11HostDevice *shown_by,
-                              SharedSurfaces *surfaces, SessionShares *shares)
+                              SharedSurfaces *surfaces, SessionShares *shares, HostMemorySource *source)
 {
     AV_SCOPE("D3d12Session::initialize");
     imports_ = &imports;
+    source_ = source;
     device_ = device != nullptr && device->placed() ? device : nullptr;
+    placing_ = decide_placement();
     shown_by_ = shown_by;
     shares_ = shares;
     joined_ = false;
+    left_lost_ = false;
     surfaces_ = surfaces;
     views_.bind(device_ != nullptr ? device_->device() : nullptr);
     pipelines_.bind(device_);
@@ -184,23 +201,43 @@ void D3d12Session::shut_down()
     presentation_.bind(nullptr, nullptr, nullptr);
     progress_.clear();
     addresses_.clear();
-    objects_.remove_kinds(D3dObjectKind::heap12, D3dObjectKind::command_signature12);
+    sizes_.clear();
+    indirect_table_.forget();
+    objects_.remove_kinds(D3dObjectKind::heap12, D3dObjectKind::state_object12);
     if (drained) block_heaps_.destroy_all();
     else block_heaps_.leak_all();
     views_.bind(nullptr);
     pipelines_.bind(nullptr);
     if (joined_) device_->dismiss(tenant_);
     joined_ = false;
+    left_lost_ = false;
     device_ = nullptr;
     shown_by_ = nullptr;
     shares_ = nullptr;
     imports_ = nullptr;
+    source_ = nullptr;
+    placing_ = false;
+}
+
+void D3d12Session::leave_device()
+{
+    AV_SCOPE("D3d12Session::leave_device");
+    if (joined_ && device_ != nullptr) device_->dismiss(tenant_);
+    joined_ = false;
+}
+
+void D3d12Session::leave_lost_device()
+{
+    AV_SCOPE("D3d12Session::leave_lost_device");
+    if (!lost()) return;
+    left_lost_ = true;
+    leave_device();
 }
 
 bool D3d12Session::lost() const
 {
     AV_SCOPE("D3d12Session::lost");
-    return joined_ && device_->lost();
+    return left_lost_ || (joined_ && device_->lost());
 }
 
 bool D3d12Session::knows(uint32_t command_id) const
@@ -273,6 +310,13 @@ bool D3d12Session::cpu_handle(const d3d12proto::DescriptorRef &ref, uint32_t typ
     return true;
 }
 
+bool D3d12Session::written_view(const d3d12proto::DescriptorRef &ref) const
+{
+    AV_SCOPE("D3d12Session::written_view");
+    const D3d12DescriptorHolds::View *const view = descriptors_.view_at(ref.heap, ref.index);
+    return view != nullptr && view->first_ != nullptr;
+}
+
 bool D3d12Session::gpu_handle(const d3d12proto::DescriptorRef &ref, uint64_t &handle) const
 {
     AV_SCOPE("D3d12Session::gpu_handle");
@@ -296,12 +340,14 @@ bool D3d12Session::place(uint32_t id, IUnknown *made, uint64_t address, uint64_t
     const bool            within = address != 0u && addresses_.translate(address, width) == host;
     const bool            registering = address != 0u && !within;
     D3dObjectKind  taken = D3dObjectKind::none;
-    const Status   registered = objects_.find_any(id, taken) != nullptr ? Status::conflict
+    const bool     named = objects_.find_any(id, taken) != nullptr;
+    const Status   registered = named ? Status::conflict
                                 : registering ? addresses_.insert(address, width, host, id)
                                               : Status::ok;
     if (registered != Status::ok) {
-        LogLine(lines_).text("a buffer's address kept nowhere, status ").number(static_cast<uint32_t>(registered))
-            .text(", ").number(addresses_.count()).text(" ranges held").write();
+        LogLine(lines_).text("a buffer's address kept nowhere: id ").number(id).text(named ? " is in use" : " overlaps")
+            .text(" at guest address ").hex(address, 16u).text(" over ").number(width).text(" bytes, status ")
+            .number(static_cast<uint32_t>(registered)).text(", ").number(addresses_.count()).text(" ranges held").write();
         made->Release();
         return false;
     }
@@ -452,7 +498,10 @@ bool D3d12Session::drain_within(TeardownBudget &budget)
 {
     AV_SCOPE("D3d12Session::drain_within");
     if (device_ == nullptr) return true;
-    if (lost()) return false;
+    if (lost()) {
+        leave_lost_device();
+        return false;
+    }
     if (!compiles_.settle(budget)) return false;
     if (!drain_marked_ || drain_commands_ != commands_ || progress_.marked() != drain_mark_) {
         if (!progress_.mark_all()) return false;
@@ -493,8 +542,12 @@ bool D3d12Session::on_OpenDevice12(uint32_t, uint32_t &hresult)
     }
     if (!joined_) {
         constexpr uint32_t renew_wait_ms = 2000u;
-        if (!device_->renew(renew_wait_ms) || !device_->admit(tenant_)) {
+        if (!device_->renew(renew_wait_ms)) {
             hresult = static_cast<uint32_t>(DXGI_ERROR_DEVICE_REMOVED);
+            return true;
+        }
+        if (!device_->admit(tenant_)) {
+            hresult = static_cast<uint32_t>(E_OUTOFMEMORY);
             return true;
         }
         joined_ = true;
@@ -527,16 +580,20 @@ bool D3d12Session::on_Destroy12(uint32_t id)
 {
     AV_SCOPE("D3d12Session::on_Destroy12");
     if (D3d12PipelineJob *const job = compiles_.pending(id)) static_cast<void>(settle(*job));
+    leased_.release(id);
     if (refused_creates_.forget(id)) return true;
     D3dObjectKind kind = D3dObjectKind::none;
     if (objects_.find_any(id, kind) == nullptr || kind < D3dObjectKind::heap12 ||
-        kind > D3dObjectKind::command_signature12)
+        kind > D3dObjectKind::state_object12)
         return false;
     if (kind == D3dObjectKind::resource12) {
         addresses_.remove(id);
         block_heaps_.detach(id);
     }
-    if (kind == D3dObjectKind::heap12) block_heaps_.release_heap(id);
+    if (kind == D3dObjectKind::heap12) {
+        block_heaps_.release_heap(id);
+        if (source_ != nullptr && imports_ != nullptr) source_->drop_placed(reinterpret_cast<uint64_t>(imports_), id);
+    }
     if (kind == D3dObjectKind::queue12) progress_.forget(id);
     if (kind == D3dObjectKind::list12) {
         release_holds(id);
@@ -568,11 +625,61 @@ bool D3d12Session::on_Finish12(uint32_t &hresult)
 bool D3d12Session::on_QueryHeapSlices12(uint32_t &supported)
 {
     AV_SCOPE("D3d12Session::on_QueryHeapSlices12");
-    supported = static_cast<uint32_t>(device_ != nullptr ? HeapSliceSupport::windows : HeapSliceSupport::none);
+    supported = static_cast<uint32_t>(device_ != nullptr && !placing_ ? HeapSliceSupport::windows : HeapSliceSupport::none);
     return true;
 }
 
-bool D3d12Session::window_heap(uint32_t heap, uint64_t size, uint64_t memory, uint64_t base)
+bool D3d12Session::decide_placement() const
+{
+    AV_SCOPE("D3d12Session::decide_placement");
+    if (device_ == nullptr || source_ == nullptr || imports_ == nullptr || !device_->exports_heaps()) return false;
+    const char *const forced = EnvSetting("AV_HEAP_PLACEMENT").text();
+    if (forced != nullptr && forced[0] == 'n') return true;
+    if (forced != nullptr && forced[0] == 'i') return false;
+    return !source_->imports_heaps();
+}
+
+bool D3d12Session::on_QueryHeapPlacement12(uint32_t &placed)
+{
+    AV_SCOPE("D3d12Session::on_QueryHeapPlacement12");
+    placed = placing_ ? 1u : 0u;
+    return true;
+}
+
+bool D3d12Session::native_heap(uint32_t heap, uint64_t size, uint64_t alignment, uint32_t &hresult, uint64_t &placed)
+{
+    AV_SCOPE("D3d12Session::native_heap");
+    D3D12_HEAP_DESC desc = {};
+    desc.SizeInBytes = size;
+    desc.Properties.Type = D3D12_HEAP_TYPE_CUSTOM;
+    desc.Properties.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_WRITE_BACK;
+    desc.Properties.MemoryPoolPreference = D3D12_MEMORY_POOL_L0;
+    desc.Properties.CreationNodeMask = 1u;
+    desc.Properties.VisibleNodeMask = 1u;
+    desc.Alignment = alignment;
+    desc.Flags = D3D12_HEAP_FLAG_ALLOW_ONLY_BUFFERS;
+    OwnedFd           descriptor;
+    ID3D12Heap *const made = device_->create_exported_heap(desc, descriptor);
+    if (made == nullptr) {
+        LogLine(lines_).text("the host made no exported heap of ").number(size).text(" bytes").write();
+        hresult = static_cast<uint32_t>(E_OUTOFMEMORY);
+        return true;
+    }
+        const uint64_t owner = reinterpret_cast<uint64_t>(imports_);
+    if (source_->place_heap(owner, heap, size, AV_MEMORY_WRITE_BACK, descriptor.fd()) != Status::ok) {
+        made->Release();
+        hresult = static_cast<uint32_t>(E_OUTOFMEMORY);
+        return true;
+    }
+    if (kept(heap, D3dObjectKind::heap12, made)) {
+        placed = heap;
+        return true;
+    }
+    source_->drop_placed(owner, heap);
+    return false;
+}
+
+bool D3d12Session::window_heap(uint32_t heap, uint64_t size, uint64_t memory, uint64_t base, uint32_t &hresult)
 {
     AV_SCOPE("D3d12Session::window_heap");
     SourceMemory *const backing = imports_ != nullptr ? imports_->named(memory) : nullptr;
@@ -580,8 +687,12 @@ bool D3d12Session::window_heap(uint32_t heap, uint64_t size, uint64_t memory, ui
         LogLine(lines_).text("a heap of ").number(size).text(" bytes names no memory, handle ").number(memory).write();
         return false;
     }
+    if (size == 0u || base % D3d12BlockHeaps::window_alignment != 0u || backing->at(base, size) == nullptr) return false;
     ID3D12Heap *const block = block_heaps_.open(*device_, *backing, heap, base, size);
-    if (block == nullptr) return false;
+    if (block == nullptr) {
+        hresult = static_cast<uint32_t>(E_OUTOFMEMORY);
+        return true;
+    }
     block->AddRef();
     if (kept(heap, D3dObjectKind::heap12, block)) return true;
     block_heaps_.release_heap(heap);
@@ -590,10 +701,13 @@ bool D3d12Session::window_heap(uint32_t heap, uint64_t size, uint64_t memory, ui
 
 bool D3d12Session::on_CreateHeap12(uint32_t heap, const d3d12proto::HeapProperties &properties, uint32_t flags,
                                    uint64_t size, uint64_t alignment, uint64_t memory, uint64_t offset,
-                                   uint32_t &hresult)
+                                   uint32_t &hresult, uint64_t &placed)
 {
     AV_SCOPE("D3d12Session::on_CreateHeap12");
-    return create_heap(heap, properties, flags, size, alignment, memory, offset, hresult);
+    placed = 0u;
+    const bool ran = create_heap(heap, properties, flags, size, alignment, memory, offset, hresult, placed);
+    if (FAILED(static_cast<HRESULT>(hresult))) leased_.release(heap);
+    return ran;
 }
 
 bool D3d12Session::on_CreateHeapAsync12(uint32_t heap, const d3d12proto::HeapProperties &properties, uint32_t flags,
@@ -601,25 +715,53 @@ bool D3d12Session::on_CreateHeapAsync12(uint32_t heap, const d3d12proto::HeapPro
 {
     AV_SCOPE("D3d12Session::on_CreateHeapAsync12");
     uint32_t hresult = static_cast<uint32_t>(S_OK);
-    if (!create_heap(heap, properties, flags, size, alignment, memory, offset, hresult)) return false;
+    uint64_t placed = 0u;
+    if (!create_heap(heap, properties, flags, size, alignment, memory, offset, hresult, placed)) return false;
     return hresult == static_cast<uint32_t>(S_OK) || refused_creates_.note(heap, hresult);
 }
 
 bool D3d12Session::create_heap(uint32_t heap, const d3d12proto::HeapProperties &properties, uint32_t flags,
                                uint64_t size, uint64_t alignment, uint64_t memory, uint64_t offset,
-                               uint32_t &hresult)
+                               uint32_t &hresult, uint64_t &placed)
 {
     AV_SCOPE("D3d12Session::create_heap");
     hresult = static_cast<uint32_t>(S_OK);
     if (properties.type == 0u || properties.type > most_heap_type || size == 0u || D3d12HeapFlags(flags).refused())
         return false;
     if (size > max_heap_bytes) {
-        LogLine(lines_).text("a heap of ").number(size).text(" bytes is past the ").number(max_heap_bytes).text(" the host makes").write();
+        if (oversized_heaps_.speaks())
+            LogLine(lines_)
+                .text("a heap of ")
+                .number(size)
+                .text(" bytes is past the ")
+                .number(max_heap_bytes)
+                .text(" the host makes, refusal ")
+                .number(oversized_heaps_.seen())
+                .text(" of this kind")
+                .write();
         hresult = static_cast<uint32_t>(E_OUTOFMEMORY);
         return true;
     }
     if (device_ == nullptr) return false;
-    if (cpu_visible(properties)) return window_heap(heap, size, memory, offset);
+    if (cpu_visible(properties)) {
+        if (placing_ && memory == 0u && (properties.type == heap_upload || properties.type == heap_readback))
+            return native_heap(heap, size, alignment, hresult, placed);
+        if (placing_) {
+            if (refused_heaps_.speaks())
+                LogLine(lines_)
+                    .text("a heap of ")
+                    .number(size)
+                    .text(" bytes over guest memory is refused: this host imports no heap, refusal ")
+                    .number(refused_heaps_.seen())
+                    .text(" of this kind")
+                    .write();
+            hresult = static_cast<uint32_t>(E_OUTOFMEMORY);
+            return true;
+        }
+        return window_heap(heap, size, memory, offset, hresult);
+    }
+    if (properties.type == heap_default) leased_.charge(heap, size);
+    const ScopeExit settled([this] { leased_.settle(); });
     D3D12_HEAP_DESC desc = {};
     desc.SizeInBytes = size;
     desc.Properties = host_properties(properties);
@@ -641,7 +783,9 @@ bool D3d12Session::on_CreateCommittedResource12(uint32_t resource, const d3d12pr
                                                 uint64_t address, uint32_t &hresult)
 {
     AV_SCOPE("D3d12Session::on_CreateCommittedResource12");
-    return create_committed(resource, properties, heap_flags, desc, state, clear, address, hresult);
+    const bool ran = create_committed(resource, properties, heap_flags, desc, state, clear, address, hresult);
+    if (FAILED(static_cast<HRESULT>(hresult))) leased_.release(resource);
+    return ran;
 }
 
 bool D3d12Session::on_CreateCommittedResourceAsync12(uint32_t resource, const d3d12proto::HeapProperties &properties,
@@ -666,6 +810,8 @@ bool D3d12Session::create_committed(uint32_t resource, const d3d12proto::HeapPro
         return false;
     const D3D12_HEAP_PROPERTIES heap = host_properties(properties);
     const D3D12_RESOURCE_DESC   made_desc = host_desc(desc);
+    leased_.charge(resource, committed_bytes(desc, made_desc));
+    const ScopeExit settled([this] { leased_.settle(); });
     D3D12_CLEAR_VALUE           value = {};
     ID3D12Resource             *made = nullptr;
     const HRESULT result = device_->device()->CreateCommittedResource(
@@ -685,6 +831,121 @@ bool D3d12Session::on_ShareResource12(uint32_t resource, uint64_t key)
     AV_SCOPE("D3d12Session::on_ShareResource12");
     ID3D12Resource *const shown = objects_.find_as<ID3D12Resource>(resource, D3dObjectKind::resource12);
     return shown != nullptr && presentation_.share(shown, key);
+}
+
+bool D3d12Session::on_ShareObject12(uint32_t object, uint64_t key)
+{
+    AV_SCOPE("D3d12Session::on_ShareObject12");
+    D3dObjectKind kind = D3dObjectKind::none;
+    IUnknown *const shared = objects_.find_any(object, kind);
+    if (key == 0u) return false;
+    if (shared == nullptr || (kind != D3dObjectKind::resource12 && kind != D3dObjectKind::heap12) || shares_ == nullptr)
+        return true;
+    return shares_->publish_resource(key, shared, ShareOrigin::d3d12) == Status::ok;
+}
+
+bool D3d12Session::on_OpenObject12(uint32_t object, uint64_t key, uint64_t address, uint32_t &kind,
+                                   uint32_t &dimension, uint32_t &height, uint32_t &depth_or_array,
+                                   uint32_t &mip_levels, uint32_t &format, uint32_t &sample_count, uint32_t &flags,
+                                   uint64_t &width, uint64_t &size)
+{
+    AV_SCOPE("D3d12Session::on_OpenObject12");
+    kind = no_object;
+    if (shares_ == nullptr || shares_->shares() == nullptr || device_ == nullptr) return true;
+    IUnknown *const opened = D3dShares(*shares_->shares()).view(shares_->domain(), key, ShareOrigin::d3d12);
+    if (opened == nullptr) return true;
+    ID3D12Resource *resource = viewed_by_d3d12(key, opened);
+    ID3D12Heap     *heap = nullptr;
+    if (resource != nullptr) {
+        opened->Release();
+        const D3D12_RESOURCE_DESC desc = resource->GetDesc();
+        dimension = static_cast<uint32_t>(desc.Dimension);
+        height = desc.Height;
+        depth_or_array = desc.DepthOrArraySize;
+        mip_levels = desc.MipLevels;
+        format = static_cast<uint32_t>(desc.Format);
+        sample_count = desc.SampleDesc.Count;
+        flags = static_cast<uint32_t>(desc.Flags);
+        width = desc.Width;
+        size = desc.Width;
+        if (!place(object, resource, desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER ? address : 0u, desc.Width))
+            return false;
+        kind = shared_resource;
+        return true;
+    }
+    if (FAILED(opened->QueryInterface(__uuidof(ID3D12Heap), reinterpret_cast<void **>(&heap)))) {
+        opened->Release();
+        return true;
+    }
+    opened->Release();
+    size = heap->GetDesc().SizeInBytes;
+    if (!kept(object, D3dObjectKind::heap12, heap)) return false;
+    kind = shared_heap;
+    return true;
+}
+
+bool D3d12Session::on_AdoptLentImage12(uint32_t resource, uint64_t memory, const d3d12proto::ResourceDesc &desc,
+                                       uint32_t row_pitch, uint32_t &hresult)
+{
+    AV_SCOPE("D3d12Session::on_AdoptLentImage12");
+    constexpr uint32_t shared_binds = 0x8u | 0x20u;
+    hresult = static_cast<uint32_t>(E_INVALIDARG);
+    if (device_ == nullptr) return false;
+    const SourceMemory *const backing = imports_ != nullptr ? imports_->named(memory) : nullptr;
+    const uint64_t row_bytes = desc.width * DxgiFormatLayout(desc.format).element_bytes();
+    if (backing == nullptr || desc.dimension != texture2d_dimension || desc.mip_levels != 1u ||
+        desc.depth_or_array != 1u || desc.sample_count > 1u || desc.height == 0u || row_bytes == 0u ||
+        desc.width > UINT32_MAX || row_pitch < row_bytes ||
+        uint64_t{desc.height - 1u} * row_pitch + row_bytes > backing->size()) {
+        LogLine(lines_).text("a lent image names no memory that holds it: handle ").hex(memory, 16u).write();
+        return true;
+    }
+    OwnedFd pages;
+    hresult = static_cast<uint32_t>(E_OUTOFMEMORY);
+    if (!backing->share(pages)) return true;
+    const SharedImageShape shape(static_cast<uint32_t>(desc.width), desc.height, desc.format, row_pitch, 0u, 0u,
+                                 shared_binds);
+    ID3D12Resource *const made = device_->adopt_image(pages, shape);
+    if (made == nullptr) {
+        LogLine(lines_).text("the host made no image over lent rows of format ").number(desc.format).text(" pitch ")
+            .number(row_pitch).write();
+        return true;
+    }
+    if (!place(resource, made, 0u, desc.width)) return false;
+    hresult = 0u;
+    return true;
+}
+
+ID3D12Resource *D3d12Session::viewed_by_d3d12(uint64_t key, IUnknown *opened)
+{
+    AV_SCOPE("D3d12Session::viewed_by_d3d12");
+    ID3D12Resource *resource = nullptr;
+    if (SUCCEEDED(opened->QueryInterface(__uuidof(ID3D12Resource), reinterpret_cast<void **>(&resource))))
+        return resource;
+    ID3D11Texture2D *texture = nullptr;
+    if (shown_by_ == nullptr ||
+        FAILED(opened->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void **>(&texture))))
+        return nullptr;
+    OwnedFd          memory;
+    SharedImageShape shape;
+    const bool       carried = shown_by_->carry_image(texture, memory, shape);
+    texture->Release();
+    resource = carried ? device_->adopt_image(memory, shape) : nullptr;
+    if (resource == nullptr) {
+        LogLine(lines_).text("the Direct3D 11 texture shared under key ").hex(key, 16u)
+            .text(carried ? " was not made a Direct3D 12 resource" : " has no memory another device can open").write();
+        return nullptr;
+    }
+    static_cast<void>(D3dShares(*shares_->shares()).keep_view(shares_->domain(), key, ShareOrigin::d3d12, resource));
+    return resource;
+}
+
+uint64_t D3d12Session::committed_bytes(const d3d12proto::ResourceDesc &desc, const D3D12_RESOURCE_DESC &made) const
+{
+    AV_SCOPE("D3d12Session::committed_bytes");
+    constexpr uint64_t buffer_alignment = uint64_t{64} << 10u;
+    if (desc.dimension == buffer_dimension) return (desc.width + buffer_alignment - 1u) & ~(buffer_alignment - 1u);
+    return device_->device()->GetResourceAllocationInfo(0u, 1u, &made).SizeInBytes;
 }
 
 bool D3d12Session::on_ResourceAllocation12(const d3d12proto::ResourceDesc &desc, uint64_t &size,
@@ -772,8 +1033,9 @@ bool D3d12Session::placed(uint32_t resource, ID3D12Heap *in, uint64_t offset, co
 bool D3d12Session::on_CreateDescriptorHeap12(uint32_t heap, uint32_t type, uint32_t count, uint32_t flags)
 {
     AV_SCOPE("D3d12Session::on_CreateDescriptorHeap12");
-    constexpr uint32_t most_descriptors = 1000000u;
-    if (device_ == nullptr || type >= descriptor_heap_types || count == 0u || count > most_descriptors) return false;
+    if (device_ == nullptr || !DescriptorHeapRules::admits_type(type) || count == 0u ||
+        !DescriptorHeapRules::admits_count(count))
+        return false;
     constexpr uint32_t visible_samplers = 2048u;
     const bool         capped = type == D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER &&
                         (flags & D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE) != 0u && count > visible_samplers;
@@ -881,25 +1143,30 @@ bool D3d12Session::on_CreateCommandSignature12(uint32_t signature, uint32_t root
     D3d12RootLayout layout;
     if (device_ == nullptr || (root != 0u && (rooted == nullptr || !layout.read(rooted)))) return false;
     const D3d12IndirectSignature made(arguments, argument_count, byte_stride);
-    if (!made.holds(rooted != nullptr ? &layout : nullptr)) return false;
+    if (made.addressed() && !device_->translates_indirect_addresses()) return false;
+    if (!made.holds(rooted != nullptr ? &layout : nullptr, device_->capabilities().caps().mesh_shader_tier != 0u)) return false;
     return kept(signature, D3dObjectKind::command_signature12, made.make(device_->device(), rooted));
 }
 
 bool D3d12Session::on_CreateGraphicsPipeline12(uint32_t pipeline, uint32_t root, const d3d12proto::GraphicsState &state,
                                                uint32_t element_count, const d3d12proto::InputElement *elements,
                                                uint32_t signature_count, const d3d12proto::SignatureEntry *signatures,
-                                               const uint8_t *vs, uint64_t vs_size, const uint8_t *hs,
+                                               uint32_t stream_out_count,
+                                               const d3d12proto::StreamOutDeclaration *stream_out,
+                                               uint32_t stride_count, const uint32_t *strides,
+                                               uint32_t rasterized_stream, const uint8_t *vs, uint64_t vs_size, const uint8_t *hs,
                                                uint64_t hs_size, const uint8_t *ds, uint64_t ds_size,
                                                const uint8_t *gs, uint64_t gs_size, const uint8_t *ps,
-                                               uint64_t ps_size)
+                                               uint64_t ps_size, const uint8_t *ms, uint64_t ms_size,
+                                               const uint8_t *as, uint64_t as_size)
 {
     AV_SCOPE("D3d12Session::on_CreateGraphicsPipeline12");
-    const uint8_t *const code[D3d12PipelineBuilder::stage_count] = {vs, hs, ds, gs, ps};
-    const uint64_t sizes[D3d12PipelineBuilder::stage_count] = {vs_size, hs_size, ds_size, gs_size, ps_size};
+    const uint8_t *const code[D3d12PipelineBuilder::stage_count] = {vs, hs, ds, gs, ps, ms, as};
+    const uint64_t sizes[D3d12PipelineBuilder::stage_count] = {vs_size, hs_size, ds_size, gs_size, ps_size, ms_size, as_size};
     D3d12PipelineJob *const job = vacant_job();
     if (job == nullptr) return false;
-    if (!pipelines_.graphics(pipeline, root, state, elements, element_count, signatures, signature_count, code, sizes,
-                             *job)) {
+    if (!pipelines_.graphics(pipeline, root, state, elements, element_count, signatures, signature_count, stream_out,
+                             stream_out_count, strides, stride_count, rasterized_stream, code, sizes, *job)) {
         job->clear();
         return false;
     }
@@ -1063,7 +1330,13 @@ bool D3d12Session::on_ExecuteCommandLists12(uint32_t queue, uint32_t count, cons
         if (allocators_.submitted(lists[index], stamp) != Status::ok) return false;
     }
     on->ExecuteCommandLists(count, executed);
-    if (progress_.signal(queue, on)) return true;
+    if (progress_.signal(queue, on)) {
+        if (work_window_.full()) {
+            const uint64_t before = work_window_.roll(progress_.marked());
+            if (before != 0u) static_cast<void>(wait_for(before));
+        }
+        return true;
+    }
     LogLine(lines_).text("the progress of queue ").number(queue).text(" is not followed after its lists ran; the device is removed").write();
     if (removed_ == 0u) removed_ = static_cast<uint32_t>(DXGI_ERROR_DRIVER_INTERNAL_ERROR);
     static_cast<void>(drain());
@@ -1075,7 +1348,8 @@ bool D3d12Session::on_CreateQueryHeap12(uint32_t heap, uint32_t type, uint32_t c
     AV_SCOPE("D3d12Session::on_CreateQueryHeap12");
     constexpr uint32_t most_query_heap_type = 5u;
     constexpr uint32_t most_queries = 65536u;
-    if (device_ == nullptr || type > most_query_heap_type || count == 0u || count > most_queries) return false;
+    if (device_ == nullptr || type > most_query_heap_type || !queries_.serves(type) || count == 0u || count > most_queries)
+        return false;
     D3D12_QUERY_HEAP_DESC desc = {};
     desc.Type = static_cast<D3D12_QUERY_HEAP_TYPE>(type);
     desc.Count = count;
@@ -1095,7 +1369,7 @@ bool D3d12Session::invariants_hold() const
     return objects_.invariants_hold() && addresses_.invariants_hold() && compiles_.invariants_hold() &&
            holds_.invariants_hold() && descriptors_.invariants_hold() &&
            (device_ != nullptr ||
-            objects_.count_kinds(D3dObjectKind::heap12, D3dObjectKind::command_signature12) == 0u);
+            objects_.count_kinds(D3dObjectKind::heap12, D3dObjectKind::state_object12) == 0u);
 }
 
 }

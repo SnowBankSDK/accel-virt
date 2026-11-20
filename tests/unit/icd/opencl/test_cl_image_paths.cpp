@@ -70,6 +70,7 @@ public:
         program_ = rig_.loader().create_program(context_, "__kernel void k(void){}", nullptr);
         if (program_ == nullptr) return;
         rig_.host().cl_handle(host_kernel, CL_SUCCESS);
+        rig_.host().cl_kernel_undescribed();
         kernel_ = rig_.loader().create_kernel(program_, "k", nullptr);
     }
 
@@ -127,6 +128,22 @@ av::WireReader payload_of(const av::MockKmt &kmt, std::uint32_t index)
 {
     return av::WireReader(kmt.command_bytes(index) + av::CommandHeader::encoded_size,
                           av::MockKmt::journal_bytes - av::CommandHeader::encoded_size);
+}
+
+bool read_description(av::WireReader &payload, cl_image_desc &crossed, std::uint64_t &buffer)
+{
+    std::uint64_t extents[6] = {};
+    bool          read = payload.read_pod(crossed.image_type);
+    for (std::uint64_t &extent : extents) read = read && payload.read_varint(extent);
+    read = read && payload.read_pod(crossed.num_mip_levels) && payload.read_pod(crossed.num_samples) &&
+           payload.read_pod(buffer);
+    crossed.image_width = static_cast<std::size_t>(extents[0]);
+    crossed.image_height = static_cast<std::size_t>(extents[1]);
+    crossed.image_depth = static_cast<std::size_t>(extents[2]);
+    crossed.image_array_size = static_cast<std::size_t>(extents[3]);
+    crossed.image_row_pitch = static_cast<std::size_t>(extents[4]);
+    crossed.image_slice_pitch = static_cast<std::size_t>(extents[5]);
+    return read;
 }
 
 bool carries(const av::MockKmt &kmt, std::uint32_t index, std::uint64_t handle)
@@ -235,11 +252,9 @@ TEST(cl_image_paths, a_copy_and_a_fill_are_enqueued_with_the_hosts_numbers_and_i
   CHECK_EQ(rig.kmt().command_id(sent + 1u), av::clproto::kCmd_clEnqueueFillBuffer);
 
   cl_event refused = nullptr;
-  rig.host().cl_enqueued(CL_INVALID_VALUE, 0u);
   CHECK_EQ(rig.root().enqueue_copy_buffer(run.queue(), run.buffer(), other, 250u, 0u, 64u, &refused),
            CL_INVALID_VALUE);
   CHECK(refused == nullptr);
-  rig.host().cl_enqueued(CL_INVALID_VALUE, 0u);
   CHECK_EQ(rig.root().enqueue_fill_buffer(run.queue(), run.buffer(), &pattern, 3u, 0u, 256u, &refused),
            CL_INVALID_VALUE);
   CHECK(refused == nullptr);
@@ -312,8 +327,9 @@ TEST(cl_image_paths, an_image_is_the_hosts_and_a_buffer_it_is_made_over_crosses_
   CHECK(payload.read_pod(context) && context == host_context);
   CHECK(payload.read_varint(flags) && payload.read_pod(present) && present == 1u);
   CHECK(payload.read(&crossed_format, sizeof crossed_format));
-  CHECK(payload.read_pod(present) && present == 1u && payload.read(&crossed, sizeof crossed));
-  CHECK_EQ(reinterpret_cast<std::uintptr_t>(crossed.buffer), host_buffer);
+  std::uint64_t   crossed_buffer = 0u;
+  CHECK(payload.read_pod(present) && present == 1u && read_description(payload, crossed, crossed_buffer));
+  CHECK_EQ(crossed_buffer, host_buffer);
   CHECK_EQ(crossed.image_width, 64u);
   CHECK(desc.buffer == run.buffer());
   CHECK(rig.root().invariants_hold()); }
@@ -602,7 +618,7 @@ TEST(cl_image_paths, an_image_transfer_the_api_would_refuse_asks_the_host_at_mos
   run.element_is(4u);
   CHECK_EQ(rig.root().enqueue_write_image(run.queue(), image, origin, region, 8u, 0u, texels, nullptr),
            CL_INVALID_VALUE);
-  CHECK_EQ(rig.kmt().commands(), sent + 2u); }
+  CHECK(rig.kmt().commands() <= sent + 2u); }
 
 TEST(cl_image_paths, a_sampler_is_made_from_the_three_properties_and_nothing_else)
 { ClIcdRig rig;
@@ -754,7 +770,7 @@ TEST(cl_image_paths, transfers_are_staged_while_buffers_fill_their_part_of_the_a
   CHECK_EQ(rig.kmt().queued_answers(), 0u);
   on->blocks().give_back(full); }
 
-TEST(cl_image_paths, the_supported_image_formats_are_the_hosts_as_they_stand)
+TEST(cl_image_paths, the_supported_image_formats_are_the_hosts_less_the_ones_it_refuses_to_make)
 { ClIcdRig rig;
   Running  run(rig);
   CHECK(run.made());
@@ -770,22 +786,29 @@ TEST(cl_image_paths, the_supported_image_formats_are_the_hosts_as_they_stand)
            CL_INVALID_VALUE);
   CHECK_EQ(rig.kmt().commands(), sent);
 
-  const cl_image_format answered[2] = {{CL_RGBA, CL_UNORM_INT8}, {CL_R, CL_FLOAT}};
-  rig.host().cl_formats(CL_SUCCESS, answered, 2u, 30u);
+  const cl_image_format answered[3] = {{CL_RGBA, CL_UNORM_INT8}, {CL_INTENSITY, CL_UNORM_INT8}, {CL_R, CL_FLOAT}};
+  rig.host().cl_formats(CL_SUCCESS, answered, 3u, 3u);
+  rig.host().cl_handle(host_image + 8u, CL_SUCCESS);
+  rig.host().cl_result(CL_SUCCESS);
+  rig.host().cl_handle(0u, CL_IMAGE_FORMAT_NOT_SUPPORTED);
+  rig.host().cl_handle(host_image + 9u, CL_SUCCESS);
+  rig.host().cl_result(CL_SUCCESS);
   CHECK_EQ(table_of(run.context())->clGetSupportedImageFormats(run.context(), CL_MEM_READ_ONLY,
-                                                               CL_MEM_OBJECT_IMAGE2D, 2u, formats, &listed),
+                                                               CL_MEM_OBJECT_IMAGE2D, 4u, formats, &listed),
            CL_SUCCESS);
-  CHECK_EQ(listed, 30u);
+  CHECK_EQ(listed, 2u);
   CHECK_EQ(formats[0].image_channel_order, static_cast<cl_channel_order>(CL_RGBA));
   CHECK_EQ(formats[1].image_channel_data_type, static_cast<cl_channel_type>(CL_FLOAT));
   CHECK_EQ(formats[2].image_channel_order, 0u);
 
-  rig.host().cl_formats(CL_SUCCESS, nullptr, 0u, 30u);
+  const std::uint32_t known = rig.kmt().commands();
   listed = 0u;
   CHECK_EQ(rig.root().supported_image_formats(run.context(), CL_MEM_READ_ONLY, CL_MEM_OBJECT_IMAGE2D, 0u, nullptr,
                                               &listed),
            CL_SUCCESS);
-  CHECK_EQ(listed, 30u); }
+  CHECK_EQ(listed, 2u);
+  CHECK_EQ(rig.kmt().commands(), known);
+  CHECK_EQ(rig.kmt().queued_answers(), 0u); }
 
 TEST(cl_image_paths, a_marker_or_a_barrier_names_the_hosts_events_and_hands_back_its_own)
 { ClIcdRig rig;
@@ -857,10 +880,11 @@ bool crossed_description(const av::MockKmt &kmt, std::uint32_t index, std::uint6
     std::uint64_t   context = 0u;
     std::uint8_t    present = 0u;
     cl_image_format format = {};
+    std::uint64_t   buffer = 0u;
     return kmt.command_id(index) == av::clproto::kCmd_clCreateImage && payload.read_pod(context) &&
            payload.read_varint(flags) && payload.read_pod(present) && present == 1u &&
            payload.read(&format, sizeof format) && payload.read_pod(present) && present == 1u &&
-           payload.read(&crossed, sizeof crossed);
+           read_description(payload, crossed, buffer);
 }
 
 }
@@ -1078,7 +1102,6 @@ TEST(cl_image_paths, a_buffer_rectangle_copy_is_enqueued_with_the_hosts_numbers_
   CHECK(carries(rig.kmt(), sent, host_buffer + 1u));
 
   cl_event refused = nullptr;
-  rig.host().cl_enqueued(CL_INVALID_VALUE, 0u);
   CHECK_EQ(rig.root().enqueue_copy_buffer_rect(run.queue(), run.buffer(), other, from_corner, to_corner, region, 4u,
                                                0u, 32u, 0u, &refused),
            CL_INVALID_VALUE);

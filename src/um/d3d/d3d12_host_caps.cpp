@@ -4,21 +4,25 @@
 #include "icd/common/adapter_memory.hpp"
 #include "icd/d3d/caps_reply.hpp"
 #include "proto/client/client_transport.hpp"
+#include "proto/d3d/caps12_layout.hpp"
 #include "proto/generated/d3d/d3d_wire_types.h"
 #include "proto/generated/d3d12/d3d12_dispatch_client.h"
+#include "icd/d3d/feature_level_gate.hpp"
+#include "um/common/guest_setting.hpp"
 
 namespace av::d3d12 {
 
 namespace {
 
-constexpr uint32_t level_11_0 = 0xb000u;
-constexpr uint32_t level_11_1 = 0xb100u;
-constexpr uint32_t level_12_0 = 0xc000u;
 constexpr uint32_t binding_tier_12_0 = 2u;
-constexpr uint32_t tiled_tier_12_0 = 2u;
 constexpr uint32_t most_tiled_tier = 2u;
+constexpr uint32_t most_view_instancing_tier = 3u;
+constexpr uint32_t most_vrs_tier = 2u;
+constexpr uint32_t mesh_tier_1 = 10u;
+constexpr uint32_t raytracing_tier_1_0 = 10u;
+constexpr uint32_t raytracing_tier_1_1 = 11u;
 constexpr uint32_t api_model_6_0 = 0x60u;
-constexpr uint32_t api_model_6_5 = 0x65u;
+constexpr uint32_t api_model_6_8 = 0x68u;
 constexpr uint32_t ddi_model_5_1 = 0x50015u;
 constexpr uint32_t ddi_model_6_0 = 0x60005u;
 constexpr uint32_t ddi_model_step = 0x10u;
@@ -46,6 +50,9 @@ bool D3d12HostCaps::learn(ClientTransport &transport, Kmt &kmt, uint32_t adapter
     if (!d3d12proto::av_d3d12_QueryCaps12(transport, &hresult, &caps_, rows, sizeof(rows), &answered) ||
         hresult != 0u)
         return false;
+    if (caps_.layout != caps12_layout) return false;
+    const GuestSetting raytracing("AV_D3D12_RAYTRACING");
+    if (!raytracing.value().on()) caps_.raytracing_tier = 0u;
     formats_.learn(rows, static_cast<uint32_t>(answered / sizeof(rows[0])));
     icd::AdapterMemory memory(kmt, adapter);
     local_budget_ = memory.read() == Status::ok ? memory.budget(MemorySegmentGroup::local) : 0u;
@@ -81,12 +88,23 @@ UINT D3d12HostCaps::format_support(DXGI_FORMAT format) const
 uint32_t D3d12HostCaps::pipeline_level() const
 {
     AV_SCOPE("D3d12HostCaps::pipeline_level");
-    if (caps_.feature_level >= level_12_0 && caps_.resource_binding_tier >= binding_tier_12_0 &&
-        tiled_tier() >= tiled_tier_12_0 && caps_.typed_uav_load_additional_formats != 0u)
-        return D3D12DDI_3DPIPELINELEVEL_12_0;
-    if (caps_.feature_level >= level_11_1) return D3D12DDI_3DPIPELINELEVEL_11_1;
-    if (caps_.feature_level >= level_11_0) return D3D12DDI_3DPIPELINELEVEL_11_0;
+    switch (gate().highest()) {
+    case d3d::FeatureLevelGate::level_12_1: return D3D12DDI_3DPIPELINELEVEL_12_1;
+    case d3d::FeatureLevelGate::level_12_0: return D3D12DDI_3DPIPELINELEVEL_12_0;
+    case d3d::FeatureLevelGate::level_11_1: return D3D12DDI_3DPIPELINELEVEL_11_1;
+    case d3d::FeatureLevelGate::level_11_0: return D3D12DDI_3DPIPELINELEVEL_11_0;
+    default: break;
+    }
     return D3D12DDI_3DPIPELINELEVEL_1_0_CORE;
+}
+
+d3d::FeatureLevelGate D3d12HostCaps::gate() const
+{
+    AV_SCOPE("D3d12HostCaps::gate");
+    return d3d::FeatureLevelGate(d3d::FeatureLevelRequirements{
+        caps_.feature_level, tiled_tier(), caps_.typed_uav_load_additional_formats != 0u, caps_.rovs != 0u,
+        caps_.conservative_rasterization_tier, caps_.resource_binding_tier >= binding_tier_12_0,
+        caps_.vp_rt_array_without_gs != 0u});
 }
 
 uint32_t D3d12HostCaps::tiled_tier() const
@@ -106,10 +124,35 @@ HRESULT D3d12HostCaps::options(void *data, UINT bytes) const
     AV_SCOPE("D3d12HostCaps::options");
     D3D12DDI_D3D12_OPTIONS_DATA_0089 answer = {};
     answer.ResourceBindingTier = static_cast<D3D12DDI_RESOURCE_BINDING_TIER>(caps_.resource_binding_tier);
+    answer.ConservativeRasterizationTier =
+        static_cast<D3D12DDI_CONSERVATIVE_RASTERIZATION_TIER>(caps_.conservative_rasterization_tier);
+    answer.VPAndRTArrayIndexFromAnyShaderFeedingRasterizerSupportedWithoutGSEmulation = caps_.vp_rt_array_without_gs != 0u;
+    answer.BarycentricsSupported = caps_.barycentrics != 0u;
     answer.ResourceHeapTier = static_cast<D3D12DDI_RESOURCE_HEAP_TIER>(caps_.resource_heap_tier);
     answer.TiledResourcesTier = static_cast<D3D12DDI_TILED_RESOURCES_TIER>(tiled_tier());
     answer.CrossNodeSharingTier = D3D12DDI_CROSS_NODE_SHARING_TIER_NOT_SUPPORTED;
     answer.OutputMergerLogicOp = caps_.output_merger_logic_op != 0u;
+    answer.ProgrammableSamplePositionsTier =
+        static_cast<D3D12DDI_PROGRAMMABLE_SAMPLE_POSITIONS_TIER>(caps_.programmable_sample_positions_tier);
+    answer.RenderPassTier = static_cast<D3D12DDI_RENDER_PASS_TIER>(caps_.render_pass_tier);
+    answer.DepthBoundsTestSupported = caps_.depth_bounds != 0u;
+    answer.ViewInstancingTier = static_cast<D3D12DDI_VIEW_INSTANCING_TIER>(
+        caps_.view_instancing_tier < most_view_instancing_tier ? caps_.view_instancing_tier : most_view_instancing_tier);
+    const uint32_t shading_tier = caps_.vrs_tier < most_vrs_tier ? caps_.vrs_tier : most_vrs_tier;
+    answer.VariableShadingRateTier = static_cast<D3D12DDI_VARIABLE_SHADING_RATE_TIER>(shading_tier);
+    answer.AdditionalShadingRatesSupported = shading_tier >= 2u && caps_.vrs_additional_rates != 0u;
+    answer.PerPrimitiveShadingRateSupportedWithViewportIndexing =
+        shading_tier >= 2u && caps_.vrs_per_primitive_viewport != 0u;
+    answer.ShadingRateImageTileSize = shading_tier >= 2u ? caps_.vrs_tile_size : 0u;
+    answer.VariableRateShadingSumCombinerSupported = shading_tier >= 2u && caps_.vrs_sum_combiner != 0u;
+    answer.WriteBufferImmediateQueueFlags = static_cast<D3D12DDI_COMMAND_QUEUE_FLAGS>(caps_.write_immediate_queues);
+    answer.CopyQueueTimestampQueriesSupported = caps_.copy_queue_timestamps != 0u;
+    answer.EnhancedBarriersSupported = caps_.enhanced_barriers != 0u;
+    answer.MeshShaderTier = caps_.mesh_shader_tier >= mesh_tier_1 ? D3D12DDI_MESH_SHADER_TIER_1
+                                                                  : D3D12DDI_MESH_SHADER_TIER_NOT_SUPPORTED;
+    answer.RaytracingTier = caps_.raytracing_tier >= raytracing_tier_1_1   ? D3D12DDI_RAYTRACING_TIER_1_1
+                            : caps_.raytracing_tier >= raytracing_tier_1_0 ? D3D12DDI_RAYTRACING_TIER_1_0
+                                                                           : D3D12DDI_RAYTRACING_TIER_NOT_SUPPORTED;
     return fill(data, bytes, &answer, sizeof(answer));
 }
 
@@ -117,6 +160,13 @@ HRESULT D3d12HostCaps::shader(void *data, UINT bytes) const
 {
     AV_SCOPE("D3d12HostCaps::shader");
     D3D12DDI_SHADER_CAPS_0084 answer = {};
+    answer.MinPrecision = static_cast<D3D12DDI_SHADER_MIN_PRECISION>(caps_.min_precision);
+    answer.ShaderSpecifiedStencilRef = caps_.ps_stencil_ref != 0u;
+    answer.ROVs = caps_.rovs != 0u;
+    answer.Native16BitOps = caps_.native_16bit_ops != 0u;
+    answer.AtomicInt64OnTypedResource = caps_.atomic_int64_typed != 0u;
+    answer.AtomicInt64OnDescriptorHeapResource = caps_.atomic_int64_heap != 0u;
+    answer.AtomicInt64OnGroupShared = caps_.atomic_int64_group_shared != 0u;
     answer.DoubleOps = caps_.double_ops != 0u;
     answer.TypedUAVLoadAdditionalFormats = caps_.typed_uav_load_additional_formats != 0u;
     answer.WaveOps = caps_.wave_ops != 0u;
@@ -133,7 +183,7 @@ HRESULT D3d12HostCaps::shader_models(void *data, UINT bytes) const
     if (data == nullptr || bytes < sizeof(D3D12DDI_D3D12_SHADER_MODELS_DATA_0011)) return E_INVALIDARG;
     const auto &asked = *static_cast<const D3D12DDI_D3D12_SHADER_MODELS_DATA_0011 *>(data);
     if (asked.pNumShaderModelsSupported == nullptr) return E_INVALIDARG;
-    const uint32_t highest = caps_.shader_model < api_model_6_5 ? caps_.shader_model : api_model_6_5;
+    const uint32_t highest = caps_.shader_model < api_model_6_8 ? caps_.shader_model : api_model_6_8;
     const UINT     models = highest >= api_model_6_0 ? 2u + (highest - api_model_6_0) : 1u;
     if (asked.pShaderModelsSupported == nullptr) {
         *asked.pNumShaderModelsSupported = models;
@@ -232,9 +282,25 @@ HRESULT D3d12HostCaps::answer_options(const D3D12DDIARG_GETCAPS &args) const
     AV_SCOPE("D3d12HostCaps::answer_options");
     const UINT bytes = args.DataSize;
     switch (static_cast<UINT>(args.Type)) {
+    case D3D12DDICAPS_TYPE_OPTIONS_0093: {
+        D3D12DDI_OPTIONS_DATA_0093 answer = {};
+        answer.AdvancedTextureOpsSupported = caps_.advanced_texture_ops != 0u;
+        answer.WriteableMSAATexturesSupported = caps_.writeable_msaa_textures != 0u;
+        return fill(args.pData, bytes, &answer, sizeof(answer));
+    }
+    case D3D12DDI_FEATURE_HARDWARE_COPY_106: {
+        D3D12DDI_FEATURE_DATA_HARDWARE_COPY_106 answer = {};
+        answer.Supported = FALSE;
+        return fill(args.pData, bytes, &answer, sizeof(answer));
+    }
+    case D3D12DDICAPS_TYPE_SHADER_MODEL_6_8_OPTIONS_0110: {
+        D3D12DDI_SHADER_MODEL_6_8_OPTIONS_0110 answer = {};
+        answer.SampleCmpGradientAndBiasSupported = caps_.sample_cmp_gradient_bias != 0u;
+        answer.ExtendedCommandInfoSupported = caps_.extended_command_info != 0u;
+        return fill(args.pData, bytes, &answer, sizeof(answer));
+    }
     case D3D12DDICAPS_TYPE_OPTIONS_0090:
     case D3D12DDICAPS_TYPE_OPTIONS_0091:
-    case D3D12DDICAPS_TYPE_OPTIONS_0093:
     case D3D12DDICAPS_TYPE_OPTIONS_0098:
     case D3D12DDICAPS_TYPE_OPTIONS_0101:
     case D3D12DDICAPS_TYPE_OPTIONS_0109:
@@ -243,8 +309,6 @@ HRESULT D3d12HostCaps::answer_options(const D3D12DDIARG_GETCAPS &args) const
     case D3D12DDICAPS_TYPE_0073_SUPPORT_BATCHED_MARKERS:
     case D3D12DDICAPS_TYPE_0074_PROTECTED_RESOURCE_SESSION_TYPE_COUNT:
     case D3D12DDICAPS_TYPE_0074_PROTECTED_RESOURCE_SESSION_TYPES:
-    case D3D12DDICAPS_TYPE_SHADER_MODEL_6_8_OPTIONS_0110:
-    case D3D12DDI_FEATURE_HARDWARE_COPY_106:
     case D3D12DDICAPS_TYPE_SWIZZLE_PATTERN:
     case D3D12DDICAPS_TYPE_0022_SWIZZLE_PATTERN:
     case D3D12DDICAPS_TYPE_0030_CRYPTO_SESSION_SUPPORT:

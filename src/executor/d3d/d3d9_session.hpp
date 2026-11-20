@@ -4,6 +4,9 @@
 #include "core/trace/function_scope.hpp"
 #include "executor/d3d/command_refusal.hpp"
 #include "executor/d3d/d3d9_lanes.hpp"
+#include "executor/d3d/d3d9_line_ends.hpp"
+#include "executor/d3d/d3d9_lent_copies.hpp"
+#include "executor/d3d/d3d9_row_surfaces.hpp"
 #include "executor/d3d/d3d9_flip_shares.hpp"
 #include "executor/d3d/d3d9_refused_queries.hpp"
 #include "executor/d3d/d3d9_slices.hpp"
@@ -23,6 +26,7 @@ namespace av {
 
 class DriverLog;
 class D3d9HostDevice;
+class LeasedObjects;
 class SharedSurfaces;
 class SessionShares;
 class D3d11HostDevice;
@@ -42,8 +46,8 @@ class D3d9Session final : public d3d9proto::ServerDispatch {
 public:
     static constexpr uint32_t max_dimension = 16384u;
 
-    D3d9Session(const GuestBytes &guest, D3dObjectTable &objects, WatchedBlocks &blocks, SliceStorages &storages,
-                EventfdWake &wake, DriverLog &lines);
+    D3d9Session(const GuestBytes &guest, D3dObjectTable &objects, LeasedObjects &leased, WatchedBlocks &blocks,
+                SliceStorages &storages, EventfdWake &wake, DriverLog &lines);
     ~D3d9Session();
     D3d9Session(const D3d9Session &) = delete;
     D3d9Session &operator=(const D3d9Session &) = delete;
@@ -60,6 +64,8 @@ public:
     bool               lost() const;
     uint64_t           marked() const;
     uint64_t           reached() const;
+    uint64_t           lent_issued() const;
+    uint64_t           lent_reached() const;
     bool               polled() const;
 
 
@@ -96,6 +102,13 @@ public:
                          const d3d9proto::Rect &destination_rect, uint32_t filter) override;
     bool on_ColorFill9(uint32_t surface, uint32_t subresource, const d3d9proto::Rect &rect, uint32_t color) override;
     bool on_PresentPoint9(uint32_t surface, uint32_t subresource, uint64_t key, uint32_t point) override;
+    bool on_CopyToLent9(uint32_t surface, uint32_t subresource, const d3d9proto::Rect &source_rect, uint64_t memory,
+                        uint32_t pitch, uint32_t x, uint32_t y) override;
+    bool on_CreateSharedSurface9(uint32_t surface, uint32_t kind, uint32_t width, uint32_t height, uint32_t format,
+                                 uint64_t key) override;
+    bool on_OpenSharedSurface9(uint32_t surface, uint64_t key, uint32_t &hresult) override;
+    bool on_CreateLentSurface9(uint32_t surface, uint32_t kind, uint32_t width, uint32_t height, uint32_t format,
+                               uint64_t memory, uint32_t pitch) override;
 
     bool on_CreateVertexShader9(uint32_t shader, const uint8_t *code, uint64_t code_size) override;
     bool on_CreatePixelShader9(uint32_t shader, const uint8_t *code, uint64_t code_size) override;
@@ -160,7 +173,14 @@ private:
     D3d9HostDevice *host_;
     SharedSurfaces *surfaces_;
     D3d9FlipShares  flips_;
+    D3d9LentCopies  lent_;
+    D3d9RowSurfaces rows_;
+    KeyedSlots<uint32_t, uint64_t> aliases_;
+    D3d11HostDevice *device11_;
+    SessionShares   *shares_;
+    ImportTable    *imports_;
     D3dObjectTable &objects_;
+    LeasedObjects  &leased_;
     WatchedBlocks  &blocks_;
     GuestDevices<IDirect3DDevice9> devices_;
     DriverLog      &lines_;
@@ -168,6 +188,7 @@ private:
     WireArena      *arena_;
     D3d9Lanes       lanes_;
     D3d9Slices      slices_;
+    D3d9LineEnds    line_ends_;
     D3d9RefusedQueries refused_;
     MonotonicClock  clock_;
     bool            lost_;

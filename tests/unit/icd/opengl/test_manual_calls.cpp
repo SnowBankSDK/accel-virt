@@ -196,6 +196,60 @@ TEST(manual_calls, a_front_buffer_read_is_answered_and_every_other_is_sent)
   calls.read_pixels(0, 0, 1, 1, 0x1907u , 0x1401u, pixels);
   CHECK(current.sent() > asked); }
 
+TEST(manual_calls, a_read_of_a_multisampled_window_resolves_it_first)
+{ GlIcdRig rig;
+  CHECK(rig.opengl32().load(av::glicd::GlIcdRoot::icd_version, 1u) == av::FakeOpengl32::Load::loaded);
+  CHECK(rig.opengl32().set_pixel_format(rig.dc(), 13));
+  void *const handle = rig.opengl32().create_context(rig.dc());
+  CHECK(handle != nullptr);
+  rig.host().gl_make("host gpu", "4.6.0 host");
+  rig.host().gl_policy(0);
+  rig.host().gl_window(2u, 2u, 100u);
+  CHECK(rig.opengl32().make_current(rig.dc(), handle));
+  av::glicd::GuestGlContext &context = *rig.root().current();
+  context.flush();
+  std::uint32_t at = rig.kmt().commands();
+  std::uint8_t  pixels[16] = {};
+  rig.host().gl_bytes(nullptr, 0u);
+  rig.root().manual().read_pixels(0, 0, 1, 1, 0x80E1u, 0x1401u, pixels);
+  gen::Wrap_glCopyTexSubImage2D(0x0DE1u, 0, 0, 0, 0, 0, 1, 1);
+  gen::Wrap_glClear(0x4000u);
+  gen::Wrap_glCopyTexSubImage2D(0x0DE1u, 0, 0, 0, 0, 0, 1, 1);
+  context.flush();
+  const auto scalar = [&rig](std::uint32_t index, std::uint32_t nth) {
+    av::WireReader reader(rig.kmt().command_bytes(index) + av::CommandHeader::encoded_size,
+                          av::MockKmt::journal_bytes - av::CommandHeader::encoded_size);
+    std::uint64_t  value = 0u;
+    for (std::uint32_t read = 0u; read <= nth; read++) CHECK(reader.read_varint(value));
+    return value;
+  };
+  const std::uint32_t reads[] = {ids::kCmd_glReadPixels, ids::kCmd_glCopyTexSubImage2D, ids::kCmd_glClear,
+                                 ids::kCmd_glCopyTexSubImage2D};
+  const bool          resolves[] = {true, false, false, true};
+  for (std::uint32_t read = 0u; read < 4u; read++) {
+    while (at < rig.kmt().commands() && rig.kmt().command_id(at) == av::CommandHeader::channel_stats_id) at++;
+    if (reads[read] == ids::kCmd_glClear) {
+      CHECK_EQ(rig.kmt().command_id(at++), ids::kCmd_glClear);
+      continue;
+    }
+    if (resolves[read]) {
+      CHECK_EQ(rig.kmt().command_id(at), ids::kCmd_glBlitNamedFramebuffer);
+      CHECK_EQ(scalar(at, 0u), 100u);
+      CHECK_EQ(scalar(at, 1u), 101u);
+      at++;
+    }
+    CHECK_EQ(rig.kmt().command_id(at), ids::kCmd_glBindFramebuffer);
+    CHECK_EQ(scalar(at, 0u), 0x8CA8u);
+    CHECK_EQ(scalar(at, 1u), 101u);
+    CHECK_EQ(rig.kmt().command_id(at + 1u), reads[read]);
+    CHECK_EQ(rig.kmt().command_id(at + 2u), ids::kCmd_glBindFramebuffer);
+    CHECK_EQ(scalar(at + 2u, 0u), 0x8CA8u);
+    CHECK_EQ(scalar(at + 2u, 1u), 100u);
+    at += 3u;
+  }
+  CHECK(rig.opengl32().make_current(nullptr, nullptr));
+  CHECK(rig.opengl32().delete_context(handle)); }
+
 TEST(manual_calls, a_read_into_a_pack_buffer_is_sent_as_an_offset)
 { Current      current;
   ManualCalls &calls = current.rig().root().manual();
@@ -285,11 +339,10 @@ TEST(manual_calls, names_and_data_are_the_hosts)
   CHECK_EQ(storage_flags(current, 4u), 0x0100u);
   CHECK_EQ(storage_flags(current, 6u), 0x0100u); }
 
-TEST(manual_calls, a_client_side_array_is_invalid_operation_and_an_offset_is_sent)
+TEST(manual_calls, a_client_side_array_is_kept_and_an_offset_is_sent)
 { Current current;
   gen::Wrap_glVertexAttribPointer(2u, 3, gl_float, 0u, 0, reinterpret_cast<const void *>(0x1000u));
   CHECK_EQ(current.sent(), 0u);
-  CHECK_EQ(current.error(), gl_invalid_operation);
   gen::Wrap_glBindBuffer(array_buffer, 4u);
   gen::Wrap_glVertexAttribPointer(2u, 3, gl_float, 0u, 12, reinterpret_cast<const void *>(0x10u));
   gen::Wrap_glEnableVertexAttribArray(2u);
@@ -308,16 +361,11 @@ TEST(manual_calls, a_client_side_array_is_invalid_operation_and_an_offset_is_sen
   gen::Wrap_glGetVertexAttribPointerv(2u, 0x8645u, nullptr);
   CHECK_EQ(current.sent(), 4u); }
 
-TEST(manual_calls, draws_send_and_client_indices_are_refused)
+TEST(manual_calls, draws_are_sent)
 { Current current;
   gen::Wrap_glDrawArrays(gl_triangles, 0, 3);
   gen::Wrap_glDrawArraysInstanced(gl_triangles, 0, 3, 2);
-  const std::uint16_t indices[] = {0, 1, 2};
-  gen::Wrap_glDrawElements(gl_triangles, 3, gl_unsigned_short, indices);
-  gen::Wrap_glDrawElementsInstanced(gl_triangles, 3, gl_unsigned_short, indices, 2);
-  gen::Wrap_glDrawRangeElements(gl_triangles, 0u, 2u, 3, gl_unsigned_short, indices);
   CHECK_EQ(current.sent(), 2u);
-  CHECK_EQ(current.error(), gl_invalid_operation);
   gen::Wrap_glDrawElements(gl_triangles, 3, gl_unsigned_short, nullptr);
   gen::Wrap_glBindVertexArray(1u);
   gen::Wrap_glBindBuffer(element_array_buffer, 2u);
@@ -464,12 +512,12 @@ TEST(manual_calls, an_explicit_range_writes_back_only_what_was_flushed)
   CHECK_EQ(current.argument_since(2u, 2u), 6u);
   CHECK_EQ(current.error(), 0u); }
 
-TEST(manual_calls, a_persistent_write_map_is_sent_before_every_draw)
+TEST(manual_calls, a_coherent_persistent_write_map_is_sent_before_every_draw)
 { Current current;
   av::ScriptedHost &host = current.rig().host();
   answer_size(host, 8u);
   host.gl_bytes(nullptr, 0u);
-  const GLbitfield persistent_write = 0x0002u | 0x0040u;
+  const GLbitfield persistent_write = 0x0002u | 0x0040u | 0x0080u;
   auto *const mapped = static_cast<std::uint8_t *>(gen::Wrap_glMapNamedBufferRange(3u, 0, 8, persistent_write));
   CHECK(mapped != nullptr);
   mapped[0] = 1u;
@@ -492,6 +540,64 @@ TEST(manual_calls, a_persistent_write_map_is_sent_before_every_draw)
   CHECK_EQ(current.sent(), 11u);
   CHECK_EQ(current.sent_since(10u), ids::kCmd_glDrawArrays);
   CHECK_EQ(current.context().mappings().held(), 0u); }
+
+TEST(manual_calls, a_non_coherent_persistent_write_map_is_sent_at_a_memory_barrier_and_not_before_each_draw)
+{ Current current;
+  av::ScriptedHost &host = current.rig().host();
+  answer_size(host, 8u);
+  host.gl_bytes(nullptr, 0u);
+  constexpr GLbitfield persistent_write = 0x0002u | 0x0040u;
+  constexpr GLbitfield client_mapped_buffer_barrier = 0x4000u;
+  auto *const mapped = static_cast<std::uint8_t *>(gen::Wrap_glMapNamedBufferRange(3u, 0, 8, persistent_write));
+  CHECK(mapped != nullptr);
+  mapped[0] = 1u;
+  gen::Wrap_glDrawArrays(gl_triangles, 0, 3);
+  gen::Wrap_glMemoryBarrier(client_mapped_buffer_barrier);
+  gen::Wrap_glDrawArrays(gl_triangles, 0, 3);
+  mapped[1] = 2u;
+  gen::Wrap_glDrawArrays(gl_triangles, 0, 3);
+  const std::uint32_t expected[] = {ids::kCmd_glGetNamedBufferParameteri64v, ids::kCmd_glGetNamedBufferSubData,
+                                    ids::kCmd_glDrawArrays,                  ids::kCmd_glNamedBufferSubData,
+                                    ids::kCmd_glMemoryBarrier,               ids::kCmd_glDrawArrays,
+                                    ids::kCmd_glDrawArrays};
+  CHECK_EQ(current.sent(), 7u);
+  for (std::uint32_t index = 0u; index < 7u; index++) CHECK_EQ(current.sent_since(index), expected[index]);
+  const GLuint deleted[] = {3u};
+  gen::Wrap_glDeleteBuffers(1, deleted);
+  CHECK_EQ(current.context().mappings().held(), 0u); }
+
+TEST(manual_calls, a_coherent_persistent_write_reaches_the_host_before_a_following_copy_and_every_buffer_read)
+{ Current current;
+  av::ScriptedHost &host = current.rig().host();
+  answer_size(host, 8u);
+  host.gl_bytes(nullptr, 0u);
+  const GLbitfield coherent_write = 0x0002u | 0x0040u | 0x0080u;
+  auto *const mapped = static_cast<std::uint8_t *>(gen::Wrap_glMapNamedBufferRange(3u, 0, 8, coherent_write));
+  CHECK(mapped != nullptr);
+  mapped[0] = 1u;
+  gen::Wrap_glCopyBufferSubData(0x8F36u, 0x8F37u, 0, 0, 8);
+  mapped[1] = 2u;
+  gen::Wrap_glCopyNamedBufferSubData(3u, 4u, 0, 0, 8);
+  mapped[2] = 3u;
+  gen::Wrap_glMemoryBarrier(0x00004000u);
+  gen::Wrap_glDrawBuffers(0, nullptr);
+  const std::uint32_t expected[] = {ids::kCmd_glGetNamedBufferParameteri64v, ids::kCmd_glGetNamedBufferSubData,
+                                    ids::kCmd_glNamedBufferSubData,          ids::kCmd_glCopyBufferSubData,
+                                    ids::kCmd_glNamedBufferSubData,          ids::kCmd_glCopyNamedBufferSubData,
+                                    ids::kCmd_glNamedBufferSubData,          ids::kCmd_glMemoryBarrier,
+                                    ids::kCmd_glDrawBuffers};
+  CHECK_EQ(current.sent(), 9u);
+  for (std::uint32_t index = 0u; index < 9u; index++) CHECK_EQ(current.sent_since(index), expected[index]);
+  mapped[3] = 4u;
+  std::uint8_t read[8] = {};
+  host.gl_bytes(nullptr, 0u);
+  gen::Wrap_glGetNamedBufferSubData(4u, 0, 8, read);
+  CHECK_EQ(current.sent_since(9u), ids::kCmd_glNamedBufferSubData);
+  CHECK_EQ(current.sent_since(10u), ids::kCmd_glGetNamedBufferSubData);
+  mapped[4] = 5u;
+  current.rig().root().manual().flush();
+  CHECK_EQ(current.sent_since(11u), ids::kCmd_glNamedBufferSubData);
+  CHECK_EQ(current.sent_since(12u), ids::kCmd_glFlush); }
 
 TEST(manual_calls, a_maps_state_is_answered_by_the_guest)
 { Current current;
@@ -616,25 +722,167 @@ TEST(manual_calls, the_debug_callback_is_kept_for_the_pointer_query)
   gen::Wrap_glGetPointerv(0x8244u, nullptr);
   CHECK_EQ(current.sent(), 0u); }
 
-TEST(manual_calls, legacy_client_arrays_are_invalid_operation_without_a_host_call)
+TEST(manual_calls, a_bindless_handle_is_used_only_after_this_share_group_was_given_it)
+{ Current current;
+  const GLuint64 stranger = 0x77u;
+  gen::Wrap_glUniformHandleui64ARB(3, stranger);
+  CHECK_EQ(current.error(), gl_invalid_operation);
+  gen::Wrap_glMakeTextureHandleResidentARB(stranger);
+  CHECK_EQ(current.error(), gl_invalid_operation);
+  gen::Wrap_glProgramUniformHandleui64ARB(2u, 3, stranger);
+  CHECK_EQ(current.error(), gl_invalid_operation);
+  CHECK_EQ(current.sent(), 0u);
+  current.rig().host().gl_varint(0x1234u);
+  const GLuint64 handle = gen::Wrap_glGetTextureHandleARB(9u);
+  CHECK_EQ(handle, 0x1234u);
+  const std::uint32_t before = current.sent();
+  gen::Wrap_glUniformHandleui64ARB(3, handle);
+  CHECK_EQ(current.sent() - before, 1u);
+  gen::Wrap_glMakeImageHandleResidentARB(handle, 0x88B9u);
+  CHECK_EQ(current.error(), gl_invalid_operation);
+  const std::uint32_t resident = current.sent();
+  gen::Wrap_glMakeTextureHandleResidentARB(handle);
+  CHECK_EQ(current.sent() - resident, 1u);
+  const GLuint64 two[2] = {handle, stranger};
+  gen::Wrap_glUniformHandleui64vARB(3, 2, two);
+  CHECK_EQ(current.error(), gl_invalid_operation);
+  const GLuint deleted = 9u;
+  gen::Wrap_glDeleteTextures(1, &deleted);
+  gen::Wrap_glUniformHandleui64ARB(3, handle);
+  CHECK_EQ(current.error(), gl_invalid_operation); }
+
+TEST(manual_calls, legacy_client_arrays_are_kept_by_the_guest_and_sent_with_the_draw_that_reads_them)
+{ Current current;
+  const float positions[8] = {0.0f, 0.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f};
+  gen::Wrap_glEnableClientState(0x8074u);
+  gen::Wrap_glVertexPointer(2, gl_float, 0, positions);
+  CHECK_EQ(current.sent(), 0u);
+  const GLuint scratch = 7u;
+  current.rig().host().gl_bytes(reinterpret_cast<const std::uint8_t *>(&scratch), sizeof scratch);
+  gen::Wrap_glDrawArrays(gl_triangles, 1, 3);
+  const std::uint32_t first[] = {ids::kCmd_glGenBuffers,    ids::kCmd_glBindBuffer,       ids::kCmd_glBufferData,
+                                 ids::kCmd_glBufferSubData, ids::kCmd_glVertexPointer,    ids::kCmd_glEnableClientState,
+                                 ids::kCmd_glBindBuffer,    ids::kCmd_glDrawArrays};
+  CHECK_EQ(current.sent(), 8u);
+  for (std::uint32_t index = 0u; index < 8u; index++) CHECK_EQ(current.sent_since(index), first[index]);
+  CHECK_EQ(current.argument_since(1u, 1u), 7u);
+  CHECK_EQ(current.argument_since(3u, 1u), 16u);
+  CHECK_EQ(current.argument_since(3u, 2u), 24u);
+  gen::Wrap_glDrawArrays(gl_triangles, 0, 4);
+  CHECK_EQ(current.sent(), 14u);
+  CHECK_EQ(current.sent_since(8u), ids::kCmd_glBindBuffer);
+  CHECK_EQ(current.sent_since(12u), ids::kCmd_glBindBuffer);
+  CHECK_EQ(current.sent_since(13u), ids::kCmd_glDrawArrays);
+  gen::Wrap_glDisableClientState(0x8074u);
+  CHECK_EQ(current.sent_since(14u), ids::kCmd_glDisableClientState);
+  gen::Wrap_glDrawArrays(gl_triangles, 0, 4);
+  CHECK_EQ(current.sent(), 16u);
+  CHECK_EQ(current.sent_since(15u), ids::kCmd_glDrawArrays); }
+
+TEST(manual_calls, client_indices_are_staged_with_the_arrays_and_the_element_binding_is_restored)
+{ Current current;
+  const float positions[8] = {0.0f, 0.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f};
+  const std::uint16_t indices[] = {0, 1, 2, 2, 3, 0};
+  gen::Wrap_glEnableClientState(0x8074u);
+  gen::Wrap_glVertexPointer(2, gl_float, 0, positions);
+  const GLuint scratch = 7u;
+  current.rig().host().gl_bytes(reinterpret_cast<const std::uint8_t *>(&scratch), sizeof scratch);
+  gen::Wrap_glDrawElements(gl_triangles, 6, gl_unsigned_short, indices);
+  const std::uint32_t expected[] = {ids::kCmd_glGenBuffers,    ids::kCmd_glBindBuffer,    ids::kCmd_glBufferData,
+                                    ids::kCmd_glBufferSubData, ids::kCmd_glVertexPointer, ids::kCmd_glEnableClientState,
+                                    ids::kCmd_glBufferSubData, ids::kCmd_glBindBuffer,    ids::kCmd_glBindBuffer,
+                                    ids::kCmd_glDrawElements,  ids::kCmd_glBindBuffer};
+  CHECK_EQ(current.sent(), 11u);
+  for (std::uint32_t index = 0u; index < 11u; index++) CHECK_EQ(current.sent_since(index), expected[index]);
+  CHECK_EQ(current.argument_since(8u, 0u), element_array_buffer);
+  CHECK_EQ(current.argument_since(8u, 1u), 7u);
+  CHECK_EQ(current.argument_since(10u, 0u), element_array_buffer);
+  CHECK_EQ(current.argument_since(10u, 1u), 0u);
+  CHECK_EQ(current.error(), 0u); }
+
+TEST(manual_calls, client_indices_without_client_arrays_are_staged_alone)
+{ Current current;
+  const std::uint16_t indices[] = {0, 1, 2};
+  const GLuint        scratch = 7u;
+  current.rig().host().gl_bytes(reinterpret_cast<const std::uint8_t *>(&scratch), sizeof scratch);
+  gen::Wrap_glDrawElements(gl_triangles, 3, gl_unsigned_short, indices);
+  const std::uint32_t expected[] = {ids::kCmd_glGenBuffers,    ids::kCmd_glBindBuffer,   ids::kCmd_glBufferData,
+                                    ids::kCmd_glBufferSubData, ids::kCmd_glBindBuffer,   ids::kCmd_glBindBuffer,
+                                    ids::kCmd_glDrawElements,  ids::kCmd_glBindBuffer};
+  CHECK_EQ(current.sent(), 8u);
+  for (std::uint32_t index = 0u; index < 8u; index++) CHECK_EQ(current.sent_since(index), expected[index]);
+  CHECK_EQ(current.error(), 0u); }
+
+TEST(manual_calls, an_array_in_a_buffer_is_sent_at_once_and_a_client_array_is_dropped_from_the_host_at_begin)
+{ Current current;
+  const float colors[12] = {};
+  gen::Wrap_glBindBuffer(array_buffer, 4u);
+  gen::Wrap_glColorPointer(3, gl_float, 0, reinterpret_cast<const void *>(0x20u));
+  gen::Wrap_glEnableClientState(0x8076u);
+  const std::uint32_t expected[] = {ids::kCmd_glBindBuffer, ids::kCmd_glColorPointer, ids::kCmd_glEnableClientState};
+  CHECK_EQ(current.sent(), 3u);
+  for (std::uint32_t index = 0u; index < 3u; index++) CHECK_EQ(current.sent_since(index), expected[index]);
+  gen::Wrap_glBindBuffer(array_buffer, 0u);
+  gen::Wrap_glColorPointer(3, gl_float, 0, colors);
+  gen::Wrap_glEnableClientState(0x8078u);
+  CHECK_EQ(current.sent(), 4u);
+  gen::Wrap_glTexCoordPointer(2, gl_float, 0, colors);
+  CHECK_EQ(current.sent(), 4u);
+  const GLuint scratch = 7u;
+  current.rig().host().gl_bytes(reinterpret_cast<const std::uint8_t *>(&scratch), sizeof scratch);
+  gen::Wrap_glDrawArrays(gl_triangles, 0, 2);
+  const std::uint32_t before = current.sent();
+  gen::Wrap_glBegin(gl_triangles);
+  CHECK_EQ(current.sent(), before + 3u);
+  CHECK_EQ(current.sent_since(before), ids::kCmd_glDisableClientState);
+  CHECK_EQ(current.sent_since(before + 2u), ids::kCmd_glBegin);
+  gen::Wrap_glArrayElement(1);
+  CHECK_EQ(current.sent(), before + 5u);
+  CHECK_EQ(current.sent_since(before + 3u), ids::kCmd_glMultiTexCoord4fv);
+  CHECK_EQ(current.sent_since(before + 4u), ids::kCmd_glColor4fv); }
+
+TEST(manual_calls, client_array_errors_are_recorded_without_a_host_call)
 { Current current;
   const float data[4] = {};
-  gen::Wrap_glVertexPointer(2, gl_float, 0, data);
-  CHECK_EQ(current.error(), gl_invalid_operation);
-  gen::Wrap_glColorPointer(4, gl_float, 0, data);
-  gen::Wrap_glNormalPointer(gl_float, 0, data);
-  gen::Wrap_glTexCoordPointer(2, gl_float, 0, data);
-  gen::Wrap_glIndexPointer(gl_float, 0, data);
-  gen::Wrap_glEdgeFlagPointer(0, data);
-  gen::Wrap_glFogCoordPointer(gl_float, 0, data);
-  gen::Wrap_glSecondaryColorPointer(3, gl_float, 0, data);
-  gen::Wrap_glInterleavedArrays(0x2A20u, 0, data);
-  gen::Wrap_glArrayElement(0);
+  gen::Wrap_glVertexPointer(2, gl_float, -1, data);
+  CHECK_EQ(current.error(), gl_invalid_value);
+  gen::Wrap_glVertexPointer(1, gl_float, 0, data);
+  CHECK_EQ(current.error(), gl_invalid_value);
+  gen::Wrap_glVertexPointer(2, 0x1401u, 0, data);
+  CHECK_EQ(current.error(), gl_invalid_enum);
+  gen::Wrap_glEnableClientState(0x1234u);
+  CHECK_EQ(current.error(), gl_invalid_enum);
+  gen::Wrap_glClientActiveTexture(0x1234u);
+  CHECK_EQ(current.error(), gl_invalid_enum);
+  gen::Wrap_glInterleavedArrays(0x1234u, 0, data);
+  CHECK_EQ(current.error(), gl_invalid_enum);
+  gen::Wrap_glInterleavedArrays(0x2A20u, -1, data);
+  CHECK_EQ(current.error(), gl_invalid_value);
+  gen::Wrap_glDrawArraysIndirect(gl_triangles, nullptr);
+  CHECK_EQ(current.sent(), 1u);
   gen::Wrap_glEnableClientState(0x8074u);
-  gen::Wrap_glDisableClientState(0x8074u);
-  gen::Wrap_glClientActiveTexture(0x84C0u);
+  gen::Wrap_glVertexPointer(2, gl_float, 0, data);
+  gen::Wrap_glDrawArraysIndirect(gl_triangles, nullptr);
   CHECK_EQ(current.error(), gl_invalid_operation);
-  CHECK_EQ(current.sent(), 0u); }
+  CHECK_EQ(current.sent(), 1u); }
+
+TEST(manual_calls, interleaved_arrays_set_every_array_of_the_format)
+{ Current current;
+  const float data[12] = {};
+  const GLuint scratch = 7u;
+  gen::Wrap_glInterleavedArrays(0x2A26u, 0, data);
+  CHECK_EQ(current.sent(), 0u);
+  current.rig().host().gl_bytes(reinterpret_cast<const std::uint8_t *>(&scratch), sizeof scratch);
+  gen::Wrap_glDrawArrays(gl_triangles, 0, 1);
+  std::uint32_t enables = 0u, pointers = 0u;
+  const std::uint32_t total = current.sent();
+  for (std::uint32_t index = 0u; index < total; index++) {
+    const std::uint32_t id = current.sent_since(index);
+    enables += id == ids::kCmd_glEnableClientState ? 1u : 0u;
+    pointers += id == ids::kCmd_glVertexPointer || id == ids::kCmd_glColorPointer || id == ids::kCmd_glNormalPointer ? 1u : 0u;
+  }
+  CHECK_EQ(enables, 3u);
+  CHECK_EQ(pointers, 3u); }
 
 TEST(manual_calls, with_nothing_current_nothing_is_sent_or_answered)
 { GlIcdRig rig;
@@ -904,16 +1152,15 @@ TEST(manual_calls, the_generated_entries_hooks_follow_the_current_context)
   auto *const mapped = static_cast<std::uint8_t *>(gen::Wrap_glMapNamedBufferRange(3u, 0, 4, 0x0002u | 0x0040u));
   CHECK(mapped != nullptr);
   mapped[0] = 1u;
-  const GLenum buffers[] = {0x8CE0u};
-  gen::Wrap_glDrawBuffers(1, buffers);
+  gen::Wrap_glMemoryBarrier(0x00004000u);
   CHECK_EQ(current.sent(), 5u);
   CHECK_EQ(current.sent_since(3u), ids::kCmd_glNamedBufferSubData);
-  CHECK_EQ(current.sent_since(4u), ids::kCmd_glDrawBuffers);
+  CHECK_EQ(current.sent_since(4u), ids::kCmd_glMemoryBarrier);
   current.rig().kmt().withhold_answer_at(1u);
   GLint value = 0;
   gen::Wrap_glGetIntegerv(0x0BA2u, &value);
   const std::uint32_t lost = current.sent();
-  gen::Wrap_glDrawBuffers(1, buffers);
+  gen::Wrap_glMemoryBarrier(0x00004000u);
   CHECK_EQ(current.sent(), lost); }
 
 TEST(manual_calls, an_imported_objects_name_is_the_hosts_by_the_time_it_crosses)
@@ -2089,3 +2336,77 @@ TEST(manual_calls_slices, a_slice_is_placed_by_storage_calls_and_a_plain_storage
   CHECK(!current.context().slices().holds(11u));
   CHECK_EQ(current.error(), gl_invalid_enum);
   CHECK(current.context().invariants_hold()); }
+
+TEST(manual_calls, vertex_buffer_offsets_cross_as_eight_byte_elements)
+{ Current current;
+  const GLuint   buffers[2] = {4u, 5u};
+  const GLintptr offsets[2] = {16, 32};
+  const GLsizei  strides[2] = {12, 12};
+  gen::Wrap_glBindVertexBuffers(0u, 2, buffers, offsets, strides);
+  gen::Wrap_glBindBuffersRange(array_buffer, 0u, 2, buffers, offsets, offsets);
+  gen::Wrap_glVertexArrayVertexBuffers(3u, 0u, 2, buffers, offsets, strides);
+  CHECK_EQ(current.sent(), 3u);
+  CHECK_EQ(current.sent_since(0u), ids::kCmd_glBindVertexBuffers);
+  CHECK_EQ(current.sent_since(1u), ids::kCmd_glBindBuffersRange);
+  CHECK_EQ(current.sent_since(2u), ids::kCmd_glVertexArrayVertexBuffers); }
+
+TEST(manual_calls, a_negative_buffer_size_is_an_error_without_a_host_call)
+{ Current current;
+  const std::uint8_t data[4] = {};
+  const std::uint32_t before = current.sent();
+  gen::Wrap_glBufferData(array_buffer, -1, data, 0x88E4u);
+  CHECK_EQ(current.error(), gl_invalid_value);
+  gen::Wrap_glNamedBufferData(3u, -8, data, 0x88E4u);
+  CHECK_EQ(current.error(), gl_invalid_value);
+  gen::Wrap_glNamedBufferStorage(3u, -8, data, 0u);
+  CHECK_EQ(current.error(), gl_invalid_value);
+  gen::Wrap_glBufferStorage(array_buffer, -8, data, 0u);
+  CHECK_EQ(current.error(), gl_invalid_value);
+  CHECK_EQ(current.sent(), before); }
+
+TEST(manual_calls, storage_without_dynamic_storage_refuses_subdata_and_reports_only_the_flags_the_application_gave)
+{ Current current;
+  const std::uint8_t data[8] = {};
+  gen::Wrap_glBindBuffer(array_buffer, 4u);
+  gen::Wrap_glBufferStorage(array_buffer, sizeof data, data, 0x0002u);
+  const std::uint32_t before = current.sent();
+  gen::Wrap_glBufferSubData(array_buffer, 0, 4, data);
+  CHECK_EQ(current.error(), gl_invalid_operation);
+  gen::Wrap_glNamedBufferSubData(4u, 0, 4, data);
+  CHECK_EQ(current.error(), gl_invalid_operation);
+  CHECK_EQ(current.sent(), before);
+  GLint flags = -1;
+  gen::Wrap_glGetBufferParameteriv(array_buffer, 0x8220u, &flags);
+  CHECK_EQ(flags, 0x0002);
+  gen::Wrap_glBindBuffer(array_buffer, 5u);
+  gen::Wrap_glBufferStorage(array_buffer, sizeof data, data, 0x0100u);
+  gen::Wrap_glBufferSubData(array_buffer, 0, 4, data);
+  const GLuint deleted[] = {4u};
+  gen::Wrap_glDeleteBuffers(1, deleted);
+  gen::Wrap_glBindBuffer(array_buffer, 4u);
+  gen::Wrap_glBufferSubData(array_buffer, 0, 4, data);
+  CHECK_EQ(current.sent(), before + 6u); }
+
+TEST(manual_calls, a_negative_name_count_is_an_invalid_value_without_a_host_call)
+{ Current current;
+  GLuint names[2] = {};
+  const std::uint32_t before = current.sent();
+  gen::Wrap_glGenTextures(-1, names);
+  CHECK_EQ(current.error(), gl_invalid_value);
+  gen::Wrap_glGenBuffers(-1, names);
+  CHECK_EQ(current.error(), gl_invalid_value);
+  gen::Wrap_glGenVertexArrays(-1, names);
+  CHECK_EQ(current.error(), gl_invalid_value);
+  CHECK_EQ(current.sent(), before); }
+
+TEST(manual_calls, a_framebuffer_name_is_the_hosts_to_answer_and_zero_is_never_one)
+{ Current current;
+  const std::uint32_t before = current.sent();
+  CHECK_EQ(gen::Wrap_glIsFramebuffer(0u), 0u);
+  CHECK_EQ(current.sent(), before);
+  current.rig().host().gl_varint(0u);
+  CHECK_EQ(gen::Wrap_glIsFramebuffer(5u), 0u);
+  CHECK_EQ(current.sent(), before + 1u);
+  CHECK_EQ(current.argument_since(before, 0u), 5u);
+  current.rig().host().gl_varint(1u);
+  CHECK_EQ(gen::Wrap_glIsFramebuffer(5u), 1u); }

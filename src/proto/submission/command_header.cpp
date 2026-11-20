@@ -37,6 +37,12 @@ bool     CommandHeader::generates_reply() const
     return (flags_ & generate_reply) != 0u;
 }
 
+bool CommandHeader::restores() const
+{
+    AV_SCOPE("CommandHeader::restores");
+    return (flags_ & restores_context) != 0u;
+}
+
 Status CommandHeader::encode(uint8_t *bytes, size_t capacity) const
 {
     AV_SCOPE("CommandHeader::encode");
@@ -56,7 +62,7 @@ Status CommandHeader::decode(const uint8_t *bytes, size_t length)
     if (reader.status() != Status::ok) return reader.status();
     const uint32_t size = word & max_size;
     const uint8_t  flags = static_cast<uint8_t>(word >> flags_shift);
-    if (size < encoded_size || (flags & ~generate_reply) != 0u) return Status::malformed;
+    if (size < encoded_size || (flags & ~(generate_reply | restores_context)) != 0u) return Status::malformed;
     *this = CommandHeader(id, size, flags);
     return Status::ok;
 }

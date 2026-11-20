@@ -4,6 +4,7 @@
 #include "core/trace/function_scope.hpp"
 #include "proto/context/capset_info.hpp"
 #include "proto/context/context_setup.hpp"
+#include "proto/submission/ring_header.hpp"
 
 namespace av {
 
@@ -52,6 +53,15 @@ Status GuestContext::accept(const uint8_t *bytes, size_t length)
     return status;
 }
 
+void GuestContext::unanswered(bool sent)
+{
+    AV_SCOPE("GuestContext::unanswered");
+    platform_.require_irql_at_most(Irql::dispatch, "GuestContext::unanswered");
+    SpinLockGuard guard(lock_);
+    sequence_.unanswered(sent);
+    if (sequence_.finished()) finish_sequence();
+}
+
 void GuestContext::finish_sequence()
 {
     AV_SCOPE("GuestContext::finish_sequence");
@@ -77,6 +87,18 @@ void GuestContext::kick()
     if (state_ == State::established) submitter_.kick();
 }
 
+void GuestContext::kick_if_behind()
+{
+    AV_SCOPE("GuestContext::kick_if_behind");
+    platform_.require_irql_at_most(Irql::dispatch, "GuestContext::kick_if_behind");
+    SpinLockGuard guard(lock_);
+    const uint8_t *const ring = pages_.ring_view();
+    if (state_ != State::established || ring == nullptr) return;
+    const uint64_t tail = __atomic_load_n(reinterpret_cast<const uint64_t *>(ring + 8u), __ATOMIC_ACQUIRE);
+    const uint64_t head = __atomic_load_n(reinterpret_cast<const uint64_t *>(ring + 16u), __ATOMIC_ACQUIRE);
+    if (head < tail) submitter_.kick();
+}
+
 Status GuestContext::submit(const SubmissionDescriptor &submission)
 {
     AV_SCOPE("GuestContext::submit");
@@ -84,7 +106,10 @@ Status GuestContext::submit(const SubmissionDescriptor &submission)
     SpinLockGuard guard(lock_);
     if (state_ != State::established) return Status::invalid_state;
     const Status status = submitter_.submit(submission);
-    if (submitter_.failed()) state_ = State::failed;
+    if (submitter_.failed()) {
+        state_ = State::failed;
+        tell_process(FaultCode::ring_header);
+    }
     return status;
 }
 
@@ -125,7 +150,10 @@ Status GuestContext::serve()
     SpinLockGuard guard(lock_);
     if (state_ != State::established) return Status::invalid_state;
     const Status status = observer_.observe();
-    if (observer_.failed()) state_ = State::failed;
+    if (observer_.failed()) {
+        state_ = State::failed;
+        tell_process(FaultCode::device_lost);
+    }
     const bool lost = observer_.faulted() || observer_.failed();
     if (progress_ != nullptr) *progress_ = lost ? UINT64_MAX : fences_.completed_fence();
     return status;
@@ -148,12 +176,23 @@ Status GuestContext::tear_down()
     return Status::ok;
 }
 
-void GuestContext::fail()
+void GuestContext::fail(FaultCode reason)
 {
     AV_SCOPE("GuestContext::fail");
     platform_.require_irql_at_most(Irql::dispatch, "GuestContext::fail");
     SpinLockGuard guard(lock_);
-    if (state_ == State::established) state_ = State::failed;
+    if (state_ != State::established) return;
+    state_ = State::failed;
+    tell_process(reason);
+}
+
+void GuestContext::tell_process(FaultCode reason)
+{
+    AV_SCOPE("GuestContext::tell_process");
+    uint8_t *const ring = pages_.ring_view();
+    if (ring == nullptr) return;
+    __atomic_store_n(reinterpret_cast<uint32_t *>(ring + RingHeader::lost_at), static_cast<uint32_t>(reason),
+                     __ATOMIC_RELEASE);
 }
 
 uint64_t GuestContext::next_begin() const

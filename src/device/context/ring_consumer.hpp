@@ -29,6 +29,8 @@ public:
     void                 withdraw();
     void                 attach();
     void                 detach();
+    void                *leave_thread() const;
+    void                 thread_joined(void *left) const;
     void                 service();
     void                 abandon();
 

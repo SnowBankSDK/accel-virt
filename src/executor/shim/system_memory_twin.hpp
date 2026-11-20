@@ -13,10 +13,11 @@ struct ID3D11Texture2D;
 namespace av {
 
 class DxvkVulkanDevice;
+class ImageRetirement;
 
 class SystemMemoryTwin final : public TextureHold {
 public:
-    explicit SystemMemoryTwin(ExportableImages &owner);
+    explicit SystemMemoryTwin(ImageRetirement &owner);
     ~SystemMemoryTwin();
     SystemMemoryTwin(const SystemMemoryTwin &) = delete;
     SystemMemoryTwin &operator=(const SystemMemoryTwin &) = delete;

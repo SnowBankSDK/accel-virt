@@ -35,6 +35,7 @@ struct ResourceRecord {
     d3d::SwapChainBuffer::Model present_model;
     uint32_t vidpn_source;
     uint32_t allocation;
+    uint32_t accounted;
     uint32_t allocation_pitch;
     uint32_t allocation_owned;
     uint32_t refreshed;
@@ -51,6 +52,12 @@ struct ResourceRecord {
     HostAllocation          *lent;
     ResourceRecord          *immediate;
     uint64_t                 gpu_wrote;
+    uint64_t                 write_order;
+    uint64_t                 leased;
+    uint32_t                 tiles;
+    uint32_t                 packed_mips;
+    uint32_t                 packed_tiles;
+    uint32_t                 tiling_known;
 };
 
 struct ObjectRecord {
@@ -59,6 +66,14 @@ struct ObjectRecord {
     d3d::RecordStamp stamp;
     uint32_t kind;
     uint32_t resource;
+};
+
+struct StreamPassthroughRecord {
+    static constexpr uint32_t marker = 0x50535452u;
+    static constexpr uint32_t variants = 4u;
+
+    ObjectRecord head;
+    uint32_t     variant[variants];
 };
 
 struct QueryRecord {
@@ -71,6 +86,7 @@ struct QueryRecord {
     uint64_t first_miss;
     uint32_t waited_on;
     uint32_t reserved;
+    uint64_t event_order;
 };
 
 struct CommandListRecord {

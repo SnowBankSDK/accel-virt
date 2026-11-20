@@ -9,8 +9,11 @@ from pathlib import Path
 class Profile:
     commands: list[str] = field(default_factory=list)
     driver_implemented: set[str] = field(default_factory=set)
+    driver_extensions: list[str] = field(default_factory=list)
     async_commands: set[str] = field(default_factory=set)
     params: dict[str, dict] = field(default_factory=dict)
+    info: dict[str, dict[str, list[str]]] = field(default_factory=dict)
+    structs: dict[str, dict] = field(default_factory=dict)
     ids: dict[str, int] = field(default_factory=dict)
     ids_path: Path | None = None
     first_id: int = 0x00020000
@@ -48,8 +51,11 @@ def load(profile_path: Path, ids_path: Path) -> Profile:
     return Profile(
         commands=list(data.get("commands", [])),
         driver_implemented=set(data.get("driver_implemented", [])),
+        driver_extensions=list(data.get("driver_extensions", [])),
         async_commands=set(data.get("async", [])),
         params=dict(data.get("params", {})),
+        info=dict(data.get("info", {})),
+        structs=dict(data.get("structs", {})),
         ids=ids,
         ids_path=ids_path,
     )

@@ -45,9 +45,88 @@ def _kinds(reg: Registry) -> list[str]:
     return sorted(used)
 
 
-STRUCT_HANDLES = {
-    "cl_image_desc": (("buffer", "mem"),),
-}
+WORD = "Word"
+
+FIXED_ROOTS = ("int8_t", "uint8_t", "int16_t", "uint16_t", "int32_t", "uint32_t", "int64_t",
+               "uint64_t", "float", "double")
+
+
+def _root_type(reg: Registry, base: str) -> str:
+    seen = set()
+    while base in reg.typedefs and base not in seen:
+        seen.add(base)
+        base = reg.typedefs[base]
+    return base
+
+
+def _struct_layout(reg: Registry, struct: str) -> list[tuple[str, str, str]]:
+    if struct not in reg.structs:
+        raise KeyError(f"{struct} is not a struct of cl.xml")
+    layout: list[tuple[str, str, str]] = []
+    for member, ctype in reg.structs[struct]:
+        if ctype.pointer_depth or ctype.is_fixed_array:
+            raise ValueError(f"{struct}.{member} is a pointer or an array the wire cannot carry")
+        if ctype.base in reg.handles:
+            layout.append((member, "handle", ctype.base))
+            continue
+        root = _root_type(reg, ctype.base)
+        if root == "size_t":
+            layout.append((member, "word", ctype.base))
+        elif root in FIXED_ROOTS:
+            layout.append((member, "fixed", ctype.base))
+        else:
+            raise ValueError(f"{struct}.{member} is a {ctype.base}, which has no wire encoding")
+    return layout
+
+
+def _worded(reg: Registry, struct: str) -> bool:
+    return any(kind != "fixed" for _, kind, _ in _struct_layout(reg, struct))
+
+
+def _struct_handles(reg: Registry, p: Param) -> list[tuple[str, str]]:
+    if p.role != Role.STRUCT_IN:
+        return []
+    return [(member, base) for member, kind, base in _struct_layout(reg, p.element) if kind == "handle"]
+
+
+def _guest_type(reg: Registry, base: str, word: str) -> str:
+    if base == "size_t":
+        return f"guest_size_t<{word}>"
+    if base in reg.structs and _worded(reg, base):
+        return f"guest_{base}<{word}>"
+    return base
+
+
+def _guest_cpp(reg: Registry, t, word: str) -> str:
+    return type(t)(base=_guest_type(reg, t.base, word), pointer_depth=t.pointer_depth,
+                   is_const=t.is_const, inner_const=t.inner_const).cpp()
+
+
+def _wire_structs(reg: Registry) -> list[str]:
+    used = []
+    for cmd in reg.commands.values():
+        for p in cmd.params:
+            if p.role == Role.STRUCT_OUT and _worded(reg, p.element):
+                raise ValueError(f"{cmd.name}.{p.name}: a {p.element} answered by the host has "
+                                 f"word-sized members the reply cannot carry")
+            if p.role == Role.STRUCT_IN and p.element not in used:
+                _struct_layout(reg, p.element)
+                used.append(p.element)
+    return used
+
+
+def _info_param(cmd: Command) -> Param | None:
+    for p in cmd.params:
+        if p.role == Role.INFO_VALUE:
+            return p
+    return None
+
+
+def _len_bytes_array(cmd: Command, scalar: Param) -> Param | None:
+    for p in cmd.params:
+        if p.role == Role.SCALAR_ARRAY and p.len_bytes and p.len_param == scalar.name:
+            return p
+    return None
 
 CONTEXT_PROPERTY_SCALARS = ("CL_CONTEXT_INTEROP_USER_SYNC",)
 
@@ -118,11 +197,20 @@ def _count_of(cmd: Command, len_param: str | None) -> str | None:
     return f"static_cast<uint64_t>({len_param})"
 
 
+def _array_count(cmd: Command, p: Param) -> str | None:
+    count = _count_of(cmd, p.len_param)
+    if count is None or not p.len_bytes:
+        return count
+    if p.role != Role.SCALAR_ARRAY:
+        raise ValueError(f"{cmd.name}.{p.name} is counted in bytes but is not a scalar array")
+    return f"{count} / sizeof({p.element})"
+
+
 def _refusals(cmd: Command) -> list[str]:
     out: list[str] = []
     for p in cmd.params:
         n = p.name
-        count = _count_of(cmd, p.len_param)
+        count = _array_count(cmd, p)
         if p.role in (Role.HANDLE_ARRAY, Role.SCALAR_ARRAY, Role.STRING_ARRAY, Role.BYTES_IN) \
                 and count is not None:
             out.append(f"    if ({n} != nullptr && {n}_count < {count}) return false;")
@@ -470,10 +558,10 @@ def _lifecycle(cmd: Command) -> tuple[str, Param] | None:
     return None
 
 
-def _client_param_decl(reg: Registry, p: Param) -> list[str]:
+def _client_param_decl(reg: Registry, p: Param, word: str) -> list[str]:
     t = p.type
     if p.role == Role.IGNORED:
-        return [f"{t.cpp()} {p.name}"]
+        return [f"{_guest_cpp(reg, t, word)} {p.name}"]
     if p.role in (Role.HANDLE, Role.SVM_POINTER):
         return [f"{HANDLE_T} {p.name}"]
     if p.role in (Role.HANDLE_ARRAY,):
@@ -485,13 +573,14 @@ def _client_param_decl(reg: Registry, p: Param) -> list[str]:
     if p.role in (Role.PROPERTIES, Role.PROPERTY_LIST):
         return [f"const {HANDLE_T}* {p.name}"]
     if p.role in (Role.STRUCT_IN,):
-        return [f"const {p.element}* {p.name}"]
+        return [f"const {_guest_type(reg, p.element, word)}* {p.name}"] + \
+            [f"{HANDLE_T} {p.name}_{member}" for member, _ in _struct_handles(reg, p)]
     if p.role in (Role.STRUCT_OUT,):
         return [f"{p.element}* {p.name}"]
-    decl = [f"{t.cpp()} {p.name}"]
+    decl = [f"{_guest_cpp(reg, t, word)} {p.name}"]
     if p.role in (Role.BYTES_IN, Role.BYTES_OUT) and \
             (p.len_param or "").startswith("@"):
-        decl.append(f"size_t {p.name}_bytes")
+        decl.append(f"guest_size_t<{word}> {p.name}_bytes")
     return decl
 
 
@@ -514,17 +603,17 @@ def _server_param_decl(reg: Registry, p: Param) -> str:
     return f"{t.cpp()} {p.name}"
 
 
-def _client_signature(reg: Registry, cmd: Command) -> str:
+def _client_signature(reg: Registry, cmd: Command, word: str = WORD, instance: str = "") -> str:
     ret = HANDLE_T if (cmd.returns_handle or cmd.returns_address) else \
         ("void" if cmd.returns_void else cmd.return_type.cpp())
     params = ["::av::ClientTransport& t"]
     for p in cmd.params:
         if p.role == Role.IGNORED:
             if _lengths_owner(cmd, p) is not None:
-                params.append(f"const size_t* {p.name}")
+                params.append(f"const guest_size_t<{word}>* {p.name}")
             continue
-        params.extend(_client_param_decl(reg, p))
-    return f"{ret} av_{cmd.name}({', '.join(params)})"
+        params.extend(_client_param_decl(reg, p, word))
+    return f"{ret} av_{cmd.name}{instance}({', '.join(params)})"
 
 
 def _server_signature(reg: Registry, cmd: Command) -> str:
@@ -538,7 +627,14 @@ def _encode_param(reg: Registry, cmd: Command, p: Param, out: list[str]) -> None
     n = p.name
     if p.role == Role.IGNORED:
         return
-    if p.role == Role.SCALAR:
+    info = _info_param(cmd)
+    counted = _len_bytes_array(cmd, p) if p.role == Role.SCALAR else None
+    if p.role == Role.SCALAR and info is not None and info.size_param == n:
+        out.append(f"    b.write_varint({info.name}_words.host_bytes());")
+    elif counted is not None and _guest_type(reg, counted.element, WORD) != counted.element:
+        element = _guest_type(reg, counted.element, WORD)
+        out.append(f"    b.write_varint(host_word_bytes<{WORD}>({n}));")
+    elif p.role == Role.SCALAR:
         out.append(f"    b.write_varint(static_cast<uint64_t>({n}));")
     elif p.role in (Role.HANDLE, Role.SVM_POINTER):
         out.append(f"    b.write_pod<{HANDLE_T}>({n});")
@@ -549,6 +645,17 @@ def _encode_param(reg: Registry, cmd: Command, p: Param, out: list[str]) -> None
         out.append(f"        b.write_varint(static_cast<uint64_t>({count}));")
         out.append(f"        for (uint64_t i = 0; i < static_cast<uint64_t>({count}); ++i) {{")
         out.append(f"            b.write_pod<{HANDLE_T}>({n}[i]);")
+        out.append("        }")
+        out.append("    }")
+    elif p.role == Role.SCALAR_ARRAY and p.len_bytes:
+        element = _guest_type(reg, p.element, WORD)
+        out.append(f"    b.write_pod<uint8_t>({n} != nullptr ? 1 : 0);")
+        out.append(f"    if ({n} != nullptr) {{")
+        out.append(f"        const auto* const wire_items = static_cast<const {element}*>({n});")
+        out.append(f"        const uint64_t wire_count = static_cast<uint64_t>({p.len_param} / sizeof({element}));")
+        out.append("        b.write_varint(wire_count);")
+        out.append("        for (uint64_t i = 0; i < wire_count; ++i) {")
+        out.append("            b.write_varint(static_cast<uint64_t>(wire_items[i]));")
         out.append("        }")
         out.append("    }")
     elif p.role == Role.SCALAR_ARRAY:
@@ -603,7 +710,15 @@ def _encode_param(reg: Registry, cmd: Command, p: Param, out: list[str]) -> None
         out.append("    }")
     elif p.role == Role.STRUCT_IN:
         out.append(f"    b.write_pod<uint8_t>({n} != nullptr ? 1 : 0);")
-        out.append(f"    if ({n} != nullptr) b.write({n}, sizeof(*{n}));")
+        out.append(f"    if ({n} != nullptr) {{")
+        for member, kind, base in _struct_layout(reg, p.element):
+            if kind == "word":
+                out.append(f"        b.write_varint(static_cast<uint64_t>({n}->{member}));")
+            elif kind == "handle":
+                out.append(f"        b.write_pod<{HANDLE_T}>({n}_{member});")
+            else:
+                out.append(f"        b.write_pod<{base}>({n}->{member});")
+        out.append("    }")
     elif p.role == Role.PROPERTIES:
         out.append(f"    b.write_pod<uint8_t>({n} != nullptr ? 1 : 0);")
         out.append(f"    if ({n} != nullptr) {{")
@@ -663,7 +778,7 @@ def _client_room(p: Param) -> str:
     if p.role == Role.HANDLE_ARRAY_OUT:
         return p.len_param
     if p.role == Role.INFO_VALUE:
-        return p.size_param
+        return f"{p.name}_words.host_bytes()"
     return f"{p.name}_bytes" if (p.len_param or "").startswith("@") else p.len_param
 
 
@@ -690,7 +805,9 @@ def _decode_reply(reg: Registry, cmd: Command, out: list[str]) -> None:
             if reported is not None and reported.role == Role.INFO_VALUE:
                 out.append(f"        if (ret == CL_SUCCESS && {reported.name} != nullptr &&")
                 out.append(f"            wire_value > static_cast<uint64_t>({_client_room(reported)})) {fail}")
-            out.append(f"        *{n} = static_cast<{p.type.base}>(wire_value);")
+                out.append(f"        *{n} = {reported.name}_words.guest_size(wire_value);")
+            else:
+                out.append(f"        *{n} = static_cast<{_guest_type(reg, p.type.base, WORD)}>(wire_value);")
         elif p.role == Role.STRUCT_OUT:
             out.append(f"        if (!r.read({n}, sizeof(*{n}))) {fail}")
         elif p.role == Role.HANDLE_ARRAY_OUT:
@@ -700,7 +817,11 @@ def _decode_reply(reg: Registry, cmd: Command, out: list[str]) -> None:
             out.append("        for (uint64_t i = 0; i < wire_count; ++i) {")
             out.append(f"            if (!r.read_pod({n}[i])) {fail}")
             out.append("        }")
-        elif p.role in (Role.BYTES_OUT, Role.INFO_VALUE):
+        elif p.role == Role.INFO_VALUE:
+            out.append("        uint64_t wire_count = 0;")
+            out.append(f"        if (!r.read_varint(wire_count)) {fail}")
+            out.append(f"        if (!{n}_words.read(r, wire_count, {n})) {fail}")
+        elif p.role == Role.BYTES_OUT:
             inline = f"!{n}_lent && " if p.lent else ""
             out.append("        uint64_t wire_count = 0;")
             out.append(f"        if (!r.read_varint(wire_count)) {fail}")
@@ -711,12 +832,162 @@ def _decode_reply(reg: Registry, cmd: Command, out: list[str]) -> None:
         out.append("    }")
 
 
+GUEST_WORDS = [
+    "template <typename Word>",
+    "struct GuestWord {",
+    "    using type = Word;",
+    "};",
+    "",
+    "template <typename Word>",
+    "using guest_size_t = typename GuestWord<Word>::type;",
+    "",
+    "template <typename Native, typename Mirror, bool SameWidth>",
+    "struct GuestLayout {",
+    "    using type = Mirror;",
+    "};",
+    "",
+    "template <typename Native, typename Mirror>",
+    "struct GuestLayout<Native, Mirror, true> {",
+    "    using type = Native;",
+    "};",
+    "",
+]
+
+GUEST_INFO_VALUE = [
+    "enum class GuestWordKind : uint8_t { none, unsigned_word, signed_word };",
+    "",
+    "template <typename Word>",
+    "class GuestInfoValue {",
+    "public:",
+    "    GuestInfoValue(GuestWordKind kind, Word guest_bytes);",
+    "",
+    "    [[nodiscard]] uint64_t host_bytes() const;",
+    "    [[nodiscard]] bool read(::av::WireReader& r, uint64_t wire_count, void* value) const;",
+    "    [[nodiscard]] Word guest_size(uint64_t host_size) const;",
+    "",
+    "private:",
+    "    [[nodiscard]] Word narrowed(uint64_t host_word) const;",
+    "",
+    "    GuestWordKind kind_;",
+    "    Word guest_bytes_;",
+    "};",
+    "",
+    "template <typename Word>",
+    "GuestInfoValue<Word>::GuestInfoValue(GuestWordKind kind, Word guest_bytes)",
+    "    : kind_(kind), guest_bytes_(guest_bytes) {}",
+    "",
+    "template <typename Word>",
+    "uint64_t GuestInfoValue<Word>::host_bytes() const {",
+    "    if constexpr (sizeof(Word) == sizeof(uint64_t)) {",
+    "        return static_cast<uint64_t>(guest_bytes_);",
+    "    } else {",
+    "        if (kind_ == GuestWordKind::none) return static_cast<uint64_t>(guest_bytes_);",
+    "        return static_cast<uint64_t>(guest_bytes_ / sizeof(Word)) * sizeof(uint64_t);",
+    "    }",
+    "}",
+    "",
+    "template <typename Word>",
+    "bool GuestInfoValue<Word>::read(::av::WireReader& r, uint64_t wire_count, void* value) const {",
+    "    if (wire_count > host_bytes()) return false;",
+    "    if (wire_count == 0) return true;",
+    "    if constexpr (sizeof(Word) == sizeof(uint64_t)) {",
+    "        return r.read(value, static_cast<size_t>(wire_count));",
+    "    } else {",
+    "        if (kind_ == GuestWordKind::none) return r.read(value, static_cast<size_t>(wire_count));",
+    "        if (wire_count % sizeof(uint64_t) != 0) return false;",
+    "        auto* const into = static_cast<uint8_t*>(value);",
+    "        const size_t count = static_cast<size_t>(wire_count / sizeof(uint64_t));",
+    "        for (size_t i = 0; i < count; ++i) {",
+    "            uint64_t host_word = 0;",
+    "            if (!r.read_pod(host_word)) return false;",
+    "            const Word guest_word = narrowed(host_word);",
+    "            __builtin_memcpy(into + i * sizeof(Word), &guest_word, sizeof guest_word);",
+    "        }",
+    "        return true;",
+    "    }",
+    "}",
+    "",
+    "template <typename Word>",
+    "Word GuestInfoValue<Word>::guest_size(uint64_t host_size) const {",
+    "    if constexpr (sizeof(Word) == sizeof(uint64_t)) {",
+    "        return static_cast<Word>(host_size);",
+    "    } else {",
+    "        if (kind_ == GuestWordKind::none) return static_cast<Word>(host_size);",
+    "        return static_cast<Word>(host_size / sizeof(uint64_t) * sizeof(Word));",
+    "    }",
+    "}",
+    "",
+    "template <typename Word>",
+    "constexpr uint64_t host_word_bytes(Word guest_bytes) {",
+    "    if constexpr (sizeof(Word) == sizeof(uint64_t)) {",
+    "        return static_cast<uint64_t>(guest_bytes);",
+    "    } else {",
+    "        return static_cast<uint64_t>(guest_bytes / sizeof(Word)) * sizeof(uint64_t) +",
+    "               static_cast<uint64_t>(guest_bytes % sizeof(Word));",
+    "    }",
+    "}",
+    "",
+    "template <typename Word>",
+    "Word GuestInfoValue<Word>::narrowed(uint64_t host_word) const {",
+    "    constexpr Word most = static_cast<Word>(~Word{0});",
+    "    if (kind_ == GuestWordKind::signed_word) {",
+    "        constexpr int64_t highest = static_cast<int64_t>(most >> 1);",
+    "        const int64_t value = static_cast<int64_t>(host_word);",
+    "        if (value > highest) return static_cast<Word>(highest);",
+    "        if (value < -highest - 1) return static_cast<Word>(static_cast<uint64_t>(-highest - 1));",
+    "        return static_cast<Word>(static_cast<uint64_t>(value));",
+    "    }",
+    "    return host_word > static_cast<uint64_t>(most) ? most : static_cast<Word>(host_word);",
+    "}",
+    "",
+]
+
+
+def _mirror(reg: Registry, struct: str) -> list[str]:
+    out = ["template <typename Word>", f"struct {struct}_words {{"]
+    for member, kind, base in _struct_layout(reg, struct):
+        out.append(f"    {base if kind == 'fixed' else 'Word'} {member};")
+    out += ["};", "",
+            "template <typename Word>",
+            f"using guest_{struct} = typename GuestLayout<{struct}, {struct}_words<Word>,",
+            f"{' ' * (len(struct) + 25)}sizeof(Word) == sizeof(size_t)>::type;", ""]
+    return out
+
+
+def _word_lookup(cmd: Command) -> list[str]:
+    name = next(p for p in cmd.params if p.name == "param_name")
+    out = ["template <typename Word>",
+           f"constexpr GuestWordKind word_of_{cmd.name}([[maybe_unused]] {name.type.cpp()} name) {{"]
+    if not cmd.info_words:
+        return out + ["    return GuestWordKind::none;", "}", ""]
+    out += ["    if constexpr (sizeof(Word) == sizeof(uint64_t)) {",
+            "        return GuestWordKind::none;",
+            "    } else {",
+            "        switch (name) {"]
+    for kind in ("unsigned_word", "signed_word"):
+        values = sorted(v for v, k in cmd.info_words.items() if k == kind)
+        if not values:
+            continue
+        out += [f"            case 0x{value:04X}u:" for value in values]
+        out.append(f"                return GuestWordKind::{kind};")
+    out += ["            default:",
+            "                return GuestWordKind::none;",
+            "        }",
+            "    }",
+            "}", ""]
+    return out
+
+
 def emit_client(reg: Registry, out_dir: Path) -> None:
+    structs = [name for name in _wire_structs(reg) if _worded(reg, name)]
     h = [HEADER, "#pragma once\n",
          "#include <stddef.h>", "#include <stdint.h>", ""] + CL_PREAMBLE + ["",
          '#include "proto/client/client_transport.hpp"', "",
-         "namespace av::clproto {", ""]
-    c = [HEADER, '#include "cl_dispatch_client.h"', "",
+         "namespace av::clproto {", ""] + GUEST_WORDS
+    for struct in structs:
+        h += _mirror(reg, struct)
+    w = [HEADER, "#pragma once\n",
+         '#include "cl_dispatch_client.h"', "",
          '#include "core/trace/function_scope.hpp"',
          '#include "proto/client/client_blob_arena.hpp"',
          '#include "proto/client/sync_call_scope.hpp"',
@@ -724,42 +995,57 @@ def emit_client(reg: Registry, out_dir: Path) -> None:
          '#include "proto/wire/wire_reader.hpp"',
          '#include "proto/wire/wire_writer.hpp"',
          '#include "cl_protocol_ids.h"', "",
+         "namespace av::clproto {", ""] + GUEST_INFO_VALUE
+    c = [HEADER, '#include "cl_dispatch_client_words.h"', "",
          "namespace av::clproto {", ""]
 
     for cmd in reg.commands.values():
+        if _info_param(cmd) is not None:
+            w += _word_lookup(cmd)
+
+    for cmd in reg.commands.values():
         sig = _client_signature(reg, cmd)
+        h.append(f"template <typename {WORD} = size_t>")
         h.append(f"{sig};")
-        c.append(f"{sig} {{")
-        c.append(f'    AV_SCOPE("av_{cmd.name}");')
-        c.append("    ::av::WireWriter b = t.request_writer();")
+        c.append(f"template {_client_signature(reg, cmd, 'size_t', '<size_t>')};")
+        w.append(f"template <typename {WORD}>")
+        w.append(f"{sig} {{")
+        w.append(f'    AV_SCOPE("av_{cmd.name}");')
+        info = _info_param(cmd)
+        if info is not None:
+            w.append(f"    const GuestInfoValue<{WORD}> {info.name}_words(word_of_{cmd.name}<{WORD}>(param_name), "
+                     f"{info.size_param});")
+        w.append("    ::av::WireWriter b = t.request_writer();")
         for p in cmd.params:
-            _encode_param(reg, cmd, p, c)
+            _encode_param(reg, cmd, p, w)
         fail = "        " + _client_failure(cmd)
         if cmd.is_async:
-            c.append(f"    if (t.send_async(kCmd_{cmd.name}, b) != ::av::TransportResult::ok) {{")
-            c.append(fail)
-            c.append("    }")
+            w.append(f"    if (t.send_async(kCmd_{cmd.name}, b) != ::av::TransportResult::ok) {{")
+            w.append(fail)
+            w.append("    }")
             if cmd.returns_handle:
-                c.append("    return 0;")
+                w.append("    return 0;")
             elif not cmd.returns_void:
-                c.append("    return CL_SUCCESS;")
+                w.append("    return CL_SUCCESS;")
         else:
-            c.append("    const ::av::SyncCallScope av_call{t};")
-            c.append("    ::av::WireReader r{nullptr, 0u};")
-            c.append(f"    if (t.send_sync(kCmd_{cmd.name}, b, r) !=")
-            c.append("        ::av::TransportResult::ok) {")
-            c.append(fail)
-            c.append("    }")
-            c.append("    [[maybe_unused]] ::av::WireArena& arena = t.decode_arena();")
-            _decode_reply(reg, cmd, c)
+            w.append("    const ::av::SyncCallScope av_call{t};")
+            w.append("    ::av::WireReader r{nullptr, 0u};")
+            w.append(f"    if (t.send_sync(kCmd_{cmd.name}, b, r) !=")
+            w.append("        ::av::TransportResult::ok) {")
+            w.append(fail)
+            w.append("    }")
+            w.append("    [[maybe_unused]] ::av::WireArena& arena = t.decode_arena();")
+            _decode_reply(reg, cmd, w)
             if cmd.returns_handle or not cmd.returns_void:
-                c.append("    return ret;")
-        c.append("}")
-        c.append("")
+                w.append("    return ret;")
+        w.append("}")
+        w.append("")
 
     h += ["", "}  // namespace av::clproto", ""]
-    c += ["}  // namespace av::clproto", ""]
+    w += ["}  // namespace av::clproto", ""]
+    c += ["", "}  // namespace av::clproto", ""]
     write(out_dir / "cl_dispatch_client.h", "\n".join(h))
+    write(out_dir / "cl_dispatch_client_words.h", "\n".join(w))
     write(out_dir / "cl_dispatch_client.cpp", "\n".join(c))
 
 
@@ -784,7 +1070,7 @@ def _decode_param(reg: Registry, cmd: Command, p: Param, out: list[str]) -> None
     elif p.role == Role.SVM_POINTER:
         out.append(f"    if (!r.read_pod({n}_wire)) return false;")
     elif p.role in (Role.HANDLE_ARRAY, Role.SCALAR_ARRAY):
-        elem = p.element if p.role == Role.HANDLE_ARRAY else p.type.base
+        elem = p.element or p.type.base
         out.append("    {")
         out.append("        uint8_t wire_present = 0;")
         out.append("        if (!r.read_pod(wire_present)) return false;")
@@ -889,15 +1175,26 @@ def _decode_param(reg: Registry, cmd: Command, p: Param, out: list[str]) -> None
         out.append("        if (wire_present != 0) {")
         out.append(f"            auto* wire_item = arena.allocate<{p.element}>(1);")
         out.append("            if (wire_item == nullptr) return false;")
-        out.append("            if (!r.read(wire_item, sizeof(*wire_item))) return false;")
-        for field, kind in STRUCT_HANDLES.get(p.element, ()):
-            out.append(f"            if (wire_item->{field} != nullptr) {{")
-            out.append(f"                const {HANDLE_T} wire_handle = static_cast<{HANDLE_T}>("
-                       f"reinterpret_cast<uintptr_t>(wire_item->{field}));")
-            out.append(f"                wire_item->{field} = static_cast<decltype(wire_item->{field})>("
-                       f"s.handle_for(HandleKind::{kind}, wire_handle));")
-            out.append(f"                if (wire_item->{field} == nullptr) return false;")
-            out.append("            }")
+        for member, kind, base in _struct_layout(reg, p.element):
+            if kind == "word":
+                out.append("            {")
+                out.append("                uint64_t wire_value = 0;")
+                out.append("                if (!r.read_varint(wire_value)) return false;")
+                out.append(f"                wire_item->{member} = static_cast<{base}>(wire_value);")
+                out.append("            }")
+            elif kind == "handle":
+                out.append("            {")
+                out.append(f"                {HANDLE_T} wire_handle = 0;")
+                out.append("                if (!r.read_pod(wire_handle)) return false;")
+                out.append(f"                wire_item->{member} = nullptr;")
+                out.append("                if (wire_handle != 0) {")
+                out.append(f"                    wire_item->{member} = static_cast<{base}>("
+                           f"s.handle_for(HandleKind::{_kind(base)}, wire_handle));")
+                out.append(f"                    if (wire_item->{member} == nullptr) return false;")
+                out.append("                }")
+                out.append("            }")
+            else:
+                out.append(f"            if (!r.read_pod(wire_item->{member})) return false;")
         out.append(f"            {n} = wire_item;")
         out.append("        }")
         out.append("    }")
@@ -1307,7 +1604,7 @@ def _default_body(reg: Registry, cmd: Command) -> list[str]:
     body.append(f"        called(kCmd_{cmd.name});")
     for p in cmd.params:
         n = p.name
-        count = _count_of(cmd, p.len_param)
+        count = _array_count(cmd, p)
         span = f"static_cast<size_t>({count})" if count else None
         if p.role == Role.HANDLE:
             body.append(f"        handed(HandleKind::{_kind(p.type.base)}, {n});")
@@ -1315,14 +1612,15 @@ def _default_body(reg: Registry, cmd: Command) -> list[str]:
             body.append(f"        for (size_t i = 0; {n} != nullptr && i < {span}; ++i) "
                         f"handed(HandleKind::{_kind(p.element)}, {n}[i]);")
         elif p.role in (Role.SCALAR_ARRAY, Role.STRING_ARRAY) and span:
-            body.append(f"        if ({n} != nullptr) touched({n}, {span} * sizeof(*{n}));")
+            element = f"*{n}" if p.type.base != "void" else p.element
+            body.append(f"        if ({n} != nullptr) touched({n}, {span} * sizeof({element}));")
         elif p.role in (Role.BYTES_IN, Role.BYTES_OUT) and span:
             body.append(f"        if ({n} != nullptr) touched({n}, {span});")
         elif p.role == Role.INFO_VALUE and p.size_param:
             body.append(f"        if ({n} != nullptr) touched({n}, static_cast<size_t>({p.size_param}));")
         elif p.role == Role.STRUCT_IN:
-            for field, kind in STRUCT_HANDLES.get(p.element, ()):
-                body.append(f"        if ({n} != nullptr) handed(HandleKind::{kind}, {n}->{field});")
+            for member, base in _struct_handles(reg, p):
+                body.append(f"        if ({n} != nullptr) handed(HandleKind::{_kind(base)}, {n}->{member});")
         elif p.role == Role.PROPERTIES and p.type.base == "cl_context_properties":
             body.append(f"        for (size_t i = 0; {n} != nullptr && {n}[i] != 0; i += 2) {{")
             body.append(f"            if ({n}[i] == CL_CONTEXT_PLATFORM) "

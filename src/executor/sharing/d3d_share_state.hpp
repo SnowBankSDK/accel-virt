@@ -18,12 +18,12 @@ public:
     D3dShareState &operator=(const D3dShareState &) = delete;
 
     IUnknown *resource() const;
-    IUnknown *view() const;
+    IUnknown *view(ShareOrigin api) const;
     IUnknown *shown() const;
     IUnknown *referenced(IUnknown *object) const;
 
     void      keep_resource(IUnknown *resource);
-    void      keep_view(IUnknown *view, D3dRetired &retired);
+    void      keep_view(ShareOrigin api, IUnknown *view, D3dRetired &retired);
     void      keep_shown(IUnknown *copy, D3dRetired &retired);
     IUnknown *open(bool &live_of_presented);
     void      expect_shown();
@@ -37,10 +37,13 @@ public:
     uint64_t  opens() const;
 
 private:
+    static constexpr uint32_t apis = 2u;
+
     void      retire(IUnknown *&held, D3dRetired &retired);
+    uint32_t  slot(ShareOrigin api) const;
 
     IUnknown   *resource_;
-    IUnknown   *view_;
+    IUnknown   *views_[apis];
     IUnknown   *shown_;
     uint64_t    writes_;
     uint64_t    opens_;

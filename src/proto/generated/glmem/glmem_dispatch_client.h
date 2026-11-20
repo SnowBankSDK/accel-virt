@@ -29,5 +29,9 @@ namespace av::glmemproto {
 // The buffer was placed in a slice (PlaceBufferSlice) and is deleted by the commands before this one: the host stops
 // counting it among the buffers that keep the block it was placed in.
 [[nodiscard]] bool av_glmem_ForgetBufferSlice(::av::ClientTransport& t, uint32_t buffer);
+// `data` into the buffer `buffer`, placed in a slice (PlaceBufferSlice), at `offset`: the glBufferSubData of a buffer
+// the guest maps in place, written by the host GPU after the commands before this one and before the commands after it.
+// An `offset` and size the buffer does not hold record GL_INVALID_VALUE.
+[[nodiscard]] bool av_glmem_WriteBufferSlice(::av::ClientTransport& t, uint32_t buffer, uint64_t offset, const void* data, uint64_t data_size);
 
 }  // namespace av::glmemproto

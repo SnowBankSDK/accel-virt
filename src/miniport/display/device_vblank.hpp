@@ -25,6 +25,7 @@ struct DeviceVblankProbe;
 class DeviceVblank {
 public:
     static constexpr uint32_t sweep_every = 24u;
+    static constexpr uint64_t catch_up_most = 16u;
 
     DeviceVblank(Platform &platform, DxgkrnlInterface &dxgkrnl, DisplaySources &sources);
     DeviceVblank(const DeviceVblank &) = delete;
@@ -50,7 +51,7 @@ private:
 
     void                 ask();
     void                 report_now();
-    [[nodiscard]] Status report(const FlipView &shown);
+    [[nodiscard]] Status report(const FlipView &shown, uint64_t ago_ns);
 
     Platform             &platform_;
     DisplaySources       &sources_;

@@ -1076,7 +1076,16 @@ static bool decode_clCreateSubBuffer(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             auto* wire_item = arena.allocate<cl_buffer_region>(1);
             if (wire_item == nullptr) return false;
-            if (!r.read(wire_item, sizeof(*wire_item))) return false;
+            {
+                uint64_t wire_value = 0;
+                if (!r.read_varint(wire_value)) return false;
+                wire_item->origin = static_cast<size_t>(wire_value);
+            }
+            {
+                uint64_t wire_value = 0;
+                if (!r.read_varint(wire_value)) return false;
+                wire_item->size = static_cast<size_t>(wire_value);
+            }
             buffer_create_info = wire_item;
         }
     }
@@ -1128,7 +1137,8 @@ static bool decode_clCreateImage(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             auto* wire_item = arena.allocate<cl_image_format>(1);
             if (wire_item == nullptr) return false;
-            if (!r.read(wire_item, sizeof(*wire_item))) return false;
+            if (!r.read_pod(wire_item->image_channel_order)) return false;
+            if (!r.read_pod(wire_item->image_channel_data_type)) return false;
             image_format = wire_item;
         }
     }
@@ -1138,11 +1148,47 @@ static bool decode_clCreateImage(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             auto* wire_item = arena.allocate<cl_image_desc>(1);
             if (wire_item == nullptr) return false;
-            if (!r.read(wire_item, sizeof(*wire_item))) return false;
-            if (wire_item->buffer != nullptr) {
-                const uint64_t wire_handle = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(wire_item->buffer));
-                wire_item->buffer = static_cast<decltype(wire_item->buffer)>(s.handle_for(HandleKind::mem, wire_handle));
-                if (wire_item->buffer == nullptr) return false;
+            if (!r.read_pod(wire_item->image_type)) return false;
+            {
+                uint64_t wire_value = 0;
+                if (!r.read_varint(wire_value)) return false;
+                wire_item->image_width = static_cast<size_t>(wire_value);
+            }
+            {
+                uint64_t wire_value = 0;
+                if (!r.read_varint(wire_value)) return false;
+                wire_item->image_height = static_cast<size_t>(wire_value);
+            }
+            {
+                uint64_t wire_value = 0;
+                if (!r.read_varint(wire_value)) return false;
+                wire_item->image_depth = static_cast<size_t>(wire_value);
+            }
+            {
+                uint64_t wire_value = 0;
+                if (!r.read_varint(wire_value)) return false;
+                wire_item->image_array_size = static_cast<size_t>(wire_value);
+            }
+            {
+                uint64_t wire_value = 0;
+                if (!r.read_varint(wire_value)) return false;
+                wire_item->image_row_pitch = static_cast<size_t>(wire_value);
+            }
+            {
+                uint64_t wire_value = 0;
+                if (!r.read_varint(wire_value)) return false;
+                wire_item->image_slice_pitch = static_cast<size_t>(wire_value);
+            }
+            if (!r.read_pod(wire_item->num_mip_levels)) return false;
+            if (!r.read_pod(wire_item->num_samples)) return false;
+            {
+                uint64_t wire_handle = 0;
+                if (!r.read_pod(wire_handle)) return false;
+                wire_item->buffer = nullptr;
+                if (wire_handle != 0) {
+                    wire_item->buffer = static_cast<cl_mem>(s.handle_for(HandleKind::mem, wire_handle));
+                    if (wire_item->buffer == nullptr) return false;
+                }
             }
             image_desc = wire_item;
         }
@@ -5451,7 +5497,8 @@ static bool decode_clCreateImage2D(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             auto* wire_item = arena.allocate<cl_image_format>(1);
             if (wire_item == nullptr) return false;
-            if (!r.read(wire_item, sizeof(*wire_item))) return false;
+            if (!r.read_pod(wire_item->image_channel_order)) return false;
+            if (!r.read_pod(wire_item->image_channel_data_type)) return false;
             image_format = wire_item;
         }
     }
@@ -5542,7 +5589,8 @@ static bool decode_clCreateImage3D(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             auto* wire_item = arena.allocate<cl_image_format>(1);
             if (wire_item == nullptr) return false;
-            if (!r.read(wire_item, sizeof(*wire_item))) return false;
+            if (!r.read_pod(wire_item->image_channel_order)) return false;
+            if (!r.read_pod(wire_item->image_channel_data_type)) return false;
             image_format = wire_item;
         }
     }
@@ -6098,10 +6146,14 @@ static bool decode_clGetKernelSubGroupInfo(ServerDispatch& s, ::av::WireReader& 
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
-            auto* wire_bytes = arena.allocate<uint8_t>(static_cast<size_t>(wire_count) + 1);
-            if (wire_bytes == nullptr) return false;
-            if (wire_count != 0 && !r.read(wire_bytes, static_cast<size_t>(wire_count))) return false;
-            input_value = reinterpret_cast<const void*>(wire_bytes);
+            auto* wire_items = arena.allocate<size_t>(static_cast<size_t>(wire_count) + 1);
+            if (wire_items == nullptr) return false;
+            for (uint64_t i = 0; i < wire_count; ++i) {
+                uint64_t wire_value = 0;
+                if (!r.read_varint(wire_value)) return false;
+                wire_items[i] = static_cast<size_t>(wire_value);
+            }
+            input_value = wire_items;
             input_value_count = wire_count;
         }
     }
@@ -6120,7 +6172,7 @@ static bool decode_clGetKernelSubGroupInfo(ServerDispatch& s, ::av::WireReader& 
         if (!r.read_pod(wire_wanted)) return false;
         param_value_size_ret_wanted = wire_wanted != 0;
     }
-    if (input_value != nullptr && input_value_count < static_cast<uint64_t>(input_value_size)) return false;
+    if (input_value != nullptr && input_value_count < static_cast<uint64_t>(input_value_size) / sizeof(size_t)) return false;
     void* param_value = nullptr;
     if (param_value_wanted) {
         param_value = reinterpret_cast<void*>(arena.allocate<uint8_t>(static_cast<size_t>(param_value_size) + 1));
@@ -6347,7 +6399,8 @@ static bool decode_clCreateImageWithProperties(ServerDispatch& s, ::av::WireRead
         if (wire_present != 0) {
             auto* wire_item = arena.allocate<cl_image_format>(1);
             if (wire_item == nullptr) return false;
-            if (!r.read(wire_item, sizeof(*wire_item))) return false;
+            if (!r.read_pod(wire_item->image_channel_order)) return false;
+            if (!r.read_pod(wire_item->image_channel_data_type)) return false;
             image_format = wire_item;
         }
     }
@@ -6357,11 +6410,47 @@ static bool decode_clCreateImageWithProperties(ServerDispatch& s, ::av::WireRead
         if (wire_present != 0) {
             auto* wire_item = arena.allocate<cl_image_desc>(1);
             if (wire_item == nullptr) return false;
-            if (!r.read(wire_item, sizeof(*wire_item))) return false;
-            if (wire_item->buffer != nullptr) {
-                const uint64_t wire_handle = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(wire_item->buffer));
-                wire_item->buffer = static_cast<decltype(wire_item->buffer)>(s.handle_for(HandleKind::mem, wire_handle));
-                if (wire_item->buffer == nullptr) return false;
+            if (!r.read_pod(wire_item->image_type)) return false;
+            {
+                uint64_t wire_value = 0;
+                if (!r.read_varint(wire_value)) return false;
+                wire_item->image_width = static_cast<size_t>(wire_value);
+            }
+            {
+                uint64_t wire_value = 0;
+                if (!r.read_varint(wire_value)) return false;
+                wire_item->image_height = static_cast<size_t>(wire_value);
+            }
+            {
+                uint64_t wire_value = 0;
+                if (!r.read_varint(wire_value)) return false;
+                wire_item->image_depth = static_cast<size_t>(wire_value);
+            }
+            {
+                uint64_t wire_value = 0;
+                if (!r.read_varint(wire_value)) return false;
+                wire_item->image_array_size = static_cast<size_t>(wire_value);
+            }
+            {
+                uint64_t wire_value = 0;
+                if (!r.read_varint(wire_value)) return false;
+                wire_item->image_row_pitch = static_cast<size_t>(wire_value);
+            }
+            {
+                uint64_t wire_value = 0;
+                if (!r.read_varint(wire_value)) return false;
+                wire_item->image_slice_pitch = static_cast<size_t>(wire_value);
+            }
+            if (!r.read_pod(wire_item->num_mip_levels)) return false;
+            if (!r.read_pod(wire_item->num_samples)) return false;
+            {
+                uint64_t wire_handle = 0;
+                if (!r.read_pod(wire_handle)) return false;
+                wire_item->buffer = nullptr;
+                if (wire_handle != 0) {
+                    wire_item->buffer = static_cast<cl_mem>(s.handle_for(HandleKind::mem, wire_handle));
+                    if (wire_item->buffer == nullptr) return false;
+                }
             }
             image_desc = wire_item;
         }

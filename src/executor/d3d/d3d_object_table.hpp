@@ -46,6 +46,7 @@ enum class D3dObjectKind : uint8_t {
     list12,
     query_heap12,
     command_signature12,
+    state_object12,
     surface9,
     texture9,
     cube_texture9,
@@ -89,6 +90,8 @@ public:
     uint32_t           count_kinds(D3dObjectKind first, D3dObjectKind last) const;
     void               release_all();
     uint32_t           count() const;
+    uint32_t           missed() const;
+    void               forget_miss();
 
     bool invariants_hold() const;
 
@@ -104,6 +107,7 @@ private:
 
     HostObjectRegistry<uint32_t, D3dObjectKind, Entry> objects_;
     GrowableArray<uint32_t>                            views_;
+    mutable uint32_t                                   missed_;
 
     friend struct D3dObjectTableProbe;
 };

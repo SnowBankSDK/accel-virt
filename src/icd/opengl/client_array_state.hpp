@@ -42,6 +42,9 @@ public:
     size_t pixel_bytes(uint32_t format, uint32_t type, int32_t width, int32_t height, int32_t depth,
                        bool packing) const;
     size_t compressed_bytes(int32_t image_size, bool packing) const;
+    size_t bitmap_bytes(int32_t width, int32_t height, bool packing) const;
+    bool   pixel_layout(uint32_t format, uint32_t type, int32_t width, int32_t height, bool packing, uint64_t &start,
+                        uint64_t &row_bytes, uint64_t &stride) const;
 
     void     bind_buffer(uint32_t target, uint32_t buffer);
     bool     tracks(uint32_t target) const;
@@ -63,6 +66,7 @@ public:
     uint64_t attribute_pointer(uint32_t index) const;
 
     const uint64_t *offsets_of(const void *const *pointers, size_t count);
+    const int64_t  *widened(const intptr_t *values, size_t count, uint32_t which);
 
     bool skip_active_texture(uint32_t texture);
     bool skip_bind_texture(uint32_t target, uint32_t texture);
@@ -110,6 +114,7 @@ private:
     uint32_t   textures_[units][texture_targets];
     uint32_t   samplers_[units];
     GrowableArray<uint64_t> offsets_;
+    GrowableArray<int64_t>  wide_[2];
     uint64_t                no_offsets_;
 
     friend struct ClientArrayStateProbe;

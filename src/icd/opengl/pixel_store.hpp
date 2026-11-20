@@ -17,6 +17,9 @@ public:
     bool     set(Field field, int32_t value);
     int32_t  get(Field field) const;
     size_t   span(uint32_t format, uint32_t type, int32_t width, int32_t height, int32_t depth) const;
+    size_t   bitmap_span(int32_t width, int32_t height) const;
+    bool     layout(uint32_t format, uint32_t type, int32_t width, int32_t height, uint64_t &start, uint64_t &row_bytes,
+                    uint64_t &stride) const;
 
     bool invariants_hold() const;
 

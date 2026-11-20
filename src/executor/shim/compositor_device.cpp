@@ -1,6 +1,7 @@
 #include "executor/shim/compositor_device.hpp"
 
 #include "core/trace/function_scope.hpp"
+#include "executor/host_lifecycle_gate.hpp"
 #include "executor/shim/physical_device_identity.hpp"
 
 #include <vulkan/vulkan.h>
@@ -18,7 +19,7 @@ constexpr uint32_t api_version_1_2 = (1u << 22u) | (2u << 12u);
 
 }
 
-CompositorDevice::CompositorDevice() : instance_(VK_NULL_HANDLE), device_(VK_NULL_HANDLE)
+CompositorDevice::CompositorDevice() : instance_(VK_NULL_HANDLE), device_(VK_NULL_HANDLE), gate_(nullptr), slots_(0u)
 {
     AV_SCOPE("CompositorDevice::CompositorDevice");
 }
@@ -29,7 +30,7 @@ CompositorDevice::~CompositorDevice()
     close();
 }
 
-bool CompositorDevice::open(const uint8_t *uuid)
+bool CompositorDevice::open(const uint8_t *uuid, HostLifecycleGate *gate)
 {
     AV_SCOPE("CompositorDevice::open");
     if (device_ != VK_NULL_HANDLE) return true;
@@ -56,7 +57,8 @@ bool CompositorDevice::open(const uint8_t *uuid)
     features12.timelineSemaphore = VK_TRUE;
     const VkDeviceCreateInfo created = {VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, &features12, 0u, 1u, &queue, 0u,
                                         nullptr, device_extension_count, device_extensions, nullptr};
-    if (physical == VK_NULL_HANDLE || vkCreateDevice(physical, &created, nullptr, &device_) != VK_SUCCESS) {
+    gate_ = gate;
+    if (physical == VK_NULL_HANDLE || !create(physical, created)) {
         device_ = VK_NULL_HANDLE;
         close();
         return false;
@@ -64,6 +66,29 @@ bool CompositorDevice::open(const uint8_t *uuid)
     if (table_.load(instance_, physical, device_) && table_.interoperates()) return true;
     close();
     return false;
+}
+
+bool CompositorDevice::create(VkPhysicalDevice physical, const VkDeviceCreateInfo &created)
+{
+    AV_SCOPE("CompositorDevice::create");
+    const HostLifecycleHold hold(gate_);
+    if (!hold.held()) return false;
+    if (gate_ != nullptr && !gate_->devices().admit(physical, created, slots_)) return false;
+    if (vkCreateDevice(physical, &created, nullptr, &device_) == VK_SUCCESS) return true;
+    if (gate_ != nullptr) gate_->devices().give(slots_);
+    slots_ = 0u;
+    return false;
+}
+
+bool CompositorDevice::destroy()
+{
+    AV_SCOPE("CompositorDevice::destroy");
+    const HostLifecycleHold hold(gate_);
+    if (!hold.held()) return false;
+    vkDestroyDevice(device_, nullptr);
+    if (gate_ != nullptr) gate_->devices().give(slots_);
+    slots_ = 0u;
+    return true;
 }
 
 bool CompositorDevice::opened() const
@@ -76,8 +101,9 @@ void CompositorDevice::close()
 {
     AV_SCOPE("CompositorDevice::close");
     table_.forget();
-    if (device_ != VK_NULL_HANDLE) vkDestroyDevice(device_, nullptr);
-    if (instance_ != VK_NULL_HANDLE) vkDestroyInstance(instance_, nullptr);
+    const bool destroyed = device_ == VK_NULL_HANDLE || destroy();
+    gate_ = nullptr;
+    if (destroyed && instance_ != VK_NULL_HANDLE) vkDestroyInstance(instance_, nullptr);
     device_ = VK_NULL_HANDLE;
     instance_ = VK_NULL_HANDLE;
 }

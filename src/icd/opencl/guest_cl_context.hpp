@@ -13,6 +13,7 @@
 #include "icd/common/open_mappings.hpp"
 #include "icd/opencl/cl_d3d11_objects.hpp"
 #include "icd/opencl/cl_external_memory.hpp"
+#include "icd/opencl/cl_format_cache.hpp"
 #include "icd/opencl/cl_property_list.hpp"
 #include "icd/opencl/mapped_region.hpp"
 #include "icd/opencl/svm_table.hpp"
@@ -37,6 +38,7 @@ class SharedHandles;
 
 namespace av::clicd {
 
+class ClContextGroup;
 struct GuestClContextProbe;
 
 class GuestClContext {
@@ -47,9 +49,10 @@ public:
     static constexpr uint32_t reply_bytes = 1024u * 1024u;
     static constexpr size_t   staging_bytes = 256u * 1024u;
     static constexpr size_t   batch_bytes = 2u * staging_bytes;
-    static constexpr uint64_t arena_bytes = uint64_t{16} << 20u;
-    static constexpr uint64_t staging_reserve = uint64_t{8} << 20u;
-    static constexpr uint64_t blocks_reserve = uint64_t{8} << 20u;
+    static constexpr uint64_t arena_bytes = uint64_t{2} << 20u;
+    static constexpr uint64_t staging_reserve = uint64_t{2} << 20u;
+    static constexpr uint64_t blocks_reserve = uint64_t{2} << 20u;
+    static constexpr uint64_t blocks_ceiling = uint64_t{256} << 20u;
 
     GuestClContext(icd::IcdConnection &connection, BlockSource &memory, ThreadLock &send_lock,
                    ThreadLock &blocks_lock, KeyedLog &lines, icd::SharedHandles &handles);
@@ -74,13 +77,17 @@ public:
     void                 retire(const uint64_t *block, HostAllocation *lent);
     void                 reclaim();
     void                 orphan_work();
+    [[nodiscard]] bool   grow_blocks(uint64_t need);
     ClArenaBlocks   &blocks();
     ClArenaBlocks   &staging();
     bool             lost() const;
     SvmTable        &svm();
     ClExternalMemory &external();
     ClD3d11Objects   &d3d11();
+    ClFormatCache    &formats();
     uint32_t         guest_device() const;
+    void             join(ClContextGroup *group);
+    ClContextGroup  *group() const;
 
     MappedRegion    *take_mapping(uint64_t buffer, uint64_t host, size_t offset, size_t bytes,
                                   cl_map_flags flags);
@@ -116,11 +123,15 @@ private:
     bool                                 orphaned_work_;
     ClArenaBlocks                        staging_;
     icd::ArenaRegion                     region_;
+    icd::ArenaRegion                     grown_[ClArenaBlocks::most_extra];
+    bool                                 growing_;
     SvmTable                             svm_;
     ClExternalMemory                     external_;
     ClD3d11Objects                       d3d11_;
+    ClFormatCache                        formats_;
     icd::OpenMappings<MappedRegion>      mappings_;
     ClPropertyList                       properties_;
+    ClContextGroup                      *group_;
     ClContextNotify                      notify_;
     State                                state_;
 };

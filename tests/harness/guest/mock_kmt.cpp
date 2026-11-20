@@ -15,6 +15,7 @@
 #include "proto/submission/submission_descriptor.hpp"
 #include "proto/resources/allocation_kind.hpp"
 #include "proto/escape/context_views_record.hpp"
+#include "proto/escape/tail_publish_record.hpp"
 #include "proto/escape/wake_event_record.hpp"
 #include "proto/escape/host_window_record.hpp"
 
@@ -891,7 +892,8 @@ Status MockKmt::wait_for_vertical_blank(std::uint32_t adapter, std::uint32_t dev
     const Object *const object = find(Kind::device, device);
     if (find(Kind::adapter, adapter) == nullptr || object == nullptr || object->owner != adapter || source != 0u)
         return misuse();
-    ticks_ += blank_period_;
+    const std::uint64_t now = ticks_ + read_ticks_;
+    ticks_ += blank_boundaries_ && blank_period_ != 0u ? blank_period_ - now % blank_period_ : blank_period_;
     if (slip_nth_ != 0u && calls_[static_cast<unsigned>(Call::wait_for_vertical_blank)] % slip_nth_ == 0u)
         ticks_ += slip_ticks_;
     return succeed();
@@ -949,6 +951,7 @@ Status MockKmt::escape(std::uint32_t adapter, std::uint32_t device, std::uint32_
     for (std::uint32_t i = 0u; i < sizeof magic && i < size; i++) magic |= std::uint32_t{data[i]} << (8u * i);
     if (magic == ContextViewsRecord::magic) return context_views(context, data, size);
     if (magic == WakeEventRecord::magic) return wake_event(data, size);
+    if (magic == TailPublishRecord::magic) return accepts_tails_ ? succeed() : refuse(not_supported);
     if (magic == HostWindowRecord::magic) return window_chunk(context, data, size);
     return refuse(not_supported);
 }
@@ -964,6 +967,7 @@ Status MockKmt::wake_event(const std::uint8_t *data, std::uint32_t size)
 }
 
 void          MockKmt::accept_wake_events() { accepts_wakes_ = true; }
+void          MockKmt::accept_tail_publishing() { accepts_tails_ = true; }
 std::uint64_t MockKmt::wake_event() const { return wake_event_; }
 std::uint32_t MockKmt::wake_events() const { return wake_events_; }
 
@@ -1230,6 +1234,12 @@ void MockKmt::reads_clock(ClockReader *reader, std::uint64_t step)
 }
 
 void MockKmt::set_blank_period(std::uint64_t ticks) { blank_period_ = ticks; }
+
+void MockKmt::blank_on_boundaries() { blank_boundaries_ = true; }
+
+void MockKmt::advance(std::uint64_t ticks) { ticks_ += ticks; }
+
+std::uint64_t MockKmt::clock() const { return ticks_ + read_ticks_; }
 
 void MockKmt::set_refresh_millihz(std::uint32_t millihz) { refresh_millihz_ = millihz; }
 

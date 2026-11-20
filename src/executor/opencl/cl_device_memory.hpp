@@ -12,6 +12,7 @@ namespace av {
 
 class BlockSource;
 class ByteLedger;
+class SessionLease;
 
 class ClDeviceMemory {
 public:
@@ -22,6 +23,7 @@ public:
     static constexpr uint64_t host_bit = 1ull << 63;
 
     void bind(ByteLedger *vram, ByteLedger *host);
+    void reserve_from(SessionLease *lease);
 
     [[nodiscard]] cl_int claim(cl_mem_flags flags, uint64_t bytes, uint64_t &claimed);
     [[nodiscard]] bool   keep(cl_mem memory, uint64_t claimed);
@@ -32,6 +34,8 @@ public:
     uint64_t held() const;
     uint64_t host_held() const;
     uint64_t cap() const;
+    uint64_t advertised() const;
+    bool     bound() const;
     uint64_t free_bytes() const;
     uint32_t objects() const;
 

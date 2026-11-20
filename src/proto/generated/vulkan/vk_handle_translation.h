@@ -28,6 +28,8 @@ enum class HandleKind : uint8_t {
     framebuffer,
     image,
     image_view,
+    indirect_commands_layout_ext,
+    indirect_execution_set_ext,
     instance,
     micromap_ext,
     physical_device,
@@ -71,6 +73,13 @@ public:
     // with, and nothing in the call carries it: each side answers from its
     // own table of templates, 0 for one it never made (feature 047).
     [[nodiscard]] virtual uint64_t template_bytes(VkDescriptorUpdateTemplate made) const = 0;
+    [[nodiscard]] virtual bool image_copy_bytes(VkImage image, const VkImageSubresourceLayers& layers,
+                                                VkExtent3D extent, uint32_t row_length,
+                                                uint32_t image_height, uint64_t& bytes) const {
+        (void)image; (void)layers; (void)extent; (void)row_length; (void)image_height;
+        bytes = 0;
+        return false;
+    }
 
 protected:
     HandleTranslation() = default;

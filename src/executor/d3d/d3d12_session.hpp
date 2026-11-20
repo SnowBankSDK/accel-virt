@@ -1,9 +1,12 @@
 #ifndef AV_D3D12_SESSION_HPP
 #define AV_D3D12_SESSION_HPP
 
+#include "core/log/log_cadence.hpp"
 #include "core/trace/function_scope.hpp"
 #include "executor/d3d/command_refusal.hpp"
+#include "executor/gpu_work_window.hpp"
 #include "executor/d3d/d3d12_address_map.hpp"
+#include "executor/d3d/d3d12_acceleration_sizes.hpp"
 #include "executor/d3d/d3d12_allocator_marks.hpp"
 #include "executor/d3d/d3d12_block_heaps.hpp"
 #include "executor/d3d/d3d12_descriptor_holds.hpp"
@@ -11,9 +14,12 @@
 #include "executor/d3d/d3d12_pipeline_builder.hpp"
 #include "executor/d3d/d3d12_pipeline_compiles.hpp"
 #include "executor/d3d/d3d12_query_heaps.hpp"
-#include "executor/d3d/d3d12_refused_creates.hpp"
+#include "executor/d3d/d3d12_raytracing_inputs.hpp"
+#include "executor/d3d/d3d_refused_creates.hpp"
 #include "executor/d3d/d3d12_queue_progress.hpp"
+#include "executor/d3d/d3d12_indirect_table.hpp"
 #include "executor/d3d/d3d12_retain_memo.hpp"
+#include "executor/d3d/d3d12_state_object_builder.hpp"
 #include "executor/d3d/d3d12_tile_update.hpp"
 #include "executor/d3d/d3d12_view_writer.hpp"
 #include "executor/d3d/d3d_object_table.hpp"
@@ -26,6 +32,7 @@
 
 struct ID3D12CommandQueue;
 struct ID3D12Fence;
+struct ID3D12Device5;
 struct ID3D12GraphicsCommandList;
 struct ID3D12PipelineState;
 struct IUnknown;
@@ -38,6 +45,7 @@ namespace av {
 
 class DriverLog;
 class D3d11HostDevice;
+class LeasedObjects;
 class SessionShares;
 class SourceMemory;
 class TeardownBudget;
@@ -48,18 +56,22 @@ class D3d12BlockHeap;
 class EventfdWake;
 class WakeSignal;
 class GuestBytes;
+class HostMemorySource;
 class ImportTable;
 struct D3d12SessionProbe;
 
 class D3d12Session final : public d3d12proto::ServerDispatch {
 public:
-    D3d12Session(const GuestBytes &guest, D3dObjectTable &objects, WakeSignal &tenant,
+    D3d12Session(const GuestBytes &guest, D3dObjectTable &objects, LeasedObjects &leased, WakeSignal &tenant,
                  EventfdWake &fence_wake, WatchedBlocks &blocks, DriverLog &lines);
 
     void               initialize(const ImportTable &imports, D3d12HostDevice *device,
                                   D3d11HostDevice *shown_by = nullptr,
-                                  SharedSurfaces *surfaces = nullptr, SessionShares *shares = nullptr);
+                                  SharedSurfaces *surfaces = nullptr, SessionShares *shares = nullptr,
+                                  HostMemorySource *source = nullptr);
     void               shut_down();
+    void               leave_device();
+    void               leave_lost_device();
     [[nodiscard]] bool drain_within(TeardownBudget &budget);
 
     bool               knows(uint32_t command_id) const;
@@ -77,7 +89,8 @@ public:
     bool on_Destroy12(uint32_t object) override;
     bool on_Finish12(uint32_t& hresult) override;
     bool on_QueryHeapSlices12(uint32_t& supported) override;
-    bool on_CreateHeap12(uint32_t heap, const d3d12proto::HeapProperties& properties, uint32_t flags, uint64_t size, uint64_t alignment, uint64_t memory, uint64_t offset, uint32_t& hresult) override;
+    bool on_QueryHeapPlacement12(uint32_t& placed) override;
+    bool on_CreateHeap12(uint32_t heap, const d3d12proto::HeapProperties& properties, uint32_t flags, uint64_t size, uint64_t alignment, uint64_t memory, uint64_t offset, uint32_t& hresult, uint64_t& placed) override;
     bool on_CreateCommittedResource12(uint32_t resource, const d3d12proto::HeapProperties& properties, uint32_t heap_flags, const d3d12proto::ResourceDesc& desc, uint32_t state, const d3d12proto::ClearValue& clear, uint64_t address, uint32_t& hresult) override;
     bool on_CreateHeapAsync12(uint32_t heap, const d3d12proto::HeapProperties& properties, uint32_t flags, uint64_t size, uint64_t alignment, uint64_t memory, uint64_t offset) override;
     bool on_CreateCommittedResourceAsync12(uint32_t resource, const d3d12proto::HeapProperties& properties, uint32_t heap_flags, const d3d12proto::ResourceDesc& desc, uint32_t state, const d3d12proto::ClearValue& clear, uint64_t address) override;
@@ -85,6 +98,12 @@ public:
     bool on_ResourceTiling12(uint32_t resource, uint32_t& tiles, uint32_t& packed_mips, uint32_t& packed_tiles) override;
     bool on_ResourceAllocation12(const d3d12proto::ResourceDesc& desc, uint64_t& size, uint64_t& alignment) override;
     bool on_ShareResource12(uint32_t resource, uint64_t key) override;
+    bool on_ShareObject12(uint32_t object, uint64_t key) override;
+    bool on_AdoptLentImage12(uint32_t resource, uint64_t memory, const d3d12proto::ResourceDesc &desc,
+                             uint32_t row_pitch, uint32_t &hresult) override;
+    bool on_OpenObject12(uint32_t object, uint64_t key, uint64_t address, uint32_t &kind, uint32_t &dimension,
+                         uint32_t &height, uint32_t &depth_or_array, uint32_t &mip_levels, uint32_t &format,
+                         uint32_t &sample_count, uint32_t &flags, uint64_t &width, uint64_t &size) override;
     bool on_PresentResource12(uint32_t queue, uint32_t resource, uint32_t point) override;
     bool on_CreatePlacedResource12(uint32_t resource, uint32_t heap, uint64_t offset, const d3d12proto::ResourceDesc& desc, uint32_t state, const d3d12proto::ClearValue& clear, uint64_t address) override;
     bool on_CreateDescriptorHeap12(uint32_t heap, uint32_t type, uint32_t count, uint32_t flags) override;
@@ -97,7 +116,7 @@ public:
     bool on_CopyDescriptors12(const d3d12proto::DescriptorRef& destination, const d3d12proto::DescriptorRef& source, uint32_t count) override;
     bool on_CreateRootSignature12(uint32_t root, uint32_t flags, uint32_t parameter_count, const d3d12proto::RootParameter* parameters, uint32_t range_count, const d3d12proto::DescriptorRange* ranges, uint32_t sampler_count, const d3d12proto::StaticSampler* samplers) override;
     bool on_CreateCommandSignature12(uint32_t signature, uint32_t root, uint32_t byte_stride, uint32_t argument_count, const d3d12proto::IndirectArgument* arguments) override;
-    bool on_CreateGraphicsPipeline12(uint32_t pipeline, uint32_t root, const d3d12proto::GraphicsState& state, uint32_t element_count, const d3d12proto::InputElement* elements, uint32_t signature_count, const d3d12proto::SignatureEntry* signatures, const uint8_t* vs, uint64_t vs_size, const uint8_t* hs, uint64_t hs_size, const uint8_t* ds, uint64_t ds_size, const uint8_t* gs, uint64_t gs_size, const uint8_t* ps, uint64_t ps_size) override;
+    bool on_CreateGraphicsPipeline12(uint32_t pipeline, uint32_t root, const d3d12proto::GraphicsState& state, uint32_t element_count, const d3d12proto::InputElement* elements, uint32_t signature_count, const d3d12proto::SignatureEntry* signatures, uint32_t stream_out_count, const d3d12proto::StreamOutDeclaration* stream_out, uint32_t stride_count, const uint32_t* strides, uint32_t rasterized_stream, const uint8_t* vs, uint64_t vs_size, const uint8_t* hs, uint64_t hs_size, const uint8_t* ds, uint64_t ds_size, const uint8_t* gs, uint64_t gs_size, const uint8_t* ps, uint64_t ps_size, const uint8_t* ms, uint64_t ms_size, const uint8_t* as, uint64_t as_size) override;
     bool on_CreateComputePipeline12(uint32_t pipeline, uint32_t root, const uint8_t* cs, uint64_t cs_size) override;
     bool on_CreateCommandQueue12(uint32_t queue, uint32_t type, uint32_t priority, uint32_t flags) override;
     bool on_CreateCommandAllocator12(uint32_t allocator, uint32_t type) override;
@@ -109,6 +128,7 @@ public:
     bool on_UpdateTileMappings12(uint32_t queue, uint32_t resource, uint32_t region_count, const d3d12proto::TileRegion* regions, uint32_t heap, uint32_t range_count, const d3d12proto::TileRange* ranges, uint32_t flags) override;
     bool on_CopyTileMappings12(uint32_t queue, uint32_t destination, const d3d12proto::TileCoordinate& destination_start, uint32_t source, const d3d12proto::TileCoordinate& source_start, const d3d12proto::TileSize& size, uint32_t flags) override;
     bool on_CreateQueryHeap12(uint32_t heap, uint32_t type, uint32_t count) override;
+    bool on_Barrier12(uint32_t list, uint32_t count, const d3d12proto::LayoutBarrier* barriers) override;
     bool on_ResourceBarrier12(uint32_t list, uint32_t count, const d3d12proto::Barrier* barriers) override;
     bool on_SetPipelineState12(uint32_t list, uint32_t pipeline) override;
     bool on_SetRootSignature12(uint32_t list, uint32_t compute, uint32_t root) override;
@@ -129,6 +149,7 @@ public:
     bool on_DrawInstanced12(uint32_t list, uint32_t vertex_count, uint32_t instance_count, uint32_t start_vertex, uint32_t start_instance) override;
     bool on_DrawIndexedInstanced12(uint32_t list, uint32_t index_count, uint32_t instance_count, uint32_t start_index, int32_t base_vertex, uint32_t start_instance) override;
     bool on_Dispatch12(uint32_t list, uint32_t x, uint32_t y, uint32_t z) override;
+    bool on_DispatchMesh12(uint32_t list, uint32_t x, uint32_t y, uint32_t z) override;
     bool on_CopyBufferRegion12(uint32_t list, uint32_t destination, uint64_t destination_offset, uint32_t source, uint64_t source_offset, uint64_t bytes) override;
     bool on_CopyTextureRegion12(uint32_t list, const d3d12proto::CopyLocation& destination, uint32_t x, uint32_t y, uint32_t z, const d3d12proto::CopyLocation& source, uint32_t has_box, const d3d12proto::Box& box) override;
     bool on_CopyResource12(uint32_t list, uint32_t destination, uint32_t source) override;
@@ -140,7 +161,10 @@ public:
     bool on_ClearUnorderedAccessViewUint12(uint32_t list, const d3d12proto::DescriptorRef& gpu_view, const d3d12proto::DescriptorRef& cpu_view, uint32_t resource, const d3d12proto::Uint4& values, uint32_t rect_count, const d3d12proto::Rect* rects) override;
     bool on_ClearUnorderedAccessViewFloat12(uint32_t list, const d3d12proto::DescriptorRef& gpu_view, const d3d12proto::DescriptorRef& cpu_view, uint32_t resource, const d3d12proto::Float4& values, uint32_t rect_count, const d3d12proto::Rect* rects) override;
     bool on_ExecuteBundle12(uint32_t list, uint32_t bundle) override;
+    bool on_SetShadingRate12(uint32_t list, uint32_t base_rate, uint32_t combiner0, uint32_t combiner1) override;
+    bool on_SetShadingRateImage12(uint32_t list, uint32_t image) override;
     bool on_SetDepthBounds12(uint32_t list, float minimum, float maximum) override;
+    bool on_SetFrontAndBackStencilRef12(uint32_t list, uint32_t front, uint32_t back) override;
     bool on_SetPredication12(uint32_t list, uint32_t buffer, uint64_t offset, uint32_t op) override;
     bool on_SetStreamOutputTargets12(uint32_t list, uint32_t start, uint32_t count, const d3d12proto::StreamOutputView* views) override;
     bool on_GetClockOrigin12(uint32_t queue, uint64_t& ticks, uint64_t& frequency) override;
@@ -151,6 +175,16 @@ public:
     bool on_EndEvent12(uint32_t list) override;
     bool on_SetMarker12(uint32_t list, uint32_t metadata, const uint8_t* data, uint64_t data_size) override;
     bool on_CopyTiles12(uint32_t list, uint32_t resource, const d3d12proto::TileCoordinate& start, const d3d12proto::TileSize& size, uint32_t buffer, uint64_t buffer_offset, uint32_t flags) override;
+    bool on_CreateStateObject12(uint32_t object, uint32_t parent, uint32_t type, uint32_t subobject_count, const d3d12proto::StateSubobject* subobjects, uint32_t export_count, const d3d12proto::StateExport* exports, uint32_t association_count, const d3d12proto::StateAssociation* associations, const uint8_t* names, uint64_t names_size, const uint8_t* libraries, uint64_t libraries_size, uint32_t& hresult) override;
+    bool on_StateObjectIdentifier12(uint32_t object, const uint8_t* name, uint64_t name_size, uint32_t& found, d3d12proto::ShaderIdentifier& identifier) override;
+    bool on_StateObjectStackSize12(uint32_t object, const uint8_t* name, uint64_t name_size, uint32_t& size) override;
+    bool on_SetPipelineStackSize12(uint32_t object, uint32_t bytes) override;
+    bool on_AccelerationStructurePrebuild12(uint32_t type, uint32_t flags, uint32_t num_descs, uint32_t layout, uint32_t geometry_count, const d3d12proto::RaytracingGeometry* geometries, uint32_t& hresult, uint64_t& result_bytes, uint64_t& scratch_bytes, uint64_t& update_scratch_bytes) override;
+    bool on_BuildAccelerationStructure12(uint32_t list, uint32_t type, uint32_t flags, uint32_t num_descs, uint32_t layout, uint64_t destination, uint64_t source, uint64_t scratch, uint64_t instances, uint32_t geometry_count, const d3d12proto::RaytracingGeometry* geometries, uint32_t postbuild_count, const d3d12proto::RaytracingPostbuild* postbuilds) override;
+    bool on_EmitAccelerationStructurePostbuild12(uint32_t list, uint32_t type, uint64_t destination, uint32_t source_count, const uint64_t* sources) override;
+    bool on_CopyAccelerationStructure12(uint32_t list, uint64_t destination, uint64_t source, uint32_t mode) override;
+    bool on_SetStateObject12(uint32_t list, uint32_t object) override;
+    bool on_DispatchRays12(uint32_t list, const d3d12proto::RayTable& raygen, const d3d12proto::RayTable& miss, const d3d12proto::RayTable& hit, const d3d12proto::RayTable& callable, uint32_t width, uint32_t height, uint32_t depth) override;
     bool on_ExecuteIndirect12(uint32_t list, uint32_t signature, uint32_t max_count, uint32_t argument_buffer, uint64_t argument_offset, uint32_t count_buffer, uint64_t count_offset) override;
 
     bool invariants_hold() const;
@@ -158,17 +192,24 @@ public:
 private:
     bool                       create_heap(uint32_t heap, const d3d12proto::HeapProperties &properties, uint32_t flags,
                                            uint64_t size, uint64_t alignment, uint64_t memory, uint64_t offset,
-                                           uint32_t &hresult);
+                                           uint32_t &hresult, uint64_t &placed);
     bool                       create_committed(uint32_t resource, const d3d12proto::HeapProperties &properties,
                                                 uint32_t heap_flags, const d3d12proto::ResourceDesc &desc,
                                                 uint32_t state, const d3d12proto::ClearValue &clear,
                                                 uint64_t address, uint32_t &hresult);
+    uint64_t                   committed_bytes(const d3d12proto::ResourceDesc &desc,
+                                               const D3D12_RESOURCE_DESC &made) const;
     void                       refresh_progress();
     ID3D12GraphicsCommandList *list(uint32_t id) const;
     bool                       cpu_handle(const d3d12proto::DescriptorRef &ref, uint32_t type, size_t &handle) const;
+    bool                       written_view(const d3d12proto::DescriptorRef &ref) const;
     bool                       gpu_handle(const d3d12proto::DescriptorRef &ref, uint64_t &handle) const;
     bool                       place(uint32_t id, IUnknown *resource, uint64_t address, uint64_t width);
-    bool                       window_heap(uint32_t heap, uint64_t size, uint64_t memory, uint64_t base);
+    ID3D12Resource            *viewed_by_d3d12(uint64_t key, IUnknown *opened);
+    bool                       window_heap(uint32_t heap, uint64_t size, uint64_t memory, uint64_t base, uint32_t &hresult);
+    bool                       native_heap(uint32_t heap, uint64_t size, uint64_t alignment, uint32_t &hresult,
+                                           uint64_t &placed);
+    bool                       decide_placement() const;
     bool                       kept(uint32_t id, D3dObjectKind kind, IUnknown *made);
     bool                       placed(uint32_t resource, ID3D12Heap *in, uint64_t offset,
                                       const d3d12proto::ResourceDesc &desc, uint32_t state,
@@ -191,6 +232,14 @@ private:
                                                const d3d12proto::Box &region) const;
     bool                       tiles_hold(ID3D12Resource *resource, const d3d12proto::TileCoordinate &start,
                                           const d3d12proto::TileSize &size) const;
+    bool                       raytracing_ready(ID3D12Device5 *&device5) const;
+    bool                       guarded_postbuilds(uint32_t list, bool compacts, uint32_t count,
+                                                  const d3d12proto::RaytracingPostbuild *postbuilds,
+                                                  d3d12new::PostbuildDesc *made);
+    bool                       retain_geometry(uint32_t list, uint32_t count,
+                                               const d3d12proto::RaytracingGeometry *geometries);
+    bool                       ray_table(uint32_t list_id, const d3d12proto::RayTable &from, bool record,
+                                         d3d12new::GpuRangeAndStride &made);
     bool                       drain();
     bool                       wait_for(uint64_t mark);
     template <typename Values>
@@ -217,28 +266,37 @@ private:
     void                       settle_pipelines();
 
     const ImportTable     *imports_;
+    HostMemorySource      *source_;
+    bool                   placing_;
     D3d12HostDevice       *device_;
     D3d11HostDevice       *shown_by_;
     SessionShares         *shares_;
     WakeSignal            &tenant_;
     bool                   joined_;
+    bool                   left_lost_;
     SharedSurfaces        *surfaces_;
     D3dObjectTable        &objects_;
+    LeasedObjects       &leased_;
     WatchedBlocks         &blocks_;
     D3d12AddressMap        addresses_;
+    D3d12IndirectTable     indirect_table_;
     D3d12QueueProgress     progress_;
+    GpuWorkWindow          work_window_;
     D3d12BlockHeaps        block_heaps_;
     D3d12ObjectHolds       holds_;
     D3d12DescriptorHolds   descriptors_;
     D3d12AllocatorMarks    allocators_;
     D3d12QueryHeaps        queries_;
-    D3d12RefusedCreates    refused_creates_;
+    D3dRefusedCreates    refused_creates_;
     D3d12ViewWriter        views_;
     D3d12PipelineBuilder   pipelines_;
     D3d12PipelineCompiles  compiles_;
     D3d12Presentation      presentation_;
     D3d12TileUpdate        tile_update_;
     D3d12RetainMemo        retained_;
+    D3d12StateObjectBuilder state_builder_;
+    D3d12RaytracingInputs  inputs_;
+    D3d12AccelerationSizes sizes_;
     uint32_t               removed_;
     DriverLog             &lines_;
     CommandRefusal         refusal_;
@@ -251,6 +309,8 @@ private:
     uint64_t               drain_commands_;
     uint64_t               drain_mark_;
     bool                   drain_marked_;
+    LogCadence             oversized_heaps_;
+    LogCadence             refused_heaps_;
 
     friend struct D3d12SessionProbe;
 };

@@ -12,9 +12,9 @@
 namespace av {
 
 D3d12HostDevice::D3d12HostDevice(DriverLog &lines)
-    : runtime_(nullptr), uuid_(), tenant_heap_(),
+    : lines_(lines), runtime_(nullptr), uuid_(), tenant_heap_(),
       renewal_(tenant_heap_, lines), shown_by_(nullptr),
-      device_(nullptr), capabilities_(), dispatch_limit_(), frames_()
+      device_(nullptr), capabilities_(), dispatch_limit_(), frames_(), imports_(lines)
 {
     AV_SCOPE("D3d12HostDevice::D3d12HostDevice");
 }
@@ -32,10 +32,12 @@ bool D3d12HostDevice::open(const D3dRuntime &runtime, const uint8_t *uuid)
     runtime_ = &runtime;
     uuid_ = DeviceUuid(uuid);
     if (!make()) {
+        lines_.write("the host Direct3D 12 device could not be made on this GPU");
         runtime_ = nullptr;
         return false;
     }
     capabilities_.measure(*device_);
+    if (!runtime.translates_indirect_addresses()) capabilities_.withhold_raytracing();
     dispatch_limit_.measure(*device_);
     return true;
 }
@@ -44,6 +46,7 @@ void D3d12HostDevice::close()
 {
     AV_SCOPE("D3d12HostDevice::close");
     frames_.bind(nullptr);
+    imports_.release();
     if (device_ != nullptr) device_->Release();
     device_ = nullptr;
     runtime_ = nullptr;
@@ -56,6 +59,7 @@ bool D3d12HostDevice::make()
     if (FAILED(runtime_->create_device12(uuid_.raw(), made)) || made == nullptr) return false;
     device_ = static_cast<ID3D12Device *>(made);
     frames_.bind(device_);
+    if (!imports_.connect(device_)) lines_.write("the host Direct3D 12 device takes no image another API shares");
     return true;
 }
 
@@ -114,9 +118,16 @@ bool D3d12HostDevice::remake()
     ID3D12Device *const old = device_;
     device_ = nullptr;
     if (old != nullptr) runtime_->abandon_waits(old);
+    imports_.release();
     const bool made = make();
     if (old != nullptr) old->Release();
     return made;
+}
+
+ID3D12Resource *D3d12HostDevice::adopt_image(OwnedFd &descriptor, const SharedImageShape &shape)
+{
+    AV_SCOPE("D3d12HostDevice::adopt_image");
+    return device_ != nullptr ? imports_.adopt(descriptor, shape) : nullptr;
 }
 
 bool D3d12HostDevice::lose()
@@ -170,10 +181,40 @@ ID3D12Heap *D3d12HostDevice::import_dmabuf_heap(void *address, int fd, uint64_t 
     return static_cast<ID3D12Heap *>(heap);
 }
 
+ID3D12Heap *D3d12HostDevice::create_exported_heap(const D3D12_HEAP_DESC &desc, OwnedFd &descriptor) const
+{
+    AV_SCOPE("D3d12HostDevice::create_exported_heap");
+    descriptor.hold(-1);
+    if (device_ == nullptr || runtime_ == nullptr) return nullptr;
+    void *heap = nullptr;
+    int   fd = -1;
+    if (FAILED(runtime_->create_exported_heap(device_, &desc, fd, heap))) return nullptr;
+    descriptor.hold(fd);
+    return static_cast<ID3D12Heap *>(heap);
+}
+
+bool D3d12HostDevice::exports_heaps() const
+{
+    AV_SCOPE("D3d12HostDevice::exports_heaps");
+    return device_ != nullptr && runtime_ != nullptr && runtime_->exports_heaps();
+}
+
 bool D3d12HostDevice::export_image(ID3D12Resource *resource, Vkd3dImageExport &image) const
 {
     AV_SCOPE("D3d12HostDevice::export_image");
     return runtime_ != nullptr && SUCCEEDED(runtime_->export_image(resource, image));
+}
+
+bool D3d12HostDevice::translates_indirect_addresses() const
+{
+    AV_SCOPE("D3d12HostDevice::translates_indirect_addresses");
+    return runtime_ != nullptr && runtime_->translates_indirect_addresses();
+}
+
+void D3d12HostDevice::set_indirect_va_table(ID3D12GraphicsCommandList *list, uint64_t table) const
+{
+    AV_SCOPE("D3d12HostDevice::set_indirect_va_table");
+    if (runtime_ != nullptr) runtime_->set_indirect_va_table(list, table);
 }
 
 bool D3d12HostDevice::export_fence(ID3D12Fence *fence, OwnedFd &descriptor) const

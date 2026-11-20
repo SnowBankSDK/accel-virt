@@ -12,13 +12,13 @@ extern "C" {
 
 typedef void (*AvHostRoutine)(void *context);
 
-#define AV_DEVICE_DOORBELLS 64u
+#define AV_DEVICE_DOORBELLS 256u
 #define AV_DEVICE_DOORBELL_PAGE 4096u
 #define AV_DEVICE_DOORBELL_SHM_ID 0x72u
 #define AV_DEVICE_FENCE_QUEUE_FIRST 2u
-#define AV_DEVICE_DISPLAY_LINE 64u
-#define AV_DEVICE_PRESENT_LINE 65u
-#define AV_DEVICE_INTERRUPT_LINES 66u
+#define AV_DEVICE_DISPLAY_LINE AV_DEVICE_DOORBELLS
+#define AV_DEVICE_PRESENT_LINE (AV_DEVICE_DOORBELLS + 1u)
+#define AV_DEVICE_INTERRUPT_LINES (AV_DEVICE_DOORBELLS + 2u)
 
 typedef struct AvGpuProperties {
     uint32_t vendor_id;
@@ -94,6 +94,8 @@ typedef struct AvHostOps {
     void (*raise_fence_interrupt)(void *opaque, uint32_t line);
     size_t (*read_request)(void *opaque, void *request, size_t offset, uint8_t *buffer, size_t size);
     void (*respond)(void *opaque, void *request, const uint8_t *bytes, size_t size);
+    void *(*keep_request)(void *opaque, void *request);
+    void (*release_request)(void *opaque, void *kept, int answered);
     int (*resource_exists)(void *opaque, uint32_t id);
     void *(*create_recording)(void *opaque, const char *path);
     int (*append_recording)(void *opaque, void *file, const uint8_t *bytes, size_t size);
@@ -147,13 +149,15 @@ typedef struct AvDevice AvDevice;
 
 void av_device_trace_start(AvMainLoopScheduler schedule);
 
+void av_device_close_implicit_layers(void);
+
 AvDevice *av_device_create(const AvHostOps *ops, const AvExecutorOps *executor, const char *host_gpu,
                              int base_blobs, const AvRecordingOptions *recording, const char *renderer,
                              const char *executor_path, uint32_t vram_reserve_mib, uint32_t host_ram_reserve_mib,
                              char *error, size_t error_size);
 int av_device_control(AvDevice *device, void *request, uint32_t type);
 int av_device_export_image(AvDevice *device, uint64_t key, AvExportedImage *image);
-int av_device_export_head(AvDevice *device, uint32_t head, uint64_t key, AvExportedImage *image);
+int av_device_show_frame(AvDevice *device, uint32_t head, uint64_t key);
 int av_device_read_image(AvDevice *device, uint64_t key, void *pixels, uint32_t stride, uint32_t width,
                           uint32_t height);
 int av_device_post_frame(AvDevice *device, uint32_t head, uint32_t frame, uint64_t key);
@@ -161,6 +165,7 @@ uint32_t av_device_capsets(AvDevice *device);
 int av_device_pci_identity(AvDevice *device, AvPciIdentity *identity);
 int av_device_set_modes(AvDevice *device, const char *modes, uint32_t *width, uint32_t *height);
 int av_device_set_refresh(AvDevice *device, uint32_t millihz);
+void av_device_set_hybrid(AvDevice *device, uint32_t role);
 void av_device_status(AvDevice *device, uint8_t status);
 void av_device_reset(AvDevice *device);
 void av_device_renderer_lost(AvDevice *device);

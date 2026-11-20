@@ -39,6 +39,7 @@ class Param:
     optional: bool = True
     lent: bool = False
     element: str = ""
+    len_bytes: bool = False
 
     @property
     def is_out(self) -> bool:
@@ -55,6 +56,7 @@ class Command:
     cmd_id: int = 0
     since: str = ""
     is_async: bool = False
+    info_words: dict[int, str] = field(default_factory=dict)
 
     @property
     def returns_handle(self) -> bool:
@@ -83,3 +85,4 @@ class Registry:
     handles: set[str] = field(default_factory=set)
     structs: dict[str, list[tuple[str, CType]]] = field(default_factory=dict)
     carried_extensions: list[str] = field(default_factory=list)
+    typedefs: dict[str, str] = field(default_factory=dict)

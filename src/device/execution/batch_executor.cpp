@@ -21,7 +21,8 @@ BatchExecutor::BatchExecutor(Host &host, ContextExecutor &executor, BlobImports 
                              FenceReporter &fences, WireRecorder &recorder, uint32_t context)
     : host_(host), executor_(executor), imports_(imports), staging_(staging), fences_(fences),
       recorder_(recorder), context_(context), fault_(FaultCode::none), reply_(),
-      batches_(0u), commands_(0u), skipped_(0u), gathered_(host), abandoned_(false)
+      batches_(0u), commands_(0u), skipped_(0u), gathered_(host), abandoned_(false),
+      restore_id_(0u), restore_size_(0u), restore_{}
       {
           AV_SCOPE("BatchExecutor::BatchExecutor");
       }
@@ -56,16 +57,29 @@ void BatchExecutor::stop()
     gathered_.clear();
 }
 
+void *BatchExecutor::leave_thread() const
+{
+    AV_SCOPE("BatchExecutor::leave_thread");
+    return executor_.leave_thread();
+}
+
+void BatchExecutor::thread_joined(void *left) const
+{
+    AV_SCOPE("BatchExecutor::thread_joined");
+    executor_.thread_joined(left);
+}
+
 void BatchExecutor::abandon()
 {
     AV_SCOPE("BatchExecutor::abandon");
-    __atomic_store_n(&abandoned_, true, __ATOMIC_RELEASE);
+    __atomic_store_n(&abandoned_, true, __ATOMIC_SEQ_CST);
+    executor_.wake();
 }
 
 bool BatchExecutor::abandoned() const
 {
     AV_SCOPE("BatchExecutor::abandoned");
-    return __atomic_load_n(&abandoned_, __ATOMIC_ACQUIRE);
+    return __atomic_load_n(&abandoned_, __ATOMIC_SEQ_CST);
 }
 
 bool BatchExecutor::started() const
@@ -107,6 +121,8 @@ Status BatchExecutor::run(const RingWindow &ring, uint64_t head, const BatchHead
     }
     batches_++;
     recorder_.record_batch(context_, batch.fence_id(), staging_.payload(), static_cast<uint32_t>(length));
+    if (executor_.enter(this)) restore();
+    ScopeExit gated([this] { executor_.leave(); });
     CommandStream       stream(staging_.payload(), length);
     CommandHeader       header;
     const uint8_t      *payload = nullptr;
@@ -202,12 +218,47 @@ Status BatchExecutor::run_whole(const CommandHeader &header, const uint8_t *payl
         fault_ = transport ? FaultCode::command_framing : fault_for(status);
         return status;
     }
+    if (!transport && header.restores()) remember(header, payload, size);
     constexpr uint64_t commands_per_heartbeat = 256u;
     if (commands_ % commands_per_heartbeat == 0u) fences_.heartbeat();
     commands_++;
     answered = answered || replying;
     answer = replying ? produced : answer;
     return Status::ok;
+}
+
+bool BatchExecutor::session_reached(uint64_t end, uint64_t deadline)
+{
+    AV_SCOPE("BatchExecutor::session_reached");
+    host_.require_worker("BatchExecutor::session_reached");
+    while (!abandoned()) {
+        if (executor_.session_reached(end, deadline)) return true;
+        if (executor_.session_gone() || host_.monotonic_nanoseconds() >= deadline) return false;
+    }
+    return false;
+}
+
+void BatchExecutor::consumed(uint64_t head)
+{
+    AV_SCOPE("BatchExecutor::consumed");
+    executor_.consumed(head);
+}
+
+void BatchExecutor::remember(const CommandHeader &header, const uint8_t *payload, size_t size)
+{
+    AV_SCOPE("BatchExecutor::remember");
+    if (size > restore_capacity) return;
+    restore_id_ = header.id();
+    restore_size_ = size;
+    if (size != 0u) __builtin_memcpy(restore_, payload, size);
+}
+
+void BatchExecutor::restore()
+{
+    AV_SCOPE("BatchExecutor::restore");
+    if (restore_id_ == 0u) return;
+    size_t produced = 0u;
+    static_cast<void>(executor_.execute(restore_id_, restore_, restore_size_, nullptr, 0u, produced));
 }
 
 void BatchExecutor::write_reply(uint64_t fence_id, size_t answer)

@@ -14,14 +14,20 @@
 #include "miniport/scheduling/execution_node.hpp"
 #include "core/support/status.hpp"
 #include "miniport/virtio/virtio_gpu_device.hpp"
+#include "harness/virtio/fake_doorbell_pages.hpp"
 #include "harness/virtio/fake_register_bytes.hpp"
 #include "harness/virtio/fake_virtqueue_device.hpp"
 #include "harness/virtio/mapped_virtio_function.hpp"
 #include "harness/dxgkrnl/fake_handle_table.hpp"
 #include "core/trace/state_writer.hpp"
 #include "harness/framework/test_registry.hpp"
+#include "harness/guest/mock_kmt.hpp"
+#include "guest/transport/host_watch.hpp"
+#include "guest/transport/transport_ring.hpp"
+#include "proto/submission/fault_code.hpp"
 #include "harness/platform/violation.hpp"
 #include "proto/context/capset_info.hpp"
+#include "proto/context/context_capacity.hpp"
 #include "proto/context/gl_context_options.hpp"
 #include "proto/context/gpu_identity.hpp"
 #include "proto/context/protocol_version.hpp"
@@ -30,6 +36,7 @@
 #include "proto/resources/allocation_descriptor.hpp"
 #include "proto/escape/context_views_record.hpp"
 #include "proto/escape/host_window_record.hpp"
+#include "proto/escape/release_record.hpp"
 #include "proto/resources/host_blob_id.hpp"
 #include "proto/resources/host_memory_request.hpp"
 #include "proto/submission/fence_page.hpp"
@@ -38,6 +45,8 @@
 #include "proto/virtio_gpu/gpu_response.hpp"
 
 #include <cstdint>
+#include <memory>
+#include <vector>
 #include <cstdio>
 #include <cstring>
 #include <optional>
@@ -130,7 +139,7 @@ constexpr std::uint8_t  uuid[av::GpuIdentity::uuid_bytes] = {};
 
 CapsetInfo capset()
 {
-    return CapsetInfo(av::ProtocolVersion(1u, 0u), 0x7u, 64u, 12u, 20u, 0u,
+    return CapsetInfo(av::ProtocolVersion(1u, 0u), 0x7u, av::ContextCapacity::contexts, 12u, 20u, 0u,
                       av::GpuIdentity(0u, 0u, 0u, uuid, 0u, 0u, "gpu"));
 }
 
@@ -330,6 +339,10 @@ public:
     void raise(std::uint64_t completed, std::uint64_t progress, std::uint64_t raised)
     {
         static_cast<void>(FencePage(completed, progress).raising(raised).encode(fence_page(), FencePage::encoded_size));
+    }
+    void process_publishes(std::uint64_t tail, std::uint32_t slot = 0u)
+    {
+        std::memcpy(ring_memory(slot) + 8u, &tail, sizeof tail);
     }
     void serve()
     {
@@ -675,16 +688,105 @@ TEST(av_context_table_bind, a_setup_the_device_never_answers_keeps_its_pages_out
   CHECK_STATUS(fixture.bind(&first_context), Status::not_supported);
   CHECK_EQ(fixture.table().bound(), 0u);
   CHECK_EQ(fixture.platform().process_mappings(), 0u);
-  CHECK_EQ(fixture.platform().mapped_frames(), 0u);
   CHECK_EQ(fixture.platform().owned_page_blocks(), 3u);
   CHECK(fixture.table().invariants_hold());
-  CHECK_EQ(fixture.platform().reclaim_page_blocks(), 3u); }
+  const std::uint32_t asked = host.queue().requests();
+  CHECK_STATUS(fixture.bind(&second_context), Status::not_supported);
+  CHECK_EQ(host.queue().requests(), asked);
+  CHECK_EQ(fixture.table().bound(), 0u);
+  CHECK_EQ(fixture.platform().owned_page_blocks(), 3u);
+  CHECK(fixture.table().invariants_hold());
+  host.delay_next(0u, 0u);
+  CHECK_EQ(host.queue().respond_all(0x1100u), 1u);
+  CHECK_STATUS(fixture.bind(&second_context), Status::ok);
+  CHECK_EQ(host.count_of(ctx_destroy_type), 1u);
+  CHECK_EQ(fixture.table().doorbell_of(&second_context), 0u);
+  CHECK_EQ(fixture.platform().owned_page_blocks(), 3u);
+  CHECK(fixture.table().invariants_hold());
+  CHECK_STATUS(fixture.table().unbind(&second_context, &fixture.device()), Status::ok);
+  CHECK_EQ(fixture.platform().mapped_frames(), 0u);
+  CHECK_EQ(fixture.platform().owned_page_blocks(), 0u); }
+
+TEST(av_context_table_unbind, a_teardown_the_device_answers_late_is_finished_later_and_its_doorbell_and_pages_wait_for_it)
+{ Fixture fixture;
+  Host host(fixture.mapped());
+  std::optional<ProcessAllocation> other;
+  other.emplace(fixture.platform(), fixture.allocations(), fixture.handles(), AllocationKind::context_ring, page);
+  const AvContextRecord second(SubApi::vulkan, 12u, other->handle(), page);
+  CHECK_STATUS(fixture.bind(&first_context), Status::ok);
+  CHECK_STATUS(fixture.bind(&second_context, second), Status::ok);
+  host.delay_next(unref_type, ~std::uint64_t{0});
+  CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok);
+  CHECK(fixture.platform().logged_line("left a control request unanswered"));
+  CHECK(fixture.platform().logged_line("keeps its doorbell and pages"));
+  CHECK_EQ(host.count_of(ctx_destroy_type), 1u);
+  CHECK_EQ(host.queue().pending_type(), unref_type);
+  CHECK_EQ(fixture.table().bound(), 1u);
+  CHECK_EQ(fixture.platform().owned_page_blocks(), 6u);
+  CHECK(fixture.table().invariants_hold());
+  const std::uint32_t asked = host.queue().requests();
+  CHECK_STATUS(fixture.table().unbind(&second_context, &fixture.device()), Status::ok);
+  CHECK_EQ(host.queue().requests(), asked);
+  CHECK_EQ(fixture.table().bound(), 0u);
+  CHECK_EQ(fixture.platform().process_mappings(), 0u);
+  CHECK_EQ(fixture.platform().owned_page_blocks(), 6u);
+  CHECK_STATUS(fixture.bind(&first_context), Status::not_supported);
+  CHECK_EQ(host.queue().requests(), asked);
+  CHECK_EQ(fixture.platform().owned_page_blocks(), 6u);
+  CHECK(fixture.table().invariants_hold());
+  host.delay_next(0u, 0u);
+  CHECK_EQ(host.queue().respond_all(0x1100u), 1u);
+  CHECK_STATUS(fixture.bind(&first_context), Status::ok);
+  CHECK_EQ(host.count_of(ctx_destroy_type), 2u);
+  CHECK_EQ(host.count_of(unref_type), 7u);
+  CHECK_EQ(fixture.table().doorbell_of(&first_context), 0u);
+  CHECK_EQ(fixture.platform().owned_page_blocks(), 3u);
+  CHECK(fixture.table().invariants_hold());
+  CHECK_STATUS(fixture.bind(&second_context, second), Status::ok);
+  CHECK_EQ(fixture.table().doorbell_of(&second_context), 1u);
+  CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok);
+  CHECK_STATUS(fixture.table().unbind(&second_context, &fixture.device()), Status::ok);
+  CHECK_EQ(fixture.platform().mapped_frames(), 0u);
+  CHECK_EQ(fixture.platform().owned_page_blocks(), 0u); }
+
+TEST(av_context_table_unbind, a_release_the_device_refuses_keeps_the_pages_until_it_is_granted)
+{ Fixture fixture;
+  Host host(fixture.mapped());
+  CHECK_STATUS(fixture.bind(&first_context), Status::ok);
+  host.refuse_next(unref_type);
+  CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok);
+  CHECK_EQ(fixture.table().bound(), 0u);
+  CHECK_EQ(fixture.platform().process_mappings(), 0u);
+  CHECK_EQ(fixture.platform().owned_page_blocks(), 3u);
+  CHECK_EQ(host.count_of(unref_type), 1u);
+  CHECK(fixture.table().invariants_hold());
+  CHECK_STATUS(fixture.bind(&first_context), Status::ok);
+  CHECK_EQ(host.count_of(unref_type), 4u);
+  CHECK_EQ(fixture.table().doorbell_of(&first_context), 0u);
+  CHECK_EQ(fixture.platform().owned_page_blocks(), 3u);
+  CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok);
+  CHECK_EQ(fixture.platform().owned_page_blocks(), 0u); }
+
+TEST(av_context_table_abandon_all, a_reset_device_gives_back_what_a_late_teardown_still_held)
+{ Fixture fixture;
+  Host host(fixture.mapped());
+  CHECK_STATUS(fixture.bind(&first_context), Status::ok);
+  host.refuse_next(unref_type);
+  CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok);
+  CHECK_EQ(fixture.platform().owned_page_blocks(), 3u);
+  fixture.table().abandon_all();
+  CHECK_EQ(fixture.platform().mapped_frames(), 0u);
+  CHECK_EQ(fixture.platform().owned_page_blocks(), 0u);
+  CHECK(fixture.table().invariants_hold());
+  CHECK_STATUS(fixture.bind(&first_context), Status::ok);
+  CHECK_EQ(fixture.table().doorbell_of(&first_context), 0u);
+  CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok); }
 
 TEST(av_context_table_bind, a_record_the_capset_forbids_is_refused_before_the_device_is_asked)
 { Fixture fixture;
   Host host(fixture.mapped());
   const AvContextRecord opengl(SubApi::opengl, 12u, fixture.ring().handle(), page);
-  const CapsetInfo vulkan_only(av::ProtocolVersion(1u, 0u), 0x1u, 64u, 12u, 20u, 0u,
+  const CapsetInfo vulkan_only(av::ProtocolVersion(1u, 0u), 0x1u, av::ContextCapacity::contexts, 12u, 20u, 0u,
                                av::GpuIdentity(0u, 0u, 0u, uuid, 0u, 0u, "gpu"));
   CHECK_STATUS(fixture.table().bind(&first_context, opengl, fixture.device(),
                                     fixture.mapped().function().doorbells(), vulkan_only),
@@ -722,6 +824,94 @@ TEST(av_context_table_unbind, a_device_that_stopped_answering_still_releases_the
   CHECK_EQ(fixture.platform().mapped_frames(), 0u);
   CHECK_EQ(fixture.platform().process_mappings(), 0u);
   CHECK_EQ(fixture.platform().reclaim_page_blocks(), 3u); }
+
+namespace {
+
+class ContextLedgerHost {
+public:
+    explicit ContextLedgerHost(av::MappedVirtioFunction &mapped) : queue_(mapped.queue_device(0u)), mapped_(mapped)
+    { mapped.platform().on_stall(&ContextLedgerHost::stall, this); }
+    ~ContextLedgerHost() { mapped_.platform().on_stall(nullptr, nullptr); }
+
+    std::uint32_t live() const { return live_count_; }
+    std::uint32_t refused() const { return refused_; }
+    std::uint32_t destroyed() const { return destroyed_; }
+
+private:
+    static constexpr std::uint32_t ledger_size = 1u << 17u;
+
+    static void stall(void *context)
+    {
+        auto *const host = static_cast<ContextLedgerHost *>(context);
+        static_cast<void>(host->queue_.answer_all(host->request_, sizeof host->request_, &ContextLedgerHost::answer,
+                                                  host));
+    }
+    static std::uint32_t answer(void *context, const std::uint8_t *request, std::uint32_t length, std::uint8_t *reply,
+                                std::uint32_t room)
+    {
+        auto *const   host = static_cast<ContextLedgerHost *>(context);
+        std::uint32_t type = 0u;
+        std::uint32_t id = 0u;
+        if (length >= 20u) {
+            std::memcpy(&type, request, sizeof type);
+            std::memcpy(&id, request + 16u, sizeof id);
+        }
+        const std::uint32_t at = id % ledger_size;
+        const bool          conflict = type == ctx_create_type && host->live_[at];
+        if (type == ctx_create_type && !conflict) {
+            host->live_[at] = true;
+            host->live_count_++;
+        }
+        if (type == ctx_destroy_type && host->live_[at]) {
+            host->live_[at] = false;
+            host->live_count_--;
+            host->destroyed_++;
+        }
+        if (conflict) host->refused_++;
+        GpuResponse response;
+        response.set(conflict ? GpuResponse::err_invalid_context_id : GpuResponse::ok_nodata);
+        const std::uint32_t written = room < response.length() ? room : static_cast<std::uint32_t>(response.length());
+        if (reply != nullptr) std::memcpy(reply, response.bytes(), written);
+        return written;
+    }
+
+    av::FakeVirtqueueDevice   queue_;
+    av::MappedVirtioFunction &mapped_;
+    bool                      live_[ledger_size] = {};
+    std::uint32_t             live_count_ = 0u;
+    std::uint32_t             refused_ = 0u;
+    std::uint32_t             destroyed_ = 0u;
+    std::uint8_t              request_[0x10000u] = {};
+};
+
+void fill_requests_sent_without_waiting(av::VirtioGpuDevice &device)
+{
+    std::uint8_t narrow[32] = {0x04u, 0x01u};
+    std::uint8_t wide[200] = {0x04u, 0x01u};
+    for (std::uint32_t slot = 0u; slot < av::GpuCommandQueue::slot_count; slot++)
+        CHECK_STATUS(device.send_control(narrow, sizeof narrow), Status::ok);
+    CHECK_STATUS(device.send_control(wide, sizeof wide), Status::ok);
+    CHECK_STATUS(device.send_control(narrow, sizeof narrow), Status::no_space);
+}
+
+}
+
+TEST(av_context_table_unbind, a_control_queue_full_of_requests_sent_without_waiting_still_destroys_on_the_device)
+{ Fixture fixture;
+  auto *const             host = new ContextLedgerHost(fixture.mapped());
+  constexpr std::uint32_t rounds = 2u * av::AvContextBinding::generations + 8u;
+  for (std::uint32_t round = 0u; round < rounds; round++) {
+      CHECK_STATUS(fixture.bind(&first_context), Status::ok);
+      CHECK_EQ(fixture.table().doorbell_of(&first_context), 0u);
+      fill_requests_sent_without_waiting(fixture.device());
+      CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok);
+      CHECK_EQ(host->live(), 0u);
+  }
+  CHECK_EQ(host->destroyed(), rounds);
+  CHECK_EQ(host->refused(), 0u);
+  CHECK_EQ(fixture.table().bound(), 0u);
+  CHECK(fixture.table().invariants_hold());
+  delete host; }
 
 TEST(av_context_table_abandon_all, a_reset_device_serves_and_accepts_nothing_until_unbound)
 { Fixture fixture;
@@ -1507,7 +1697,7 @@ TEST(av_context_table_report, writes_each_live_context_its_memory_and_its_chunks
   std::snprintf(expected, sizeof expected,
                 "av_context_table/0 busy=false bound=1\n"
                 "av_context_table/0/av_context/0 handle=0x%016llX doorbell=0 ring_order=12 name=0x%016llX"
-                " ring_view=%llu reply_view=%llu state=2 context_id=1 completed=0 live=true lost=false"
+                " ring_view=%llu reply_view=%llu state=2 context_id=1 completed=0 live=true lane=false lost=false"
                 " wakes=false raised=0 chunks=1",
                 hex_of(&first_context), hex_of(fixture.ring().allocation()),
                 static_cast<unsigned long long>(fixture.memory().ring_view()),
@@ -1572,7 +1762,7 @@ constexpr std::size_t options_offset = setup_offset + 32u;
 
 CapsetInfo current_capset()
 {
-    return CapsetInfo(av::ProtocolVersion(av::ProtocolVersion::current_major, av::ProtocolVersion::current_minor), 0x7u, 64u, 12u, 20u, 0u,
+    return CapsetInfo(av::ProtocolVersion(av::ProtocolVersion::current_major, av::ProtocolVersion::current_minor), 0x7u, av::ContextCapacity::contexts, 12u, 20u, 0u,
                       av::GpuIdentity(0u, 0u, 0u, uuid, 0u, 0u, "gpu"));
 }
 
@@ -1845,8 +2035,8 @@ TEST(av_context_table_kick, rings_a_live_context_s_doorbell_and_nothing_else)
   Host host(fixture.mapped());
   CHECK_STATUS(fixture.bind(&first_context), Status::ok);
   fixture.platform().set_irql(Irql::dispatch);
-  fixture.table().kick(&first_context);
-  fixture.table().kick(&second_context);
+  static_cast<void>(fixture.table().follow(&first_context, 1u));
+  static_cast<void>(fixture.table().follow(&second_context, 1u));
   fixture.platform().set_irql(Irql::passive);
   CHECK_EQ(fixture.mapped().function().doorbells().rings(0u), 1u);
   std::uint64_t tail = 0u;
@@ -1859,74 +2049,14 @@ TEST(av_context_table_kick, rings_a_live_context_s_doorbell_and_nothing_else)
   fixture.serve();
   const std::uint32_t rings = fixture.mapped().function().doorbells().rings(0u);
   fixture.platform().set_irql(Irql::dispatch);
-  fixture.table().kick(&first_context);
+  static_cast<void>(fixture.table().follow(&first_context, 1u));
   fixture.platform().set_irql(Irql::passive);
   CHECK_EQ(fixture.mapped().function().doorbells().rings(0u), rings);
   CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok);
   fixture.platform().set_irql(Irql::dispatch);
-  fixture.table().kick(&first_context);
+  static_cast<void>(fixture.table().follow(&first_context, 1u));
   fixture.platform().set_irql(Irql::passive);
   CHECK_EQ(fixture.mapped().function().doorbells().rings(0u), rings); }
-
-TEST(av_context_table_release_batch, releases_batches_in_ring_order_and_holds_one_that_arrived_early)
-{ Fixture fixture;
-  Host host(fixture.mapped());
-  CHECK_STATUS(fixture.bind(&first_context), Status::ok);
-  std::uint64_t awaited = 0u;
-  fixture.platform().set_irql(Irql::dispatch);
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(2u, 32u, 64u), awaited), Status::ok);
-  CHECK_EQ(awaited, 2u);
-  fixture.platform().set_irql(Irql::passive);
-  CHECK_EQ(fixture.mapped().function().doorbells().rings(0u), 0u);
-  fixture.platform().set_irql(Irql::dispatch);
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(1u, 0u, 32u), awaited), Status::ok);
-  CHECK_EQ(awaited, 1u);
-  fixture.platform().set_irql(Irql::passive);
-  CHECK_EQ(fixture.mapped().function().doorbells().rings(0u), 2u);
-  std::uint64_t tail = 0u;
-  std::memcpy(&tail, fixture.ring_memory() + 8u, sizeof tail);
-  CHECK_EQ(tail, 64u);
-  fixture.platform().set_irql(Irql::dispatch);
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(1u, 0u, 32u), awaited), Status::ok);
-  fixture.platform().set_irql(Irql::passive);
-  CHECK_EQ(fixture.mapped().function().doorbells().rings(0u), 2u);
-  CHECK(fixture.table().invariants_hold());
-  CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok); }
-
-TEST(av_context_table_release_batch, refuses_a_context_it_does_not_hold_and_a_batch_the_ring_cannot_hold)
-{ Fixture fixture;
-  Host host(fixture.mapped());
-  std::uint64_t awaited = 9u;
-  fixture.platform().set_irql(Irql::dispatch);
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(1u, 0u, 32u), awaited),
-               Status::invalid_parameter);
-  CHECK_EQ(awaited, 0u);
-  fixture.platform().set_irql(Irql::passive);
-  CHECK_STATUS(fixture.bind(&first_context), Status::ok);
-  fixture.platform().set_irql(Irql::dispatch);
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(1u, 0u, 5000u), awaited),
-               Status::invalid_parameter);
-  fixture.platform().set_irql(Irql::passive);
-  CHECK_EQ(fixture.mapped().function().doorbells().rings(0u), 0u);
-  CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok); }
-
-TEST(av_context_table_fault_if_held, loses_a_context_that_holds_a_batch_no_earlier_one_released)
-{ Fixture fixture;
-  Host host(fixture.mapped());
-  CHECK_STATUS(fixture.bind(&first_context), Status::ok);
-  std::uint64_t awaited = 0u;
-  fixture.platform().set_irql(Irql::dispatch);
-  CHECK(!fixture.table().fault_if_held(&first_context));
-  CHECK(!fixture.table().fault_if_held(nullptr));
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(2u, 32u, 64u), awaited), Status::ok);
-  CHECK(!fixture.table().fault_if_held(&second_context));
-  CHECK(fixture.table().fault_if_held(&first_context));
-  CHECK(!fixture.table().fault_if_held(&first_context));
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(1u, 0u, 32u), awaited),
-               Status::invalid_parameter);
-  fixture.platform().set_irql(Irql::passive);
-  CHECK(fixture.table().invariants_hold());
-  CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok); }
 
 TEST(av_context_table_bind, a_ring_order_or_reply_the_memory_cannot_be_is_refused_as_such)
 { Fixture fixture;
@@ -1948,84 +2078,16 @@ TEST(av_context_table_bind, a_setup_and_a_teardown_the_device_both_refuse_leave_
   CHECK_STATUS(fixture.bind(&first_context), Status::not_supported);
   CHECK_EQ(fixture.table().bound(), 0u);
   CHECK_EQ(host.count_of(ctx_destroy_type), 1u);
-  CHECK_EQ(fixture.platform().mapped_frames(), 0u);
+  CHECK_EQ(fixture.platform().owned_page_blocks(), 3u);
   CHECK_EQ(fixture.platform().process_mappings(), 0u);
   CHECK(fixture.table().invariants_hold());
   host.refuse_from(-1);
   CHECK_STATUS(fixture.bind(&first_context), Status::ok);
-  CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok); }
-
-TEST(av_context_table_submit, a_submission_after_a_release_waits_its_turn_like_a_release)
-{ Fixture fixture;
-  Host host(fixture.mapped());
-  CHECK_STATUS(fixture.bind(&first_context), Status::ok);
-  std::uint64_t awaited = 0u;
-  fixture.platform().set_irql(Irql::dispatch);
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(1u, 0u, 32u), awaited), Status::ok);
-  fixture.platform().set_irql(Irql::passive);
-  CHECK_EQ(fixture.mapped().function().doorbells().rings(0u), 1u);
-  CHECK_STATUS(fixture.submit(&first_context, SubmissionDescriptor(3u, 64u, 96u), awaited), Status::ok);
-  CHECK_EQ(awaited, 3u);
-  CHECK_EQ(fixture.mapped().function().doorbells().rings(0u), 1u);
-  CHECK_STATUS(fixture.submit(&first_context, SubmissionDescriptor(2u, 32u, 64u), awaited), Status::ok);
-  CHECK_EQ(fixture.mapped().function().doorbells().rings(0u), 1u + 2u);
-  CHECK(fixture.table().invariants_hold());
-  CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok); }
-
-TEST(av_context_table_release_batch, a_slot_not_yet_live_takes_nothing_and_has_nothing_running)
-{ Fixture fixture;
-  Host host(fixture.mapped());
-  CHECK_STATUS(fixture.bind(&first_context), Status::ok);
-  std::uint64_t awaited = 9u;
-  fixture.platform().set_irql(Irql::dispatch);
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(2u, 32u, 64u), awaited), Status::ok);
-  AvContextTableProbe::set_live(fixture.table(), 0u, false);
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(1u, 0u, 32u), awaited),
-               Status::invalid_parameter);
-  CHECK(!fixture.table().fault_if_held(&first_context));
-  const std::uint32_t rings = fixture.mapped().function().doorbells().rings(0u);
-  fixture.table().kick(&first_context);
-  CHECK_EQ(fixture.mapped().function().doorbells().rings(0u), rings);
-  CHECK(fixture.table().completed_already(&first_context, 1000u));
-  AvContextTableProbe::set_live(fixture.table(), 0u, true);
-  fixture.table().kick(&first_context);
-  CHECK_EQ(fixture.mapped().function().doorbells().rings(0u), rings + 1u);
-  CHECK(!fixture.table().completed_already(&first_context, 1000u));
-  fixture.platform().set_irql(Irql::passive);
-  CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok); }
-
-TEST(av_context_table_release_batch, a_batch_overlapping_one_released_or_refused_by_the_ring_loses_the_context)
-{ Fixture fixture;
-  Host host(fixture.mapped());
-  CHECK_STATUS(fixture.bind(&first_context), Status::ok);
-  std::uint64_t awaited = 0u;
-  fixture.platform().set_irql(Irql::dispatch);
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(1u, 0u, 32u), awaited), Status::ok);
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(2u, 16u, 48u), awaited), Status::ok);
-  CHECK(fixture.platform().logged_line("the context is lost"));
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(3u, 32u, 64u), awaited),
-               Status::invalid_parameter);
-  fixture.platform().set_irql(Irql::passive);
+  CHECK_EQ(host.count_of(ctx_destroy_type), 2u);
+  CHECK_EQ(fixture.platform().owned_page_blocks(), 3u);
   CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok);
-
-  CHECK_STATUS(fixture.bind(&first_context), Status::ok);
-  CHECK_STATUS(fixture.submit(&first_context, SubmissionDescriptor(7u, 0u, 32u), awaited), Status::ok);
-  const std::uint32_t lost = fixture.platform().logged();
-  fixture.platform().set_irql(Irql::dispatch);
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(3u, 32u, 64u), awaited), Status::ok);
-  fixture.platform().set_irql(Irql::passive);
-  CHECK(fixture.platform().logged() > lost);
-  CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok);
-
-  CHECK_STATUS(fixture.bind(&first_context), Status::ok);
-  fixture.platform().set_irql(Irql::dispatch);
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(5u, 32u, 64u), awaited), Status::ok);
-  const std::uint32_t held = fixture.platform().logged();
-  CHECK_STATUS(fixture.table().release_batch(&first_context, SubmissionDescriptor(9u, 0u, 32u), awaited), Status::ok);
-  CHECK(fixture.platform().logged() > held);
-  CHECK(!fixture.table().fault_if_held(&first_context));
-  fixture.platform().set_irql(Irql::passive);
-  CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok); }
+  CHECK_EQ(fixture.platform().mapped_frames(), 0u);
+  CHECK_EQ(fixture.platform().owned_page_blocks(), 0u); }
 
 TEST(av_context_table_invariants, detect_a_live_slot_without_its_binding_and_a_free_one_with_a_stray_binding_wake_or_flag)
 { Fixture fixture;
@@ -2074,3 +2136,190 @@ TEST(av_context_table_invariants, detect_a_free_slot_that_still_holds_a_binding)
   AvContextTableProbe::set_context(table, 1u, &second_context);
   AvContextTableProbe::set_live(table, 1u, true);
   CHECK(table.invariants_hold()); }
+
+TEST(av_context_table_unbind, the_packets_that_waited_on_the_context_are_finished_by_the_next_serve)
+{ Fixture fixture;
+  Host host(fixture.mapped());
+  CHECK_STATUS(fixture.bind(&first_context), Status::ok);
+  ProcessAllocation other(fixture.platform(), fixture.allocations(), fixture.handles(), AllocationKind::context_ring,
+                         page);
+  CHECK_STATUS(fixture.bind(&second_context, AvContextRecord(SubApi::vulkan, 12u, other.handle(), page)), Status::ok);
+  std::uint64_t awaited = 0u;
+  CHECK_STATUS(fixture.submit(&first_context, SubmissionDescriptor(1u, 0u, 32u), awaited), Status::ok);
+  fixture.platform().set_irql(Irql::dispatch);
+  CHECK_STATUS(fixture.node().submit(5u, &first_context, 1u), Status::ok);
+  CHECK_STATUS(fixture.node().submit(6u, &first_context, 77u), Status::ok);
+  CHECK_STATUS(fixture.node().submit(7u, &second_context, 3u), Status::ok);
+  fixture.platform().set_irql(Irql::passive);
+  fixture.complete_through(0u);
+  fixture.complete_through(0u, 0u);
+  static_cast<void>(FencePage(0u, 0u).encode(fixture.fence_page(1u), FencePage::encoded_size));
+  fixture.serve();
+  CHECK_EQ(fixture.node().current_fence(), 0u);
+  CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok);
+  fixture.serve();
+  CHECK_EQ(fixture.node().current_fence(), 6u);
+  CHECK_EQ(fixture.node().pending(), 1u);
+  fixture.serve();
+  CHECK_EQ(fixture.node().pending(), 1u);
+  CHECK_STATUS(fixture.table().unbind(&second_context, &fixture.device()), Status::ok);
+  fixture.serve();
+  CHECK_EQ(fixture.node().pending(), 0u); }
+
+namespace {
+
+int lane_device = 0;
+int lane_process = 0;
+int foreign_process = 0;
+
+void owned(ProcessAllocation &ring, void *process = &lane_process)
+{
+    static_cast<void>(ring.allocation()->open(&lane_device, process));
+}
+
+CapsetInfo d3d_capset()
+{
+    return CapsetInfo(av::ProtocolVersion(av::ProtocolVersion::current_major, av::ProtocolVersion::current_minor), 0xFu,
+                      av::ContextCapacity::contexts, 12u, 20u, 0u, av::GpuIdentity(0u, 0u, 0u, uuid, 0u, 0u, "gpu"));
+}
+
+Status bind_d3d(Fixture &fixture, void *context, const AvContextRecord &record)
+{
+    return fixture.table().bind(context, record, fixture.device(), fixture.mapped().function().doorbells(), d3d_capset());
+}
+
+Status release_in(Fixture &fixture, void *context, std::uint32_t ring, const SubmissionDescriptor &batch,
+                  std::uint64_t &awaited)
+{
+    fixture.platform().set_irql(Irql::dispatch);
+    const Status status = fixture.table().release_batch(context, av::ReleaseRecord(ring, batch), awaited);
+    fixture.platform().set_irql(Irql::passive);
+    return status;
+}
+
+}
+
+TEST(av_context_table_lane, a_session_has_at_most_its_lanes_and_the_next_is_refused_unsent_so_its_context_stays_on_the_session)
+{ Fixture fixture;
+  Host host(fixture.mapped());
+  CHECK_STATUS(bind_d3d(fixture, &first_context, AvContextRecord(SubApi::d3d, 12u, fixture.ring().handle(), page)),
+               Status::ok);
+  owned(fixture.ring());
+  const GlContextOptions lane = GlContextOptions().sharing(fixture.ring().handle());
+  std::vector<std::unique_ptr<Transport>> rings;
+  int                                     handles[av::ContextCapacity::lanes + 1u] = {};
+  for (std::uint32_t index = 0u; index < av::ContextCapacity::lanes; index++) {
+      rings.push_back(std::make_unique<Transport>(fixture));
+      owned(rings.back()->ring());
+      CHECK_STATUS(bind_d3d(fixture, &handles[index], rings.back()->record(SubApi::d3d, lane)), Status::ok);
+  }
+  CHECK_EQ(host.field(submit_3d_type, 1u, options_offset + 4u), 1u);
+  const std::uint32_t sent = host.count_of(submit_3d_type);
+  rings.push_back(std::make_unique<Transport>(fixture));
+  owned(rings.back()->ring());
+  CHECK_STATUS(bind_d3d(fixture, &handles[av::ContextCapacity::lanes], rings.back()->record(SubApi::d3d, lane)),
+               Status::no_space);
+  CHECK_EQ(host.count_of(submit_3d_type), sent);
+  CHECK(fixture.table().invariants_hold());
+  CHECK_STATUS(fixture.table().unbind(&handles[0], &fixture.device()), Status::ok);
+  CHECK_STATUS(bind_d3d(fixture, &handles[av::ContextCapacity::lanes], rings.back()->record(SubApi::d3d, lane)),
+               Status::ok);
+  for (std::uint32_t index = 1u; index <= av::ContextCapacity::lanes; index++)
+      CHECK_STATUS(fixture.table().unbind(&handles[index], &fixture.device()), Status::ok);
+  CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok);
+  CHECK(fixture.table().invariants_hold()); }
+
+TEST(av_context_table_lane, a_lane_of_a_lane_or_of_another_api_or_process_is_refused)
+{ Fixture fixture;
+  Host host(fixture.mapped());
+  CHECK_STATUS(bind_d3d(fixture, &first_context, AvContextRecord(SubApi::d3d, 12u, fixture.ring().handle(), page)),
+               Status::ok);
+  owned(fixture.ring());
+  Transport lane(fixture);
+  owned(lane.ring());
+  CHECK_STATUS(bind_d3d(fixture, &second_context,
+                        lane.record(SubApi::d3d, GlContextOptions().sharing(fixture.ring().handle()))),
+               Status::ok);
+  Transport further(fixture);
+  owned(further.ring());
+  int       third = 0;
+  CHECK_STATUS(bind_d3d(fixture, &third, further.record(SubApi::d3d, GlContextOptions().sharing(lane.ring().handle()))),
+               Status::invalid_parameter);
+  Transport vulkan(fixture);
+  owned(vulkan.ring());
+  int       fourth = 0;
+  CHECK_STATUS(bind_d3d(fixture, &fourth, vulkan.record(SubApi::vulkan, GlContextOptions())), Status::ok);
+  Transport other(fixture);
+  owned(other.ring());
+  int       fifth = 0;
+  CHECK_STATUS(bind_d3d(fixture, &fifth, other.record(SubApi::d3d, GlContextOptions().sharing(vulkan.ring().handle()))),
+               Status::invalid_parameter);
+  Transport stranger(fixture);
+  owned(stranger.ring(), &foreign_process);
+  int       sixth = 0;
+  CHECK_STATUS(bind_d3d(fixture, &sixth,
+                        stranger.record(SubApi::d3d, GlContextOptions().sharing(fixture.ring().handle()))),
+               Status::invalid_parameter);
+  CHECK_STATUS(fixture.table().unbind(&fourth, &fixture.device()), Status::ok);
+  CHECK_STATUS(fixture.table().unbind(&second_context, &fixture.device()), Status::ok);
+  CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok); }
+
+TEST(av_context_table_lane, a_lane_publishes_each_released_batch_at_once_and_wakes_its_session_only_while_it_has_work)
+{ Fixture fixture;
+  Host host(fixture.mapped());
+  CHECK_STATUS(bind_d3d(fixture, &first_context, AvContextRecord(SubApi::d3d, 12u, fixture.ring().handle(), page)),
+               Status::ok);
+  owned(fixture.ring());
+  Transport lane(fixture);
+  owned(lane.ring());
+  CHECK_STATUS(bind_d3d(fixture, &second_context,
+                        lane.record(SubApi::d3d, GlContextOptions().sharing(fixture.ring().handle()))),
+               Status::ok);
+  const std::uint32_t lane_slot = fixture.table().doorbell_of(&second_context);
+  const std::uint32_t session_slot = fixture.table().doorbell_of(&first_context);
+  av::FakeDoorbellPages &doorbells = fixture.mapped().function().doorbells();
+  const std::uint32_t session_rings = doorbells.rings(session_slot);
+  std::uint64_t awaited = 0u;
+  CHECK_STATUS(release_in(fixture, &second_context, lane.ring().handle(), SubmissionDescriptor(1u, 0u, 64u), awaited),
+               Status::ok);
+  CHECK_EQ(awaited, 1u);
+  std::uint64_t tail = 0u;
+  std::memcpy(&tail, fixture.ring_memory(lane_slot) + 8u, sizeof tail);
+  CHECK_EQ(tail, 64u);
+  CHECK_EQ(doorbells.rings(session_slot), session_rings);
+  fixture.process_publishes(96u, session_slot);
+  CHECK_STATUS(release_in(fixture, &second_context, lane.ring().handle(), SubmissionDescriptor(2u, 64u, 128u), awaited),
+               Status::ok);
+  CHECK_EQ(awaited, 2u);
+  std::memcpy(&tail, fixture.ring_memory(lane_slot) + 8u, sizeof tail);
+  CHECK_EQ(tail, 128u);
+  CHECK_EQ(doorbells.rings(session_slot), session_rings + 1u);
+  CHECK_STATUS(fixture.table().unbind(&second_context, &fixture.device()), Status::ok);
+  CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok); }
+
+TEST(av_context_table_lane, a_lane_batch_out_of_its_own_order_loses_the_lane_at_once_and_holds_nothing)
+{ Fixture fixture;
+  Host host(fixture.mapped());
+  CHECK_STATUS(bind_d3d(fixture, &first_context, AvContextRecord(SubApi::d3d, 12u, fixture.ring().handle(), page)),
+               Status::ok);
+  owned(fixture.ring());
+  Transport lane(fixture);
+  owned(lane.ring());
+  CHECK_STATUS(bind_d3d(fixture, &second_context,
+                        lane.record(SubApi::d3d, GlContextOptions().sharing(fixture.ring().handle()))),
+               Status::ok);
+  std::uint64_t awaited = 0u;
+  CHECK_STATUS(release_in(fixture, &second_context, lane.ring().handle(), SubmissionDescriptor(2u, 64u, 128u), awaited),
+               Status::ok);
+  CHECK_EQ(awaited, 2u);
+  const std::uint32_t lane_slot = fixture.table().doorbell_of(&second_context);
+  std::uint32_t       lost = 0u;
+  std::memcpy(&lost, fixture.ring_memory(lane_slot) + av::RingHeader::lost_at, sizeof lost);
+  CHECK(lost != 0u);
+  CHECK(fixture.platform().logged_line("cannot be released in order"));
+  std::uint32_t session_lost = 0u;
+  std::memcpy(&session_lost, fixture.ring_memory(fixture.table().doorbell_of(&first_context)) + av::RingHeader::lost_at,
+              sizeof session_lost);
+  CHECK_EQ(session_lost, 0u);
+  CHECK_STATUS(fixture.table().unbind(&second_context, &fixture.device()), Status::ok);
+  CHECK_STATUS(fixture.table().unbind(&first_context, &fixture.device()), Status::ok); }

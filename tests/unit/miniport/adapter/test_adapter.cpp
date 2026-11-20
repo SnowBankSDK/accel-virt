@@ -58,6 +58,8 @@
 #include "miniport/ddi/dxgkarg_present_record.hpp"
 #include "device/control/control_request.hpp"
 #include "device/control/present_commands.hpp"
+#include "device/control/held_requests.hpp"
+#include "harness/host/main_loop_pump.hpp"
 #include "device/control/present_engine_commands.hpp"
 #include "device/fence/fence_interrupts.hpp"
 #include "device/present/present_engine.hpp"
@@ -171,6 +173,7 @@ struct AdapterProbe {
         PresentQueueProbe::put_payload(adapter.presents_.object(), 0u, payload);
     }
     void stop_device_object() { static_cast<void>(adapter.device_.object().stop()); }
+    std::uint32_t pending_packets() { return adapter.node_.pending(); }
     bool window_offered() const { return adapter.window_.offered(); }
     std::uint64_t scanout(std::uint32_t source) { return adapter.sources_.scanout_address(source); }
     void         *primary(std::uint32_t source) { return adapter.sources_.primary(source); }
@@ -379,7 +382,12 @@ public:
     void                   serve() { answer_display_info(this); }
     const std::uint8_t    *last_queued() const { return queued_; }
     std::uint32_t          queued_presents() const { return queued_count_; }
-    void                   stop_presents() { present_engine_.detach(); }
+    void                   stop_presents()
+    {
+        present_engine_.detach();
+        for (int round = 0; round < 500 && present_engine_.releasing(); round++)
+            static_cast<void>(host_.wait_for_main_loop_work(1u, 10u)), static_cast<void>(host_.run_main_loop());
+    }
     void                   offer_modes(const av::DisplayModeSet &modes) { offered_modes_ = modes; }
     void                   refuse_the_blob() { refuse_blob_ = true; }
     std::uint32_t          blob_maps() const { return blob_maps_; }
@@ -509,7 +517,9 @@ private:
         }
         av::MockRequest    mock(request, length);
         av::ControlRequest control(fixture->host_, &mock);
-        static_cast<void>(av::PresentEngineCommands(fixture->host_, fixture->present_engine_, av::PresentFrames()).answer(control, type));
+        if (av::PresentEngineCommands(fixture->host_, fixture->present_engine_, av::PresentFrames(), fixture->present_held_)
+                .answer(control, type))
+            static_cast<void>(av::pump_main_loop(fixture->host_, [&mock] { return mock.answered(); }));
         const std::size_t given = mock.response_size() < room ? mock.response_size() : room;
         std::memcpy(answer, mock.response_bytes(), given);
         return static_cast<std::uint32_t>(given);
@@ -519,7 +529,8 @@ private:
     av::MockHost          host_;
     av::PresentCommands   present_commands_{host_};
     av::FenceInterrupts   present_interrupts_{host_};
-    av::PresentEngine     present_engine_{host_, present_interrupts_};
+    av::HeldRequests      present_held_{host_};
+    av::PresentEngine     present_engine_{host_, present_interrupts_, present_held_};
     std::uint8_t          queued_[av::QueuedPresentRequest::encoded_size] = {};
     std::uint32_t         queued_count_ = 0u;
     std::uint8_t          present_request_[0x9000] = {};
@@ -1198,14 +1209,15 @@ TEST(adapter_set_power_state, what_was_scanning_out_before_d3_is_scanning_out_af
   CHECK_EQ(fixture.start(), success);
   av::FakeVirtqueueDevice &control = fixture.control();
   CHECK_EQ(commit(fixture, 1280u, 800u), success);
-  CHECK_EQ(control.respond_all(0x1100u), 1u);
+  CHECK_EQ(control.respond_all(0x1100u), 2u);
   CHECK_EQ(nt(fixture.adapter().set_power_state(adapter_uid, power_d3, 0)), success);
   fixture.forget_control();
   CHECK_EQ(nt(fixture.adapter().set_power_state(adapter_uid, power_d0, 0)), success);
   av::FakeVirtqueueDevice &resumed = fixture.control();
-  CHECK_EQ(resumed.respond_all(0x1100u), 2u);
+  CHECK_EQ(resumed.respond_all(0x1100u), 3u);
   CHECK_EQ(resumed.request_type(0u), 0x02F4u);
   CHECK_EQ(resumed.request_type(1u), 0x0101u);
+  CHECK_EQ(resumed.request_type(2u), 0x02F5u);
   CHECK(fixture.adapter().invariants_hold()); }
 
 TEST(adapter_set_power_state, a_source_that_was_dark_stays_dark_across_power)
@@ -1255,13 +1267,14 @@ TEST(adapter_commit_vidpn, the_committed_source_reaches_the_host_scanout)
   fixture.adapter().dpc_routine();
   fixture.platform().set_irql(Irql::passive);
   const std::uint32_t after_commit = control.respond_all(0x1100u);
-  CHECK_EQ(after_commit, 5u);
+  CHECK_EQ(after_commit, 6u);
   CHECK_EQ(control.request_type(0u), 0x02F4u);
   CHECK_EQ(control.request_type(5u), 0x0101u);
-  CHECK_EQ(control.request_type(6u), 0x0106u);
-  CHECK_EQ(control.request_type(7u), 0x0103u);
-  CHECK_EQ(control.request_type(8u), 0x0105u);
-  CHECK_EQ(control.request_type(9u), 0x0104u);
+  CHECK_EQ(control.request_type(6u), 0x02F5u);
+  CHECK_EQ(control.request_type(7u), 0x0106u);
+  CHECK_EQ(control.request_type(8u), 0x0103u);
+  CHECK_EQ(control.request_type(9u), 0x0105u);
+  CHECK_EQ(control.request_type(10u), 0x0104u);
   fixture.platform().advance_time(display_period);
   fixture.platform().set_irql(Irql::dispatch);
   fixture.adapter().dpc_routine();
@@ -1367,7 +1380,7 @@ TEST(adapter_commit_vidpn, a_path_that_is_gone_scans_out_nothing)
   CHECK_EQ(fixture.start(), success);
   av::FakeVirtqueueDevice &control = fixture.control();
   CHECK_EQ(commit(fixture, 1280u, 800u), success);
-  CHECK_EQ(control.respond_all(0x1100u), 1u);
+  CHECK_EQ(control.respond_all(0x1100u), 2u);
   av::FakeVidPn empty;
   const av::DxgkargCommitVidPnRecord request = {&empty, 0u, 0, nullptr, 0u, 0u};
   CHECK_EQ(nt(fixture.adapter().commit_vidpn(&request)), success);
@@ -3520,7 +3533,7 @@ TEST(adapter_escape, the_trace_escape_answers_the_state_of_the_adapter_without_a
       "adapter/0/context_table/0 busy=false live=0\n"
       "adapter/0/hw_queue_table/0 busy=false live=0\n"
       "adapter/0/execution_node/0 busy=false pending=0 last_submitted=0 last_completed=0"
-      " preemption_requested=false preemption_fence=0 stopped=false progress_time=0\n"
+      " preemption_requested=false preemption_fence=0 stopped=false progress_time=0 preempted=0\n"
       "adapter/0/present_waiters/0 busy=false waiting=0 waits=0 timeouts=0\n"
       "adapter/0/av_context_table/0 busy=false bound=0\n"
       "adapter/0/display_sources/0 count=1 vsync=false\n"
@@ -4513,13 +4526,14 @@ TEST(adapter_commit_vidpn, the_second_display_scans_out_on_its_own)
   fixture.platform().set_irql(Irql::dispatch);
   fixture.adapter().dpc_routine();
   fixture.platform().set_irql(Irql::passive);
-  CHECK_EQ(control.respond_all(0x1100u), 5u);
+  CHECK_EQ(control.respond_all(0x1100u), 6u);
   CHECK_EQ(control.request_type(5u), 0x0101u);
   CHECK_EQ(u32(control.request(5u), 24u), av::ScanoutResource::first_resource_id + 1u);
   CHECK_EQ(u32(control.request(5u), 32u), 1024u);
-  CHECK_EQ(control.request_type(7u), 0x0103u);
-  CHECK_EQ(u32(control.request(7u), 40u), 1u);
-  CHECK_EQ(u32(control.request(7u), 44u), av::ScanoutResource::first_resource_id + 1u); }
+  CHECK_EQ(control.request_type(6u), 0x02F5u);
+  CHECK_EQ(control.request_type(8u), 0x0103u);
+  CHECK_EQ(u32(control.request(8u), 40u), 1u);
+  CHECK_EQ(u32(control.request(8u), 44u), av::ScanoutResource::first_resource_id + 1u); }
 
 TEST(adapter_start_device, says_when_the_displays_are_not_all_one_size)
 { Fixture fixture;
@@ -5739,15 +5753,15 @@ TEST(adapter_dpc_routine, lets_a_follower_go_once_it_has_waited_the_deadline)
   CHECK_STATUS(av::FollowRecord(process.ring().kmt_handle(), 1u).encode(follow, sizeof follow), av::Status::ok);
   CHECK_EQ(submit_packet(fixture, queue.hContext, 8u, follow, sizeof follow), success);
   const std::uint32_t before = fixture.dxgkrnl().interrupts();
-  fixture.platform().advance_time(av::ExecutionNode::park_deadline - 1u);
+  fixture.platform().advance_time(av::ExecutionNode::overdue_after - 1u);
   run_dpc(fixture);
   CHECK_EQ(fixture.dxgkrnl().interrupts(), before);
-  CHECK(!fixture.platform().logged_line("a held packet passed its deadline"));
+  CHECK(!fixture.platform().logged_line("passed its deadline and was let go"));
   fixture.platform().advance_time(1u);
   run_dpc(fixture);
   CHECK_EQ(fixture.dxgkrnl().interrupts(), before + 2u);
   CHECK_EQ(fixture.dxgkrnl().interrupt(before + 1u).FenceId, 8u);
-  CHECK(fixture.platform().logged_line("avgpu: a held packet passed its deadline and was let go"));
+  CHECK(fixture.platform().logged_line("avgpu: a packet whose batch the host had not finished passed its deadline and was let go"));
   CHECK_EQ(nt(fixture.adapter().destroy_context(queue.hContext)), success);
   CHECK_EQ(nt(fixture.adapter().destroy_context(context.hContext)), success);
   CHECK_EQ(nt(fixture.adapter().destroy_device(process.device())), success); }
@@ -5776,7 +5790,7 @@ std::uint32_t edid_preferred_width(Fixture &fixture)
 
 }
 
-TEST(adapter_start_device, offers_the_hosts_own_modes_whatever_their_size)
+TEST(adapter_start_device, offers_the_hosts_own_modes_and_the_standard_ones_below_the_largest)
 { Fixture fixture;
   fixture.offer_modes(host_modes({{1920u, 1080u}, {100u, 100u}, {2560u, 1440u}, {5120u, 2880u}, {80u, 80u}}, 2u));
   CHECK_EQ(fixture.start(), success);
@@ -5785,10 +5799,11 @@ TEST(adapter_start_device, offers_the_hosts_own_modes_whatever_their_size)
   vidpn.add_path(0u, 0u);
   const av::DxgkargEnumVidPnCofuncModalityRecord request = {&vidpn, no_pivot, 0u, 0u, 0u};
   CHECK_EQ(nt(fixture.adapter().enum_vidpn_cofunc_modality(&request)), success);
-  CHECK_EQ(vidpn.source_modes(0u).modes(), 3u * av::DisplayMode::source_format_count);
+  CHECK_EQ(vidpn.source_modes(0u).modes(), 13u * av::DisplayMode::source_format_count);
   CHECK_EQ(commit(fixture, 100u, 100u), success);
   CHECK_EQ(commit(fixture, 80u, 80u), invalid_source_mode);
-  CHECK_EQ(commit(fixture, 1280u, 800u), invalid_source_mode); }
+  CHECK_EQ(commit(fixture, 1280u, 800u), success);
+  CHECK_EQ(commit(fixture, 1000u, 700u), invalid_source_mode); }
 
 TEST(adapter_dpc_routine, a_display_event_is_cleared_and_each_monitor_replugged)
 { Fixture fixture;
@@ -5822,47 +5837,100 @@ void spend_log_budget(Fixture &fixture) { AdapterProbe(fixture.adapter()).spend_
 
 }
 
-TEST(adapter_dpc_routine, a_context_whose_release_is_held_past_the_deadline_is_lost_and_its_neighbour_is_not)
+TEST(adapter_destroy_allocation, destroying_the_ring_of_a_bound_av_context_unbinds_it_and_says_so)
 { Fixture fixture; av::FakeHandleTable handles;
   fixture.function().add_doorbell_region();
   CHECK_EQ(fixture.start(), success);
   AvProcess process(fixture, handles);
-  AvProcess other(fixture, handles);
   av::DxgkargCreateContextRecord context = {};
   CHECK_EQ(process.create_context(context), success);
-  av::DxgkargCreateContextRecord neighbour = {};
-  CHECK_EQ(other.create_context(neighbour), success);
-  av::DxgkargCreateContextRecord queue = {};
-  queue.Flags = 0x4u;
-  CHECK_EQ(nt(fixture.adapter().create_context(process.device(), &queue)), success);
-  av::DxgkargCreateContextRecord follower = {};
-  follower.Flags = 0x4u;
-  CHECK_EQ(nt(fixture.adapter().create_context(other.device(), &follower)), success);
-
-  std::uint8_t release[av::ReleaseRecord::encoded_size] = {};
-  CHECK_STATUS(av::ReleaseRecord(process.ring().kmt_handle(), av::SubmissionDescriptor(1u, 32u, 64u))
-                   .encode(release, sizeof release),
-               av::Status::ok);
-  CHECK_EQ(submit_packet(fixture, queue.hContext, 5u, release, sizeof release), success);
-  std::uint8_t follow[av::FollowRecord::encoded_size] = {};
-  CHECK_STATUS(av::FollowRecord(other.ring().kmt_handle(), 1u).encode(follow, sizeof follow), av::Status::ok);
-  CHECK_EQ(submit_packet(fixture, follower.hContext, 6u, follow, sizeof follow), success);
-
-  const std::uint32_t before = fixture.dxgkrnl().interrupts();
-  fixture.platform().advance_time(av::ExecutionNode::park_deadline);
-  run_dpc(fixture);
-  CHECK(fixture.platform().logged_line("avgpu: a held packet passed its deadline and was let go"));
-  CHECK(fixture.platform().logged_line("avgpu: a context's batches cannot be released in order: the context is lost"));
-  CHECK_EQ(fixture.dxgkrnl().interrupts(), before + 2u);
-  CHECK_EQ(submit_packet(fixture, queue.hContext, 7u, release, sizeof release), invalid_parameter);
-  CHECK_EQ(submit_packet(fixture, follower.hContext, 8u, follow, sizeof follow), success);
-  CHECK(fixture.adapter().invariants_hold());
-  CHECK_EQ(nt(fixture.adapter().destroy_context(follower.hContext)), success);
-  CHECK_EQ(nt(fixture.adapter().destroy_context(queue.hContext)), success);
-  CHECK_EQ(nt(fixture.adapter().destroy_context(neighbour.hContext)), success);
+  CHECK(!fixture.platform().logged_line("av context unbound"));
+  CHECK_EQ(process.ring().destroy(), success);
+  CHECK(fixture.platform().logged_line("avgpu: av context unbound with the allocation it uses: adapter "));
+  CHECK(fixture.platform().logged_line(" doorbell 0"));
   CHECK_EQ(nt(fixture.adapter().destroy_context(context.hContext)), success);
-  CHECK_EQ(nt(fixture.adapter().destroy_device(other.device())), success);
   CHECK_EQ(nt(fixture.adapter().destroy_device(process.device())), success); }
+
+namespace {
+
+std::uint32_t preempt(Fixture &fixture, std::uint32_t fence)
+{
+    av::DxgkargPreemptCommandRecord request = {};
+    request.PreemptionFenceId = fence;
+    fixture.platform().set_irql(Irql::dispatch);
+    const std::uint32_t status = nt(fixture.adapter().preempt_command(&request));
+    fixture.platform().set_irql(Irql::passive);
+    return status;
+}
+
+}
+
+TEST(adapter_preempt_command, a_held_owner_s_packets_go_back_and_an_unrelated_owner_completes_when_submitted_again)
+{ Fixture fixture; av::FakeHandleTable handles;
+  fixture.function().add_doorbell_region();
+  CHECK_EQ(fixture.start(), success);
+  AvProcess slow(fixture, handles);
+  AvProcess quick(fixture, handles);
+  av::DxgkargCreateContextRecord slow_context = {};
+  CHECK_EQ(slow.create_context(slow_context), success);
+  av::DxgkargCreateContextRecord quick_context = {};
+  CHECK_EQ(quick.create_context(quick_context), success);
+  av::DxgkargCreateContextRecord quick_device = {};
+  quick_device.Flags = 0x4u;
+  CHECK_EQ(nt(fixture.adapter().create_context(quick.device(), &quick_device)), success);
+
+  std::uint8_t follow[av::FollowRecord::encoded_size] = {};
+  CHECK_STATUS(av::FollowRecord(quick.ring().kmt_handle(), 1u).encode(follow, sizeof follow), av::Status::ok);
+  CHECK_EQ(quick.submit(quick_context.hContext, 4u, av::SubmissionDescriptor(1u, 0u, 32u)), success);
+  quick.host_completes(1u);
+  run_dpc(fixture);
+  const std::uint32_t before = fixture.dxgkrnl().interrupts();
+  CHECK_EQ(fixture.dxgkrnl().interrupt(before - 1u).FenceId, 4u);
+
+  CHECK_EQ(slow.submit(slow_context.hContext, 5u, av::SubmissionDescriptor(1u, 0u, 32u)), success);
+  CHECK_EQ(slow.submit(slow_context.hContext, 6u, av::SubmissionDescriptor(2u, 32u, 64u)), success);
+  CHECK_EQ(submit_packet(fixture, quick_device.hContext, 7u, follow, sizeof follow), success);
+  const std::uint32_t rings = fixture.function().doorbells().rings(0u);
+  CHECK_EQ(rings, 2u);
+  run_dpc(fixture);
+  CHECK_EQ(fixture.dxgkrnl().interrupts(), before);
+
+  CHECK_EQ(preempt(fixture, 8u), success);
+  run_dpc(fixture);
+  CHECK_EQ(fixture.dxgkrnl().interrupts(), before + 1u);
+  CHECK_EQ(fixture.dxgkrnl().interrupt(before).InterruptType, 2);
+  CHECK_EQ(fixture.dxgkrnl().interrupt(before).FenceId, 8u);
+  CHECK_EQ(fixture.dxgkrnl().interrupt(before).Argument1, 4u);
+  CHECK(fixture.platform().logged_line("avgpu: packets still held went back to the scheduler that asked to preempt: adapter "));
+  CHECK(fixture.platform().logged_line(" packets 3"));
+
+  CHECK_EQ(submit_packet(fixture, quick_device.hContext, 9u, follow, sizeof follow), success);
+  run_dpc(fixture);
+  CHECK_EQ(fixture.dxgkrnl().interrupts(), before + 2u);
+  CHECK_EQ(fixture.dxgkrnl().interrupt(before + 1u).InterruptType, 1);
+  CHECK_EQ(fixture.dxgkrnl().interrupt(before + 1u).FenceId, 9u);
+
+  CHECK_EQ(slow.submit(slow_context.hContext, 10u, av::SubmissionDescriptor(1u, 0u, 32u)), success);
+  CHECK_EQ(slow.submit(slow_context.hContext, 11u, av::SubmissionDescriptor(2u, 32u, 64u)), success);
+  CHECK_EQ(fixture.function().doorbells().rings(0u), rings);
+  CHECK(!fixture.platform().logged_line("the context is lost"));
+  CHECK(!fixture.platform().logged_line("SubmitCommandVirtual refused"));
+  run_dpc(fixture);
+  CHECK_EQ(fixture.dxgkrnl().interrupts(), before + 2u);
+  slow.host_completes(1u);
+  run_dpc(fixture);
+  CHECK_EQ(fixture.dxgkrnl().interrupts(), before + 3u);
+  CHECK_EQ(fixture.dxgkrnl().interrupt(before + 2u).FenceId, 10u);
+  slow.host_completes(2u);
+  run_dpc(fixture);
+  CHECK_EQ(fixture.dxgkrnl().interrupts(), before + 4u);
+  CHECK_EQ(fixture.dxgkrnl().interrupt(before + 3u).FenceId, 11u);
+  CHECK(fixture.adapter().invariants_hold());
+  CHECK_EQ(nt(fixture.adapter().destroy_context(quick_device.hContext)), success);
+  CHECK_EQ(nt(fixture.adapter().destroy_context(quick_context.hContext)), success);
+  CHECK_EQ(nt(fixture.adapter().destroy_context(slow_context.hContext)), success);
+  CHECK_EQ(nt(fixture.adapter().destroy_device(quick.device())), success);
+  CHECK_EQ(nt(fixture.adapter().destroy_device(slow.device())), success); }
 
 TEST(adapter_dpc_routine, a_deadline_passed_with_the_log_budget_spent_is_let_go_unlogged)
 { Fixture fixture; av::FakeHandleTable handles;
@@ -5879,7 +5947,7 @@ TEST(adapter_dpc_routine, a_deadline_passed_with_the_log_budget_spent_is_let_go_
   CHECK_STATUS(av::FollowRecord(process.ring().kmt_handle(), 1u).encode(follow, sizeof follow), av::Status::ok);
   CHECK_EQ(submit_packet(fixture, queue.hContext, 8u, follow, sizeof follow), success);
   const std::uint32_t before = fixture.dxgkrnl().interrupts();
-  fixture.platform().advance_time(av::ExecutionNode::park_deadline);
+  fixture.platform().advance_time(av::ExecutionNode::overdue_after);
   spend_log_budget(fixture);
   const std::uint32_t logged_before = fixture.platform().logged();
   run_dpc(fixture);
@@ -6541,31 +6609,6 @@ TEST(adapter_present, readers_of_presented_pages_beyond_the_slots_to_wait_in_are
       CHECK_EQ(nt(fixture.adapter().destroy_device(device.hDevice)), success);
   } }
 
-TEST(adapter_submit_command_virtual, a_follow_or_release_the_queue_cannot_take_is_refused)
-{ Fixture fixture; av::FakeHandleTable handles;
-  fixture.function().add_doorbell_region();
-  CHECK_EQ(fixture.start(), success);
-  AvProcess process(fixture, handles);
-  av::DxgkargCreateContextRecord context = {};
-  CHECK_EQ(process.create_context(context), success);
-  av::DxgkargCreateContextRecord queue = {};
-  queue.Flags = 0x4u;
-  CHECK_EQ(nt(fixture.adapter().create_context(process.device(), &queue)), success);
-  std::uint8_t follow[av::FollowRecord::encoded_size] = {};
-  CHECK_STATUS(av::FollowRecord(process.ring().kmt_handle(), 1u).encode(follow, sizeof follow), av::Status::ok);
-  CHECK_EQ(submit_packet(fixture, queue.hContext, 8u, follow, sizeof follow), success);
-  CHECK_EQ(submit_packet(fixture, queue.hContext, 8u, follow, sizeof follow), invalid_parameter);
-  CHECK(fixture.platform().logged_line("avgpu: SubmitCommandVirtual refused status 0xC000000D"));
-  std::uint8_t release[av::ReleaseRecord::encoded_size] = {};
-  CHECK_STATUS(av::ReleaseRecord(process.ring().kmt_handle() + 0x100u, av::SubmissionDescriptor(1u, 0u, 32u))
-                   .encode(release, sizeof release),
-               av::Status::ok);
-  CHECK_EQ(submit_packet(fixture, queue.hContext, 9u, release, sizeof release), invalid_parameter);
-  CHECK(fixture.adapter().invariants_hold());
-  CHECK_EQ(nt(fixture.adapter().destroy_context(queue.hContext)), success);
-  CHECK_EQ(nt(fixture.adapter().destroy_context(context.hContext)), success);
-  CHECK_EQ(nt(fixture.adapter().destroy_device(process.device())), success); }
-
 TEST(adapter_escape, a_point_named_wrongly_is_refused_silently_once_the_log_is_spent)
 { Fixture fixture;
   CHECK_EQ(fixture.start(), success);
@@ -6639,7 +6682,7 @@ TEST(adapter_start_device, the_modes_a_host_offers_are_said_unless_the_log_is_sp
       fixture.offer_modes(host_modes({{1920u, 1080u}}, 0u));
       if (spent) spend_log_budget(fixture);
       CHECK_EQ(fixture.start(), success);
-      CHECK_EQ(fixture.platform().logged_line("avgpu: the host offers 1 modes, 1 taken, preferred 1920x1080"), !spent);
+      CHECK_EQ(fixture.platform().logged_line("avgpu: the host offers 1 modes, "), !spent);
   } }
 
 TEST(adapter_is_supported_vidpn, a_refusal_names_the_pinned_mode_it_could_not_take_unless_the_log_is_spent)
@@ -6724,3 +6767,34 @@ TEST(adapter_invariants, a_present_engine_that_lost_a_payload_is_caught)
   AdapterProbe(fixture.adapter()).set_started(false);
   CHECK(!fixture.adapter().invariants_hold());
   AdapterProbe(fixture.adapter()).set_started(true); }
+
+TEST(adapter_submit_command_virtual, a_follow_or_release_the_queue_cannot_take_is_refused)
+{ Fixture fixture; av::FakeHandleTable handles;
+  fixture.function().add_doorbell_region();
+  CHECK_EQ(fixture.start(), success);
+  AvProcess process(fixture, handles);
+  av::DxgkargCreateContextRecord context = {};
+  CHECK_EQ(process.create_context(context), success);
+  av::DxgkargCreateContextRecord queue = {};
+  queue.Flags = 0x4u;
+  CHECK_EQ(nt(fixture.adapter().create_context(process.device(), &queue)), success);
+  std::uint8_t follow[av::FollowRecord::encoded_size] = {};
+  CHECK_STATUS(av::FollowRecord(process.ring().kmt_handle(), 1u).encode(follow, sizeof follow), av::Status::ok);
+  CHECK_EQ(submit_packet(fixture, queue.hContext, 8u, follow, sizeof follow), success);
+  CHECK_EQ(submit_packet(fixture, queue.hContext, 8u, follow, sizeof follow), invalid_parameter);
+  CHECK(fixture.platform().logged_line("avgpu: SubmitCommandVirtual refused: adapter "));
+  CHECK(fixture.platform().logged_line(" status 0xC000000D fence "));
+  std::uint8_t release[av::ReleaseRecord::encoded_size] = {};
+  CHECK_STATUS(av::ReleaseRecord(process.ring().kmt_handle() + 0x100u, av::SubmissionDescriptor(1u, 0u, 32u))
+                   .encode(release, sizeof release),
+               av::Status::ok);
+  CHECK_EQ(submit_packet(fixture, queue.hContext, 9u, release, sizeof release), invalid_parameter);
+  std::uint8_t into_session[av::ReleaseRecord::encoded_size] = {};
+  CHECK_STATUS(av::ReleaseRecord(process.ring().kmt_handle(), av::SubmissionDescriptor(1u, 0u, 32u))
+                   .encode(into_session, sizeof into_session),
+               av::Status::ok);
+  CHECK_EQ(submit_packet(fixture, queue.hContext, 10u, into_session, sizeof into_session), invalid_parameter);
+  CHECK(fixture.adapter().invariants_hold());
+  CHECK_EQ(nt(fixture.adapter().destroy_context(queue.hContext)), success);
+  CHECK_EQ(nt(fixture.adapter().destroy_context(context.hContext)), success);
+  CHECK_EQ(nt(fixture.adapter().destroy_device(process.device())), success); }

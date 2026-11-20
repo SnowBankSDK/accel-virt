@@ -29,7 +29,7 @@ public:
     uint32_t           blanks() const;
     bool               admits();
     uint32_t           next_admit_milliseconds() const;
-    void               after_present();
+    void               before_show();
     uint64_t           waited() const;
 
     bool invariants_hold() const;

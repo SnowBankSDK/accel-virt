@@ -13,6 +13,7 @@ def lower(root: ET.Element, profile: Profile,
           declared_names: set[str] | None = None) -> Registry:
     reg = Registry()
     reg.declared_names = set(declared_names or ())
+    reg.formats = parse.parse_formats(root)
 
     api_consts = parse.parse_api_constants(root)
 
@@ -186,8 +187,22 @@ def lower(root: ET.Element, profile: Profile,
 
     _withdraw_unbacked_extensions(reg, profile, implemented_extensions,
                                   extension_commands)
+    _record_command_extensions(reg, root)
 
     return reg
+
+
+def _record_command_extensions(reg: Registry, root: ET.Element) -> None:
+    listed: dict[str, list[tuple[str, str]]] = {}
+    for ext_name, info in parse.parse_extensions(root).items():
+        if info["supported"] == "disabled" or "vulkan" not in info["supported"].split(",") \
+                or not info["type"]:
+            continue
+        for command in info["commands"]:
+            listed.setdefault(command, []).append((ext_name, info["type"]))
+    for name, cmd in reg.commands.items():
+        found = set(listed.get(name, ())) | set(listed.get(cmd.alias_of or name, ()))
+        reg.command_extensions[name] = sorted(found)
 
 
 def _withdraw_unbacked_extensions(
@@ -215,7 +230,7 @@ def _withdraw_unbacked_extensions(
             print(f"  {ext_name}: needs {first}", file=sys.stderr)
 
 
-_BESPOKE_UNIONS = {"VkDescriptorDataEXT"}
+_BESPOKE_UNIONS = {"VkDescriptorDataEXT", "VkIndirectCommandsTokenDataEXT", "VkIndirectExecutionSetInfoEXT"}
 
 
 def _is_address_union(s) -> bool:
@@ -253,26 +268,32 @@ def _validation_reason(reg, cmd, classify, is_count_array_pair) -> str | None:
                 "the server. Needs a discriminator-aware serializer"
             )
 
+    blobs: set[str] = set()
     i = 0
     while i < len(cmd.params):
         if is_count_array_pair(cmd.params, i):
             count = cmd.params[i]
             arr = cmd.params[i + 1]
-            if count.type.base != "uint32_t":
+            wide_blob = count.type.base == "size_t" and arr.type.base == "void"
+            if count.type.base != "uint32_t" and not wide_blob:
                 return (
                     f"count_array_pair count {count.name!r} is "
                     f"{count.type.base}; only uint32_t handled"
                 )
-            if arr.type.base == "void":
+            if arr.type.base == "void" and not wide_blob:
                 return (
                     f"count_array_pair element {arr.name!r} is void* "
                     "(opaque blob); needs bespoke serialization"
                 )
+            if wide_blob:
+                blobs.add(arr.name)
             i += 2
         else:
             i += 1
 
     for p in cmd.params:
+        if p.name in blobs:
+            continue
         if p.direction == "out" and p.type.pointer_depth == 1 and p.type.base == "void":
             has_size_sibling = p.len_expr is not None and any(
                 q.name == p.len_expr
@@ -413,6 +434,7 @@ def _lower_command(cmd_el: ET.Element, cmd_name: str,
                 len_expr=len_expr,
                 direction=direction,
                 inner_len=profile.inner_lens.get(f"{cmd_name}.{pname}"),
+                stride=p_el.get("stride"),
             )
         )
 

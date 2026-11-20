@@ -10,6 +10,7 @@
 #include "device/threading/work_item.hpp"
 #include "device/threading/doorbell.hpp"
 #include "device/threading/worker.hpp"
+#include "device/threading/worker_reaper.hpp"
 #include "device/recording/wire_recorder.hpp"
 #include "device/abi/av_executor.h"
 #include "harness/executor/mock_executor_ops.hpp"
@@ -34,6 +35,7 @@ using av::RingWindow;
 using av::Status;
 using av::WorkItem;
 using av::Worker;
+using av::WorkerReaper;
 
 namespace av {
 
@@ -41,6 +43,19 @@ struct DoorbellProbe {
     static void forge(Doorbell &doorbell, void *event) { doorbell.event_ = event; doorbell.connected_ = true; }
     static void forget_event(Doorbell &doorbell) { doorbell.event_ = nullptr; }
     static void repair(Doorbell &doorbell) { doorbell.event_ = nullptr; doorbell.connected_ = false; }
+};
+
+struct WorkerReaperProbe {
+    static void fill(WorkerReaper &reaper, Worker &worker)
+    {
+        for (WorkerReaper::Entry &entry : reaper.entries_) entry = WorkerReaper::Entry{&worker, 0u, WorkerReaper::State::waiting, false, false, false};
+        reaper.held_ = WorkerReaper::capacity;
+    }
+    static void empty(WorkerReaper &reaper)
+    {
+        for (WorkerReaper::Entry &entry : reaper.entries_) entry = WorkerReaper::Entry{};
+        reaper.held_ = 0u;
+    }
 };
 
 struct WorkerProbe {
@@ -111,7 +126,13 @@ public:
     {
         journal_.host = &host_;
     }
-    ~Fixture() { worker_.stop(); }
+    ~Fixture() { halt(); }
+
+    void halt()
+    {
+        worker_.stop();
+        worker_.join();
+    }
 
     MockHost     &host() { return host_; }
     Worker       &worker() { return worker_; }
@@ -159,7 +180,7 @@ TEST(worker_post, runs_work_off_the_main_loop_and_completes_on_it_in_order)
       CHECK_EQ(fixture.journal().completion_order[index], index + 1u);
   }
   CHECK_EQ(fixture.worker().pending(), 0u);
-  fixture.worker().stop();
+  fixture.halt();
   CHECK(!fixture.worker().running());
   CHECK(fixture.worker().invariants_hold()); }
 
@@ -194,7 +215,7 @@ TEST(worker_report, writes_its_queue_or_busy_without_waiting)
   fixture.host().signal_event(gate);
   while (fixture.journal().ran.load() != Worker::queue_capacity + 1u) sched_yield();
   CHECK(fixture.worker().invariants_hold());
-  fixture.worker().stop();
+  fixture.halt();
   fixture.host().destroy_event(gate); }
 
 TEST(worker_post, a_full_queue_refuses_the_next_item)
@@ -218,7 +239,7 @@ TEST(worker_post, a_full_queue_refuses_the_next_item)
   CHECK(fixture.host().wait_for_main_loop_work(Worker::queue_capacity + 1u, patience_ms));
   CHECK_EQ(fixture.host().run_main_loop(), Worker::queue_capacity + 1u);
   CHECK_EQ(fixture.journal().completion_order[Worker::queue_capacity], Worker::queue_capacity);
-  fixture.worker().stop();
+  fixture.halt();
   fixture.host().destroy_event(gate); }
 
 namespace {
@@ -238,7 +259,7 @@ void release_once_stopping(void *context)
 
 }
 
-TEST(worker_stop, finishes_the_running_item_and_drops_the_rest)
+TEST(worker_stop, finishes_the_running_item_and_completes_the_rest_without_running_them)
 { Fixture fixture;
   void *gate = nullptr;
   CHECK_STATUS(fixture.host().create_event(gate), Status::ok);
@@ -251,10 +272,11 @@ TEST(worker_stop, finishes_the_running_item_and_drops_the_rest)
   Releaser releaser = {&fixture.worker(), &fixture.host(), gate};
   void *helper = nullptr;
   CHECK_STATUS(fixture.host().start_thread(&release_once_stopping, &releaser, helper), Status::ok);
-  fixture.worker().stop();
+  fixture.halt();
   fixture.host().join_thread(helper);
   CHECK_EQ(fixture.journal().ran.load(), 1u);
-  CHECK_EQ(fixture.host().run_main_loop(), 1u);
+  CHECK_EQ(fixture.host().run_main_loop(), 4u);
+  CHECK_EQ(fixture.journal().ran.load(), 1u);
   CHECK(!fixture.worker().stopping());
   CHECK_EQ(fixture.worker().pending(), 0u);
   CHECK_STATUS(fixture.worker().post(WorkItem(&work, &completion, &dropped[0])), Status::invalid_state);
@@ -265,8 +287,8 @@ TEST(worker_start, a_second_start_is_refused_and_each_host_failure_releases_ever
 { Fixture fixture;
   CHECK_STATUS(fixture.worker().start(), Status::ok);
   CHECK_STATUS(fixture.worker().start(), Status::invalid_state);
-  fixture.worker().stop();
-  fixture.worker().stop();
+  fixture.halt();
+  fixture.halt();
   for (int failure = 0; failure < 3; failure++) {
       if (failure == 0) fixture.host().fail_event_at(1u);
       if (failure == 1) fixture.host().fail_mutex_at(1u);
@@ -297,7 +319,7 @@ TEST(worker, lifecycle_is_main_loop_only_and_work_is_worker_only)
   CHECK(fixture.host().claim(HostViolation::main_loop_required));
   CHECK_STATUS(call.status, Status::invalid_state);
   CHECK_STATUS(fixture.worker().start(), Status::ok);
-  fixture.worker().stop();
+  fixture.halt();
   Entry entry = fixture.entry(1u);
   work(&entry);
   CHECK(fixture.host().claim(HostViolation::worker_required)); }
@@ -317,7 +339,7 @@ TEST(worker_connect_doorbell, a_store_wakes_the_worker_to_serve_its_ring)
       CHECK(fixture.published(fixture.guest().tail()));
   }
   CHECK(!fixture.host().ring_doorbell(4u));
-  fixture.worker().stop();
+  fixture.halt();
   CHECK_EQ(fixture.host().live_doorbells(), 0u);
   CHECK_EQ(fixture.ring().batches(), 3u);
   CHECK(fixture.worker().invariants_hold()); }
@@ -351,10 +373,10 @@ TEST(worker_connect_doorbell, a_page_past_the_region_is_refused)
   CHECK_STATUS(fixture.worker().start(), Status::ok);
   CHECK_STATUS(fixture.worker().connect_doorbell(av::Doorbell::pages), Status::invalid_parameter);
   CHECK_EQ(fixture.host().live_doorbells(), 0u);
-  fixture.worker().stop();
+  fixture.halt();
   CHECK_STATUS(fixture.worker().start(), Status::ok);
   CHECK_STATUS(fixture.worker().connect_doorbell(1u), Status::ok);
-  fixture.worker().stop(); }
+  fixture.halt(); }
 
 TEST(worker_invariants, a_queue_past_capacity_or_a_head_outside_it_is_detected)
 { MockHost host;
@@ -441,7 +463,7 @@ TEST(worker_run, a_batch_published_as_the_worker_gives_up_spinning_is_served_wit
   for (std::uint32_t spins = 0u; spins < 50000000u && fixture.guest().tail() != 32u; spins++) sched_yield();
   CHECK_EQ(fixture.guest().tail(), 32u);
   CHECK(fixture.published(32u));
-  fixture.worker().stop();
+  fixture.halt();
   CHECK(fixture.worker().invariants_hold()); }
 
 namespace {
@@ -469,4 +491,119 @@ TEST(worker_run, an_idle_worker_with_a_hung_submission_wakes_at_the_watchdog_dea
   fixture.host().set_clock(1000u + av::SubmissionWatchdog::default_limit_ns + 1u);
   for (std::uint32_t spins = 0u; spins < 50000000u && !fixture.ring().faulted(); spins++) sched_yield();
   CHECK(fixture.ring().faulted());
-  fixture.worker().stop(); }
+  fixture.halt(); }
+
+namespace {
+
+struct Collector {
+    WorkerReaper *reaper = nullptr;
+    Host         *host = nullptr;
+    std::uint32_t tokens[4] = {};
+    std::uint32_t count = 0u;
+};
+
+void collect(void *context)
+{
+    auto *const collector = static_cast<Collector *>(context);
+    collector->host->require_main_loop("test collect");
+    collector->count += collector->reaper->collect(collector->tokens + collector->count, 4u - collector->count);
+}
+
+struct Opener {
+    Host *host;
+    void *gate;
+};
+
+void open_gate_later(void *context)
+{
+    auto *const opener = static_cast<Opener *>(context);
+    for (int spins = 0; spins < 2000; spins++) sched_yield();
+    opener->host->signal_event(opener->gate);
+}
+
+}
+
+TEST(worker_stop, returns_at_once_while_the_running_item_is_blocked_and_join_waits_for_the_item)
+{ Fixture fixture;
+  void *gate = nullptr;
+  CHECK_STATUS(fixture.host().create_event(gate), Status::ok);
+  CHECK_STATUS(fixture.worker().start(), Status::ok);
+  Entry blocker = fixture.entry(1u, gate);
+  CHECK_STATUS(fixture.worker().post(WorkItem(&work, &completion, &blocker)), Status::ok);
+  while (fixture.worker().pending() != 0u) sched_yield();
+  fixture.worker().stop();
+  CHECK(fixture.worker().stopping());
+  CHECK(fixture.worker().running());
+  CHECK(!fixture.worker().exited());
+  CHECK_EQ(fixture.journal().ran.load(), 0u);
+  fixture.host().signal_event(gate);
+  fixture.worker().join();
+  CHECK(fixture.worker().exited());
+  CHECK(!fixture.worker().running());
+  CHECK_EQ(fixture.journal().ran.load(), 1u);
+  CHECK_EQ(fixture.host().run_main_loop(), 1u);
+  fixture.host().destroy_event(gate); }
+
+TEST(worker_reaper, joins_a_stopped_worker_off_the_main_loop_once_its_item_ends_and_gives_its_token_back)
+{ Fixture fixture;
+  Collector collector;
+  WorkerReaper reaper(fixture.host(), &collect, &collector);
+  collector.reaper = &reaper;
+  collector.host = &fixture.host();
+  CHECK_STATUS(reaper.start(), Status::ok);
+  void *gate = nullptr;
+  CHECK_STATUS(fixture.host().create_event(gate), Status::ok);
+  CHECK_STATUS(fixture.worker().start(), Status::ok);
+  Entry blocker = fixture.entry(1u, gate);
+  CHECK_STATUS(fixture.worker().post(WorkItem(&work, &completion, &blocker)), Status::ok);
+  while (fixture.worker().pending() != 0u) sched_yield();
+  fixture.worker().stop();
+  CHECK_STATUS(reaper.take(fixture.worker(), 7u), Status::ok);
+  CHECK_EQ(reaper.held(), 1u);
+  for (int spins = 0; spins < 2000; spins++) sched_yield();
+  CHECK_EQ(fixture.host().run_main_loop(), 0u);
+  CHECK_EQ(collector.count, 0u);
+  CHECK(fixture.worker().running());
+  fixture.host().signal_event(gate);
+  CHECK(fixture.host().wait_for_main_loop_work(2u, patience_ms));
+  CHECK_EQ(fixture.host().run_main_loop(), 2u);
+  CHECK_EQ(collector.count, 1u);
+  CHECK_EQ(collector.tokens[0], 7u);
+  CHECK(!fixture.worker().running());
+  CHECK_EQ(reaper.held(), 0u);
+  CHECK(reaper.invariants_hold());
+  reaper.stop();
+  CHECK_EQ(fixture.host().unclaimed_violations(), 0u);
+  fixture.host().destroy_event(gate); }
+
+TEST(worker_reaper, a_reaper_not_started_or_full_refuses_and_stopping_waits_for_the_workers_it_holds)
+{ Fixture fixture;
+  Collector collector;
+  WorkerReaper reaper(fixture.host(), &collect, &collector);
+  collector.reaper = &reaper;
+  collector.host = &fixture.host();
+  CHECK_STATUS(fixture.worker().start(), Status::ok);
+  CHECK_STATUS(reaper.take(fixture.worker(), 1u), Status::invalid_state);
+  CHECK_STATUS(reaper.start(), Status::ok);
+  CHECK_STATUS(reaper.start(), Status::invalid_state);
+  av::WorkerReaperProbe::fill(reaper, fixture.worker());
+  CHECK_STATUS(reaper.take(fixture.worker(), 1u), Status::no_space);
+  av::WorkerReaperProbe::empty(reaper);
+  void *gate = nullptr;
+  CHECK_STATUS(fixture.host().create_event(gate), Status::ok);
+  Entry blocker = fixture.entry(1u, gate);
+  CHECK_STATUS(fixture.worker().post(WorkItem(&work, nullptr, &blocker)), Status::ok);
+  while (fixture.worker().pending() != 0u) sched_yield();
+  fixture.worker().stop();
+  CHECK_STATUS(reaper.take(fixture.worker(), 3u), Status::ok);
+  Opener opener = {&fixture.host(), gate};
+  void *helper = nullptr;
+  CHECK_STATUS(fixture.host().start_thread(&open_gate_later, &opener, helper), Status::ok);
+  reaper.stop();
+  fixture.host().join_thread(helper);
+  CHECK(!fixture.worker().running());
+  std::uint32_t tokens[2] = {};
+  CHECK_EQ(reaper.collect(tokens, 2u), 1u);
+  CHECK_EQ(tokens[0], 3u);
+  CHECK_EQ(reaper.held(), 0u);
+  fixture.host().destroy_event(gate); }

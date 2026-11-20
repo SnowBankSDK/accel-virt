@@ -2,6 +2,7 @@
 
 #include "core/trace/function_scope.hpp"
 #include "icd/d3d/caps_reply.hpp"
+#include "icd/d3d/feature_level_gate.hpp"
 #include "guest/kmt/kmt.hpp"
 #include "proto/escape/umd_adapter_info.hpp"
 #include "proto/generated/d3d/d3d_dispatch_client.h"
@@ -63,7 +64,10 @@ uint64_t D3d11HostCaps::max_buffer_bytes() const
 UINT D3d11HostCaps::pipeline_levels() const
 {
     AV_SCOPE("D3d11HostCaps::pipeline_levels");
-    const uint32_t level = caps_.feature_level;
+    const uint32_t level = d3d::FeatureLevelGate(d3d::FeatureLevelRequirements{
+        caps_.feature_level, caps_.tiled_resources_tier, caps_.typed_uav_load_additional_formats != 0u,
+        caps_.rovs != 0u, caps_.conservative_rasterization_tier, true,
+        caps_.vp_and_rt_array_index_from_any_shader != 0u}).highest();
     UINT levels = D3D11DDI_ENCODE_3DPIPELINESUPPORT_CAP(D3D11DDI_3DPIPELINELEVEL_10_0) |
                   D3D11DDI_ENCODE_3DPIPELINESUPPORT_CAP(D3D11DDI_3DPIPELINELEVEL_10_1) |
                   D3D11DDI_ENCODE_3DPIPELINESUPPORT_CAP(D3D11_1DDI_3DPIPELINELEVEL_9_1) |
@@ -71,7 +75,21 @@ UINT D3d11HostCaps::pipeline_levels() const
                   D3D11DDI_ENCODE_3DPIPELINESUPPORT_CAP(D3D11_1DDI_3DPIPELINELEVEL_9_3);
     if (level >= level_11_0) levels |= D3D11DDI_ENCODE_3DPIPELINESUPPORT_CAP(D3D11DDI_3DPIPELINELEVEL_11_0);
     if (level >= level_11_1) levels |= D3D11DDI_ENCODE_3DPIPELINESUPPORT_CAP(D3D11_1DDI_3DPIPELINELEVEL_11_1);
+    if (level >= d3d::FeatureLevelGate::level_12_0)
+        levels |= D3D11DDI_ENCODE_3DPIPELINESUPPORT_CAP(D3DWDDM2_0DDI_3DPIPELINELEVEL_12_0);
+    if (level >= d3d::FeatureLevelGate::level_12_1)
+        levels |= D3D11DDI_ENCODE_3DPIPELINESUPPORT_CAP(D3DWDDM2_0DDI_3DPIPELINELEVEL_12_1);
     return levels;
+}
+
+UINT D3d11HostCaps::tiled_support_flags() const
+{
+    AV_SCOPE("D3d11HostCaps::tiled_support_flags");
+    UINT flags = 0u;
+    if (caps_.tiled_resources_tier >= 1u) flags |= D3DWDDM1_3DDI_TILED_RESOURCES_TIER_1_SUPPORTED;
+    if (caps_.tiled_resources_tier >= 2u) flags |= D3DWDDM1_3DDI_TILED_RESOURCES_TIER_2_SUPPORTED;
+    if (caps_.tiled_resources_tier >= 3u) flags |= D3DWDDM2_0DDI_TILED_RESOURCES_TIER_3_SUPPORTED;
+    return flags;
 }
 
 HRESULT D3d11HostCaps::answer(const D3D10_2DDIARG_GETCAPS &args) const
@@ -107,7 +125,11 @@ HRESULT D3d11HostCaps::answer(const D3D10_2DDIARG_GETCAPS &args) const
         precision.AllOtherStagesMinPrecision = caps_.all_other_shader_stages_min_precision;
         return reply.give_whole(&precision, sizeof precision) ? S_OK : E_INVALIDARG;
     }
-    case D3DWDDM1_3DDICAPS_D3D11_OPTIONS1: word = 0u; break;
+    case D3DWDDM1_3DDICAPS_D3D11_OPTIONS1: {
+        D3DWDDM1_3DDI_D3D11_OPTIONS_DATA1 tiled = {};
+        tiled.TiledResourcesSupportFlags = tiled_support_flags();
+        return reply.give_whole(&tiled, sizeof tiled) ? S_OK : E_INVALIDARG;
+    }
     case D3DWDDM1_3DDICAPS_MARKER: word = 0u; break;
     case D3DWDDM2_0DDICAPS_D3D11_OPTIONS2: word = caps_.conservative_rasterization_tier; break;
     case D3DWDDM2_0DDICAPS_D3D11_OPTIONS3: word = caps_.vp_and_rt_array_index_from_any_shader; break;

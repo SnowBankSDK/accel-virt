@@ -20,6 +20,7 @@ public:
     uint32_t host_type(uint32_t guest) const;
     uint32_t heap_of(uint32_t guest) const;
     uint32_t source_type(uint32_t guest) const;
+    bool     placed(uint32_t guest) const;
     uint32_t guest_bits(uint32_t host_bits) const;
     uint32_t unmapped(uint32_t guest_bits) const;
 
@@ -28,6 +29,12 @@ public:
 private:
     static constexpr VkMemoryPropertyFlags host_access =
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+
+    static constexpr VkMemoryPropertyFlags cached_coherent =
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+    static constexpr VkMemoryPropertyFlags cached_coherent_mask =
+        cached_coherent | VK_MEMORY_PROPERTY_PROTECTED_BIT | VK_MEMORY_PROPERTY_DEVICE_COHERENT_BIT_AMD |
+        VK_MEMORY_PROPERTY_DEVICE_UNCACHED_BIT_AMD | VK_MEMORY_PROPERTY_RDMA_CAPABLE_BIT_NV;
 
     uint32_t twin_origins(const VkPhysicalDeviceMemoryProperties &host, uint32_t backed) const;
     void     append(VkMemoryPropertyFlags flags, uint32_t heap, uint32_t host, bool backed);
@@ -41,6 +48,7 @@ private:
     uint32_t                         hosts_[VK_MAX_MEMORY_TYPES];
     uint32_t                         backed_;
     uint32_t                         host_types_;
+    uint32_t                         placed_;
 
     friend struct GuestMemoryTypesProbe;
 };

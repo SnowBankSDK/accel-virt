@@ -9,8 +9,10 @@
 #include "icd/common/shared_handles.hpp"
 #include "icd/opengl/gl_context_table.hpp"
 #include "icd/opengl/gl_extension_policy.hpp"
+#include "icd/opengl/gl_poll_clock.hpp"
 #include "icd/opengl/manual_calls.hpp"
 #include "icd/opengl/pixel_format_query.hpp"
+#include "icd/opengl/preferred_adapter.hpp"
 #include "icd/opengl/pixel_format_table.hpp"
 #include "icd/opengl/window_table.hpp"
 
@@ -34,6 +36,7 @@ class WindowSurface;
 
 namespace av::glicd {
 
+class AdapterOrder;
 class SystemOpengl;
 class ThreadSlot;
 struct GlIcdRootProbe;
@@ -51,10 +54,12 @@ public:
     };
     enum : uint32_t { gl_invalid_operation = 0x0502u, gl_invalid_enum = 0x0500u, gl_invalid_value = 0x0501u };
     static constexpr uint32_t swap_main_plane = 1u;
+    static constexpr uint32_t make_attempts = 20u;
+    static constexpr uint64_t make_pause_nanoseconds = 50000000u;
 
     GlIcdRoot(BlockSource &memory, Kmt &kmt, ThreadLock &lock, ThreadLock &send_lock, ThreadLock &slice_lock, KeyedLog &log,
               icd::WindowSurface &surface, ThreadSlot &slot, SystemOpengl &system, GlPresentQueue &presents,
-              GlIcdBinding &binding);
+              GlIcdBinding &binding, AdapterOrder &order);
     ~GlIcdRoot();
     GlIcdRoot(const GlIcdRoot &) = delete;
     GlIcdRoot &operator=(const GlIcdRoot &) = delete;
@@ -95,6 +100,7 @@ public:
     uint32_t         reset_status();
     int32_t          force_context_fault();
     uint32_t         current_share_name();
+    uint64_t         current_adapter_luid();
     int32_t          run_held_calls();
     uint64_t         mint_sync_token();
     void             note_dropped(const char *api, const char *command, size_t written);
@@ -107,6 +113,8 @@ private:
     enum class Shown { refused, nothing, handed };
 
     Shown show_frame(void *dc);
+    bool  show_front(GuestGlContext *context);
+    void  choose_adapter(void *dc);
     Shown present_frame(void *dc, bool paced);
     bool  admits(GuestGlContext &context);
     uint64_t take_pending(uint32_t thread);
@@ -117,6 +125,7 @@ private:
     GuestGlContext *shared_context(void *share, uint64_t &handle);
     bool            shares_into(uint64_t first, uint64_t second) const;
     [[nodiscard]] Status make_chain(GuestGlContext &context);
+    [[nodiscard]] Status make_patiently(GuestGlContext &context);
     GuestGlContext      &farthest_unmade(GuestGlContext &context) const;
     void                 note_profile(const GuestGlContext &context);
 
@@ -132,6 +141,9 @@ private:
     PixelFormatQuery  query_;
     WindowTable       windows_;
     CurrentContexts   currents_;
+    PreferredAdapter  preferred_;
+    bool              adapter_chosen_;
+    uint64_t          adapter_luid_;
     icd::IcdConnection      connection_;
     GlExtensionPolicy extensions_;
     icd::SharedHandles shared_handles_;
@@ -142,6 +154,7 @@ private:
     generated::GlProcTable proc_table_;
     KeyedSlots<uint32_t, uint64_t> pending_;
     icd::IdMint<uint64_t> sync_tokens_;
+    GlPollClock       clock_;
 
     friend struct GlIcdRootProbe;
 };

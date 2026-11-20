@@ -12,6 +12,7 @@ namespace av {
 class BlockSource;
 class GlErrorQueue;
 class ByteLedger;
+class SessionLease;
 
 class GlVramGuard {
 public:
@@ -20,6 +21,7 @@ public:
     GlVramGuard &operator=(const GlVramGuard &) = delete;
 
     void bind(ByteLedger *vram, ByteLedger *host);
+    void reserve_from(SessionLease *lease);
     void install();
     void clear();
 
@@ -32,7 +34,7 @@ public:
     bool invariants_hold() const;
 
 private:
-    enum class Kind : uint64_t { buffer = 1u, texture = 2u, renderbuffer = 3u, host_buffer = 4u };
+    enum class Kind : uint64_t { buffer = 1u, texture = 2u, renderbuffer = 3u, host_buffer = 4u, commitment = 5u };
 
     [[nodiscard]] bool account(VramAccount &against, Kind kind, uint32_t name, uint32_t slot, uint64_t bytes);
     [[nodiscard]] bool buffer_bytes(uint32_t name, uint64_t size, bool resident);
@@ -49,12 +51,17 @@ private:
     bool               renderbuffer(uint32_t name, uint32_t format, uint64_t width, uint64_t height,
                                     uint64_t samples);
     void               forget(Kind kind, uint64_t count, const uint32_t *names);
+    void               sparse_parameter(uint32_t texture, uint32_t target, uint32_t pname, int64_t value);
+    bool               commitment(uint32_t texture, uint32_t target, uint32_t level, uint64_t width, uint64_t height,
+                                  uint64_t depth, bool commit);
+    bool               sparse(uint32_t name) const;
 
     glproto::RealGl &gl_;
     GlErrorQueue    &errors_;
     VramAccount      account_;
     VramAccount      host_;
     KeyedSlots<uint64_t, uint64_t> sizes_;
+    KeyedSlots<uint64_t, uint64_t> sparse_;
 };
 
 }

@@ -8,6 +8,7 @@
 #include "icd/common/gpu_timeline.hpp"
 #include "icd/common/host_channel.hpp"
 #include "icd/opengl/buffer_clear_pattern.hpp"
+#include "icd/opengl/buffer_pieces.hpp"
 #include "icd/opengl/buffer_mapping.hpp"
 #include "icd/opengl/slice_pin.hpp"
 #include "proto/client/client_transport.hpp"
@@ -95,7 +96,7 @@ bool SlicedBuffers::offers(int64_t size, uint32_t flags) const
                                        gl_dynamic_storage_bit | gl_client_storage_bit;
     if ((flags & ~known_storage) != 0u || (flags & both) == 0u) return false;
     if ((flags & gl_map_coherent_bit) != 0u && (flags & BufferMapping::map_persistent) == 0u) return false;
-    return (flags & BufferMapping::map_persistent) != 0u && (flags & gl_dynamic_storage_bit) == 0u;
+    return (flags & BufferMapping::map_persistent) != 0u;
 }
 
 Status SlicedBuffers::place(ClientTransport &wire, uint32_t buffer, uint64_t size, uint32_t flags, const void *data)
@@ -465,6 +466,25 @@ uint32_t SlicedBuffers::invalidate(uint32_t buffer, int64_t offset, int64_t leng
     return overlaps && (row.access_ & BufferMapping::map_persistent) == 0u ? gl_invalid_operation : gl_no_error;
 }
 
+uint32_t SlicedBuffers::write(ClientTransport &wire, uint32_t buffer, int64_t offset, int64_t size, const void *data)
+{
+    AV_SCOPE("SlicedBuffers::write");
+    Row row = {};
+    if (!snapshot(buffer, row) || (row.flags_ & gl_dynamic_storage_bit) == 0u) return gl_invalid_operation;
+    if (offset < 0 || size < 0) return gl_invalid_value;
+    const uint64_t at = static_cast<uint64_t>(offset);
+    const uint64_t bytes = static_cast<uint64_t>(size);
+    if (at > row.size_ || bytes > row.size_ - at) return gl_invalid_value;
+    if (row.access_ != 0u && (row.access_ & BufferMapping::map_persistent) == 0u) return gl_invalid_operation;
+    if (bytes == 0u || data == nullptr) return gl_no_error;
+    BufferPieces pieces(wire);
+    if (pieces.cuts_write(static_cast<intptr_t>(size), data))
+        pieces.write_slice(buffer, at, static_cast<size_t>(bytes), static_cast<const uint8_t *>(data));
+    else
+        static_cast<void>(glmemproto::av_glmem_WriteBufferSlice(wire, buffer, at, data, bytes));
+    return gl_no_error;
+}
+
 void *SlicedBuffers::pointer_of(uint32_t buffer) const
 {
     AV_SCOPE("SlicedBuffers::pointer_of");
@@ -522,6 +542,12 @@ uint32_t SlicedBuffers::busy() const
     const uint32_t rows = owned();
     const uint32_t waiting = deferred();
     return rows + waiting + pinned();
+}
+
+uint32_t SlicedBuffers::group_root() const
+{
+    AV_SCOPE("SlicedBuffers::group_root");
+    return groups_.root(group_);
 }
 
 uint32_t SlicedBuffers::group() const

@@ -1,6 +1,7 @@
 #ifndef AV_SOFTWARE_GL_HPP
 #define AV_SOFTWARE_GL_HPP
 
+#include "executor/host_lifecycle_gate.hpp"
 #include "executor/shim/gl_display.hpp"
 
 #include <cstdint>
@@ -22,6 +23,7 @@ public:
 private:
     void probe();
 
+    HostLifecycleGate gate_;
     GlDisplay    display_;
     std::uint8_t uuid_[uuid_bytes];
     bool         usable_;

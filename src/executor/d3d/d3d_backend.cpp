@@ -1,5 +1,8 @@
 #include "executor/d3d/d3d_backend.hpp"
 
+#include "core/support/scope_exit.hpp"
+#include "proto/d3d/resource_footprint.hpp"
+
 #include "executor/d3d/bounded_transfer.hpp"
 
 #include "executor/teardown_budget.hpp"
@@ -20,6 +23,8 @@
 #include "executor/source_memory.hpp"
 #include "device/abi/av_executor.h"
 #include "executor/d3d/dxbc_container.hpp"
+#include "executor/d3d/stream_output_declaration.hpp"
+#include "executor/d3d/stream_output_signature.hpp"
 #include "proto/d3d/buffer_slice_support.hpp"
 #include "proto/d3d/dxgi_format_layout.hpp"
 #include "proto/d3d/resource_misc.hpp"
@@ -58,7 +63,8 @@ constexpr uint32_t dimension_texture3d = 4u;
 constexpr uint32_t kept_misc_flags = D3D11_RESOURCE_MISC_GENERATE_MIPS | D3D11_RESOURCE_MISC_TEXTURECUBE |
                                      D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS |
                                      D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS |
-                                     D3D11_RESOURCE_MISC_BUFFER_STRUCTURED | D3D11_RESOURCE_MISC_RESOURCE_CLAMP;
+                                     D3D11_RESOURCE_MISC_BUFFER_STRUCTURED | D3D11_RESOURCE_MISC_RESOURCE_CLAMP |
+                                     ResourceMisc::tile_pool_bit | ResourceMisc::tiled_bit;
 constexpr uint32_t known_bind_flags = D3D11_BIND_VERTEX_BUFFER | D3D11_BIND_INDEX_BUFFER |
                                       D3D11_BIND_CONSTANT_BUFFER | D3D11_BIND_SHADER_RESOURCE |
                                       D3D11_BIND_STREAM_OUTPUT | D3D11_BIND_RENDER_TARGET |
@@ -120,18 +126,20 @@ D3dObjectKind D3dBackend::shader_kind(uint32_t stage) const
 D3dBackend::D3dBackend(ExecutorLog &log)
     : d3dproto::ServerDispatch(guest_), device11_(nullptr), surfaces_(nullptr), shares_(nullptr), wake_(), fence_wake_(), clock_(), admitted_(false), held_(false), heap_(),
       blocks_(heap_), remade_(blocks_, Pool::paged), states_(blocks_),
-      lines_(log.d3d11()), refusal_(lines_), arena_(nullptr), objects_(blocks_), guest_(),
-      region_(guest_, lines_), imports_(nullptr), slices_(blocks_, lines_), d3d12_(guest_, objects_, wake_, fence_wake_, blocks_, log.d3d12()),
-      d3d9_(guest_, objects_, blocks_, slices_, fence_wake_, log.d3d9()),
+      lines_(log.d3d11()), refusal_(lines_), arena_(nullptr), objects_(blocks_), refused_creates_(blocks_), leased_(blocks_), guest_(),
+      region_(guest_, lines_), imports_(nullptr), slices_(blocks_, lines_), d3d12_(guest_, objects_, leased_, wake_, fence_wake_, blocks_, log.d3d12()),
+      d3d9_(guest_, objects_, leased_, blocks_, slices_, fence_wake_, log.d3d9()), tiles_(objects_),
       published_(blocks_, guest_), progress11_(fence_wake_), constants_(blocks_),
-      missed_key_(0u), batches_(), queue_drain_(), submitted_(0u), drained_(false), mark_refused_(false), must_signal_(false), deferred_since_(0u), batch_ended_at_(0u),
-      show_refused_(false), lost_(false)
+      missed_key_(0u), batches_(), queue_drain_(), submitted_(0u), drained_(false), predication_refusal_noted_(false), mark_refused_(false),
+      must_signal_(false), deferred_since_(0u), batch_ended_at_(0u), show_refused_(false), refused_use_noted_(false), lost_(false),
+      memory_refused_(false)
 {
     AV_SCOPE("D3dBackend::D3dBackend");
 }
 
 bool D3dBackend::initialize(SessionShares &shares, ImportTable &imports, D3d11HostDevice *device11,
-                            D3d12HostDevice *device12, SharedSurfaces *surfaces, D3d9HostDevice *device9)
+                            D3d12HostDevice *device12, SharedSurfaces *surfaces, D3d9HostDevice *device9,
+                            HostMemorySource *source)
 {
     AV_SCOPE("D3dBackend::initialize");
     if (device11 == nullptr || !device11->admit(wake_)) return false;
@@ -140,9 +148,10 @@ bool D3dBackend::initialize(SessionShares &shares, ImportTable &imports, D3d11Ho
     surfaces_ = surfaces;
     shares_ = &shares;
     imports_ = &imports;
-    d3d12_.initialize(imports, device12, device11, surfaces, &shares);
+    d3d12_.initialize(imports, device12, device11, surfaces, &shares, source);
     d3d9_.initialize(device9, surfaces, device11, &shares, &imports);
     lost_ = false;
+    memory_refused_ = false;
     return true;
 }
 
@@ -151,15 +160,40 @@ void D3dBackend::let_go_of_thread()
     AV_SCOPE("D3dBackend::let_go_of_thread");
 }
 
+void D3dBackend::leave_device()
+{
+    AV_SCOPE("D3dBackend::leave_device");
+    d3d12_.leave_device();
+    heap_.bind(nullptr, UINT64_MAX);
+    if (admitted_ && device11_ != nullptr) device11_->dismiss(wake_);
+    admitted_ = false;
+}
+
+void D3dBackend::leave_lost_device()
+{
+    AV_SCOPE("D3dBackend::leave_lost_device");
+    lost_ = true;
+    d3d12_.leave_lost_device();
+    if (admitted_ && device11_ != nullptr) device11_->dismiss(wake_);
+    admitted_ = false;
+}
+
 void D3dBackend::use_host_ram(ByteLedger *ledger, uint64_t limit)
 {
     AV_SCOPE("D3dBackend::use_host_ram");
     heap_.bind(ledger, limit);
 }
 
+void D3dBackend::lease_from(SessionLease *lease)
+{
+    AV_SCOPE("D3dBackend::lease_from");
+    leased_.draw_from(lease);
+}
+
 void D3dBackend::shut_down()
 {
     AV_SCOPE("D3dBackend::shut_down");
+    leased_.draw_from(nullptr);
     d3d12_.shut_down();
     d3d9_.shut_down();
     if (device11_ != nullptr) {
@@ -173,6 +207,7 @@ void D3dBackend::shut_down()
         published_.unbind();
         constants_.close();
         objects_.release_all();
+        refused_creates_.clear();
         if (slices_.count() != 0u && !drained_) device11_->vulkan().idle();
         slices_.destroy_all();
         progress11_.release();
@@ -187,6 +222,7 @@ void D3dBackend::shut_down()
     shares_ = nullptr;
     imports_ = nullptr;
     queue_drain_.forget();
+    work_window_.forget();
     submitted_ = 0u;
     drained_ = false;
 }
@@ -218,9 +254,21 @@ bool D3dBackend::run(uint32_t command_id, WireReader &payload, WireWriter &reply
     else device11_->select(states_.selected());
     held_ = true;
     arena_ = &arena;
+    objects_.forget_miss();
     const bool ran = d3dproto::dispatch_command(*this, command_id, payload, reply, arena);
     arena_ = nullptr;
     if (ran) return true;
+    if (refused_creates_.holds(objects_.missed())) {
+        if (!refused_use_noted_)
+            LogLine(lines_)
+                .text(d3dproto::command_name(command_id))
+                .text(" names ")
+                .number(objects_.missed())
+                .text(", which the host refused to make: the command is dropped, as every later one naming it is")
+                .write();
+        refused_use_noted_ = true;
+        return true;
+    }
     return states_.refuse(refusal_, d3dproto::command_name(command_id),
                           blocks_.refusal(static_cast<uint32_t>(DXGI_ERROR_DRIVER_INTERNAL_ERROR)));
 }
@@ -239,7 +287,10 @@ bool D3dBackend::drain(TeardownBudget &budget)
 bool D3dBackend::drain_queue(TeardownBudget &budget)
 {
     AV_SCOPE("D3dBackend::drain_queue");
-    if (lost_ || device11_->lost()) return false;
+    if (lost_ || device11_->lost()) {
+        leave_lost_device();
+        return false;
+    }
     device11_->lock(nullptr);
     if (progress11_.deferred()) signal_batches();
     const bool marked = queue_drain_.mark(device11_->vulkan(), submitted_);
@@ -255,6 +306,7 @@ void D3dBackend::end_batch()
     d3d9_.end_batch();
     d3d12_.end_batch();
     finish_d3d11();
+    if (device11_ != nullptr && device11_->refused_memory()) memory_refused_ = true;
     batches_.end(issued(), completed());
 }
 
@@ -264,7 +316,7 @@ D3dBatchCounter::Marks D3dBackend::issued() const
     uint64_t marked12 = 0u;
     uint64_t reached12 = 0u;
     d3d12_.gpu_progress(marked12, reached12);
-    return D3dBatchCounter::Marks{progress11_.issued(), marked12, d3d9_.marked()};
+    return D3dBatchCounter::Marks{progress11_.issued(), marked12, d3d9_.marked(), d3d9_.lent_issued()};
 }
 
 D3dBatchCounter::Marks D3dBackend::completed() const
@@ -273,7 +325,7 @@ D3dBatchCounter::Marks D3dBackend::completed() const
     uint64_t marked12 = 0u;
     uint64_t reached12 = 0u;
     d3d12_.gpu_progress(marked12, reached12);
-    return D3dBatchCounter::Marks{progress11_.reached(), reached12, d3d9_.reached()};
+    return D3dBatchCounter::Marks{progress11_.reached(), reached12, d3d9_.reached(), d3d9_.lent_reached()};
 }
 
 void D3dBackend::finish_d3d11()
@@ -363,7 +415,7 @@ void D3dBackend::gpu_progress(uint64_t &marked, uint64_t &reached) const
 bool D3dBackend::lost() const
 {
     AV_SCOPE("D3dBackend::lost");
-    return lost_ || (device11_ != nullptr && device11_->lost()) || d3d12_.lost() || d3d9_.lost();
+    return lost_ || memory_refused_ || (device11_ != nullptr && device11_->lost()) || d3d12_.lost() || d3d9_.lost();
 }
 
 bool D3dBackend::lose_device()
@@ -838,15 +890,17 @@ bool D3dBackend::on_Finish11(uint32_t &hresult)
     device11_->context()->Flush();
     must_signal_ = true;
     const HRESULT removed = device11_->device()->GetDeviceRemovedReason();
-    lost_ = FAILED(removed);
+    lost_ = lost_ || FAILED(removed);
     const uint32_t own = states_.removed_reason(states_.selected_id());
-    hresult = own != 0u ? own : static_cast<uint32_t>(removed);
+    hresult = own != 0u ? own : memory_refused_ ? static_cast<uint32_t>(E_OUTOFMEMORY) : static_cast<uint32_t>(removed);
     return true;
 }
 
 bool D3dBackend::on_DestroyObject(uint32_t id)
 {
     AV_SCOPE("D3dBackend::on_DestroyObject");
+    leased_.release(id);
+    if (refused_creates_.forget(id)) return true;
     D3dObjectKind kind = D3dObjectKind::none;
     IUnknown *const found = objects_.find_any(id, kind);
     if (found == nullptr || kind >= D3dObjectKind::heap12) return false;
@@ -863,6 +917,8 @@ bool D3dBackend::on_CreateResource(uint32_t id, const d3dproto::ResourceDesc &de
     AV_SCOPE("D3dBackend::on_CreateResource");
     if (!has_device() || !DxgiFormatLayout(desc.format).known() || (desc.bind_flags & ~known_bind_flags) != 0u) return false;
     if (desc.width == 0u || desc.mip_levels > 16u) return false;
+    leased_.charge(id, ResourceFootprint(desc).leased(memory));
+    const ScopeExit settled([this] { leased_.settle(); });
     const uint32_t misc = desc.misc_flags & kept_misc_flags;
     ID3D11Device5 *const device = device11_->device();
     IUnknown *made = nullptr;
@@ -914,7 +970,30 @@ bool D3dBackend::on_CreateResource(uint32_t id, const d3dproto::ResourceDesc &de
     } else {
         return false;
     }
-    if (FAILED(result) || made == nullptr) return true;
+    if (FAILED(result) || made == nullptr) {
+        if (refused_creates_.note(id, static_cast<uint32_t>(result)))
+            LogLine(lines_)
+                .text("the host made no resource ")
+                .number(id)
+                .text(" (")
+                .hex(static_cast<uint32_t>(result), 8u)
+                .text("): dimension ")
+                .number(desc.dimension)
+                .text(" format ")
+                .number(desc.format)
+                .text(" ")
+                .number(desc.width)
+                .text("x")
+                .number(desc.height)
+                .text("x")
+                .number(desc.depth_or_array)
+                .text(" mips ")
+                .number(desc.mip_levels)
+                .text(" bind ")
+                .hex(desc.bind_flags, 8u)
+                .write();
+        return true;
+    }
     if (objects_.keep(id, D3dObjectKind::resource, made) != Status::ok) return false;
     ID3D11DeviceChild *child = nullptr;
     if (shared_key != 0u &&
@@ -1009,10 +1088,26 @@ bool D3dBackend::on_OpenResource(uint32_t id, uint64_t shared_key, uint32_t &fou
     return true;
 }
 
+bool D3dBackend::refused_view(uint32_t id, HRESULT result)
+{
+    AV_SCOPE("D3dBackend::refused_view");
+    if (refused_creates_.note(id, static_cast<uint32_t>(result)))
+        LogLine(lines_)
+            .text("the host made no view ")
+            .number(id)
+            .text(" (")
+            .hex(static_cast<uint32_t>(result), 8u)
+            .text(")")
+            .write();
+    return true;
+}
+
 bool D3dBackend::on_CreateShaderResourceView(uint32_t id, const d3dproto::ViewDesc &desc)
 {
     AV_SCOPE("D3dBackend::on_CreateShaderResourceView");
     ID3D11Resource *const resource = objects_.find_as<ID3D11Resource>(desc.resource, D3dObjectKind::resource);
+    if (resource == nullptr && refused_creates_.holds(desc.resource))
+        return refused_view(id, static_cast<HRESULT>(refused_creates_.hresult_of(desc.resource)));
     if (resource == nullptr || !DxgiFormatLayout(desc.format).known()) return false;
     D3D11_SHADER_RESOURCE_VIEW_DESC view = {};
     view.Format = static_cast<DXGI_FORMAT>(desc.format);
@@ -1022,7 +1117,8 @@ bool D3dBackend::on_CreateShaderResourceView(uint32_t id, const d3dproto::ViewDe
     if (view.ViewDimension == D3D11_SRV_DIMENSION_BUFFEREX) view.BufferEx.Flags = desc.flags;
     if (desc.dimension > D3D11_SRV_DIMENSION_BUFFEREX) return false;
     ID3D11ShaderResourceView *made = nullptr;
-    if (FAILED(device11_->device()->CreateShaderResourceView(resource, &view, &made))) return true;
+    const HRESULT viewed = device11_->device()->CreateShaderResourceView(resource, &view, &made);
+    if (FAILED(viewed)) return refused_view(id, viewed);
     return objects_.keep(id, D3dObjectKind::shader_resource_view, made) == Status::ok;
 }
 
@@ -1030,6 +1126,8 @@ bool D3dBackend::on_CreateRenderTargetView(uint32_t id, const d3dproto::ViewDesc
 {
     AV_SCOPE("D3dBackend::on_CreateRenderTargetView");
     ID3D11Resource *const resource = objects_.find_as<ID3D11Resource>(desc.resource, D3dObjectKind::resource);
+    if (resource == nullptr && refused_creates_.holds(desc.resource))
+        return refused_view(id, static_cast<HRESULT>(refused_creates_.hresult_of(desc.resource)));
     if (resource == nullptr || !DxgiFormatLayout(desc.format).known() || desc.dimension > D3D11_RTV_DIMENSION_TEXTURE3D)
         return false;
     D3D11_RENDER_TARGET_VIEW_DESC view = {};
@@ -1037,7 +1135,8 @@ bool D3dBackend::on_CreateRenderTargetView(uint32_t id, const d3dproto::ViewDesc
     view.ViewDimension = static_cast<D3D11_RTV_DIMENSION>(desc.dimension);
     __builtin_memcpy(&view.Buffer, desc.args, sizeof(uint32_t) * 3u);
     ID3D11RenderTargetView *made = nullptr;
-    if (FAILED(device11_->device()->CreateRenderTargetView(resource, &view, &made))) return true;
+    const HRESULT viewed = device11_->device()->CreateRenderTargetView(resource, &view, &made);
+    if (FAILED(viewed)) return refused_view(id, viewed);
     return objects_.keep(id, D3dObjectKind::render_target_view, made) == Status::ok;
 }
 
@@ -1045,6 +1144,8 @@ bool D3dBackend::on_CreateDepthStencilView(uint32_t id, const d3dproto::ViewDesc
 {
     AV_SCOPE("D3dBackend::on_CreateDepthStencilView");
     ID3D11Resource *const resource = objects_.find_as<ID3D11Resource>(desc.resource, D3dObjectKind::resource);
+    if (resource == nullptr && refused_creates_.holds(desc.resource))
+        return refused_view(id, static_cast<HRESULT>(refused_creates_.hresult_of(desc.resource)));
     if (resource == nullptr || !DxgiFormatLayout(desc.format).known() || desc.dimension > D3D11_DSV_DIMENSION_TEXTURE2DMSARRAY)
         return false;
     D3D11_DEPTH_STENCIL_VIEW_DESC view = {};
@@ -1053,7 +1154,8 @@ bool D3dBackend::on_CreateDepthStencilView(uint32_t id, const d3dproto::ViewDesc
     view.Flags = desc.flags & (D3D11_DSV_READ_ONLY_DEPTH | D3D11_DSV_READ_ONLY_STENCIL);
     __builtin_memcpy(&view.Texture1D, desc.args, sizeof(uint32_t) * 3u);
     ID3D11DepthStencilView *made = nullptr;
-    if (FAILED(device11_->device()->CreateDepthStencilView(resource, &view, &made))) return true;
+    const HRESULT viewed = device11_->device()->CreateDepthStencilView(resource, &view, &made);
+    if (FAILED(viewed)) return refused_view(id, viewed);
     return objects_.keep(id, D3dObjectKind::depth_stencil_view, made) == Status::ok;
 }
 
@@ -1061,6 +1163,8 @@ bool D3dBackend::on_CreateUnorderedAccessView(uint32_t id, const d3dproto::ViewD
 {
     AV_SCOPE("D3dBackend::on_CreateUnorderedAccessView");
     ID3D11Resource *const resource = objects_.find_as<ID3D11Resource>(desc.resource, D3dObjectKind::resource);
+    if (resource == nullptr && refused_creates_.holds(desc.resource))
+        return refused_view(id, static_cast<HRESULT>(refused_creates_.hresult_of(desc.resource)));
     if (resource == nullptr || !DxgiFormatLayout(desc.format).known() || desc.dimension > D3D11_UAV_DIMENSION_TEXTURE3D)
         return false;
     D3D11_UNORDERED_ACCESS_VIEW_DESC view = {};
@@ -1069,8 +1173,16 @@ bool D3dBackend::on_CreateUnorderedAccessView(uint32_t id, const d3dproto::ViewD
     __builtin_memcpy(&view.Buffer, desc.args, sizeof(uint32_t) * 3u);
     if (view.ViewDimension == D3D11_UAV_DIMENSION_BUFFER) view.Buffer.Flags = desc.flags;
     ID3D11UnorderedAccessView *made = nullptr;
-    if (FAILED(device11_->device()->CreateUnorderedAccessView(resource, &view, &made))) return true;
+    const HRESULT viewed = device11_->device()->CreateUnorderedAccessView(resource, &view, &made);
+    if (FAILED(viewed)) return refused_view(id, viewed);
     return objects_.keep(id, D3dObjectKind::unordered_access_view, made) == Status::ok;
+}
+
+bool D3dBackend::refused_shader(const char *why) const
+{
+    AV_SCOPE("D3dBackend::refused_shader");
+    LogLine(lines_).text("CreateShader ").text(why).write();
+    return false;
 }
 
 bool D3dBackend::on_CreateShader(uint32_t id, uint32_t stage, uint32_t input_count,
@@ -1083,20 +1195,24 @@ bool D3dBackend::on_CreateShader(uint32_t id, uint32_t stage, uint32_t input_cou
 {
     AV_SCOPE("D3dBackend::on_CreateShader");
     const D3dObjectKind kind = shader_kind(stage);
-    if (!has_device() || kind == D3dObjectKind::none || code == nullptr) return false;
+    if (!has_device() || kind == D3dObjectKind::none || code == nullptr) return refused_shader("names no device, stage or code");
     const size_t capacity = static_cast<size_t>(code_size) + container_slack;
     uint8_t *const storage = arena_ == nullptr ? nullptr : arena_->allocate<uint8_t>(capacity);
-    if (storage == nullptr) return false;
+    if (storage == nullptr) return refused_shader("has no arena room");
     DxbcContainer container(storage, capacity);
     const bool pixel = stage == stage_pixel;
+    const bool streams = stage == stage_geometry && stream_out_count != 0u;
+    const StreamOutputSignature completed(outputs, output_count, stream_out, streams ? stream_out_count : 0u);
+    const d3dproto::SignatureEntry *const all_outputs = completed.entries();
+    const uint32_t                        all_count = completed.count();
     if (!container.add_signature(DxbcContainer::Role::input, inputs, input_count, false) ||
-        !container.add_signature(DxbcContainer::Role::output, outputs, output_count, pixel) ||
+        !container.add_signature(DxbcContainer::Role::output, all_outputs, all_count, pixel) ||
         (patch_count != 0u &&
          !container.add_signature(DxbcContainer::Role::patch_constant, patch_constants, patch_count, false)) ||
         !container.add_code(code, static_cast<size_t>(code_size)))
-        return false;
+        return refused_shader("has a signature or code the container refuses");
     const size_t size = container.finish();
-    if (size == 0u) return false;
+    if (size == 0u) return refused_shader("made an empty container");
     ID3D11Device5 *const device = device11_->device();
     HRESULT result = E_INVALIDARG;
     IUnknown *made = nullptr;
@@ -1124,20 +1240,26 @@ bool D3dBackend::on_CreateShader(uint32_t id, uint32_t stage, uint32_t input_cou
         if (stream_out_count == 0u) {
             result = device->CreateGeometryShader(storage, size, nullptr, &out);
         } else {
+            const StreamOutputDeclaration<d3dproto::StreamOutEntry> declaration(stream_out, stream_out_count, strides,
+                                                                                stride_count, rasterized_stream);
+            if (!declaration.holds()) return refused_shader("has a stream output declaration that is not valid");
             D3D11_SO_DECLARATION_ENTRY entries[128] = {};
             for (uint32_t index = 0u; index < stream_out_count; index++) {
                 const d3dproto::StreamOutEntry &entry = stream_out[index];
                 entries[index].Stream = entry.stream;
                 entries[index].OutputSlot = static_cast<BYTE>(entry.output_slot);
-                const uint32_t mask = entry.mask & 0xfu;
-                entries[index].StartComponent = mask == 0u ? 0u : static_cast<BYTE>(__builtin_ctz(mask));
-                entries[index].ComponentCount = static_cast<BYTE>(__builtin_popcount(mask));
+                entries[index].StartComponent = static_cast<BYTE>(declaration.start_component(index));
+                entries[index].ComponentCount = static_cast<BYTE>(declaration.component_count(index));
                 if (entry.register_index == no_stream) continue;
                 d3dproto::SignatureEntry named = {};
-                for (uint32_t output = 0u; output < output_count; output++)
-                    if (outputs[output].register_index == entry.register_index &&
-                        outputs[output].stream == entry.stream)
-                        named = outputs[output];
+                bool                     found = false;
+                for (uint32_t output = 0u; output < all_count; output++)
+                    if (all_outputs[output].register_index == entry.register_index &&
+                        all_outputs[output].stream == entry.stream) {
+                        named = all_outputs[output];
+                        found = true;
+                    }
+                if (!found) return refused_shader("streams a register its outputs do not name");
                 uint32_t semantic = 0u;
                 entries[index].SemanticName = container.semantic_of(named, false, semantic);
                 entries[index].SemanticIndex = semantic;
@@ -1162,7 +1284,10 @@ bool D3dBackend::on_CreateShader(uint32_t id, uint32_t stage, uint32_t input_cou
         break;
     }
     }
-    if (FAILED(result) || made == nullptr) return true;
+    if (FAILED(result) || made == nullptr) {
+        LogLine(lines_).text("the host made no shader of stage ").number(stage).text(" (").hex(static_cast<uint32_t>(result), 8u).text(")").write();
+        return true;
+    }
     return objects_.keep(id, kind, made) == Status::ok;
 }
 
@@ -1550,8 +1675,13 @@ bool D3dBackend::on_SetPredication(uint32_t query, uint32_t value)
     if (!ready() || (query != 0u && found == nullptr)) return false;
     ID3D11Predicate *predicate = nullptr;
     if (found != nullptr &&
-        FAILED(found->QueryInterface(__uuidof(ID3D11Predicate), reinterpret_cast<void **>(&predicate))))
-        return false;
+        FAILED(found->QueryInterface(__uuidof(ID3D11Predicate), reinterpret_cast<void **>(&predicate)))) {
+        predicate = nullptr;
+        if (!predication_refusal_noted_) {
+            predication_refusal_noted_ = true;
+            lines_.write("a predication by a query the host cannot predicate with was cleared");
+        }
+    }
     device11_->context()->SetPredication(predicate, value != 0u);
     if (predicate != nullptr) predicate->Release();
     return true;
@@ -1730,6 +1860,7 @@ bool D3dBackend::on_CopyResource(uint32_t destination, uint32_t source)
     if (dimension == D3D11_RESOURCE_DIMENSION_BUFFER) static_cast<ID3D11Buffer *>(to)->GetDesc(&whole);
     if (dimension != D3D11_RESOURCE_DIMENSION_BUFFER || !copy_buffer_in_pieces(to, 0u, from, 0u, whole.ByteWidth, 0u))
         device11_->context()->CopyResource(to, from);
+    pace(copy_bytes(from, nullptr));
     counted(to);
     return true;
 }
@@ -1755,6 +1886,7 @@ bool D3dBackend::on_CopySubresourceRegion(uint32_t destination, uint32_t destina
         const uint32_t right = has_box != 0u ? box.right : source_desc.ByteWidth;
         if (right > left && right <= source_desc.ByteWidth &&
             copy_buffer_in_pieces(to, x, from, left, right - left, copy_flags)) {
+            pace(right - left);
             counted(to);
             return true;
         }
@@ -1762,6 +1894,7 @@ bool D3dBackend::on_CopySubresourceRegion(uint32_t destination, uint32_t destina
     device11_->context()->CopySubresourceRegion1(to, destination_subresource, x, y, z, from, source_subresource,
                                                  has_box != 0u ? &region : nullptr,
                                                  copy_flags & (D3D11_COPY_NO_OVERWRITE | D3D11_COPY_DISCARD));
+    pace(copy_bytes(from, has_box != 0u ? &region : nullptr));
     counted(to);
     return true;
 }
@@ -1810,6 +1943,45 @@ bool D3dBackend::on_BltResource(uint32_t destination, uint32_t destination_subre
                                                 0u, nullptr);
     counted(to);
     return true;
+}
+
+uint64_t D3dBackend::copy_bytes(ID3D11Resource *resource, const D3D11_BOX *box)
+{
+    AV_SCOPE("D3dBackend::copy_bytes");
+    D3D11_RESOURCE_DIMENSION dimension = D3D11_RESOURCE_DIMENSION_UNKNOWN;
+    resource->GetType(&dimension);
+    if (box != nullptr) {
+        const uint64_t width = box->right > box->left ? box->right - box->left : 0u;
+        if (dimension == D3D11_RESOURCE_DIMENSION_BUFFER) return width;
+        const uint64_t height = box->bottom > box->top ? box->bottom - box->top : 0u;
+        const uint64_t depth = box->back > box->front ? box->back - box->front : 0u;
+        return width * height * depth * 4u;
+    }
+    if (dimension == D3D11_RESOURCE_DIMENSION_BUFFER) {
+        D3D11_BUFFER_DESC desc = {};
+        static_cast<ID3D11Buffer *>(resource)->GetDesc(&desc);
+        return desc.ByteWidth;
+    }
+    if (dimension == D3D11_RESOURCE_DIMENSION_TEXTURE2D) {
+        D3D11_TEXTURE2D_DESC desc = {};
+        static_cast<ID3D11Texture2D *>(resource)->GetDesc(&desc);
+        return uint64_t{desc.Width} * desc.Height * desc.ArraySize * 4u;
+    }
+    if (dimension == D3D11_RESOURCE_DIMENSION_TEXTURE3D) {
+        D3D11_TEXTURE3D_DESC desc = {};
+        static_cast<ID3D11Texture3D *>(resource)->GetDesc(&desc);
+        return uint64_t{desc.Width} * desc.Height * desc.Depth * 4u;
+    }
+    return 0u;
+}
+
+void D3dBackend::pace(uint64_t bytes)
+{
+    AV_SCOPE("D3dBackend::pace");
+    work_window_.add(bytes);
+    if (!work_window_.full()) return;
+    device11_->context()->Flush();
+    static_cast<void>(work_window_.settle(device11_->vulkan()));
 }
 
 void D3dBackend::counted(ID3D11Resource *destination)
@@ -2087,11 +2259,46 @@ bool D3dBackend::on_ReadSubresource(uint32_t resource, uint32_t subresource, uin
                                     uint32_t &depth_pitch, uint8_t *data, uint64_t data_capacity, uint64_t &data_size)
 {
     AV_SCOPE("D3dBackend::on_ReadSubresource");
+    uint64_t total = 0u;
+    if (!read_packed(resource, subresource, 0u, hresult, row_pitch, depth_pitch, data, data_capacity, data_size, total))
+        return false;
+    if (hresult == static_cast<uint32_t>(S_OK) && total > data_capacity) {
+        hresult = static_cast<uint32_t>(E_OUTOFMEMORY);
+        data_size = 0u;
+    }
+    return true;
+}
+
+bool D3dBackend::on_ReadSubresourceRange(uint32_t resource, uint32_t subresource, uint64_t offset, uint32_t &hresult,
+                                         uint32_t &row_pitch, uint32_t &depth_pitch, uint8_t *data,
+                                         uint64_t data_capacity, uint64_t &data_size)
+{
+    AV_SCOPE("D3dBackend::on_ReadSubresourceRange");
+    uint64_t total = 0u;
+    if (!read_packed(resource, subresource, offset, hresult, row_pitch, depth_pitch, data, data_capacity, data_size, total))
+        return false;
+    if (hresult == static_cast<uint32_t>(S_OK) && offset > total) {
+        hresult = static_cast<uint32_t>(E_INVALIDARG);
+        data_size = 0u;
+    }
+    return true;
+}
+
+bool D3dBackend::read_packed(uint32_t resource, uint32_t subresource, uint64_t offset, uint32_t &hresult,
+                             uint32_t &row_pitch, uint32_t &depth_pitch, uint8_t *data, uint64_t data_capacity,
+                             uint64_t &data_size, uint64_t &total)
+{
+    AV_SCOPE("D3dBackend::read_packed");
     hresult = static_cast<uint32_t>(E_FAIL);
     row_pitch = 0u;
     depth_pitch = 0u;
     data_size = 0u;
+    total = 0u;
     ID3D11Resource *const found = objects_.find_as<ID3D11Resource>(resource, D3dObjectKind::resource);
+    if (ready() && found == nullptr && refused_creates_.holds(resource)) {
+        hresult = refused_creates_.hresult_of(resource);
+        return true;
+    }
     if (!ready() || found == nullptr) return false;
     constants_.release(device11_->context(), states_.selected_id(), resource, static_cast<ID3D11Buffer *>(found));
     uint32_t width = 0u, height = 0u, depth = 0u, format = 0u;
@@ -2116,20 +2323,21 @@ bool D3dBackend::on_ReadSubresource(uint32_t resource, uint32_t subresource, uin
     const DxgiFormatLayout layout(format);
     const uint32_t row = layout.copied_row_bytes(width);
     const uint32_t rows = layout.rows(height);
-    const uint64_t total = static_cast<uint64_t>(row) * rows * depth;
-    if (total <= data_capacity) {
-        for (uint32_t slice = 0u; slice < depth; slice++)
-            for (uint32_t line = 0u; line < rows; line++)
-                __builtin_memcpy(data + (static_cast<uint64_t>(slice) * rows + line) * row,
-                                 static_cast<const uint8_t *>(mapped.pData) +
-                                     static_cast<uint64_t>(slice) * mapped.DepthPitch +
-                                     static_cast<uint64_t>(line) * mapped.RowPitch,
-                                 row);
-        data_size = total;
-        hresult = static_cast<uint32_t>(S_OK);
-    } else {
-        hresult = static_cast<uint32_t>(E_OUTOFMEMORY);
-    }
+    total = static_cast<uint64_t>(row) * rows * depth;
+    const uint64_t end = offset + data_capacity < offset ? total : (offset + data_capacity < total ? offset + data_capacity : total);
+    for (uint32_t slice = 0u; slice < depth; slice++)
+        for (uint32_t line = 0u; line < rows; line++) {
+            const uint64_t from = (static_cast<uint64_t>(slice) * rows + line) * row;
+            const uint64_t first = from > offset ? from : offset;
+            const uint64_t last = from + row < end ? from + row : end;
+            if (first >= last) continue;
+            __builtin_memcpy(data + (first - offset),
+                             static_cast<const uint8_t *>(mapped.pData) + static_cast<uint64_t>(slice) * mapped.DepthPitch +
+                                 static_cast<uint64_t>(line) * mapped.RowPitch + (first - from),
+                             last - first);
+        }
+    data_size = end > offset ? end - offset : 0u;
+    hresult = static_cast<uint32_t>(S_OK);
     context->Unmap(staging, 0u);
     staging->Release();
     row_pitch = row;
@@ -2198,6 +2406,65 @@ bool D3dBackend::invariants_hold() const
     if (!states_.invariants_hold() || !batches_.invariants_hold()) return false;
     if (device11_ == nullptr) return states_.count() == 0u && objects_.count() == 0u;
     return true;
+}
+
+
+bool D3dBackend::on_ResourceTiling11(uint32_t resource, uint32_t &tiles, uint32_t &packed_mips,
+                                     uint32_t &packed_tiles)
+{
+    AV_SCOPE("D3dBackend::on_ResourceTiling11");
+    return ready() && tiles_.tiling(*device11_->device(), resource, tiles, packed_mips, packed_tiles);
+}
+
+bool D3dBackend::on_UpdateTileMappings11(uint32_t resource, uint32_t region_count,
+                                         const d3dproto::TileRegion *regions, uint32_t pool, uint32_t range_count,
+                                         const d3dproto::TileRange *ranges, uint32_t flags)
+{
+    AV_SCOPE("D3dBackend::on_UpdateTileMappings11");
+    return ready() &&
+           tiles_.update_mappings(*device11_->context(), resource, region_count, regions, pool, range_count, ranges,
+                                  flags);
+}
+
+bool D3dBackend::on_CopyTileMappings11(uint32_t destination, const d3dproto::TileCoordinate &destination_start,
+                                       uint32_t source, const d3dproto::TileCoordinate &source_start,
+                                       const d3dproto::TileSize &size, uint32_t flags)
+{
+    AV_SCOPE("D3dBackend::on_CopyTileMappings11");
+    return ready() &&
+           tiles_.copy_mappings(*device11_->context(), destination, destination_start, source, source_start, size,
+                                flags);
+}
+
+bool D3dBackend::on_CopyTiles11(uint32_t resource, const d3dproto::TileCoordinate &start,
+                                const d3dproto::TileSize &size, uint32_t buffer, uint64_t buffer_offset,
+                                uint32_t flags)
+{
+    AV_SCOPE("D3dBackend::on_CopyTiles11");
+    return ready() && tiles_.copy(*device11_->context(), resource, start, size, buffer, buffer_offset, flags);
+}
+
+bool D3dBackend::on_UpdateTiles11(uint32_t resource, const d3dproto::TileCoordinate &start,
+                                  const d3dproto::TileSize &size, uint32_t flags, const uint8_t *data,
+                                  uint64_t data_size)
+{
+    AV_SCOPE("D3dBackend::on_UpdateTiles11");
+    return ready() && tiles_.update(*device11_->context(), resource, start, size, flags, data, data_size);
+}
+
+bool D3dBackend::on_ResizeTilePool11(uint32_t pool, uint64_t bytes)
+{
+    AV_SCOPE("D3dBackend::on_ResizeTilePool11");
+    if (!ready()) return false;
+    leased_.recharge(pool, ResourceFootprint(bytes, ResourceMisc::tile_pool_bit).leased(0u));
+    const ScopeExit settled([this] { leased_.settle(); });
+    return tiles_.resize(*device11_->context(), pool, bytes);
+}
+
+bool D3dBackend::on_TiledResourceBarrier11(uint32_t before, uint32_t after)
+{
+    AV_SCOPE("D3dBackend::on_TiledResourceBarrier11");
+    return ready() && tiles_.barrier(*device11_->context(), before, after);
 }
 
 }

@@ -24,6 +24,7 @@ LoopbackRendererPeer::Process::Process(MockHost &qemu, const AvExecutorOps &exec
 LoopbackRendererPeer::Process::~Process()
 {
     service.shut_down();
+    static_cast<void>(host.run_main_loop());
     for (std::uint32_t index = 0u; index < region_count; index++) {
         void         *base = nullptr;
         std::uint64_t size = 0u;

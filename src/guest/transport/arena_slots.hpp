@@ -25,6 +25,10 @@ private:
 
     uint64_t span_of(uint64_t base, uint64_t bytes) const;
 
+    void     hold() const;
+    void     release() const;
+
+    mutable bool held_;
     uint64_t used_;
     uint64_t starts_;
 };

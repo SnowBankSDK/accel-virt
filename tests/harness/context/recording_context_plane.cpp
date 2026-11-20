@@ -1,5 +1,8 @@
 #include "harness/context/recording_context_plane.hpp"
 
+#include "device/memory/host_blob_errand.hpp"
+#include "device/threading/service_thread.hpp"
+
 #include <sys/eventfd.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -32,6 +35,20 @@ Status RecordingContextPlane::allocate_memory(std::uint32_t context, std::uint64
     memory.caching = caching_;
     memory.size = short_ ? size - 4096u : made;
     return Status::ok;
+}
+
+Status RecordingContextPlane::hand_memory(HostBlobErrand &errand, ServiceThread &service)
+{
+    hand_offs_++;
+    if (refuse_hand_off_ != 0u && --refuse_hand_off_ == 0u) return Status::no_space;
+    return service.post(errand);
+}
+
+Status RecordingContextPlane::hand_off(Errand &errand, ServiceThread &service)
+{
+    hand_offs_++;
+    if (refuse_hand_off_ != 0u && --refuse_hand_off_ == 0u) return Status::no_space;
+    return service.post(errand);
 }
 
 void RecordingContextPlane::free_memory(std::uint64_t key)

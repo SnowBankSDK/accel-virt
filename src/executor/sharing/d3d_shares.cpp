@@ -42,10 +42,10 @@ IUnknown *D3dShares::resource(uint32_t domain, uint64_t id)
     return referenced(domain, id, [](const D3dShareState &state) { return state.resource(); });
 }
 
-IUnknown *D3dShares::view(uint32_t domain, uint64_t id)
+IUnknown *D3dShares::view(uint32_t domain, uint64_t id, ShareOrigin api)
 {
     AV_SCOPE("D3dShares::view");
-    return referenced(domain, id, [](const D3dShareState &state) { return state.view(); });
+    return referenced(domain, id, [api](const D3dShareState &state) { return state.view(api); });
 }
 
 IUnknown *D3dShares::shown(uint32_t domain, uint64_t id)
@@ -54,12 +54,13 @@ IUnknown *D3dShares::shown(uint32_t domain, uint64_t id)
     return referenced(domain, id, [](const D3dShareState &state) { return state.shown(); });
 }
 
-bool D3dShares::keep_view(uint32_t domain, uint64_t id, IUnknown *view)
+bool D3dShares::keep_view(uint32_t domain, uint64_t id, ShareOrigin api, IUnknown *view)
 {
     AV_SCOPE("D3dShares::keep_view");
     if (view == nullptr) return false;
-    return shares_.with_direct3d(
-        domain, id, [view](Share &share, D3dRetired &retired) { share.direct3d().keep_view(view, retired); });
+    return shares_.with_direct3d(domain, id, [api, view](Share &share, D3dRetired &retired) {
+        share.direct3d().keep_view(api, view, retired);
+    });
 }
 
 bool D3dShares::keep_shown(uint32_t domain, uint64_t id, IUnknown *copy)

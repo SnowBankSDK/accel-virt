@@ -26,7 +26,7 @@ uint32_t drained(D3dRetired &retired)
 TEST(d3d_share_state, holds_nothing_until_it_is_given_a_resource)
 { D3dShareState state(ShareOrigin::d3d12);
   CHECK(state.resource() == nullptr);
-  CHECK(state.view() == nullptr);
+  CHECK(state.view(ShareOrigin::d3d11) == nullptr);
   CHECK(state.shown() == nullptr);
   CHECK_EQ(state.writes(), 0u);
   CHECK_EQ(state.opens(), 0u); }
@@ -37,7 +37,7 @@ TEST(d3d_share_state, keeps_a_reference_to_its_resource_and_the_view_falls_back_
   state.keep_resource(&resource);
   CHECK_EQ(resource.references(), 2u);
   CHECK(state.resource() == &resource);
-  CHECK(state.view() == &resource);
+  CHECK(state.view(ShareOrigin::d3d11) == &resource);
   CHECK(state.shown() == nullptr); }
 
 TEST(d3d_share_state, a_view_replaces_the_resource_as_the_view_and_the_old_view_waits_to_be_released)
@@ -46,12 +46,12 @@ TEST(d3d_share_state, a_view_replaces_the_resource_as_the_view_and_the_old_view_
   D3dRetired    retired(platform);
   D3dShareState state(ShareOrigin::d3d12);
   state.keep_resource(&resource);
-  state.keep_view(&view, retired);
-  CHECK(state.view() == &view);
+  state.keep_view(ShareOrigin::d3d11, &view, retired);
+  CHECK(state.view(ShareOrigin::d3d11) == &view);
   CHECK(state.resource() == &resource);
   CHECK_EQ(retired.live(), 0u);
-  state.keep_view(&newer_view, retired);
-  CHECK(state.view() == &newer_view);
+  state.keep_view(ShareOrigin::d3d11, &newer_view, retired);
+  CHECK(state.view(ShareOrigin::d3d11) == &newer_view);
   CHECK_EQ(retired.live(), 1u);
   CHECK_EQ(view.references(), 2u);
   CHECK_EQ(drained(retired), 1u);
@@ -65,7 +65,7 @@ TEST(d3d_share_state, a_shown_copy_replaces_the_previous_one_and_is_what_opens)
   D3dRetired    retired(platform);
   D3dShareState state(ShareOrigin::d3d12);
   state.keep_resource(&resource);
-  state.keep_view(&view, retired);
+  state.keep_view(ShareOrigin::d3d11, &view, retired);
   bool live = true;
   IUnknown *opened = state.open(live);
   CHECK(opened == &view);
@@ -130,11 +130,11 @@ TEST(d3d_share_state, retire_all_hands_every_object_to_the_retired_list)
   D3dRetired    retired(platform);
   D3dShareState state(ShareOrigin::d3d12);
   state.keep_resource(&resource);
-  state.keep_view(&view, retired);
+  state.keep_view(ShareOrigin::d3d11, &view, retired);
   state.keep_shown(&shown, retired);
   state.retire_all(retired);
   CHECK(state.resource() == nullptr);
-  CHECK(state.view() == nullptr);
+  CHECK(state.view(ShareOrigin::d3d11) == nullptr);
   CHECK(state.shown() == nullptr);
   CHECK_EQ(retired.live(), 3u);
   CHECK_EQ(drained(retired), 3u);
@@ -159,12 +159,12 @@ TEST(d3d_share_state, a_lost_direct3d11_device_takes_its_resource_and_every_view
   CountedObject resource12;
   D3dShareState published12(ShareOrigin::d3d12);
   published12.keep_resource(&resource12);
-  published12.keep_view(&view, retired);
+  published12.keep_view(ShareOrigin::d3d11, &view, retired);
   published12.keep_shown(&shown, retired);
   published12.retire_direct3d11(retired);
   CHECK_EQ(retired.live(), 2u);
   CHECK(published12.resource() == &resource12);
-  CHECK(published12.view() == &resource12);
+  CHECK(published12.view(ShareOrigin::d3d11) == &resource12);
   CHECK(published12.shown() == nullptr);
   CHECK_EQ(drained(retired), 2u);
   CountedObject object;
@@ -180,12 +180,12 @@ TEST(d3d_share_state, a_lost_direct3d12_device_takes_only_the_resource_it_made)
   D3dRetired    retired(platform);
   D3dShareState published12(ShareOrigin::d3d12);
   published12.keep_resource(&resource);
-  published12.keep_view(&view, retired);
+  published12.keep_view(ShareOrigin::d3d11, &view, retired);
   published12.keep_shown(&shown, retired);
   published12.retire_direct3d12(retired);
   CHECK_EQ(retired.live(), 1u);
   CHECK(published12.resource() == nullptr);
-  CHECK(published12.view() == &view);
+  CHECK(published12.view(ShareOrigin::d3d11) == &view);
   CHECK(published12.shown() == &shown);
   CHECK_EQ(drained(retired), 1u);
   CHECK_EQ(resource.references(), 1u);
@@ -235,3 +235,25 @@ TEST(d3d_retired, an_object_it_has_no_room_for_is_released_at_once)
   retired.retire(&object);
   CHECK_EQ(retired.live(), 0u);
   CHECK_EQ(object.references(), 1u); }
+
+TEST(d3d_share_state, each_api_has_its_own_view_and_a_lost_device_takes_only_its_api_s)
+{ CountedObject resource11, view12;
+  MockPlatform  platform;
+  D3dRetired    retired(platform);
+  D3dShareState published11(ShareOrigin::d3d11);
+  published11.keep_resource(&resource11);
+  CHECK(published11.view(ShareOrigin::d3d12) == &resource11);
+  published11.keep_view(ShareOrigin::d3d12, &view12, retired);
+  CHECK(published11.view(ShareOrigin::d3d12) == &view12);
+  CHECK(published11.view(ShareOrigin::d3d11) == &resource11);
+  bool          live = false;
+  IUnknown *const opened = published11.open(live);
+  CHECK(opened == &resource11);
+  opened->Release();
+  published11.retire_direct3d11(retired);
+  CHECK(published11.view(ShareOrigin::d3d12) == &view12);
+  CHECK_EQ(drained(retired), 1u);
+  published11.retire_direct3d12(retired);
+  CHECK(published11.view(ShareOrigin::d3d12) == nullptr);
+  CHECK_EQ(drained(retired), 1u);
+  CHECK_EQ(view12.references(), 1u); }

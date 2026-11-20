@@ -1,5 +1,6 @@
 #include "core/support/object_storage.hpp"
 #include "executor/d3d/d3d9_session.hpp"
+#include "executor/d3d/leased_objects.hpp"
 #include "executor/d3d/d3d_object_table.hpp"
 #include "executor/shim/d3d_headers.hpp"
 #include "core/log/driver_log.hpp"
@@ -66,11 +67,11 @@ public:
 
 class FreshSession {
 public:
-    FreshSession() : sink_(), lines_(sink_, "d3d9: "), slices_(blocks, lines_), wake_()
+    FreshSession() : sink_(), lines_(sink_, "d3d9: "), slices_(blocks, lines_), wake_(), leased_(blocks)
     {
         CHECK_STATUS(bytes_.bind(0u, guest, sizeof guest), av::Status::ok);
         CHECK_STATUS(table_storage.construct(blocks), av::Status::ok);
-        CHECK_STATUS(session_storage.construct(bytes_, table_storage.object(), blocks, slices_, wake_, lines_),
+        CHECK_STATUS(session_storage.construct(bytes_, table_storage.object(), leased_, blocks, slices_, wake_, lines_),
                      av::Status::ok);
         session_storage.object().initialize(nullptr, nullptr, nullptr, nullptr, nullptr);
     }
@@ -91,6 +92,7 @@ private:
     av::DriverLog    lines_;
     av::SliceStorages slices_;
     av::EventfdWake  wake_;
+    av::LeasedObjects leased_;
     av::GuestBytes   bytes_;
 };
 
@@ -173,6 +175,11 @@ TEST(d3d9_session_on_commands, with_no_device_selected_each_is_refused)
     CHECK(!session.on_StretchRect9(nobody, 0u, rect, nobody, 0u, rect, 2u));
     CHECK(!session.on_ColorFill9(nobody, 0u, rect, 0u));
     CHECK(!session.on_PresentPoint9(nobody, 0u, 0x9152u, 1u));
+    CHECK(!session.on_CopyToLent9(nobody, 0u, rect, 0x9153u, 64u, 0u, 0u));
+    CHECK(!session.on_CreateLentSurface9(nobody, 1u, 8u, 8u, 21u, 0x9153u, 64u));
+    CHECK(!session.on_CreateSharedSurface9(nobody, 1u, 8u, 8u, 21u, 0x9154u));
+    std::uint32_t opened = 0u;
+    CHECK(!session.on_OpenSharedSurface9(nobody, 0x9154u, opened));
     CHECK(!session.on_CreateVertexShader9(1u, data, sizeof data));
     CHECK(!session.on_CreatePixelShader9(1u, data, sizeof data));
     CHECK(!session.on_CreateVertexDeclaration9(1u, 1u, &element));

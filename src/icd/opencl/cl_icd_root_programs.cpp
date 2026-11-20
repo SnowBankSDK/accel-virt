@@ -4,6 +4,12 @@
 #include "core/log/log_line.hpp"
 #include "core/support/scope_exit.hpp"
 #include "core/trace/function_scope.hpp"
+#include "icd/opencl/cl_build_options.hpp"
+#include "icd/opencl/cl_include_inliner.hpp"
+#include "icd/opencl/cl_option_judge.hpp"
+#include "icd/opencl/cl_pragma_judge.hpp"
+#include "core/support/extension_words.hpp"
+#include "icd/opencl/cl_device.hpp"
 #include "icd/opencl/cl_info_request.hpp"
 #include "proto/generated/opencl/cl_dispatch_client.h"
 
@@ -19,14 +25,43 @@ void report_program_error(cl_int *error, cl_int value)
 
 }
 
+cl_int ClIcdRoot::build_with_includes(ClObject &program, ClientTransport &wire, const char *options)
+{
+    AV_SCOPE("ClIcdRoot::build_with_includes");
+    ClIncludeInliner inliner(memory_, headers_);
+    if (inliner.read_options(options) != Status::ok) return CL_OUT_OF_HOST_MEMORY;
+    if (inliner.directories() == 0u) return CL_SUCCESS;
+    ClProgramSource *const source = program.source();
+    if (inliner.expand(source->text(), source->text_bytes()) != Status::ok) return CL_OUT_OF_HOST_MEMORY;
+    if (!source->keep_options(options) || !source->keep_host_options(inliner.host_options()))
+        return CL_OUT_OF_HOST_MEMORY;
+    const char *text = inliner.text();
+    const size_t      bytes = inliner.text_bytes();
+    cl_int            host_error = CL_SUCCESS;
+    const uint64_t    fresh = av::clproto::av_clCreateProgramWithSource(wire, program.context() != nullptr
+                                                                                  ? program.nearest(ClObject::Kind::context)->wire()
+                                                                                  : 0u,
+                                                                        1u, &text, &bytes, &host_error);
+    if (fresh == 0u) return host_error != CL_SUCCESS ? host_error : CL_OUT_OF_RESOURCES;
+    static_cast<void>(av::clproto::av_clReleaseProgram(wire, program.wire()));
+    program.rewire(fresh);
+    return CL_SUCCESS;
+}
+
 cl_int ClIcdRoot::program_devices(ClObject &context, cl_uint num_devices, const cl_device_id *device_list)
 {
     AV_SCOPE("ClIcdRoot::program_devices");
     if ((device_list == nullptr) != (num_devices == 0u)) return CL_INVALID_VALUE;
     GuestClContext *const owner = context.context();
     ClDevice *const       running = owner != nullptr ? devices_.running(*owner) : nullptr;
+    ClContextGroup *const group = owner != nullptr ? owner->group() : nullptr;
     for (cl_uint index = 0u; index < num_devices; ++index) {
         ClObject *const named = judged(device_list[index], ClObject::Kind::device);
+        if (group != nullptr) {
+            ClDevice *const device = named != nullptr ? devices_.of(*named) : nullptr;
+            if (device == nullptr || group->of(device) == nullptr) return CL_INVALID_DEVICE;
+            continue;
+        }
         if (named == nullptr || running == nullptr || devices_.of(*named) != running) return CL_INVALID_DEVICE;
     }
     return CL_SUCCESS;
@@ -58,10 +93,85 @@ cl_int ClIcdRoot::build_program(cl_program program, cl_uint num_devices, const c
     if (devices != CL_SUCCESS) return devices;
     ClientTransport *const wire = wire_of(*held);
     if (wire == nullptr) return CL_OUT_OF_RESOURCES;
-    const cl_int built = av::clproto::av_clBuildProgram(*wire, held->wire(), 0u, nullptr, options);
+    if (!ClOptionJudge(options).valid()) return CL_INVALID_BUILD_OPTIONS;
+    ClContextGroup *const group = held->context() != nullptr ? held->context()->group() : nullptr;
+    if (group != nullptr && held->source() != nullptr) return CL_INVALID_OPERATION;
+    if (held->source() != nullptr) {
+        const cl_int inlined = build_with_includes(*held, *wire, options);
+        if (inlined != CL_SUCCESS) return inlined;
+    }
+    if (held->source() != nullptr && source_needs_unreported_extension(*held)) {
+        held->keep_traits(held->traits() | ClObject::program_failed);
+        notify.tell(program);
+        return CL_BUILD_PROGRAM_FAILURE;
+    }
+    const ClBuildOptions sent(memory_, held->source() != nullptr && held->source()->options() != nullptr
+                                           ? held->source()->host_options()
+                                           : options);
+    if (!sent.usable()) return CL_OUT_OF_HOST_MEMORY;
+    auto wanted = [&](ClContextGroup::Member &member) {
+        if (num_devices == 0u) return true;
+        for (cl_uint index = 0u; index < num_devices; ++index)
+            if (devices_.of(*judged(device_list[index], ClObject::Kind::device)) == member.device) return true;
+        return false;
+    };
+    ClContextGroup::Member *const home = group != nullptr ? group->of(held->context()) : nullptr;
+    cl_int built = CL_SUCCESS;
+    if (home == nullptr || wanted(*home))
+        built = av::clproto::av_clBuildProgram(*wire, held->wire(), 0u, nullptr, sent.for_host());
+    if (built == CL_SUCCESS && (home == nullptr || wanted(*home)))
+        held->keep_traits(sent.traits() | (held->traits() & ClObject::program_from_source));
+    else if (built == CL_BUILD_PROGRAM_FAILURE) held->keep_traits(held->traits() | ClObject::program_failed);
     if (built == CL_BUILD_PROGRAM_FAILURE) note_build_log(*wire, held->wire(), host_device_of(*held), options);
+    if (group != nullptr && held->replicas() != nullptr) {
+        for (uint32_t index = 0u; index < held->replicas()->count(); ++index) {
+            const ClReplicas::Entry &entry = held->replicas()->at(index);
+            ClContextGroup::Member *const member = group->of(entry.session);
+            ClientTransport *const        peer = entry.session->wire();
+            if (member == nullptr || !wanted(*member) || peer == nullptr) continue;
+            const cl_int peer_built = av::clproto::av_clBuildProgram(*peer, entry.wire, 0u, nullptr, sent.for_host());
+            if (peer_built == CL_SUCCESS && built == CL_SUCCESS)
+                held->keep_traits(sent.traits() | (held->traits() & ClObject::program_from_source));
+            if (peer_built != CL_SUCCESS && built == CL_SUCCESS) built = peer_built;
+        }
+    }
     if (built == CL_SUCCESS || built == CL_BUILD_PROGRAM_FAILURE) notify.tell(program);
     return built;
+}
+
+bool ClIcdRoot::source_needs_unreported_extension(ClObject &program)
+{
+    AV_SCOPE("ClIcdRoot::source_needs_unreported_extension");
+    GuestClContext *const context = program.context();
+    ClDevice *const       device = context != nullptr ? devices_.running(*context) : nullptr;
+    if (device == nullptr) return false;
+    const ClPragmaJudge judge(program.source()->text(), program.source()->text_bytes());
+    static const char *const gated[] = {"cl_khr_fp16", "cl_khr_fp64"};
+    ExtensionWords           host(memory_, Pool::paged);
+    bool                     listed = false;
+    for (const char *const name : gated) {
+        if (!judge.enables(name)) continue;
+        if (!listed && host_extensions(*device, host) != CL_SUCCESS) return false;
+        listed = true;
+        if (!device->extensions().reports(host, name)) return true;
+    }
+    return false;
+}
+
+uint64_t ClIcdRoot::failed_link_stand_in(ClientTransport &wire, uint64_t context)
+{
+    AV_SCOPE("ClIcdRoot::failed_link_stand_in");
+    static const char   text[] = "#error the link of the programs failed\n";
+    const char         *lines = text;
+    const size_t        bytes = sizeof text - 1u;
+    cl_int              host_error = CL_SUCCESS;
+    const uint64_t      made = av::clproto::av_clCreateProgramWithSource(wire, context, 1u, &lines, &bytes, &host_error);
+    if (made == 0u) return 0u;
+    if (av::clproto::av_clBuildProgram(wire, made, 0u, nullptr, "") == CL_SUCCESS) {
+        static_cast<void>(av::clproto::av_clReleaseProgram(wire, made));
+        return 0u;
+    }
+    return made;
 }
 
 void ClIcdRoot::note_build_log(ClientTransport &wire, uint64_t program, uint64_t device, const char *options)
@@ -150,7 +260,17 @@ cl_program ClIcdRoot::create_program_with_il(cl_context context, const void *il,
         report_program_error(error, CL_INVALID_CONTEXT);
         return nullptr;
     }
-    if (il == nullptr || length == 0u) {
+    if (wire_of(*held) == nullptr) {
+        report_program_error(error, CL_OUT_OF_RESOURCES);
+        return nullptr;
+    }
+    uint32_t magic = 0u;
+    if (il != nullptr && length >= sizeof magic) __builtin_memcpy(&magic, il, sizeof magic);
+    constexpr uint32_t module_magic = 0x07230203u;
+    constexpr uint32_t swapped_magic = 0x03022307u;
+    constexpr size_t   header_bytes = 20u;
+    if (il == nullptr || length < header_bytes || length % sizeof magic != 0u ||
+        (magic != module_magic && magic != swapped_magic)) {
         report_program_error(error, CL_INVALID_VALUE);
         return nullptr;
     }
@@ -213,14 +333,23 @@ cl_int ClIcdRoot::compile_program(cl_program program, cl_uint num_devices, const
     if (!notify.valid() || (num_headers != 0u && header_names == nullptr)) return CL_INVALID_VALUE;
     const cl_int devices = program_devices(*held, num_devices, device_list);
     if (devices != CL_SUCCESS) return devices;
+    if (!ClOptionJudge(options).valid()) return CL_INVALID_COMPILER_OPTIONS;
     ClHostNumbers host_headers_room(memory_);
     uint64_t     *host_headers = nullptr;
     const cl_int listed = program_list(*held, num_headers, headers, host_headers_room, host_headers);
     if (listed != CL_SUCCESS) return listed;
     ClientTransport *const wire = wire_of(*held);
     if (wire == nullptr) return CL_OUT_OF_RESOURCES;
-    const cl_int compiled = av::clproto::av_clCompileProgram(*wire, held->wire(), 0u, nullptr, options, num_headers,
-                                                             num_headers != 0u ? host_headers : nullptr, header_names);
+    if (held->source() != nullptr && source_needs_unreported_extension(*held)) {
+        notify.tell(program);
+        return CL_COMPILE_PROGRAM_FAILURE;
+    }
+    const ClBuildOptions sent(memory_, options);
+    if (!sent.usable()) return CL_OUT_OF_HOST_MEMORY;
+    const cl_int compiled = av::clproto::av_clCompileProgram(*wire, held->wire(), 0u, nullptr, sent.for_host(),
+                                                             num_headers, num_headers != 0u ? host_headers : nullptr,
+                                                             header_names);
+    if (compiled == CL_SUCCESS) held->keep_traits(sent.traits() | (held->traits() & ClObject::program_from_source));
     if (compiled == CL_COMPILE_PROGRAM_FAILURE) note_build_log(*wire, held->wire(), host_device_of(*held), options);
     if (compiled == CL_SUCCESS || compiled == CL_COMPILE_PROGRAM_FAILURE) notify.tell(program);
     return compiled;
@@ -237,6 +366,7 @@ cl_program ClIcdRoot::link_program(cl_context context, cl_uint num_devices, cons
         return nullptr;
     }
     cl_int judgement = !notify.valid() || num_inputs == 0u ? CL_INVALID_VALUE : CL_SUCCESS;
+    if (judgement == CL_SUCCESS && !ClOptionJudge(options).valid()) judgement = CL_INVALID_LINKER_OPTIONS;
     if (judgement == CL_SUCCESS) judgement = program_devices(*held, num_devices, device_list);
     ClHostNumbers host_inputs_room(memory_);
     uint64_t     *host_inputs = nullptr;
@@ -248,16 +378,37 @@ cl_program ClIcdRoot::link_program(cl_context context, cl_uint num_devices, cons
         return nullptr;
     }
     cl_int         host_error = CL_SUCCESS;
-    const uint64_t linked = av::clproto::av_clLinkProgram(*wire, held->wire(), 0u, nullptr, options, num_inputs,
+    uint64_t linked = av::clproto::av_clLinkProgram(*wire, held->wire(), 0u, nullptr, options, num_inputs,
                                                           host_inputs, &host_error);
-    if (linked == 0u) {
-        report_program_error(error, host_error != CL_SUCCESS ? host_error : CL_LINK_PROGRAM_FAILURE);
+    const bool refused_link =
+        linked == 0u && (host_error == CL_INVALID_BINARY || host_error == CL_SUCCESS || host_error == CL_LINK_PROGRAM_FAILURE);
+    uint64_t stand_in = 0u;
+    if (refused_link) stand_in = failed_link_stand_in(*wire, held->wire());
+    if (linked == 0u && stand_in == 0u) {
+        report_program_error(error, host_error == CL_INVALID_BINARY ? CL_LINK_PROGRAM_FAILURE
+                                    : host_error != CL_SUCCESS ? host_error : CL_LINK_PROGRAM_FAILURE);
         return nullptr;
+    }
+    if (stand_in != 0u) {
+        linked = stand_in;
+        host_error = CL_LINK_PROGRAM_FAILURE;
     }
     if (host_error == CL_LINK_PROGRAM_FAILURE) note_build_log(*wire, linked, host_device_of(*held), options);
     cl_int     kept = CL_SUCCESS;
     cl_program made = static_cast<cl_program>(wrap(*wire, ClObject::Kind::program, linked, held->context(), held, &kept));
-    report_program_error(error, kept != CL_SUCCESS ? kept : host_error);
+    if (made != nullptr && stand_in != 0u)
+        static_cast<ClObject *>(static_cast<void *>(made))->keep_traits(ClObject::program_failed);
+    if (made != nullptr) {
+        uint32_t carried = ClObject::program_typed_arguments | ClObject::program_arguments_asked | ClObject::program_from_source;
+        uint32_t non_uniform = 0u;
+        for (cl_uint index = 0u; index < num_inputs; ++index) {
+            const ClObject *const input = judged(inputs[index], ClObject::Kind::program);
+            carried &= input != nullptr ? input->traits() : 0u;
+            non_uniform |= input != nullptr ? input->traits() & ClObject::program_non_uniform : 0u;
+        }
+        if (stand_in == 0u) static_cast<ClObject *>(static_cast<void *>(made))->keep_traits(carried | non_uniform);
+    }
+    report_program_error(error, kept != CL_SUCCESS ? kept : host_error == CL_INVALID_BINARY ? CL_LINK_PROGRAM_FAILURE : host_error);
     notify.tell(made);
     return made;
 }
@@ -279,10 +430,18 @@ cl_int ClIcdRoot::program_info(cl_program program, cl_program_info name, size_t 
         return asked.give(&owner, sizeof owner);
     }
     case CL_PROGRAM_NUM_DEVICES: {
-        const cl_uint one = 1u;
-        return asked.give(&one, sizeof one);
+        ClContextGroup *const group = held->context() != nullptr ? held->context()->group() : nullptr;
+        const cl_uint         count = group != nullptr ? group->count() : 1u;
+        return asked.give(&count, sizeof count);
     }
     case CL_PROGRAM_DEVICES: {
+        ClContextGroup *const group = held->context() != nullptr ? held->context()->group() : nullptr;
+        if (group != nullptr) {
+            cl_device_id listed[ClContextGroup::most] = {};
+            for (uint32_t index = 0u; index < group->count(); ++index)
+                listed[index] = reinterpret_cast<cl_device_id>(group->at(index).device->object());
+            return asked.give(listed, group->count() * sizeof listed[0]);
+        }
         ClDevice *const    on = held->context() != nullptr ? devices_.running(*held->context()) : nullptr;
         const cl_device_id device = on != nullptr ? reinterpret_cast<cl_device_id>(on->object()) : nullptr;
         return asked.give(&device, sizeof device);
@@ -347,6 +506,7 @@ cl_int ClIcdRoot::create_kernels_in_program(cl_program program, cl_uint num_kern
     ClObject *const held = judged(program, ClObject::Kind::program);
     if (held == nullptr) return CL_INVALID_PROGRAM;
     if (kernels != nullptr && num_kernels == 0u) return CL_INVALID_VALUE;
+    if ((held->traits() & ClObject::program_failed) != 0u) return CL_INVALID_PROGRAM_EXECUTABLE;
     ClientTransport *const wire = wire_of(*held);
     if (wire == nullptr) return CL_OUT_OF_RESOURCES;
     const cl_uint   room = kernels != nullptr ? num_kernels : 0u;
@@ -392,7 +552,18 @@ cl_kernel ClIcdRoot::clone_kernel(cl_kernel kernel, cl_int *error)
         report_program_error(error, host_error != CL_SUCCESS ? host_error : CL_OUT_OF_RESOURCES);
         return nullptr;
     }
-    return static_cast<cl_kernel>(wrap(*wire, ClObject::Kind::kernel, clone, held->context(), held->parent(), error));
+    void *const made = wrap(*wire, ClObject::Kind::kernel, clone, held->context(), held->parent(), error);
+    if (made == nullptr) return nullptr;
+    ClObject *const cloned = static_cast<ClObject *>(made);
+    ClKernelShape *const shape = held->shape();
+    if (shape != nullptr) {
+        ClKernelShape *copy = nullptr;
+        if (shapes_.create(copy, memory_) == Status::ok) {
+            if (copy->copy_from(*shape) == Status::ok) cloned->keep_shape(copy);
+            else static_cast<void>(shapes_.destroy(copy));
+        }
+    }
+    return static_cast<cl_kernel>(made);
 }
 
 cl_int ClIcdRoot::kernel_info(cl_kernel kernel, cl_kernel_info name, size_t value_bytes, void *value,
@@ -429,8 +600,15 @@ cl_int ClIcdRoot::kernel_arg_info(cl_kernel kernel, cl_uint index, cl_kernel_arg
     AV_SCOPE("ClIcdRoot::kernel_arg_info");
     ClObject *const held = judged(kernel, ClObject::Kind::kernel);
     if (held == nullptr) return CL_INVALID_KERNEL;
+    const ClObject *const owner = held->parent();
+    if (owner != nullptr && (owner->traits() & ClObject::program_typed_arguments) != 0u &&
+        (owner->traits() & ClObject::program_from_source) != 0u &&
+        (owner->traits() & ClObject::program_arguments_asked) == 0u)
+        return CL_KERNEL_ARG_INFO_NOT_AVAILABLE;
     ClientTransport *const wire = wire_of(*held);
     if (wire == nullptr) return CL_OUT_OF_RESOURCES;
+    const ClKernelShape *const shape = held->shape();
+    if (shape != nullptr && index >= shape->count()) return CL_INVALID_ARG_INDEX;
     return av::clproto::av_clGetKernelArgInfo(*wire, held->wire(), index, name, value_bytes, value, size_ret);
 }
 

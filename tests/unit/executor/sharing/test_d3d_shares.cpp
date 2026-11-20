@@ -147,11 +147,11 @@ TEST(d3d_shares, opens_as_the_flip_copy_then_the_view_then_the_resource)
 { CountedObject resource, view, newer_view, shown, newer_shown;
   Fixture f;
   CHECK_STATUS(f.d3d.publish_resource(domain, 0x2Au, &resource, ShareOrigin::d3d12, f.publisher), Status::ok);
-  IUnknown *found = f.d3d.view(domain, 0x2Au);
+  IUnknown *found = f.d3d.view(domain, 0x2Au, ShareOrigin::d3d11);
   CHECK(found == &resource);
   found->Release();
-  CHECK(f.d3d.keep_view(domain, 0x2Au, &view));
-  CHECK(f.d3d.keep_view(domain, 0x2Au, &newer_view));
+  CHECK(f.d3d.keep_view(domain, 0x2Au, ShareOrigin::d3d11, &view));
+  CHECK(f.d3d.keep_view(domain, 0x2Au, ShareOrigin::d3d11, &newer_view));
   CHECK_EQ(view.references(), 2u);
   CHECK_EQ(resource.references(), 2u);
   found = f.opened_resource(0x2Au);
@@ -184,7 +184,7 @@ TEST(d3d_shares_lose_direct3d11, gives_up_the_lost_device_s_objects_and_keeps_th
   CHECK_STATUS(f.d3d.publish_resource(domain, 0x11u, &resource11, ShareOrigin::d3d11, f.publisher), Status::ok);
   CHECK(f.d3d.keep_shown(domain, 0x11u, &shown11));
   CHECK_STATUS(f.d3d.publish_resource(domain, 0x12u, &resource12, ShareOrigin::d3d12, f.publisher), Status::ok);
-  CHECK(f.d3d.keep_view(domain, 0x12u, &view12));
+  CHECK(f.d3d.keep_view(domain, 0x12u, ShareOrigin::d3d11, &view12));
   CHECK(f.d3d.keep_shown(domain, 0x12u, &shown12));
   f.d3d.lose_direct3d11();
   CHECK_EQ(f.drained(), 4u);
@@ -210,14 +210,14 @@ TEST(d3d_shares_lose_direct3d12, gives_up_the_lost_device_s_resources_and_keeps_
   Fixture f;
   CHECK_STATUS(f.d3d.publish_resource(domain, 0x11u, &resource11, ShareOrigin::d3d11, f.publisher), Status::ok);
   CHECK_STATUS(f.d3d.publish_resource(domain, 0x12u, &resource12, ShareOrigin::d3d12, f.publisher), Status::ok);
-  CHECK(f.d3d.keep_view(domain, 0x12u, &view12));
+  CHECK(f.d3d.keep_view(domain, 0x12u, ShareOrigin::d3d11, &view12));
   CHECK(f.d3d.keep_shown(domain, 0x12u, &shown12));
   f.d3d.lose_direct3d12();
   CHECK_EQ(f.drained(), 1u);
   CHECK_EQ(resource12.references(), 1u);
   CHECK_EQ(view12.references(), 2u);
   CHECK_EQ(shown12.references(), 2u);
-  IUnknown *const viewed = f.d3d.view(domain, 0x12u);
+  IUnknown *const viewed = f.d3d.view(domain, 0x12u, ShareOrigin::d3d11);
   CHECK(viewed == &view12);
   viewed->Release();
   CHECK(f.d3d.resource(domain, 0x12u) == nullptr);
@@ -270,13 +270,13 @@ TEST(d3d_shares_restore_resource, a_resource_made_again_is_kept_by_the_share_it_
 TEST(d3d_shares, nothing_is_kept_for_an_unknown_id_or_no_object)
 { CountedObject object;
   Fixture f;
-  CHECK(!f.d3d.keep_view(domain, 0x2Au, &object));
+  CHECK(!f.d3d.keep_view(domain, 0x2Au, ShareOrigin::d3d11, &object));
   CHECK(!f.d3d.keep_shown(domain, 0x2Au, &object));
   CHECK(f.d3d.resource(domain, 0x2Au) == nullptr);
-  CHECK(f.d3d.view(domain, 0x2Au) == nullptr);
+  CHECK(f.d3d.view(domain, 0x2Au, ShareOrigin::d3d11) == nullptr);
   CHECK(f.d3d.shown(domain, 0x2Au) == nullptr);
   CHECK_STATUS(f.d3d.publish_resource(domain, 0x2Au, &object, ShareOrigin::d3d12, f.publisher), Status::ok);
-  CHECK(!f.d3d.keep_view(domain, 0x2Au, nullptr));
+  CHECK(!f.d3d.keep_view(domain, 0x2Au, ShareOrigin::d3d11, nullptr));
   CHECK(!f.d3d.keep_shown(domain, 0x2Au, nullptr));
   CHECK_EQ(object.references(), 2u); }
 
@@ -284,9 +284,9 @@ TEST(d3d_shares, a_reference_that_cannot_be_retired_is_released_at_once)
 { CountedObject resource, view, newer_view, shown, newer_shown;
   Fixture f;
   CHECK_STATUS(f.d3d.publish_resource(domain, 0x2Au, &resource, ShareOrigin::d3d12, f.publisher), Status::ok);
-  CHECK(f.d3d.keep_view(domain, 0x2Au, &view));
+  CHECK(f.d3d.keep_view(domain, 0x2Au, ShareOrigin::d3d11, &view));
   f.platform.fail_allocation_at(1u);
-  CHECK(f.d3d.keep_view(domain, 0x2Au, &newer_view));
+  CHECK(f.d3d.keep_view(domain, 0x2Au, ShareOrigin::d3d11, &newer_view));
   CHECK_EQ(view.references(), 1u);
   CHECK_EQ(f.drained(), 0u);
   CHECK(f.d3d.keep_shown(domain, 0x2Au, &shown));
@@ -338,7 +338,7 @@ TEST(d3d_shares, copies_are_counted_per_id_and_start_again_with_the_id)
   f.d3d.written(domain, 6u);
   f.d3d.written(domain, 6u);
   f.d3d.written(domain + 1u, 5u);
-  CHECK(f.d3d.keep_view(domain, 5u, &view));
+  CHECK(f.d3d.keep_view(domain, 5u, ShareOrigin::d3d11, &view));
   f.d3d.written(domain, 5u);
   CHECK(f.d3d.writes(domain, 5u, count));
   CHECK_EQ(count, 2u);
@@ -359,9 +359,9 @@ TEST(d3d_shares, a_report_while_the_table_is_held_says_so)
   Fixture f;
   view.shares = &f.shares;
   CHECK_STATUS(f.d3d.publish_resource(domain, 0x2Au, &resource, ShareOrigin::d3d12, f.publisher), Status::ok);
-  CHECK(f.d3d.keep_view(domain, 0x2Au, &view));
+  CHECK(f.d3d.keep_view(domain, 0x2Au, ShareOrigin::d3d11, &view));
   f.platform.fail_allocation_at(1u);
-  CHECK(f.d3d.keep_view(domain, 0x2Au, &newer_view));
+  CHECK(f.d3d.keep_view(domain, 0x2Au, ShareOrigin::d3d11, &newer_view));
   CHECK(view.saw_busy);
   CHECK(!reports(f.shares, "busy=true")); }
 
@@ -370,3 +370,33 @@ TEST(d3d_shares, a_direct3d_open_of_an_object_with_no_resource_gets_nothing)
   f.published(0x2Au);
   CHECK(f.opened_resource(0x2Au) == nullptr);
   CHECK(reports(f.shares, "opens=0")); }
+
+TEST(d3d_shares, a_direct3d12_view_of_a_direct3d11_share_is_its_own_and_goes_with_the_direct3d12_device)
+{ CountedObject resource11, view12;
+  Fixture f;
+  CHECK_STATUS(f.d3d.publish_resource(domain, 0x11u, &resource11, ShareOrigin::d3d11, f.publisher), Status::ok);
+  IUnknown *found = f.d3d.view(domain, 0x11u, ShareOrigin::d3d12);
+  CHECK(found == &resource11);
+  found->Release();
+  CHECK(f.d3d.keep_view(domain, 0x11u, ShareOrigin::d3d12, &view12));
+  found = f.d3d.view(domain, 0x11u, ShareOrigin::d3d12);
+  CHECK(found == &view12);
+  found->Release();
+  found = f.d3d.view(domain, 0x11u, ShareOrigin::d3d11);
+  CHECK(found == &resource11);
+  found->Release();
+  found = f.opened_resource(0x11u);
+  CHECK(found == &resource11);
+  found->Release();
+  f.d3d.lose_direct3d11();
+  CHECK_EQ(f.drained(), 1u);
+  CHECK_EQ(view12.references(), 2u);
+  found = f.d3d.view(domain, 0x11u, ShareOrigin::d3d12);
+  CHECK(found == &view12);
+  found->Release();
+  f.d3d.lose_direct3d12();
+  CHECK_EQ(f.drained(), 1u);
+  CHECK_EQ(view12.references(), 1u);
+  CHECK(f.d3d.view(domain, 0x11u, ShareOrigin::d3d12) == nullptr);
+  CHECK_EQ(f.shares.live(), 1u);
+  f.shares.clear(); }

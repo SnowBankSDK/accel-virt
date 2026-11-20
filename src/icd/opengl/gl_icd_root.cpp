@@ -84,6 +84,27 @@ constexpr GlExtensionPolicy::Row reported_extensions[] = {
     {"GL_ARB_multitexture", 1u, "gl_extension_policy.reports_what_rows_the_tier_and_the_host_share"},
     {"GL_ARB_clip_control", 1u, "gl_extension_policy.reports_what_rows_the_tier_and_the_host_share"},
     {"GL_ARB_shader_draw_parameters", 1u, "gl_extension_policy.reports_what_rows_the_tier_and_the_host_share"},
+    {"GL_EXT_texture_compression_s3tc", 1u, "gl_extension_policy.reports_what_rows_the_tier_and_the_host_share"},
+    {"GL_EXT_texture_compression_dxt1", 1u, "gl_extension_policy.reports_what_rows_the_tier_and_the_host_share"},
+    {"GL_EXT_texture_filter_anisotropic", 1u, "gl_extension_policy.reports_what_rows_the_tier_and_the_host_share"},
+    {"GL_EXT_texture_sRGB_decode", 1u, "gl_extension_policy.reports_what_rows_the_tier_and_the_host_share"},
+    {"GL_ARB_texture_compression_bptc", 1u, "gl_extension_policy.reports_what_rows_the_tier_and_the_host_share"},
+    {"GL_ARB_texture_compression_rgtc", 1u, "gl_extension_policy.reports_what_rows_the_tier_and_the_host_share"},
+    {"GL_ARB_ES3_compatibility", 1u, "gl_extension_policy.reports_what_rows_the_tier_and_the_host_share"},
+    {"GL_KHR_shader_subgroup", 1u, "gl_extension_policy.reports_what_rows_the_tier_and_the_host_share"},
+    {"GL_ARB_shader_ballot", 1u, "gl_extension_policy.reports_what_rows_the_tier_and_the_host_share"},
+    {"GL_ARB_shader_viewport_layer_array", 1u, "gl_extension_policy.reports_what_rows_the_tier_and_the_host_share"},
+    {"GL_AMD_vertex_shader_layer", 1u, "gl_extension_policy.reports_what_rows_the_tier_and_the_host_share"},
+    {"GL_ARB_fragment_shader_interlock", 1u, "gl_extension_policy.reports_what_rows_the_tier_and_the_host_share"},
+    {"GL_EXT_shader_image_load_formatted", 1u, "gl_extension_policy.reports_what_rows_the_tier_and_the_host_share"},
+    {"GL_KHR_blend_equation_advanced", 1u, "gl_extension_policy.reports_what_rows_the_tier_and_the_host_share"},
+    {"GL_KHR_blend_equation_advanced_coherent", 1u, "gl_extension_policy.reports_what_rows_the_tier_and_the_host_share"},
+    {"GL_ARB_gl_spirv", 1u, "gl_extension_policy.reports_what_rows_the_tier_and_the_host_share"},
+    {"GL_ARB_vertex_program", 1u, "gl_extension_policy.reports_what_rows_the_tier_and_the_host_share"},
+    {"GL_ARB_fragment_program", 1u, "gl_extension_policy.reports_what_rows_the_tier_and_the_host_share"},
+    {"GL_ARB_sparse_texture", 1u, "gl_extension_policy.reports_what_rows_the_tier_and_the_host_share"},
+    {"GL_ARB_bindless_texture", 1u, "manual_calls.a_bindless_handle_is_used_only_after_this_share_group_was_given_it"},
+    {"GL_NV_conservative_raster", 1u, "gl_extension_policy.reports_what_rows_the_tier_and_the_host_share"},
 };
 constexpr uint32_t reported_count = sizeof reported_extensions / sizeof reported_extensions[0];
 constexpr GlExtensionPolicy::Row reported_wgl_extensions[] = {
@@ -102,10 +123,10 @@ constexpr uint32_t reported_wgl_count = sizeof reported_wgl_extensions / sizeof 
 
 GlIcdRoot::GlIcdRoot(BlockSource &memory, Kmt &kmt, ThreadLock &lock, ThreadLock &send_lock,
                      ThreadLock &slice_lock, KeyedLog &log, icd::WindowSurface &surface, ThreadSlot &slot, SystemOpengl &system,
-                     GlPresentQueue &presents, GlIcdBinding &binding)
+                     GlPresentQueue &presents, GlIcdBinding &binding, AdapterOrder &order)
     : lock_(lock), lines_(log), refused_(lines_), surface_(surface), slot_(slot), system_(system), presents_(presents),
       binding_(binding), formats_(),
-      query_(formats_), windows_(memory), currents_(slot), connection_(memory, kmt, 0u),
+      query_(formats_), windows_(memory), currents_(slot), preferred_(kmt, order), adapter_chosen_(false), adapter_luid_(0u), connection_(memory, kmt, 0u),
       extensions_(reported_extensions, reported_count, reported_wgl_extensions, reported_wgl_count),
       shared_handles_(kmt, lock, memory),
       contexts_(memory, connection_, lock, send_lock, slice_lock, lines_, extensions_, shared_handles_),
@@ -115,6 +136,7 @@ GlIcdRoot::GlIcdRoot(BlockSource &memory, Kmt &kmt, ThreadLock &lock, ThreadLock
     generated::fill_proc_table(proc_table_);
     proc_table_.slots[get_error_slot] = reinterpret_cast<GlProc>(&entry::get_error);
     proc_table_.slots[get_integerv_slot] = reinterpret_cast<GlProc>(&entry::get_integerv);
+    clock_.bind(kmt);
     binding_.bind(*this);
 }
 
@@ -228,8 +250,10 @@ void *GlIcdRoot::set_context(void *dc, uint64_t handle, void *)
         previous->flush();
     }
     if (context->state() == GuestGlContext::State::created) {
+        choose_adapter(dc);
         const Status made = make_chain(*context);
         if (made != Status::ok) {
+            LogLine(lines_).text("wglMakeCurrent: the context chain could not be made, status ").number(static_cast<uint32_t>(made)).text(", error ").number(made_error(made)).write();
             fail(made_error(made));
             return nullptr;
         }
@@ -310,6 +334,7 @@ void *GlIcdRoot::get_proc_address(const char *name)
     if (__builtin_strcmp(name, "avForceContextFault") == 0)
         return reinterpret_cast<void *>(&entry::avForceContextFault);
     if (__builtin_strcmp(name, "avGetShareName") == 0) return reinterpret_cast<void *>(&entry::avGetShareName);
+    if (__builtin_strcmp(name, "avGetAdapterLuid") == 0) return reinterpret_cast<void *>(&entry::avGetAdapterLuid);
     if (__builtin_strcmp(name, "avRunHeldCalls") == 0) return reinterpret_cast<void *>(&entry::avRunHeldCalls);
     for (const SharedObjectEntry &row : shared_object_entries)
         if (__builtin_strcmp(name, row.name) == 0) return row.address;
@@ -337,7 +362,6 @@ bool GlIcdRoot::swap_buffers(void *dc)
     const Shown shown = show_frame(dc);
     if (shown == Shown::refused) return false;
     currents_.current()->end_frame();
-    if (shown == Shown::handed) currents_.current()->pacing().after_present();
     contexts_.reap();
     return true;
 }
@@ -376,6 +400,8 @@ GlIcdRoot::Shown GlIcdRoot::present_frame(void *dc, bool paced)
     if (seen == icd::WindowExtent::Look::gone || seen == icd::WindowExtent::Look::empty) return Shown::nothing;
     WindowFramebuffers &framebuffers = context->framebuffers();
     framebuffers.drop_gone(*transport, surface_);
+    framebuffers.paced_by(context->pacing());
+    framebuffers.watched_by(context->channel());
     if (!framebuffers.present(*transport, context->arrays(), dc, window, surface_, &presents_,
                               context->adapter_luid()))
         return Shown::refused;
@@ -402,18 +428,39 @@ void GlIcdRoot::flush_current()
 {
     AV_SCOPE("GlIcdRoot::flush_current");
     GuestGlContext *const context = currents_.current();
-    if (context != nullptr && !formats_.format(context->pixel_format()).double_buffer())
-        static_cast<void>(show_frame(context->current_dc()));
+    const bool            shown = show_front(context);
     if (context != nullptr) context->framebuffers().show_held_now();
     manual_.flush();
+    if (shown) context->framebuffers().front_shown(context->calls_sent());
+}
+
+bool GlIcdRoot::show_front(GuestGlContext *context)
+{
+    AV_SCOPE("GlIcdRoot::show_front");
+    if (context == nullptr || formats_.format(context->pixel_format()).double_buffer()) return false;
+    if (!context->framebuffers().front_drawn(context->calls_sent())) return true;
+    return show_frame(context->current_dc()) == Shown::handed;
+}
+
+void GlIcdRoot::choose_adapter(void *dc)
+{
+    AV_SCOPE("GlIcdRoot::choose_adapter");
+    if (adapter_chosen_) return;
+    adapter_chosen_ = true;
+    const uint64_t chosen = preferred_.choose(dc);
+    adapter_luid_ = chosen;
+    connection_.prefer(chosen);
 }
 
 void GlIcdRoot::finish_current()
 {
     AV_SCOPE("GlIcdRoot::finish_current");
     GuestGlContext *const context = currents_.current();
+    const bool            shown = show_front(context);
     if (context != nullptr) context->framebuffers().show_held_now();
     manual_.finish();
+    if (shown) context->framebuffers().front_shown(context->calls_sent());
+    if (context != nullptr) context->deliver_debug();
 }
 
 bool GlIcdRoot::set_swap_interval(int32_t interval)
@@ -468,6 +515,7 @@ void *GlIcdRoot::create_context_attribs(void *dc, void *share, const int32_t *at
     Status         created = Status::ok;
     {
         const ThreadLockHold locked(lock_);
+        choose_adapter(dc);
         created = contexts_.create(format, options, handle);
     }
     if (created != Status::ok) {
@@ -481,7 +529,7 @@ void *GlIcdRoot::create_context_attribs(void *dc, void *share, const int32_t *at
         grouped = contexts_.join(handle, share_handle);
         if (grouped == Status::ok) static_cast<void>(context->share(share_name));
     }
-    const Status made = grouped == Status::ok ? context->make() : grouped;
+    const Status made = grouped == Status::ok ? make_patiently(*context) : grouped;
     Status       pended = made;
     if (made == Status::ok) {
         const ThreadLockHold locked(lock_);
@@ -565,12 +613,16 @@ uint32_t GlIcdRoot::get_error()
     AV_SCOPE("GlIcdRoot::get_error");
     GuestGlContext *const context = currents_.current();
     if (context == nullptr) return 0u;
+    context->deliver_debug();
     ClientTransport *const transport = context->wire();
     const uint32_t         local = context->take_error();
     if (local != 0u) return local;
     uint32_t published = 0u;
     if (context->take_host_error(published)) return published;
-    return transport != nullptr ? glproto::av_glGetError(*transport) : 0u;
+    if (transport == nullptr) return 0u;
+    const uint32_t asked = glproto::av_glGetError(*transport);
+    if (asked != 0u) return asked;
+    return context->take_host_error(published) ? published : 0u;
 }
 
 uint32_t GlIcdRoot::reset_status()
@@ -594,6 +646,13 @@ uint32_t GlIcdRoot::current_share_name()
     AV_SCOPE("GlIcdRoot::current_share_name");
     const GuestGlContext *const context = currents_.current();
     return context != nullptr ? context->share_name() : 0u;
+}
+
+uint64_t GlIcdRoot::current_adapter_luid()
+{
+    AV_SCOPE("GlIcdRoot::current_adapter_luid");
+    if (currents_.current() == nullptr || !adapter_chosen_) return 0u;
+    return adapter_luid_ != 0u ? adapter_luid_ : preferred_.default_luid();
 }
 
 int32_t GlIcdRoot::force_context_fault()
@@ -697,7 +756,7 @@ uint32_t GlIcdRoot::made_error(Status status) const
 {
     AV_SCOPE("GlIcdRoot::made_error");
     if (status == Status::not_supported) return error_not_supported;
-    return status == Status::no_memory ? error_not_enough_memory : error_invalid_operation;
+    return status == Status::no_memory || status == Status::no_space ? error_not_enough_memory : error_invalid_operation;
 }
 
 uint32_t GlIcdRoot::make_error(Status status, const GlContextOptions &options) const
@@ -731,10 +790,22 @@ Status GlIcdRoot::make_chain(GuestGlContext &context)
             target->lend();
             static_cast<void>(link.share(target->share_name()));
         }
-        const Status made = link.make();
+        const Status made = make_patiently(link);
         if (made != Status::ok) return made;
     }
     return Status::ok;
+}
+
+Status GlIcdRoot::make_patiently(GuestGlContext &context)
+{
+    AV_SCOPE("GlIcdRoot::make_patiently");
+    Status made = context.make();
+    for (uint32_t attempt = 1u; (made == Status::no_space || made == Status::invalid_state) && attempt < make_attempts;
+         attempt++) {
+        clock_.pause(make_pause_nanoseconds);
+        made = context.make();
+    }
+    return made;
 }
 
 GuestGlContext &GlIcdRoot::farthest_unmade(GuestGlContext &context) const
@@ -759,7 +830,10 @@ GuestGlContext *GlIcdRoot::shared_context(void *share, uint64_t &handle)
     const ThreadLockHold release(lock_);
     GuestGlContext *const target = contexts_.resolve(found);
     if (target == nullptr) return nullptr;
-    if (target->state() == GuestGlContext::State::created && make_chain(*target) != Status::ok) return nullptr;
+    if (target->state() == GuestGlContext::State::created) {
+        choose_adapter(nullptr);
+        if (make_chain(*target) != Status::ok) return nullptr;
+    }
     if (!target->shareable()) return nullptr;
     handle = found;
     return target;

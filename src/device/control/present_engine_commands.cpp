@@ -3,6 +3,7 @@
 #include "core/support/text_buffer.hpp"
 #include "core/trace/function_scope.hpp"
 #include "device/control/control_request.hpp"
+#include "device/control/held_requests.hpp"
 #include "device/host/host.hpp"
 #include "device/present/present_engine.hpp"
 #include "proto/virtio_gpu/gpu_response.hpp"
@@ -12,8 +13,9 @@
 
 namespace av {
 
-PresentEngineCommands::PresentEngineCommands(Host &host, PresentEngine &engine, const PresentFrames &snapshots)
-    : host_(host), engine_(engine), snapshots_(snapshots)
+PresentEngineCommands::PresentEngineCommands(Host &host, PresentEngine &engine, const PresentFrames &snapshots,
+                                             HeldRequests &held)
+    : host_(host), engine_(engine), snapshots_(snapshots), held_(held)
 {
     AV_SCOPE("PresentEngineCommands::PresentEngineCommands");
 }
@@ -40,9 +42,17 @@ void PresentEngineCommands::register_page(ControlRequest &request)
     WireReader   reader(bytes, request.read(0u, bytes, sizeof bytes));
     PageRequest  page;
     GpuResponse  response;
-    const Status attached = page.decode(reader) == Status::ok ? engine_.attach(page.address(), snapshots_) : Status::malformed;
-    if (attached == Status::no_memory) response.set(GpuResponse::err_out_of_memory);
-    else response.set(attached == Status::ok ? GpuResponse::ok_nodata : GpuResponse::err_invalid_parameter);
+    const bool   decoded = page.decode(reader) == Status::ok;
+    uint32_t     ticket = HeldRequests::no_ticket;
+    if (decoded) engine_.detach();
+    if (decoded && engine_.releasing()) {
+        if (held_.hold(request, &PresentEngineCommands::attach_answer, ticket) == Status::ok) {
+            engine_.attach_when_released(ticket, page.address(), snapshots_);
+            return;
+        }
+    }
+    const Status attached = decoded ? engine_.attach(page.address(), snapshots_) : Status::malformed;
+    response.set(attach_answer(attached));
     if (attached != Status::ok) {
         char       line[112] = {};
         TextBuffer text(line, sizeof line);
@@ -51,6 +61,13 @@ void PresentEngineCommands::register_page(ControlRequest &request)
         host_.log(text.text());
     }
     request.respond(response);
+}
+
+uint32_t PresentEngineCommands::attach_answer(Status status)
+{
+    AV_SCOPE("PresentEngineCommands::attach_answer");
+    if (status == Status::no_memory) return GpuResponse::err_out_of_memory;
+    return status == Status::ok ? GpuResponse::ok_nodata : GpuResponse::err_invalid_parameter;
 }
 
 }

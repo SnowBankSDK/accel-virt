@@ -13,10 +13,10 @@ namespace av::d3d {
 
 D3dSession::D3dSession(Kmt &kmt, BlockSource &memory, DriverLog &log, uint64_t arena_size, uint32_t select_command,
                        uint32_t flush_command, const SliceOffer *offer)
-    : lines_(log), lock_(), connection_(kmt),
+    : lines_(log), memory_(memory), lock_(), placement_lock_(), connection_(kmt),
       channel_(memory, log,
                icd::ChannelShape(SubApi::d3d, ring_order, reply_bytes, staging_bytes, batch_bytes, arena_size), lock_),
-      stream_(), shared_memory_(memory, channel_, lock_, log, offer, this), query_results_(), contexts_(memory), members_(0u), ids_(),
+      stream_(), shared_memory_(memory, channel_, lock_, kmt, log, offer, this), lease_(), query_results_(), contexts_(memory), members_(0u), ids_(),
       select_command_(select_command), flush_command_(flush_command)
 {
     AV_SCOPE("D3dSession::D3dSession");
@@ -91,6 +91,7 @@ HRESULT D3dSession::open(uint32_t adapter)
     const Status opened = channel_.open(connection_);
     if (opened != Status::ok) return opened == Status::no_memory ? E_OUTOFMEMORY : E_FAIL;
     static_cast<void>(stream_.construct(channel_.transport()));
+    static_cast<void>(lease_.construct(stream_.object(), lock_, LeaseRecord::direct3d_initial_bytes));
     stream_.object().speak_with(select_command_, flush_command_);
     uint8_t *slots = nullptr;
     uint64_t slots_at = 0u;
@@ -111,6 +112,18 @@ Status D3dSession::adopt_memory(void *address, uint64_t bytes, HostMemoryRequest
     return channel_.adopt_memory(address, bytes, memory, this, made);
 }
 
+Status D3dSession::place_memory(uint64_t bytes, HostMemoryRequest memory, uint64_t named, HostAllocation *&made)
+{
+    AV_SCOPE("D3dSession::place_memory");
+    return channel_.place_memory(bytes, memory, this, named, made);
+}
+
+ThreadLock &D3dSession::placement_lock()
+{
+    AV_SCOPE("D3dSession::placement_lock");
+    return placement_lock_;
+}
+
 void D3dSession::close_memory(HostAllocation &allocation)
 {
     AV_SCOPE("D3dSession::close_memory");
@@ -121,6 +134,7 @@ void D3dSession::close()
 {
     AV_SCOPE("D3dSession::close");
     shared_memory_.close_streams();
+    lease_.destroy();
     if (stream_.constructed()) {
         static_cast<void>(stream_.object().flush());
         stream_.destroy();
@@ -136,10 +150,40 @@ SessionMemory &D3dSession::shared_memory()
     return shared_memory_;
 }
 
+D3dSessionLease &D3dSession::lease()
+{
+    AV_SCOPE("D3dSession::lease");
+    return lease_.object();
+}
+
 uint32_t D3dSession::next_id()
 {
     AV_SCOPE("D3dSession::next_id");
     return ids_.next();
+}
+
+GuestConnection &D3dSession::connection()
+{
+    AV_SCOPE("D3dSession::connection");
+    return connection_;
+}
+
+BlockSource &D3dSession::memory()
+{
+    AV_SCOPE("D3dSession::memory");
+    return memory_;
+}
+
+uint32_t D3dSession::select_command() const
+{
+    AV_SCOPE("D3dSession::select_command");
+    return select_command_;
+}
+
+uint32_t D3dSession::flush_command() const
+{
+    AV_SCOPE("D3dSession::flush_command");
+    return flush_command_;
 }
 
 d3d::D3dCommandStream &D3dSession::stream()
@@ -170,6 +214,18 @@ ClientBlobArena &D3dSession::blobs()
 {
     AV_SCOPE("D3dSession::blobs");
     return channel_.transport().blobs();
+}
+
+KmtBlobArena *D3dSession::arena()
+{
+    AV_SCOPE("D3dSession::arena");
+    return channel_.arena();
+}
+
+DriverLog &D3dSession::log()
+{
+    AV_SCOPE("D3dSession::log");
+    return lines_;
 }
 
 ThreadLock &D3dSession::lock()

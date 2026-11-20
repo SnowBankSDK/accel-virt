@@ -1,4 +1,5 @@
 #include "core/platform/block_source.hpp"
+#include "guest/transport/host_allocation.hpp"
 #include "core/log/log_line.hpp"
 #include "core/support/text_buffer.hpp"
 #include "core/trace/function_scope.hpp"
@@ -6,11 +7,16 @@
 #include "core/log/keyed_log.hpp"
 #include "icd/d3d/d3d_command_stream.hpp"
 #include "icd/common/pieces.hpp"
+#include "icd/d3d/cross_adapter_rows.hpp"
+#include "icd/d3d/d3d9_surface_role.hpp"
 #include "icd/d3d/d3d_device_channel.hpp"
+#include "icd/d3d/kernel_surface.hpp"
 #include "icd/d3d/texture_upload.hpp"
 #include "proto/resources/pitched_rows.hpp"
 #include "proto/d3d/d3d9_format_layout.hpp"
 #include "proto/d3d/d3d9_present_format.hpp"
+#include "proto/d3d/resource_footprint.hpp"
+#include "proto/submission/lease_record.hpp"
 #include "proto/resources/allocation_descriptor.hpp"
 #include "proto/resources/shared_allocation_data.hpp"
 #include "proto/generated/d3d9/d3d9_dispatch_client.h"
@@ -51,15 +57,52 @@ constexpr uint32_t usage_autogen_mipmap = 0x400u;
 constexpr uint32_t usage_dmap = 0x4000u;
 constexpr uint32_t write_discard = 0x2000u;
 constexpr uint32_t write_no_overwrite = 0x1000u;
+constexpr HRESULT out_of_video_memory = static_cast<HRESULT>(0x8876017cu);
 constexpr uint32_t filter_point = 1u;
 constexpr uint32_t filter_linear = 2u;
+
+bool same_pixels(D3DDDIFORMAT source, D3DDDIFORMAT destination)
+{
+    AV_SCOPE("same_pixels");
+    const auto opaque_pair = [](D3DDDIFORMAT format) {
+        return format == D3DDDIFMT_A8R8G8B8 || format == D3DDDIFMT_X8R8G8B8;
+    };
+    const auto swapped_pair = [](D3DDDIFORMAT format) {
+        return format == D3DDDIFMT_A8B8G8R8 || format == D3DDDIFMT_X8B8G8R8;
+    };
+    return source == destination || (opaque_pair(source) && opaque_pair(destination)) ||
+           (swapped_pair(source) && swapped_pair(destination));
+}
 
 }
 
 
-HRESULT D3d9Device::create_resource(D3DDDIARG_CREATERESOURCE *args)
+HRESULT D3d9Device::create_resource2(D3DDDIARG_CREATERESOURCE2 *args)
 {
-    AV_SCOPE("D3d9Device::create_resource");
+    AV_SCOPE("D3d9Device::create_resource2");
+    D3DDDIARG_CREATERESOURCE base = {};
+    base.Format = args->Format;
+    base.Pool = args->Pool;
+    base.MultisampleType = args->MultisampleType;
+    base.MultisampleQuality = args->MultisampleQuality;
+    base.pSurfList = args->pSurfList;
+    base.SurfCount = args->SurfCount;
+    base.MipLevels = args->MipLevels;
+    base.Fvf = args->Fvf;
+    base.VidPnSourceId = args->VidPnSourceId;
+    base.RefreshRate = args->RefreshRate;
+    base.hResource = args->hResource;
+    base.Flags = args->Flags;
+    base.Rotation = args->Rotation;
+    const HRESULT made = make_resource(base, args->Flags2.Value);
+    if (SUCCEEDED(made)) args->hResource = base.hResource;
+    return made;
+}
+
+HRESULT D3d9Device::make_resource(D3DDDIARG_CREATERESOURCE &created, uint32_t flags2)
+{
+    AV_SCOPE("D3d9Device::make_resource");
+    D3DDDIARG_CREATERESOURCE *const args = &created;
     if (args->SurfCount == 0u || args->pSurfList == nullptr) return E_INVALIDARG;
     D3d9Resource *made = nullptr;
     if (resources_.create(made) != Status::ok) return E_OUTOFMEMORY;
@@ -92,13 +135,39 @@ HRESULT D3d9Device::create_resource(D3DDDIARG_CREATERESOURCE *args)
     if (args->Flags.RenderTarget || args->Flags.ZBuffer || args->Flags.Primary)
         trace("resource", args->Flags.Value, static_cast<uint32_t>(args->Format), made->subresources[0].width,
               made->subresources[0].height);
-    HRESULT host = args->Pool == D3DDDIPOOL_SYSTEMMEM ? S_OK : create_host_object(*made, *args);
-    if (SUCCEEDED(host) && args->Flags.Primary) host = allocate_primary(*made, *args);
-    else if (SUCCEEDED(host) && shares_render_target(*made, *args)) host = allocate_shared(*made, *args);
+    const d3d::D3d9SurfaceRole role(args->Flags.Value, flags2, static_cast<uint32_t>(args->Pool),
+                                    static_cast<uint32_t>(args->Format), args->SurfCount,
+                                    static_cast<uint32_t>(args->MultisampleType));
+    HRESULT host = S_OK;
+    switch (role.kind()) {
+    case d3d::D3d9SurfaceRole::Kind::refused:
+        lines_.once("a Direct3D 9 cross-adapter resource that is not one surface of rows");
+        host = E_INVALIDARG;
+        break;
+    case d3d::D3d9SurfaceRole::Kind::across_adapters:
+        host = create_across_adapters(*made, *args, role.texture());
+        break;
+    case d3d::D3d9SurfaceRole::Kind::shared_image:
+        host = create_shared_image(*made, *args, role.texture());
+        break;
+    case d3d::D3d9SurfaceRole::Kind::local:
+    case d3d::D3d9SurfaceRole::Kind::primary:
+    case d3d::D3d9SurfaceRole::Kind::shared:
+        host = args->Pool == D3DDDIPOOL_SYSTEMMEM ? S_OK : create_host_object(*made, *args);
+        if (SUCCEEDED(host) && role.kind() == d3d::D3d9SurfaceRole::Kind::primary)
+            host = allocate_primary(*made, *args);
+        else if (SUCCEEDED(host) && role.kind() == d3d::D3d9SurfaceRole::Kind::shared)
+            host = allocate_shared(*made, *args);
+        break;
+    }
     if (FAILED(host)) {
+        LogLine refused(lines_);
+        refused.text("d3d9 resource refused ").hex(static_cast<uint32_t>(host), 8u).text(" flags ").hex(args->Flags.Value, 8u);
+        refused.text(" format ").number(static_cast<uint32_t>(args->Format)).text(" pool ").number(static_cast<uint32_t>(args->Pool));
+        refused.text(" size ").number(made->subresources[0].width).text("x").number(made->subresources[0].height).write();
         release_resource(*made);
         static_cast<void>(resources_.destroy(made));
-        return host;
+        return host == E_OUTOFMEMORY && args->Pool != D3DDDIPOOL_SYSTEMMEM ? out_of_video_memory : host;
     }
     args->hResource = made;
     return S_OK;
@@ -115,6 +184,24 @@ HRESULT D3d9Device::create_host_object(D3d9Resource &resource, const D3DDDIARG_C
                            (flags.RtPatches ? usage_rt_patches : 0u) | (flags.NPatches ? usage_n_patches : 0u) |
                            (flags.DMap ? usage_dmap : 0u);
     const D3d9Subresource &top = resource.subresources[0];
+    const uint32_t         faces = flags.CubeMap ? cube_faces : 1u;
+    const uint32_t         levels = flags.AutogenMipmap ? 0u : create.SurfCount / faces;
+    uint64_t               leased = 0u;
+    if (flags.VertexBuffer || flags.IndexBuffer)
+        leased = ResourceFootprint(top.width, 0u).bytes();
+    else if (flags.Texture || flags.CubeMap || flags.Volume)
+        leased = ResourceFootprint(static_cast<uint32_t>(create.Format), top.width, top.height,
+                                                    flags.Volume ? top.depth : 1u, faces, levels, 1u)
+                     .bytes();
+    else
+        for (uint32_t index = 0u; index < resource.count; index++)
+            leased += ResourceFootprint(static_cast<uint32_t>(create.Format),
+                                                         resource.subresources[index].width,
+                                                         resource.subresources[index].height, 1u, 1u, 1u,
+                                                         static_cast<uint32_t>(create.MultisampleType))
+                          .bytes();
+    if (!lease(leased)) return E_OUTOFMEMORY;
+    resource.leased = leased;
     resource.id = next_id();
     bool sent = false;
     if (flags.VertexBuffer) {
@@ -125,13 +212,11 @@ HRESULT D3d9Device::create_host_object(D3d9Resource &resource, const D3DDDIARG_C
         sent = d3d9proto::av_d3d9_CreateIndexBuffer9(wire(), resource.id, top.width, usage,
                                                      static_cast<uint32_t>(create.Format), pool_default);
     } else if (flags.Texture || flags.CubeMap || flags.Volume) {
-        const uint32_t faces = flags.CubeMap ? cube_faces : 1u;
         resource.kind = flags.CubeMap  ? D3d9Resource::Kind::cube
                         : flags.Volume ? D3d9Resource::Kind::volume
                                        : D3d9Resource::Kind::texture;
         resource.levels = create.SurfCount / faces;
         const uint32_t type = flags.CubeMap ? texture_cube : flags.Volume ? texture_volume : texture_2d;
-        const uint32_t levels = flags.AutogenMipmap ? 0u : resource.levels;
         sent = d3d9proto::av_d3d9_CreateTexture9(wire(), resource.id, type, top.width, top.height, top.depth, levels,
                                                  usage, static_cast<uint32_t>(create.Format), pool_default);
     } else {
@@ -189,7 +274,23 @@ void D3d9Device::release_resource(D3d9Resource &resource)
     }
     if (resource.subresources != nullptr) memory_.release(resource.subresources);
     resource.subresources = nullptr;
-    if (!resource.opened) allocations_.give_back(resource.allocation, resource.allocation_resource);
+    if (resource.lent != nullptr) lender_.retire(*resource.lent);
+    resource.lent = nullptr;
+    if (resource.allocation != 0u) allocations_.give_back(resource.allocation, resource.allocation_resource);
+    give_lease(resource.leased);
+}
+
+bool D3d9Device::lease(uint64_t bytes)
+{
+    AV_SCOPE("D3d9Device::lease");
+    return session_.lease().take(bytes);
+}
+
+void D3d9Device::give_lease(uint64_t &bytes)
+{
+    AV_SCOPE("D3d9Device::give_lease");
+    if (bytes != 0u) session_.lease().give(bytes);
+    bytes = 0u;
 }
 
 HRESULT D3d9Device::open_resource(D3DDDIARG_OPENRESOURCE *args)
@@ -206,9 +307,23 @@ HRESULT D3d9Device::open_resource(D3DDDIARG_OPENRESOURCE *args)
         return refuse_open(*args, 0u);
     const SurfaceLayout &layout = descriptor.layout();
     D3d9PresentFormat    presented(0u);
-    if ((descriptor.kind() != AllocationKind::gdi && descriptor.kind() != AllocationKind::surface) || layout.width() == 0u || layout.height() == 0u ||
+    if ((descriptor.kind() != AllocationKind::gdi && descriptor.kind() != AllocationKind::surface &&
+         descriptor.kind() != AllocationKind::cross_adapter) ||
+        layout.width() == 0u || layout.height() == 0u ||
         !presented.take_ddi(layout.format()))
+    {
+        LogLine(lines_)
+            .text("a Direct3D 9 opened allocation of kind ")
+            .number(static_cast<uint32_t>(descriptor.kind()))
+            .text(" is ")
+            .number(layout.width())
+            .text("x")
+            .number(layout.height())
+            .text(" format ")
+            .number(static_cast<uint32_t>(layout.format()))
+            .write();
         return refuse_open(*args, static_cast<uint32_t>(descriptor.kind()));
+    }
     D3d9Resource *made = nullptr;
     if (resources_.create(made) != Status::ok) return E_OUTOFMEMORY;
     *made = D3d9Resource{};
@@ -228,6 +343,24 @@ HRESULT D3d9Device::open_resource(D3DDDIARG_OPENRESOURCE *args)
     made->allocation = info.hAllocation;
     made->allocation_pitch = layout.pitch();
     made->opened = true;
+    made->allocation_resource = made->runtime;
+    made->cross_adapter = descriptor.kind() == AllocationKind::cross_adapter;
+    d3d::KernelSurface shared;
+    if (descriptor.kind() == AllocationKind::surface &&
+        shared.open(args->pPrivateDriverData, args->PrivateDriverDataSize, info.pPrivateDriverData,
+                    info.PrivateDriverDataSize) == Status::ok)
+        made->shared_key = shared.key();
+    if (made->cross_adapter) {
+        d3d::CrossAdapterRows rows(allocations_, lender_);
+        if (FAILED(rows.adopt(made->allocation, descriptor))) {
+            lines_.write("the device took no opened cross-adapter surface's pages");
+            release_resource(*made);
+            static_cast<void>(resources_.destroy(made));
+            return E_OUTOFMEMORY;
+        }
+        made->lent = rows.lent();
+        engage();
+    }
     if (FAILED(allocations_.keep_resident(made->allocation))) {
         release_resource(*made);
         static_cast<void>(resources_.destroy(made));
@@ -666,9 +799,9 @@ HRESULT D3d9Device::read_surface(const D3d9Resource &resource, uint32_t index, u
 }
 
 
-HRESULT D3d9Device::tex_blt(const D3DDDIARG_TEXBLT *args)
+HRESULT D3d9Device::tex_blt1(const D3DDDIARG_TEXBLT1 *args)
 {
-    AV_SCOPE("D3d9Device::tex_blt");
+    AV_SCOPE("D3d9Device::tex_blt1");
     const D3d9Resource *const destination = resource(args->hDstResource);
     const D3d9Resource *const source = resource(args->hSrcResource);
     if (destination == nullptr || source == nullptr || source->kind != D3d9Resource::Kind::system ||
@@ -719,9 +852,9 @@ HRESULT D3d9Device::blt_level(const D3d9Resource &source, uint32_t source_index,
     return write_texture(destination, destination_index, box, data, from.system_pitch, from.system_slice_pitch, 0u);
 }
 
-HRESULT D3d9Device::vol_blt(const D3DDDIARG_VOLUMEBLT *args)
+HRESULT D3d9Device::vol_blt1(const D3DDDIARG_VOLUMEBLT1 *args)
 {
-    AV_SCOPE("D3d9Device::vol_blt");
+    AV_SCOPE("D3d9Device::vol_blt1");
     const D3d9Resource *const destination = resource(args->hDstResource);
     const D3d9Resource *const source = resource(args->hSrcResource);
     if (destination == nullptr || source == nullptr || source->kind != D3d9Resource::Kind::system ||
@@ -749,9 +882,9 @@ HRESULT D3d9Device::vol_blt(const D3DDDIARG_VOLUMEBLT *args)
     return S_OK;
 }
 
-HRESULT D3d9Device::buf_blt(const D3DDDIARG_BUFFERBLT *args)
+HRESULT D3d9Device::buf_blt1(const D3DDDIARG_BUFFERBLT1 *args)
 {
-    AV_SCOPE("D3d9Device::buf_blt");
+    AV_SCOPE("D3d9Device::buf_blt1");
     D3d9Resource *const       destination = resource(args->hDstResource);
     const D3d9Resource *const source = resource(args->hSrcResource);
     if (destination == nullptr || source == nullptr || source->kind != D3d9Resource::Kind::system ||
@@ -771,12 +904,15 @@ HRESULT D3d9Device::buf_blt(const D3DDDIARG_BUFFERBLT *args)
 HRESULT D3d9Device::blt(const D3DDDIARG_BLT *args)
 {
     AV_SCOPE("D3d9Device::blt");
-    const D3d9Resource *const source = resource(args->hSrcResource);
+    D3d9Resource *const       source = resource(args->hSrcResource);
     const D3d9Resource *const destination = resource(args->hDstResource);
     if (source == nullptr || destination == nullptr || args->SrcSubResourceIndex >= source->count ||
         args->DstSubResourceIndex >= destination->count)
         return E_INVALIDARG;
-    if (refuses_opened(*source, "a Direct3D 9 blt from an opened surface") ||
+    trace("bltargs", args->Flags.Value, source->format, destination->format, destination->opened ? 1u : 0u);
+    if (destination->opened && destination->cross_adapter && !source->opened) return blt_to_cross_adapter(*source, *destination, *args);
+    const bool from_rows = source->opened && !destination->opened && adopt_opened(*source);
+    if ((!from_rows && refuses_opened(*source, "a Direct3D 9 blt from an opened surface")) ||
         refuses_opened(*destination, "a Direct3D 9 blt into an opened surface"))
         return E_NOTIMPL;
     const bool from_system = source->kind == D3d9Resource::Kind::system;
@@ -826,6 +962,29 @@ HRESULT D3d9Device::blt_to_system(const D3d9Resource &source, const D3d9Resource
         if (from + line > readback_bytes_ || line > to.system_pitch) break;
         memcpy(out + into, readback_ + from, line);
     }
+    return S_OK;
+}
+
+HRESULT D3d9Device::blt_to_cross_adapter(const D3d9Resource &source, const D3d9Resource &destination,
+                                         const D3DDDIARG_BLT &blt)
+{
+    AV_SCOPE("D3d9Device::blt_to_cross_adapter");
+    if (!same_pixels(source.format, destination.format) || source.kind == D3d9Resource::Kind::system ||
+        destination.lent == nullptr)
+        return E_NOTIMPL;
+    const LONG wide = blt.SrcRect.right - blt.SrcRect.left, high = blt.SrcRect.bottom - blt.SrcRect.top;
+    if (wide <= 0 || high <= 0 || wide != blt.DstRect.right - blt.DstRect.left ||
+        high != blt.DstRect.bottom - blt.DstRect.top || blt.DstRect.left < 0 || blt.DstRect.top < 0)
+        return E_NOTIMPL;
+    uint32_t id = 0u, subresource = 0u;
+    if (!surface_of(source, blt.SrcSubResourceIndex, id, subresource)) return E_NOTIMPL;
+    if (!send_states()) return lost(__func__);
+    const d3d9proto::Rect area = {blt.SrcRect.left, blt.SrcRect.top, blt.SrcRect.right, blt.SrcRect.bottom};
+    if (!d3d9proto::av_d3d9_CopyToLent9(wire(), id, subresource, area, destination.lent->handle(),
+                                        destination.allocation_pitch, static_cast<uint32_t>(blt.DstRect.left),
+                                        static_cast<uint32_t>(blt.DstRect.top)) ||
+        wire().flush() != Status::ok)
+        return lost(__func__);
     return S_OK;
 }
 

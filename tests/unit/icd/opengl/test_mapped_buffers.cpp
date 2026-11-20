@@ -48,6 +48,7 @@ constexpr std::uint32_t invalid_operation = MappedBuffers::gl_invalid_operation;
 constexpr std::uint32_t out_of_memory = MappedBuffers::gl_out_of_memory;
 constexpr std::uint32_t read = BufferMapping::map_read, write = BufferMapping::map_write;
 constexpr std::uint32_t persistent = BufferMapping::map_persistent, explicit_flush = BufferMapping::map_flush_explicit;
+constexpr std::uint32_t coherent = BufferMapping::map_coherent;
 
 struct Rig {
     GlContextRig   context_rig;
@@ -104,7 +105,8 @@ TEST(mapped_buffers, access_bits_and_arguments_are_judged_first)
       std::uint32_t access;
       std::uint32_t error;
   } refusals[] = {
-      {1u, 0, 4, 0x0080u | read, invalid_value},
+      {1u, 0, 4, 0x0100u | read, invalid_value},
+      {1u, 0, 4, 0x0080u | read, invalid_operation},
       {1u, 0, 4, 0x8000'0000u | write, invalid_value},
       {1u, 0, 4, 0u, invalid_operation},
       {1u, 0, 4, persistent, invalid_operation},
@@ -113,7 +115,7 @@ TEST(mapped_buffers, access_bits_and_arguments_are_judged_first)
       {1u, 0, 4, read | BufferMapping::map_unsynchronized, invalid_operation},
       {1u, 0, 4, read | explicit_flush, invalid_operation},
       {1u, -1, 4, read, invalid_value},
-      {1u, 0, 0, read, invalid_value},
+      {1u, 0, 0, read, invalid_operation},
       {1u, 0, -2, write, invalid_value},
       {0u, 0, 4, read, invalid_operation},
   };
@@ -238,7 +240,7 @@ TEST(mapped_buffers, only_persistent_writers_are_flushed)
   CHECK_EQ(rig.commands(), before);
   CHECK(rig.map(1u, 4, 0, 4, write, no_error) != nullptr);
   CHECK(rig.map(2u, 4, 0, 4, read | persistent, no_error) != nullptr);
-  auto *const three = static_cast<std::uint8_t *>(rig.map(3u, 4, 0, 4, write | persistent, no_error));
+  auto *const three = static_cast<std::uint8_t *>(rig.map(3u, 4, 0, 4, write | persistent | coherent, no_error));
   CHECK(three != nullptr);
   CHECK(rig.map(4u, 4, 0, 4, write | persistent | explicit_flush, no_error) != nullptr);
   const std::uint32_t flushed = rig.commands();
@@ -259,7 +261,7 @@ TEST(mapped_buffers, only_persistent_writers_are_flushed)
   rig.mappings.report(writer);
   CHECK(std::strstr(writer.dump(), "mappings/0 held=4 persistent_writers=2\n") == writer.dump());
   CHECK(std::strstr(writer.dump(),
-                    "mappings/0/mapping/2 buffer=3 offset=0 length=4 access=0x0000000000000042 dirty_from=0 "
+                    "mappings/0/mapping/2 buffer=3 offset=0 length=4 access=0x00000000000000C2 dirty_from=0 "
                     "dirty_to=0") != nullptr);
   CHECK(rig.mappings.invariants_hold()); }
 
@@ -279,13 +281,35 @@ TEST(mapped_buffers, forget_and_release_give_up_ranges_without_writing)
   CHECK(rig.mappings.pointer_of(3u) != nullptr);
   CHECK(rig.mappings.invariants_hold());
   three[2] = 0x33u;
-  rig.mappings.flush_persistent(rig.wire());
+  rig.mappings.order_persistent(rig.wire());
   CHECK_EQ(rig.commands() - before, 1u);
   rig.mappings.release();
   CHECK_EQ(rig.mappings.held(), 0u);
   CHECK(rig.mappings.invariants_hold());
-  rig.mappings.flush_persistent(rig.wire());
+  rig.mappings.order_persistent(rig.wire());
   CHECK_EQ(rig.commands() - before, 1u); }
+
+TEST(mapped_buffers, a_non_coherent_persistent_write_is_sent_at_a_barrier_or_fence_and_not_before_each_reader)
+{ Rig rig;
+  auto *const plain = static_cast<std::uint8_t *>(rig.map(1u, 4, 0, 4, write | persistent, no_error));
+  auto *const kept = static_cast<std::uint8_t *>(rig.map(2u, 4, 0, 4, write | persistent | coherent, no_error));
+  CHECK(plain != nullptr && kept != nullptr);
+  const std::uint32_t before = rig.commands();
+  plain[0] = 0x11u;
+  rig.mappings.flush_persistent(rig.wire());
+  CHECK_EQ(rig.commands(), before);
+  kept[0] = 0x22u;
+  rig.mappings.flush_persistent(rig.wire());
+  CHECK_EQ(rig.commands() - before, 1u);
+  rig.mappings.order_persistent(rig.wire());
+  CHECK_EQ(rig.commands() - before, 2u);
+  rig.mappings.order_persistent(rig.wire());
+  CHECK_EQ(rig.commands() - before, 2u);
+  plain[1] = 0x12u;
+  kept[1] = 0x23u;
+  rig.mappings.order_persistent(rig.wire());
+  CHECK_EQ(rig.commands() - before, 4u);
+  CHECK(rig.mappings.invariants_hold()); }
 
 TEST(mapped_buffers_invariants, fail_for_a_miscount_or_a_broken_mapping)
 { Rig counted;
@@ -431,3 +455,14 @@ TEST(mapped_buffers, map_state_answers_a_sliced_buffers_storage_flags_and_its_ma
   CHECK_EQ(value, 16);
   CHECK(rig.mappings.map_state(1u, length, value));
   CHECK_EQ(value, 64); }
+
+TEST(mapped_buffers, a_persistent_read_mapping_is_read_again_and_other_mappings_are_left_alone)
+{ Rig rig;
+  CHECK(rig.map(1u, 4, 0, 4, write, no_error) != nullptr);
+  CHECK(rig.map(2u, 4, 0, 4, read | persistent, no_error) != nullptr);
+  CHECK(rig.map(3u, 4, 0, 4, write | persistent, no_error) != nullptr);
+  const std::uint32_t before = rig.commands();
+  rig.mappings.refresh_persistent(rig.wire());
+  CHECK_EQ(rig.commands() - before, 1u);
+  CHECK_EQ(rig.id(before), ids::kCmd_glGetNamedBufferSubData);
+  CHECK_EQ(rig.mappings.held(), 3u); }

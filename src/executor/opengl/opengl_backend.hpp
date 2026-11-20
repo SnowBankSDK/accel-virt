@@ -11,11 +11,16 @@
 #include "executor/budgeted_heap.hpp"
 #include "executor/opengl/gl_batch_progress.hpp"
 #include "executor/opengl/gl_buffer_slices.hpp"
+#include "executor/opengl/gl_client_reads.hpp"
+#include "executor/opengl/gl_fence_deferral.hpp"
+#include "executor/opengl/gl_framebuffer_names.hpp"
 #include "executor/opengl/gl_error_queue.hpp"
 #include "executor/opengl/gl_memory_objects.hpp"
 #include "executor/opengl/gl_texture_slices.hpp"
+#include "executor/opengl/gl_transfer_pacer.hpp"
 #include "executor/opengl/gl_vram_guard.hpp"
 #include "executor/shim/gl_dma_buf_images.hpp"
+#include "executor/opengl/gl_shared_fences.hpp"
 #include "executor/opengl/sync_tokens.hpp"
 #include "executor/shim/gl_context.hpp"
 #include "executor/opengl/gl_pack_buffer.hpp"
@@ -27,6 +32,8 @@
 #include <stdint.h>
 
 namespace av {
+
+class SessionLease;
 
 class DriverLog;
 class OwnedFd;
@@ -47,8 +54,10 @@ public:
                                   const OpenGlBackend *share, GlMemoryGroup *group = nullptr);
     const GlContext   &context() const;
     void use_host_ram(ByteLedger *ledger, uint64_t limit) override;
+    void lease_from(SessionLease *lease) override;
     void               shut_down() override;
     void               let_go_of_thread() override;
+    void               leave_device() override;
 
     bool knows(uint32_t command_id) const override;
     [[nodiscard]] bool run(uint32_t command_id, WireReader &payload, WireWriter &reply,
@@ -99,6 +108,10 @@ private:
     EventfdWake     wake_;
     GlPackBuffer    pack_;
     SyncTokens  fences_;
+    GlTransferPacer pacer_;
+    GlFenceDeferral deferral_;
+    GlClientReads   client_reads_;
+    GlSharedFences *shared_fences_;
     GlBatchProgress progress_;
     GlErrorQueue    pending_;
     GlVramGuard     vram_guard_;
@@ -106,6 +119,7 @@ private:
     GlDmaBufImages  images_;
     GlBufferSlices  slices_;
     GlTextureSlices textures_;
+    GlFramebufferNames framebuffers_;
     GuestBytes  guest_;
     GuestRegion region_;
     PublishedSlots published_;
@@ -117,6 +131,7 @@ private:
     uint64_t    drained_at_;
     void       *drain_fence_;
     bool        current_;
+    bool        fence_owed_;
     bool        poll_failure_logged_;
     DriverLog  &lines_;
 

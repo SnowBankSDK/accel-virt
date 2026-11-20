@@ -25,6 +25,7 @@ public:
     [[nodiscard]] bool make_exportable(const VulkanDeviceTable &table, const VkImageCreateInfo &info);
     [[nodiscard]] bool import_dma_buf(const VulkanDeviceTable &table, const VkImageCreateInfo &info,
                                       OwnedFd &descriptor);
+    [[nodiscard]] bool import_dma_buf(OwnedFd &descriptor);
     [[nodiscard]] bool export_dma_buf(OwnedFd &descriptor) const;
     uint64_t            modifier() const;
     VkSubresourceLayout row_layout() const;

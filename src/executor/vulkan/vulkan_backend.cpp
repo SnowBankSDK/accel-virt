@@ -1,4 +1,6 @@
 #include "executor/vulkan/vulkan_backend.hpp"
+
+#include "core/log/log_line.hpp"
 #include "executor/vulkan/low_priority_queues.hpp"
 #include "executor/vulkan/vulkan_robust_access.hpp"
 #include "executor/vulkan/vulkan_timeline_feature.hpp"
@@ -9,14 +11,17 @@
 #include "core/log/driver_log.hpp"
 #include "core/support/untestable.hpp"
 #include "core/trace/function_scope.hpp"
+#include "executor/host_lifecycle_gate.hpp"
 #include "proto/submission/blob_role.hpp"
 #include "device/abi/av_executor.h"
 #include "executor/host_gpu.hpp"
 #include "executor/import_table.hpp"
 #include "executor/owned_fd.hpp"
 #include "proto/vulkan/descriptor_template_layout.hpp"
+#include "proto/generated/vulkan/vk_command_extensions.h"
 #include "proto/generated/vulkan/vk_command_names.h"
 #include "proto/generated/vulkan/vk_dispatch_server.h"
+#include "proto/generated/vulkan/vk_protocol_ids.h"
 #include "proto/wire/wire_reader.hpp"
 #include "proto/wire/wire_writer.hpp"
 
@@ -35,6 +40,31 @@ constexpr VulkanObjectKind object_kind(vkproto::HandleKind kind)
     case vkproto::HandleKind::command_buffer: return VulkanObjectKind::command_buffer;
     default: return VulkanObjectKind::other;
     }
+}
+
+template <typename Slot>
+uint64_t extension_mask(const char *const *names, uint32_t count, Slot slot_of)
+{
+    AV_SCOPE("extension_mask");
+    uint64_t mask = 0u;
+    for (uint32_t i = 0; names != nullptr && i < count; ++i) {
+        if (names[i] == nullptr) continue;
+        const uint16_t slot = slot_of(names[i]);
+        if (slot != vkproto::kNoExtensionSlot) mask |= uint64_t{1} << slot;
+    }
+    return mask;
+}
+
+constexpr const char *const withheld_extensions[] = {
+    "VK_EXT_device_generated_commands", "VK_EXT_descriptor_buffer"};
+
+bool names_withheld(const char *const *names, uint32_t count)
+{
+    AV_SCOPE("names_withheld");
+    for (uint32_t index = 0u; names != nullptr && index < count; index++)
+        for (const char *const withheld : withheld_extensions)
+            if (names[index] != nullptr && __builtin_strcmp(names[index], withheld) == 0) return true;
+    return false;
 }
 
 bool enables(const VkDeviceCreateInfo *create, const char *name)
@@ -58,11 +88,11 @@ VulkanBackend::VulkanBackend(DriverLog &lines) : VulkanBackend(heap_, lines)
 
 VulkanBackend::VulkanBackend(BlockSource &blocks, DriverLog &lines)
     : heap_(), blocks_(blocks), gpu_(nullptr), source_(nullptr), listed_(), extensions_(blocks, Pool::paged),
-      application_(), devices_(blocks), adopting_(nullptr), physical_(VK_NULL_HANDLE),
+      application_(), devices_(blocks), adopting_(nullptr), lifecycle_(nullptr), physical_(VK_NULL_HANDLE),
       memory_import_(false), handles_(blocks), buffer_device_(), imports_(nullptr), types_(), types_learnt_(false), timing_(lines),
       templates_(blocks), layouts_(blocks), families_(blocks), host_waits_(blocks), park_clock_(), parked_(blocks, *this, park_clock_), frame_(nullptr, 0u),
-      frame_command_(0u), framed_(false), replaying_(false), last_submit_(VK_SUCCESS), lines_(lines), fence_watch_(), spirv_(), vram_(blocks), progress_(blocks),
-      timeline_submit_(blocks), fence_targets_(blocks), guard_(blocks, *this, progress_), parent_(0u), ran_(0u), lost_(false), devices_leaked_(false)
+      frame_command_(0u), framed_(false), replaying_(false), last_submit_(VK_SUCCESS), lines_(lines), fence_watch_(), spirv_(), issued_(), addresses_(blocks), copies_(blocks), vram_(blocks), progress_(blocks),
+      timeline_submit_(blocks), fence_targets_(blocks), guard_(blocks, *this, progress_), robust_(), parent_(0u), created_extensions_(0u), ran_(0u), lost_(false), devices_leaked_(false)
 {
     AV_SCOPE("VulkanBackend::VulkanBackend");
 }
@@ -79,6 +109,12 @@ void VulkanBackend::use_vram(ByteLedger *vram, ByteLedger *host)
 {
     AV_SCOPE("VulkanBackend::use_vram");
     vram_.bind(vram, host);
+}
+
+void VulkanBackend::gate_lifecycle(HostLifecycleGate *gate)
+{
+    AV_SCOPE("VulkanBackend::gate_lifecycle");
+    lifecycle_ = gate;
 }
 
 VkPhysicalDevice VulkanBackend::bound_device(VkInstance instance)
@@ -138,7 +174,10 @@ bool VulkanBackend::room_for(uint64_t handles)
 void VulkanBackend::made(vkproto::HandleKind kind, uint64_t handle)
 {
     AV_SCOPE("VulkanBackend::made");
-    keep(handle, object_kind(kind), kind == vkproto::HandleKind::command_buffer ? families_.flags_of(parent_) : 0u);
+    const bool extended = kind == vkproto::HandleKind::instance || kind == vkproto::HandleKind::device;
+    keep(handle, object_kind(kind),
+         kind == vkproto::HandleKind::command_buffer ? families_.flags_of(parent_) : extended ? created_extensions_ : 0u);
+    if (extended) created_extensions_ = 0u;
 }
 
 bool VulkanBackend::handle_for(vkproto::HandleKind kind, uint64_t wire, uint64_t &handle) const
@@ -176,6 +215,9 @@ void VulkanBackend::made_through(uint64_t parent)
 void VulkanBackend::ended(uint64_t raw)
 {
     AV_SCOPE("VulkanBackend::ended");
+    copies_.forget(raw);
+    addresses_.forget_buffer(raw);
+    addresses_.forget_structure(raw);
     templates_.forget(raw);
     layouts_.forget(raw);
     handles_.forget(raw);
@@ -252,6 +294,8 @@ VkResult VulkanBackend::on_vkCreateInstance(const VkInstanceCreateInfo *pCreateI
     if (pCreateInfo->pApplicationInfo != nullptr && pCreateInfo->pApplicationInfo->apiVersion != 0u &&
         pCreateInfo->pApplicationInfo->apiVersion < lowest_api_version)
         return VK_ERROR_INCOMPATIBLE_DRIVER;
+    created_extensions_ = extension_mask(pCreateInfo->ppEnabledExtensionNames, pCreateInfo->enabledExtensionCount,
+                                         [](const char *name) { return vkproto::instance_extension_slot(name); });
     VkInstanceCreateInfo create = *pCreateInfo;
     if (enable_identity(create) != Status::ok) return VK_ERROR_OUT_OF_HOST_MEMORY;
     adopt_host_version(create);
@@ -324,6 +368,13 @@ VkResult VulkanBackend::on_vkCreatePipelineLayout(VkDevice device, const VkPipel
     return VK_ERROR_OUT_OF_HOST_MEMORY;
 }
 
+bool VulkanBackend::image_copy_bytes(VkImage image, const VkImageSubresourceLayers &layers, VkExtent3D extent,
+                                     uint32_t row_length, uint32_t image_height, uint64_t &bytes) const
+{
+    AV_SCOPE("VulkanBackend::image_copy_bytes");
+    return copies_.bytes(reinterpret_cast<uint64_t>(image), layers, extent, row_length, image_height, bytes);
+}
+
 uint64_t VulkanBackend::template_bytes(VkDescriptorUpdateTemplate made) const
 {
     AV_SCOPE("VulkanBackend::template_bytes");
@@ -346,6 +397,16 @@ bool VulkanBackend::run(uint32_t command_id, WireReader &payload, WireWriter &re
     const bool        recording = name[0] == 'v' && name[1] == 'k' && name[2] == 'C' && name[3] == 'm' && name[4] == 'd';
     if (recording && !queue_admits(command_id, payload)) {
         lines_.note_hex("a command its command buffer's queue family cannot record, id", command_id, 8u);
+        lost_ = true;
+        return true;
+    }
+    if (command_refused(command_id)) {
+        lines_.note_hex("a command that hands the host driver a guest pointer or a captured address, id", command_id, 8u);
+        lost_ = true;
+        return true;
+    }
+    if (!extension_admits(command_id, payload)) {
+        lines_.note_hex("a command whose extension its device or instance did not enable, id", command_id, 8u);
         lost_ = true;
         return true;
     }
@@ -374,6 +435,43 @@ bool VulkanBackend::queue_admits(uint32_t command_id, const WireReader &payload)
     if (!peek.read_pod(buffer)) return true;
     const uint64_t *const flags = handles_.find(buffer, VulkanObjectKind::command_buffer);
     return flags == nullptr || (*flags & queues) != 0u;
+}
+
+bool VulkanBackend::command_refused(uint32_t command_id) const
+{
+    AV_SCOPE("VulkanBackend::command_refused");
+    switch (command_id) {
+    case vkproto::kCmd_vkBuildAccelerationStructuresKHR:
+    case vkproto::kCmd_vkCopyAccelerationStructureKHR:
+    case vkproto::kCmd_vkCopyAccelerationStructureToMemoryKHR:
+    case vkproto::kCmd_vkCopyMemoryToAccelerationStructureKHR:
+    case vkproto::kCmd_vkWriteAccelerationStructuresPropertiesKHR:
+    case vkproto::kCmd_vkGetBufferOpaqueCaptureAddress:
+    case vkproto::kCmd_vkGetBufferOpaqueCaptureAddressKHR:
+    case vkproto::kCmd_vkGetDeviceMemoryOpaqueCaptureAddress:
+    case vkproto::kCmd_vkGetDeviceMemoryOpaqueCaptureAddressKHR:
+    case vkproto::kCmd_vkCmdCopyAccelerationStructureToMemoryKHR:
+    case vkproto::kCmd_vkCmdCopyMemoryToAccelerationStructureKHR:
+    case vkproto::kCmd_vkGetRayTracingCaptureReplayShaderGroupHandlesKHR: return true;
+    default: return false;
+    }
+}
+
+bool VulkanBackend::extension_admits(uint32_t command_id, const WireReader &payload) const
+{
+    AV_SCOPE("VulkanBackend::extension_admits");
+    const vkproto::CommandExtensions needed = vkproto::command_extensions(command_id);
+    if (needed.owner == vkproto::CommandOwner::open) return true;
+    WireReader peek = payload;
+    uint64_t   at = 0u;
+    if (!peek.read_pod(at)) return true;
+    const VulkanObjectKind owner =
+        needed.owner == vkproto::CommandOwner::device ? VulkanObjectKind::device : VulkanObjectKind::instance;
+    while (at != 0u && handles_.find(at, owner) == nullptr) at = handles_.parent_of(at);
+    if (at == 0u) return true;
+    uint64_t wanted = 0u;
+    for (uint16_t i = 0; i < needed.count; ++i) wanted |= uint64_t{1} << needed.slots[i];
+    return (*handles_.find(at, owner) & wanted) != 0u;
 }
 
 bool VulkanBackend::family_flags(VkDevice device, uint32_t family, uint32_t &flags)
@@ -433,15 +531,45 @@ VkResult VulkanBackend::create_lowered(VkPhysicalDevice physicalDevice, const Vk
     return result;
 }
 
+void VulkanBackend::on_vkGetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice, VkPhysicalDeviceFeatures2 *pFeatures)
+{
+    AV_SCOPE("VulkanBackend::on_vkGetPhysicalDeviceFeatures2");
+    RealVulkanDispatch::on_vkGetPhysicalDeviceFeatures2(physicalDevice, pFeatures);
+    robust_.hide_capture_replay(pFeatures->pNext);
+}
+
+void VulkanBackend::on_vkGetPhysicalDeviceFeatures2KHR(VkPhysicalDevice physicalDevice, VkPhysicalDeviceFeatures2 *pFeatures)
+{
+    AV_SCOPE("VulkanBackend::on_vkGetPhysicalDeviceFeatures2KHR");
+    RealVulkanDispatch::on_vkGetPhysicalDeviceFeatures2KHR(physicalDevice, pFeatures);
+    robust_.hide_capture_replay(pFeatures->pNext);
+}
+
 VkResult VulkanBackend::on_vkCreateDevice(VkPhysicalDevice physicalDevice,
                                           const VkDeviceCreateInfo *pCreateInfo,
                                           const VkAllocationCallbacks *, VkDevice *pDevice)
 {
     AV_SCOPE("VulkanBackend::on_vkCreateDevice");
-    VulkanRobustAccess    robust;
+    if (names_withheld(pCreateInfo->ppEnabledExtensionNames, pCreateInfo->enabledExtensionCount)) {
+        lines_.write("a device named an extension that hands the host driver guest-supplied addresses or binaries; refused");
+        return VK_ERROR_EXTENSION_NOT_PRESENT;
+    }
+    created_extensions_ = extension_mask(pCreateInfo->ppEnabledExtensionNames, pCreateInfo->enabledExtensionCount,
+                                         [](const char *name) { return vkproto::device_extension_slot(name); });
     VkDeviceCreateInfo    guarded = *pCreateInfo;
-    static_cast<void>(robust.apply(physicalDevice, guarded));
+    static_cast<void>(robust_.apply(physicalDevice, guarded));
     pCreateInfo = &guarded;
+    const HostLifecycleHold hold(lifecycle_);
+    if (!hold.held()) {
+        lines_.write("a device was not created: the GPU's lifecycle gate stayed held");
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
+    HostDeviceSlots *const pool = lifecycle_ != nullptr ? &lifecycle_->devices() : nullptr;
+    uint32_t               slots = 0u;
+    if (pool != nullptr && !pool->admit(physicalDevice, *pCreateInfo, slots)) {
+        lines_.write("a device was not created: the host driver has no room left for its queues in this process");
+        return VK_ERROR_TOO_MANY_OBJECTS;
+    }
     VulkanTimelineFeature timeline;
     VkDeviceCreateInfo    timed = *pCreateInfo;
     bool                  timelines = timeline.offered_by(physicalDevice) && timeline.apply(timed);
@@ -451,19 +579,25 @@ VkResult VulkanBackend::on_vkCreateDevice(VkPhysicalDevice physicalDevice,
         timelines = false;
         result = create_lowered(physicalDevice, pCreateInfo, pDevice);
     }
-    if (result != VK_SUCCESS) return result;
+    if (result != VK_SUCCESS) {
+        if (pool != nullptr) pool->give(slots);
+        return result;
+    }
     if (timelines && !progress_.enable_timelines(*pDevice)) timelines = false;
     GuestDevice *made = nullptr;
     if (devices_.create(made) != Status::ok) {
         RealVulkanDispatch::on_vkDestroyDevice(*pDevice, nullptr);
+        if (pool != nullptr) pool->give(slots);
         *pDevice = VK_NULL_HANDLE;
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     }
+    made->hold_slots(slots);
     physical_ = physicalDevice;
     const auto instance = reinterpret_cast<VkInstance>(handles_.parent_of(reinterpret_cast<uint64_t>(physicalDevice)));
     if (made->load(instance, physicalDevice, *pDevice)) {
         adopting_ = made;
         made->note_invalid_shader_extension(enables(pCreateInfo, VK_NV_GLSL_SHADER_EXTENSION_NAME));
+        made->enable_placement(enables(pCreateInfo, VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME));
         memory_import_ = made->memory().imports();
     } else {
         static_cast<void>(devices_.destroy(made));
@@ -511,11 +645,69 @@ void VulkanBackend::on_vkGetPhysicalDeviceMemoryProperties2(VkPhysicalDevice phy
             vram_.report(*reinterpret_cast<VkPhysicalDeviceMemoryBudgetPropertiesEXT *>(link));
 }
 
+void VulkanBackend::on_vkGetPhysicalDeviceProperties2(VkPhysicalDevice physicalDevice,
+                                                      VkPhysicalDeviceProperties2 *pProperties)
+{
+    AV_SCOPE("VulkanBackend::on_vkGetPhysicalDeviceProperties2");
+    RealVulkanDispatch::on_vkGetPhysicalDeviceProperties2(physicalDevice, pProperties);
+    learn_types(physicalDevice);
+    vram_.clamp(*pProperties);
+}
+
+void VulkanBackend::on_vkGetPhysicalDeviceProperties2KHR(VkPhysicalDevice physicalDevice,
+                                                         VkPhysicalDeviceProperties2 *pProperties)
+{
+    AV_SCOPE("VulkanBackend::on_vkGetPhysicalDeviceProperties2KHR");
+    on_vkGetPhysicalDeviceProperties2(physicalDevice, pProperties);
+}
+
 void VulkanBackend::on_vkGetPhysicalDeviceMemoryProperties2KHR(VkPhysicalDevice physicalDevice,
                                                                VkPhysicalDeviceMemoryProperties2 *pMemoryProperties)
 {
     AV_SCOPE("VulkanBackend::on_vkGetPhysicalDeviceMemoryProperties2KHR");
     on_vkGetPhysicalDeviceMemoryProperties2(physicalDevice, pMemoryProperties);
+}
+
+namespace {
+
+void timestamps_per_spec(VkQueueFamilyProperties &family)
+{
+    constexpr uint32_t least_valid_bits = 36u;
+    if (family.timestampValidBits != 0u && family.timestampValidBits < least_valid_bits) family.timestampValidBits = 0u;
+}
+
+}
+
+void VulkanBackend::on_vkGetPhysicalDeviceQueueFamilyProperties(VkPhysicalDevice physicalDevice,
+                                                                uint32_t *pQueueFamilyPropertyCount,
+                                                                VkQueueFamilyProperties *pQueueFamilyProperties)
+{
+    AV_SCOPE("VulkanBackend::on_vkGetPhysicalDeviceQueueFamilyProperties");
+    RealVulkanDispatch::on_vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, pQueueFamilyPropertyCount,
+                                                                    pQueueFamilyProperties);
+    if (pQueueFamilyProperties == nullptr || pQueueFamilyPropertyCount == nullptr) return;
+    for (uint32_t index = 0u; index < *pQueueFamilyPropertyCount; index++)
+        timestamps_per_spec(pQueueFamilyProperties[index]);
+}
+
+void VulkanBackend::on_vkGetPhysicalDeviceQueueFamilyProperties2(VkPhysicalDevice physicalDevice,
+                                                                 uint32_t *pQueueFamilyPropertyCount,
+                                                                 VkQueueFamilyProperties2 *pQueueFamilyProperties)
+{
+    AV_SCOPE("VulkanBackend::on_vkGetPhysicalDeviceQueueFamilyProperties2");
+    RealVulkanDispatch::on_vkGetPhysicalDeviceQueueFamilyProperties2(physicalDevice, pQueueFamilyPropertyCount,
+                                                                     pQueueFamilyProperties);
+    if (pQueueFamilyProperties == nullptr || pQueueFamilyPropertyCount == nullptr) return;
+    for (uint32_t index = 0u; index < *pQueueFamilyPropertyCount; index++)
+        timestamps_per_spec(pQueueFamilyProperties[index].queueFamilyProperties);
+}
+
+void VulkanBackend::on_vkGetPhysicalDeviceQueueFamilyProperties2KHR(VkPhysicalDevice physicalDevice,
+                                                                    uint32_t *pQueueFamilyPropertyCount,
+                                                                    VkQueueFamilyProperties2 *pQueueFamilyProperties)
+{
+    AV_SCOPE("VulkanBackend::on_vkGetPhysicalDeviceQueueFamilyProperties2KHR");
+    on_vkGetPhysicalDeviceQueueFamilyProperties2(physicalDevice, pQueueFamilyPropertyCount, pQueueFamilyProperties);
 }
 
 bool VulkanBackend::backs_with_source(VkDevice device, const void *next, VkStructureType external,
@@ -564,10 +756,20 @@ VkResult VulkanBackend::on_vkCreateBuffer(VkDevice device, const VkBufferCreateI
                                           const VkAllocationCallbacks *, VkBuffer *pBuffer)
 {
     AV_SCOPE("VulkanBackend::on_vkCreateBuffer");
+    if ((pCreateInfo->flags & VK_BUFFER_CREATE_DEVICE_ADDRESS_CAPTURE_REPLAY_BIT) != 0u) {
+        lines_.write("a buffer asked to be placed at a captured address; refused");
+        return VK_ERROR_FEATURE_NOT_PRESENT;
+    }
     VkBufferCreateInfo               create = *pCreateInfo;
     VkExternalMemoryBufferCreateInfo external;
     for_source(device, create, external);
-    return RealVulkanDispatch::on_vkCreateBuffer(device, &create, nullptr, pBuffer);
+    const VkResult made = RealVulkanDispatch::on_vkCreateBuffer(device, &create, nullptr, pBuffer);
+    if (made != VK_SUCCESS || (create.usage & (VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR)) == 0u) return made;
+    if (addresses_.note_buffer(reinterpret_cast<uint64_t>(device), reinterpret_cast<uint64_t>(*pBuffer), create.size))
+        return made;
+    RealVulkanDispatch::on_vkDestroyBuffer(device, *pBuffer, nullptr);
+    *pBuffer = VK_NULL_HANDLE;
+    return VK_ERROR_OUT_OF_HOST_MEMORY;
 }
 
 VkResult VulkanBackend::on_vkCreateImage(VkDevice device, const VkImageCreateInfo *pCreateInfo,
@@ -576,8 +778,23 @@ VkResult VulkanBackend::on_vkCreateImage(VkDevice device, const VkImageCreateInf
     AV_SCOPE("VulkanBackend::on_vkCreateImage");
     VkImageCreateInfo               create = *pCreateInfo;
     VkExternalMemoryImageCreateInfo external;
-    const bool                      bindable = for_source(device, create, external);
-    const VkResult result = RealVulkanDispatch::on_vkCreateImage(device, &create, nullptr, pImage);
+    bool                            bindable = for_source(device, create, external);
+    VkResult result = RealVulkanDispatch::on_vkCreateImage(device, &create, nullptr, pImage);
+    if (result == VK_SUCCESS && bindable) {
+        VkMemoryRequirements needs = {};
+        RealVulkanDispatch::on_vkGetImageMemoryRequirements(device, *pImage, &needs);
+        if (needs.memoryTypeBits == 0u) {
+            RealVulkanDispatch::on_vkDestroyImage(device, *pImage, nullptr);
+            create = *pCreateInfo;
+            result = RealVulkanDispatch::on_vkCreateImage(device, &create, nullptr, pImage);
+            bindable = false;
+        }
+    }
+    if (result == VK_SUCCESS && !copies_.record(reinterpret_cast<uint64_t>(*pImage), reinterpret_cast<uint64_t>(device), create)) {
+        RealVulkanDispatch::on_vkDestroyImage(device, *pImage, nullptr);
+        *pImage = VK_NULL_HANDLE;
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
     if (bindable) {
         made_through(reinterpret_cast<uint64_t>(device));
         keep(reinterpret_cast<uint64_t>(*pImage), VulkanObjectKind::external_image, 0u);
@@ -589,7 +806,9 @@ uint32_t VulkanBackend::image_bits(uint32_t host_bits, bool external) const
 {
     AV_SCOPE("VulkanBackend::image_bits");
     const uint32_t bits = types_.guest_bits(host_bits);
-    return external ? bits : types_.unmapped(bits);
+    const uint32_t shown = external ? bits : types_.unmapped(bits);
+    if (shown == 0u) LogLine(lines_).text("an image's host memory types ").number(host_bits).text(" are none of the guest's").write();
+    return shown;
 }
 
 void VulkanBackend::on_vkGetBufferMemoryRequirements(VkDevice device, VkBuffer buffer,
@@ -742,24 +961,38 @@ void VulkanBackend::on_vkDestroyDevice(VkDevice device, const VkAllocationCallba
     parked_.drop_device(reinterpret_cast<uint64_t>(device));
     const bool idle = guard_.release_all(reinterpret_cast<uint64_t>(device));
     templates_.forget_device(reinterpret_cast<uint64_t>(device));
+    copies_.forget_device(reinterpret_cast<uint64_t>(device));
+    addresses_.forget_device(reinterpret_cast<uint64_t>(device));
     layouts_.forget_device(reinterpret_cast<uint64_t>(device));
     fence_watch_.forget(device);
     progress_.forget(device);
-    timing_.forget(device);
+    timing_.forget(device, idle);
     GuestDevice *const ending = device_of(reinterpret_cast<uint64_t>(device));
     if (ending != nullptr && ending == adopting_) {
         adopting_ = nullptr;
         memory_import_ = false;
     }
+    const uint32_t slots = ending != nullptr ? ending->slots() : 0u;
     if (ending != nullptr) static_cast<void>(devices_.destroy(ending));
-    if (idle) RealVulkanDispatch::on_vkDestroyDevice(device, nullptr);
-    else devices_leaked_ = true;
+    if (!idle) {
+        devices_leaked_ = true;
+        return;
+    }
+    const HostLifecycleHold hold(lifecycle_);
+    if (!hold.held()) {
+        devices_leaked_ = true;
+        lines_.write("a device was leaked instead of destroyed: the GPU's lifecycle gate stayed held");
+        return;
+    }
+    RealVulkanDispatch::on_vkDestroyDevice(device, nullptr);
+    if (lifecycle_ != nullptr) lifecycle_->devices().give(slots);
 }
 
 void VulkanBackend::on_vkFreeMemory(VkDevice device, VkDeviceMemory memory, const VkAllocationCallbacks *)
 {
     AV_SCOPE("VulkanBackend::on_vkFreeMemory");
     const uint64_t            handle = reinterpret_cast<uint64_t>(memory);
+    if (source_ != nullptr && imports_ != nullptr) source_->drop_placed(reinterpret_cast<uint64_t>(imports_), handle);
     const SourceMemory *const imported = imports_ != nullptr ? imports_->named(handle) : nullptr;
     if (imported == nullptr) {
         guard_.destroy(VulkanDestroyKind::memory, reinterpret_cast<uint64_t>(device), 0u, handle);
@@ -814,22 +1047,111 @@ VkResult VulkanBackend::on_vkAllocateMemory(VkDevice device, const VkMemoryAlloc
 {
     AV_SCOPE("VulkanBackend::on_vkAllocateMemory");
     if (!imports_nothing(pAllocateInfo->pNext)) return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+    for (auto *node = static_cast<const VkBaseInStructure *>(pAllocateInfo->pNext); node != nullptr; node = node->pNext) {
+        const bool replays =
+            (node->sType == VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO &&
+             (reinterpret_cast<const VkMemoryAllocateFlagsInfo *>(node)->flags &
+              VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_CAPTURE_REPLAY_BIT) != 0u) ||
+            (node->sType == VK_STRUCTURE_TYPE_MEMORY_OPAQUE_CAPTURE_ADDRESS_ALLOCATE_INFO &&
+             reinterpret_cast<const VkMemoryOpaqueCaptureAddressAllocateInfo *>(node)->opaqueCaptureAddress != 0u);
+        if (!replays) continue;
+        lines_.write("a memory allocation asked to be placed at a captured address; refused");
+        return VK_ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS;
+    }
     VkMemoryAllocateInfo allocate = *pAllocateInfo;
     allocate.memoryTypeIndex = types_.host_type(pAllocateInfo->memoryTypeIndex);
-    if (allocate.memoryTypeIndex == GuestMemoryTypes::no_type) return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    if (allocate.memoryTypeIndex == GuestMemoryTypes::no_type) {
+        LogLine(lines_).text("a memory allocation names guest memory type ").number(pAllocateInfo->memoryTypeIndex).text(" the host has no type for").write();
+        return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    }
     const uint32_t heap = types_.heap_of(pAllocateInfo->memoryTypeIndex);
-    if (!vram_.admit(heap, pAllocateInfo->allocationSize))
+    if (!vram_.admit(heap, pAllocateInfo->allocationSize)) {
+        LogLine(lines_).text("a memory allocation of ").number(pAllocateInfo->allocationSize).text(" bytes in heap ").number(heap).text(" refused by the ").text(vram_.system(heap) ? "host memory" : "video memory").text(" budget").write();
         return vram_.system(heap) ? VK_ERROR_OUT_OF_HOST_MEMORY : VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    }
+    GuestDevice *const placing_device = device_of(reinterpret_cast<uint64_t>(device));
+    const bool         placing = placing_device != nullptr && placing_device->placement() && source_ != nullptr &&
+                         imports_ != nullptr && types_.placed(pAllocateInfo->memoryTypeIndex);
+    VkExportMemoryAllocateInfo exporting = {VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO, allocate.pNext,
+                                            VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT};
+    if (placing && !exports_memory(pAllocateInfo->pNext)) allocate.pNext = &exporting;
     const VkResult made = RealVulkanDispatch::on_vkAllocateMemory(device, &allocate, nullptr, pMemory);
     if (made != VK_SUCCESS) {
+        LogLine refusal(lines_);
+        refusal.text("the host driver refused an allocation of ").number(pAllocateInfo->allocationSize).text(" bytes in host type ").number(allocate.memoryTypeIndex).text(" for guest type ").number(pAllocateInfo->memoryTypeIndex).text(": ").number(static_cast<uint64_t>(static_cast<int64_t>(made))).text(", chain");
+        for (auto *node = static_cast<const VkBaseInStructure *>(pAllocateInfo->pNext); node != nullptr; node = node->pNext) refusal.text(" ").number(static_cast<uint64_t>(node->sType));
+        refusal.write();
+        VkPhysicalDeviceMemoryBudgetPropertiesEXT budget = {};
+        budget.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT;
+        VkPhysicalDeviceMemoryProperties2 asked = {};
+        asked.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2;
+        asked.pNext = &budget;
+        RealVulkanDispatch::on_vkGetPhysicalDeviceMemoryProperties2(physical_, &asked);
+        VkPhysicalDeviceProperties named = {};
+        RealVulkanDispatch::on_vkGetPhysicalDeviceProperties(physical_, &named);
+        const VkMemoryType &kind = asked.memoryProperties.memoryTypes[allocate.memoryTypeIndex < VK_MAX_MEMORY_TYPES ? allocate.memoryTypeIndex : 0u];
+        LogLine(lines_).text("on ").text(named.deviceName).text(", host type flags ").number(kind.propertyFlags).text(" heap ").number(kind.heapIndex).text(" of ").number(asked.memoryProperties.memoryTypeCount).text(" types, committed ").number(vram_.used(heap)).write();
+        LogLine(lines_).text("host heap 0 budget ").number(budget.heapBudget[0]).text(" usage ").number(budget.heapUsage[0]).text(", heap 1 budget ").number(budget.heapBudget[1]).text(" usage ").number(budget.heapUsage[1]).write();
+        VkMemoryAllocateInfo clean = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, nullptr, pAllocateInfo->allocationSize, allocate.memoryTypeIndex};
+        VkDeviceMemory       retried = VK_NULL_HANDLE;
+        const VkResult       again = RealVulkanDispatch::on_vkAllocateMemory(device, &clean, nullptr, &retried);
+        if (retried != VK_NULL_HANDLE) RealVulkanDispatch::on_vkFreeMemory(device, retried, nullptr);
+        LogLine(lines_).text("the same allocation without the guest's chain is answered ").number(static_cast<uint64_t>(static_cast<int64_t>(again))).write();
+        LogLine every(lines_);
+        every.text("a clean 4096 byte allocation by type:");
+        for (uint32_t type = 0u; type < asked.memoryProperties.memoryTypeCount; type++) {
+            const VkMemoryAllocateInfo probe = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, nullptr, 4096u, type};
+            VkDeviceMemory             probed = VK_NULL_HANDLE;
+            const VkResult             verdict = RealVulkanDispatch::on_vkAllocateMemory(device, &probe, nullptr, &probed);
+            every.text(" ").number(type).text("=").number(static_cast<uint64_t>(static_cast<int64_t>(verdict)));
+            if (probed != VK_NULL_HANDLE) RealVulkanDispatch::on_vkFreeMemory(device, probed, nullptr);
+        }
+        every.write();
         vram_.refund(heap, pAllocateInfo->allocationSize);
         return made;
     }
-    if (vram_.commit(heap, reinterpret_cast<uint64_t>(*pMemory), pAllocateInfo->allocationSize) == Status::ok) return made;
+    if (vram_.commit(heap, reinterpret_cast<uint64_t>(*pMemory), pAllocateInfo->allocationSize) == Status::ok) {
+        if (!placing || place_exported(*placing_device, pAllocateInfo->memoryTypeIndex, reinterpret_cast<uint64_t>(*pMemory),
+                                       pAllocateInfo->allocationSize))
+            return made;
+        vram_.release(reinterpret_cast<uint64_t>(*pMemory));
+        RealVulkanDispatch::on_vkFreeMemory(device, *pMemory, nullptr);
+        *pMemory = VK_NULL_HANDLE;
+        return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    }
     vram_.refund(heap, pAllocateInfo->allocationSize);
     RealVulkanDispatch::on_vkFreeMemory(device, *pMemory, nullptr);
     *pMemory = VK_NULL_HANDLE;
     return VK_ERROR_OUT_OF_HOST_MEMORY;
+}
+
+bool VulkanBackend::exports_memory(const void *next) const
+{
+    AV_SCOPE("VulkanBackend::exports_memory");
+    for (const auto *node = static_cast<const VkBaseInStructure *>(next); node != nullptr; node = node->pNext)
+        if (node->sType == VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO) return true;
+    return false;
+}
+
+bool VulkanBackend::place_exported(GuestDevice &device, uint32_t guest_type, uint64_t memory, uint64_t size)
+{
+    AV_SCOPE("VulkanBackend::place_exported");
+    OwnedFd descriptor;
+    if (!device.memory().export_memory(memory, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, descriptor)) {
+        lines_.write("placed memory the host driver would not export as a dma-buf; refused");
+        return false;
+    }
+    VkPhysicalDeviceMemoryProperties shown = {};
+    types_.properties(shown);
+    const bool     cached = guest_type < shown.memoryTypeCount &&
+                        (shown.memoryTypes[guest_type].propertyFlags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) != 0u;
+    const uint32_t caching = cached ? AV_MEMORY_WRITE_BACK : AV_MEMORY_WRITE_COMBINED;
+    if (source_->place(reinterpret_cast<uint64_t>(imports_), memory, guest_type, size, caching, descriptor.fd()) !=
+        Status::ok) {
+        lines_.write("placed memory the memory source would not keep; refused");
+        return false;
+    }
+    return true;
 }
 
 bool VulkanBackend::imports_nothing(const void *next) const
@@ -857,13 +1179,29 @@ bool VulkanBackend::adopt(SourceMemory &memory, const BlobRole &role, uint64_t &
     AV_SCOPE("VulkanBackend::adopt");
     handle = 0u;
     if (role.is_arena() || adopting_ == nullptr || !memory_import_) return false;
-    OwnedFd  descriptor;
     uint64_t made = 0u;
-    if (!memory.share(descriptor)) return false;
-    const uint32_t type = import_type(memory, descriptor.fd());
-    if (type == max_memory_types ||
-        !adopting_->memory().import_dmabuf(descriptor, memory.size(), type, made))
+    uint32_t preferred = max_memory_types;
+    uint32_t listed = 0u;
+    {
+        OwnedFd probe;
+        if (!memory.share(probe)) return false;
+        preferred = import_type(memory, probe.fd());
+        listed = adopting_->memory().dmabuf_types(probe.fd());
+    }
+    bool imported = false;
+    for (uint32_t pass = 0u; pass < 3u && !imported; pass++) {
+        for (uint32_t type = 0u; type < max_memory_types && !imported; type++) {
+            const bool wanted = pass == 0u ? type == preferred : pass == 1u ? (listed & (1u << type)) != 0u : true;
+            if (!wanted || (pass != 0u && type == preferred)) continue;
+            OwnedFd descriptor;
+            if (!memory.share(descriptor)) return false;
+            imported = adopting_->memory().import_dmabuf(descriptor, memory.size(), type, made);
+        }
+    }
+    if (!imported) {
+        LogLine(lines_).text("a guest memory blob of ").number(memory.size()).text(" bytes could not be imported by the host driver: dma-buf types ").number(listed).text(", preferred ").number(preferred).text(", host pointer ").number(reinterpret_cast<uint64_t>(memory.pointer()) & 0xFFFu).write();
         return false;
+    }
     if (!kept_on(*adopting_, made)) {
         adopting_->memory().release(made);
         return false;
@@ -918,10 +1256,16 @@ bool VulkanBackend::import_object(uint32_t kind, uint32_t handle_kind, int fd, u
 bool VulkanBackend::import_memory(GuestDevice &device, int fd, uint64_t size, uint64_t &wire_handle)
 {
     AV_SCOPE("VulkanBackend::import_memory");
-    const uint32_t memory_type = first_memory_type(device.memory().dmabuf_types(fd));
-    if (memory_type == max_memory_types) return false;
-    const bool imported = device.memory().import_shared_memory(fd, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
-                                                               size, memory_type, wire_handle);
+    const uint32_t listed = device.memory().dmabuf_types(fd);
+    bool           imported = false;
+    for (uint32_t pass = 0u; pass < 2u && !imported; pass++) {
+        for (uint32_t type = 0u; type < max_memory_types && !imported; type++) {
+            const bool is_listed = (listed & (1u << type)) != 0u;
+            if (is_listed != (pass == 0u)) continue;
+            imported = device.memory().import_shared_memory(fd, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, size,
+                                                            type, wire_handle);
+        }
+    }
     if (!imported) { AV_UNTESTABLE("no host driver here refuses an import"); return false; }
     if (kept_on(device, wire_handle)) return true;
     device.memory().release(wire_handle);
@@ -1056,6 +1400,13 @@ void VulkanBackend::let_go(uint64_t raw, VulkanObjectKind kind)
     if (!devices_leaked_) ::vkDestroyInstance(reinterpret_cast<VkInstance>(raw), nullptr);
 }
 
+void VulkanBackend::leave_device()
+{
+    AV_SCOPE("VulkanBackend::leave_device");
+    vram_.close();
+    heap_.bind(nullptr, UINT64_MAX);
+}
+
 void VulkanBackend::let_go_of_thread()
 {
     AV_SCOPE("VulkanBackend::let_go_of_thread");
@@ -1065,6 +1416,12 @@ void VulkanBackend::use_host_ram(ByteLedger *ledger, uint64_t limit)
 {
     AV_SCOPE("VulkanBackend::use_host_ram");
     heap_.bind(ledger, limit);
+}
+
+void VulkanBackend::lease_from(SessionLease *lease)
+{
+    AV_SCOPE("VulkanBackend::lease_from");
+    vram_.reserve_from(lease);
 }
 
 void VulkanBackend::shut_down()

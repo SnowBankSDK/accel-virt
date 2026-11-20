@@ -14,9 +14,11 @@ NULL_SLOTS = {
     "pfnQueryAuthenticatedChannel", "pfnConfigureAuthenticatedChannel", "pfnDestroyAuthenticatedChannel",
     "pfnCreateCryptoSession", "pfnCryptoSessionKeyExchange", "pfnDestroyCryptoSession", "pfnEncryptionBlt",
     "pfnGetPitch", "pfnStartSessionKeyRefresh", "pfnFinishSessionKeyRefresh", "pfnGetEncryptionBltKey",
-    "pfnDecryptionBlt", "pfnCreateResource2", "pfnVolBlt1", "pfnBufBlt1", "pfnTexBlt1", "pfnFlush1",
-    "pfnCheckCounterInfo", "pfnCheckCounter", "pfnUpdateSubresourceUP", "pfnPresent1", "pfnSetMarker",
-    "pfnSetMarkerMode", "pfnTrimResidencySet", "pfnAcquireResource", "pfnReleaseResource",
+    "pfnDecryptionBlt", "pfnTrimResidencySet", "pfnAcquireResource", "pfnReleaseResource",
+}
+SUPERSEDED_SLOTS = {
+    "pfnVolBlt": "pfnVolBlt1", "pfnBufBlt": "pfnBufBlt1", "pfnTexBlt": "pfnTexBlt1",
+    "pfnCreateResource": "pfnCreateResource2", "pfnPresent": "pfnPresent1", "pfnFlush": "pfnFlush1",
 }
 
 
@@ -33,7 +35,7 @@ D3DDDI_DEVICEFUNCS *probe;
     table="D3DDDI_DEVICEFUNCS",
     record="_D3DDDI_DEVICEFUNCS",
     device_type="HANDLE",
-    skip=lambda name: bool(RESERVED.match(name)) or name in NULL_SLOTS,
+    skip=lambda name: bool(RESERVED.match(name)) or name in NULL_SLOTS or name in SUPERSEDED_SLOTS,
     root_slots=ROOT_SLOTS,
     root_argument="device",
     device="*static_cast<D3d9Device *>(device)",

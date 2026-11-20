@@ -129,6 +129,12 @@ public:
         writer.write_header(third_ring, 12u);
     }
 
+    ~Fixture()
+    {
+        plane_.destroy_all();
+        static_cast<void>(host_.run_main_loop());
+    }
+
     std::uint32_t send(const GpuRequestBuilder &builder)
     {
         MockRequest mock(builder.bytes(), builder.size());
@@ -244,6 +250,8 @@ TEST(context_commands_submit, a_setup_binds_the_context_until_it_is_destroyed)
   CHECK_STATUS(fixture.blobs().release(ring), Status::invalid_state);
   CHECK_EQ(fixture.send(submit(4u, setup())), err_invalid_parameter);
   CHECK_EQ(fixture.send(destroy(4u)), ok_nodata);
+  CHECK(fixture.host().wait_for_main_loop_work(1u, 5000u));
+  CHECK_EQ(fixture.host().run_main_loop(), 1u);
   CHECK_STATUS(fixture.blobs().release(ring), Status::ok);
   CHECK_STATUS(fixture.blobs().release(fence), Status::ok); }
 
@@ -271,7 +279,7 @@ TEST(context_commands_submit, refuses_every_setup_it_cannot_bind)
       {submit(5u, setup(99u)), err_invalid_resource_id},
       {submit(5u, setup(small_ring)), err_invalid_parameter},
       {submit(5u, setup(ring, 12u, ProtocolVersion::current_major + 1u)), err_invalid_parameter},
-      {submit(5u, setup(ring, 12u, ProtocolVersion::current_major, 64u)), err_invalid_parameter},
+      {submit(5u, setup(ring, 12u, ProtocolVersion::current_major, av::ContextCapacity::contexts)), err_invalid_parameter},
       {submit(5u, setup(headless_ring)), err_invalid_parameter},
       {submit(5u, setup(ring, 12u, ProtocolVersion::current_major, 0u, 99u)), err_invalid_resource_id},
   };
@@ -301,7 +309,9 @@ TEST(context_commands_submit, a_doorbell_another_context_holds_is_refused)
   CHECK_EQ(fixture.send(submit(2u, setup(second_ring, 12u, ProtocolVersion::current_major, 7u))), err_invalid_parameter);
   CHECK(!fixture.contexts().find(2u)->binding().bound());
   CHECK_EQ(fixture.send(destroy(1u)), ok_nodata);
-  CHECK_EQ(fixture.send(submit(2u, setup(second_ring, 12u, ProtocolVersion::current_major, 7u))), ok_nodata); }
+  CHECK_EQ(fixture.send(submit(2u, setup(second_ring, 12u, ProtocolVersion::current_major, 7u))), ok_nodata);
+  CHECK(fixture.host().wait_for_main_loop_work(1u, 5000u));
+  CHECK_EQ(fixture.host().run_main_loop(), 1u); }
 
 TEST(context_commands, a_device_without_a_capset_refuses_capset_queries_and_contexts)
 { MockHost host;

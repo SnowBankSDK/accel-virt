@@ -34,11 +34,15 @@ public:
     virtual bool on_Finish12(uint32_t& hresult) = 0;
     virtual bool on_QueryCaps12(uint32_t& hresult, Caps12& caps, uint8_t* formats, uint64_t formats_capacity, uint64_t& formats_size) = 0;
     virtual bool on_QueryHeapSlices12(uint32_t& supported) = 0;
-    virtual bool on_CreateHeap12(uint32_t heap, const HeapProperties& properties, uint32_t flags, uint64_t size, uint64_t alignment, uint64_t memory, uint64_t offset, uint32_t& hresult) = 0;
+    virtual bool on_QueryHeapPlacement12(uint32_t& placed) = 0;
+    virtual bool on_CreateHeap12(uint32_t heap, const HeapProperties& properties, uint32_t flags, uint64_t size, uint64_t alignment, uint64_t memory, uint64_t offset, uint32_t& hresult, uint64_t& placed) = 0;
     virtual bool on_CreateCommittedResource12(uint32_t resource, const HeapProperties& properties, uint32_t heap_flags, const ResourceDesc& desc, uint32_t state, const ClearValue& clear, uint64_t address, uint32_t& hresult) = 0;
     virtual bool on_CreateHeapAsync12(uint32_t heap, const HeapProperties& properties, uint32_t flags, uint64_t size, uint64_t alignment, uint64_t memory, uint64_t offset) = 0;
     virtual bool on_CreateCommittedResourceAsync12(uint32_t resource, const HeapProperties& properties, uint32_t heap_flags, const ResourceDesc& desc, uint32_t state, const ClearValue& clear, uint64_t address) = 0;
     virtual bool on_ShareResource12(uint32_t resource, uint64_t key) = 0;
+    virtual bool on_ShareObject12(uint32_t object, uint64_t key) = 0;
+    virtual bool on_OpenObject12(uint32_t object, uint64_t key, uint64_t address, uint32_t& kind, uint32_t& dimension, uint32_t& height, uint32_t& depth_or_array, uint32_t& mip_levels, uint32_t& format, uint32_t& sample_count, uint32_t& flags, uint64_t& width, uint64_t& size) = 0;
+    virtual bool on_AdoptLentImage12(uint32_t resource, uint64_t memory, const ResourceDesc& desc, uint32_t row_pitch, uint32_t& hresult) = 0;
     virtual bool on_CreatePlacedResource12(uint32_t resource, uint32_t heap, uint64_t offset, const ResourceDesc& desc, uint32_t state, const ClearValue& clear, uint64_t address) = 0;
     virtual bool on_CreateReservedResource12(uint32_t resource, const ResourceDesc& desc, uint32_t state, const ClearValue& clear, uint64_t address) = 0;
     virtual bool on_ResourceTiling12(uint32_t resource, uint32_t& tiles, uint32_t& packed_mips, uint32_t& packed_tiles) = 0;
@@ -53,7 +57,7 @@ public:
     virtual bool on_CopyDescriptors12(const DescriptorRef& destination, const DescriptorRef& source, uint32_t count) = 0;
     virtual bool on_CreateRootSignature12(uint32_t root, uint32_t flags, uint32_t parameter_count, const RootParameter* parameters, uint32_t range_count, const DescriptorRange* ranges, uint32_t sampler_count, const StaticSampler* samplers) = 0;
     virtual bool on_CreateCommandSignature12(uint32_t signature, uint32_t root, uint32_t byte_stride, uint32_t argument_count, const IndirectArgument* arguments) = 0;
-    virtual bool on_CreateGraphicsPipeline12(uint32_t pipeline, uint32_t root, const GraphicsState& state, uint32_t element_count, const InputElement* elements, uint32_t signature_count, const SignatureEntry* signatures, const uint8_t* vs, uint64_t vs_size, const uint8_t* hs, uint64_t hs_size, const uint8_t* ds, uint64_t ds_size, const uint8_t* gs, uint64_t gs_size, const uint8_t* ps, uint64_t ps_size) = 0;
+    virtual bool on_CreateGraphicsPipeline12(uint32_t pipeline, uint32_t root, const GraphicsState& state, uint32_t element_count, const InputElement* elements, uint32_t signature_count, const SignatureEntry* signatures, uint32_t stream_out_count, const StreamOutDeclaration* stream_out, uint32_t stride_count, const uint32_t* strides, uint32_t rasterized_stream, const uint8_t* vs, uint64_t vs_size, const uint8_t* hs, uint64_t hs_size, const uint8_t* ds, uint64_t ds_size, const uint8_t* gs, uint64_t gs_size, const uint8_t* ps, uint64_t ps_size, const uint8_t* ms, uint64_t ms_size, const uint8_t* as, uint64_t as_size) = 0;
     virtual bool on_CreateComputePipeline12(uint32_t pipeline, uint32_t root, const uint8_t* cs, uint64_t cs_size) = 0;
     virtual bool on_CreateCommandQueue12(uint32_t queue, uint32_t type, uint32_t priority, uint32_t flags) = 0;
     virtual bool on_CreateCommandAllocator12(uint32_t allocator, uint32_t type) = 0;
@@ -86,6 +90,10 @@ public:
     virtual bool on_DrawInstanced12(uint32_t list, uint32_t vertex_count, uint32_t instance_count, uint32_t start_vertex, uint32_t start_instance) = 0;
     virtual bool on_DrawIndexedInstanced12(uint32_t list, uint32_t index_count, uint32_t instance_count, uint32_t start_index, int32_t base_vertex, uint32_t start_instance) = 0;
     virtual bool on_Dispatch12(uint32_t list, uint32_t x, uint32_t y, uint32_t z) = 0;
+    virtual bool on_DispatchMesh12(uint32_t list, uint32_t x, uint32_t y, uint32_t z) = 0;
+    virtual bool on_SetShadingRate12(uint32_t list, uint32_t base_rate, uint32_t combiner0, uint32_t combiner1) = 0;
+    virtual bool on_SetShadingRateImage12(uint32_t list, uint32_t image) = 0;
+    virtual bool on_Barrier12(uint32_t list, uint32_t count, const LayoutBarrier* barriers) = 0;
     virtual bool on_CopyBufferRegion12(uint32_t list, uint32_t destination, uint64_t destination_offset, uint32_t source, uint64_t source_offset, uint64_t bytes) = 0;
     virtual bool on_CopyTextureRegion12(uint32_t list, const CopyLocation& destination, uint32_t x, uint32_t y, uint32_t z, const CopyLocation& source, uint32_t has_box, const Box& box) = 0;
     virtual bool on_CopyResource12(uint32_t list, uint32_t destination, uint32_t source) = 0;
@@ -104,11 +112,22 @@ public:
     virtual bool on_SetViewInstanceMask12(uint32_t list, uint32_t mask) = 0;
     virtual bool on_GetClockOrigin12(uint32_t queue, uint64_t& ticks, uint64_t& frequency) = 0;
     virtual bool on_SetDepthBounds12(uint32_t list, float minimum, float maximum) = 0;
+    virtual bool on_SetFrontAndBackStencilRef12(uint32_t list, uint32_t front, uint32_t back) = 0;
     virtual bool on_SetPredication12(uint32_t list, uint32_t buffer, uint64_t offset, uint32_t op) = 0;
     virtual bool on_SetStreamOutputTargets12(uint32_t list, uint32_t start, uint32_t count, const StreamOutputView* views) = 0;
     virtual bool on_ClearUnorderedAccessViewUint12(uint32_t list, const DescriptorRef& gpu_view, const DescriptorRef& cpu_view, uint32_t resource, const Uint4& values, uint32_t rect_count, const Rect* rects) = 0;
     virtual bool on_ClearUnorderedAccessViewFloat12(uint32_t list, const DescriptorRef& gpu_view, const DescriptorRef& cpu_view, uint32_t resource, const Float4& values, uint32_t rect_count, const Rect* rects) = 0;
     virtual bool on_ExecuteBundle12(uint32_t list, uint32_t bundle) = 0;
+    virtual bool on_CreateStateObject12(uint32_t object, uint32_t parent, uint32_t type, uint32_t subobject_count, const StateSubobject* subobjects, uint32_t export_count, const StateExport* exports, uint32_t association_count, const StateAssociation* associations, const uint8_t* names, uint64_t names_size, const uint8_t* libraries, uint64_t libraries_size, uint32_t& hresult) = 0;
+    virtual bool on_StateObjectIdentifier12(uint32_t object, const uint8_t* name, uint64_t name_size, uint32_t& found, ShaderIdentifier& identifier) = 0;
+    virtual bool on_StateObjectStackSize12(uint32_t object, const uint8_t* name, uint64_t name_size, uint32_t& size) = 0;
+    virtual bool on_SetPipelineStackSize12(uint32_t object, uint32_t bytes) = 0;
+    virtual bool on_AccelerationStructurePrebuild12(uint32_t type, uint32_t flags, uint32_t num_descs, uint32_t layout, uint32_t geometry_count, const RaytracingGeometry* geometries, uint32_t& hresult, uint64_t& result_bytes, uint64_t& scratch_bytes, uint64_t& update_scratch_bytes) = 0;
+    virtual bool on_BuildAccelerationStructure12(uint32_t list, uint32_t type, uint32_t flags, uint32_t num_descs, uint32_t layout, uint64_t destination, uint64_t source, uint64_t scratch, uint64_t instances, uint32_t geometry_count, const RaytracingGeometry* geometries, uint32_t postbuild_count, const RaytracingPostbuild* postbuilds) = 0;
+    virtual bool on_EmitAccelerationStructurePostbuild12(uint32_t list, uint32_t type, uint64_t destination, uint32_t source_count, const uint64_t* sources) = 0;
+    virtual bool on_CopyAccelerationStructure12(uint32_t list, uint64_t destination, uint64_t source, uint32_t mode) = 0;
+    virtual bool on_SetStateObject12(uint32_t list, uint32_t object) = 0;
+    virtual bool on_DispatchRays12(uint32_t list, const RayTable& raygen, const RayTable& miss, const RayTable& hit, const RayTable& callable, uint32_t width, uint32_t height, uint32_t depth) = 0;
 
 protected:
     // `guest` is the context's blob arena, which the implementation owns and

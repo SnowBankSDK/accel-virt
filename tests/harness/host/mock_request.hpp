@@ -14,9 +14,13 @@ public:
     MockRequest &operator=(const MockRequest &) = delete;
 
     std::size_t read(std::size_t offset, std::uint8_t *buffer, std::size_t size) const;
+    std::size_t size() const;
+    const std::uint8_t *bytes() const;
     bool        answer(const std::uint8_t *bytes, std::size_t size);
 
     bool          answered() const;
+    void          drop();
+    bool          dropped() const;
     std::uint32_t response_type() const;
     std::uint32_t response_u32(std::size_t offset) const;
     std::size_t   response_size() const;
@@ -28,6 +32,7 @@ private:
     std::uint8_t  response_[256];
     std::size_t   response_size_;
     bool          answered_;
+    bool          dropped_;
 };
 
 }

@@ -14,6 +14,8 @@ extern constinit DeviceModule device_module;
 extern "C" {
 
 void AvWorkerRun(void *worker);
+void AvWorkerReaperRun(void *reaper);
+void AvContextsReaped(void *table);
 void AvRingAttach(void *ring);
 void AvDisplayClockRun(void *clock);
 void AvDevicePulseRun(void *pulse);
@@ -22,7 +24,12 @@ void AvDisplayFramesExport(void *device);
 void AvDisplayImagesShow(void *device);
 void AvDisplayFramesShow(void *device);
 void AvPresentEngineRun(void *engine);
+void AvPresentEngineReleased(void *engine);
 void AvExportConnectionServe(void *connection);
+void AvServiceThreadRun(void *service);
+void AvServiceThreadConclude(void *service);
+void AvErrandPerform(void *errand);
+void AvErrandConclude(void *errand);
 
 }
 

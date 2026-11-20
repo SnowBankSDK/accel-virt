@@ -22,6 +22,7 @@ namespace av::icd {
 }
 
 namespace av::icd {
+class HostChannel;
 class PresentPacing;
 class WindowSurface;
 }
@@ -53,14 +54,22 @@ public:
     uint32_t name_of(uint32_t name) const;
     void     bound(uint32_t target, uint32_t name);
     void     reading(uint32_t buffer);
+    bool     reads_window() const;
     [[nodiscard]] bool read_front(int32_t x, int32_t y, int32_t width, int32_t height, uint32_t format,
                                   uint32_t type, void *pixels) const;
     uint32_t buffer_for(uint32_t buffer, bool drawing) const;
+    bool     resolved_read(ClientTransport &wire, uint64_t sent);
+    void     resolved_read_done(ClientTransport &wire);
+    void     resolved_through(uint64_t sent);
     int32_t  answer(uint32_t pname, int32_t host_value) const;
+    bool     front_drawn(uint64_t sent) const;
+    void     front_shown(uint64_t sent);
     bool     present(ClientTransport &wire, const ClientArrayState &state, void *dc, void *window,
                      icd::WindowSurface &surface, GlPresentQueue *loop, uint64_t luid);
     void     hand_over(const BatchMark &mark);
     void     hold_over(const BatchMark &mark, icd::PresentPacing &pacing);
+    void     paced_by(icd::PresentPacing &pacing);
+    void     watched_by(icd::HostChannel &channel);
     void     show_held_now();
     bool     viewport_resizes(uint32_t width, uint32_t height);
     void     follow(ClientTransport &wire, void *window, const PixelFormat &format, icd::WindowSurface &surface);
@@ -73,9 +82,12 @@ public:
     bool invariants_hold() const;
 
 private:
+    static constexpr uint64_t no_calls = ~0ull;
+
     BackBufferPresenter *find(void *window) const;
     uint64_t             key_of(void *window) const;
     void                 forget(BackBufferPresenter *presenter);
+    void                 forget_marks();
     void     bind_window(ClientTransport &wire, uint32_t framebuffer);
 
     BlockSource                        &memory_;
@@ -84,11 +96,15 @@ private:
     KeyedSlots<uint64_t, BackBufferPresenter *> presenters_;
     BackBufferPresenter                *current_;
     BackBufferPresenter                *presented_;
+    icd::PresentPacing                 *pacing_;
+    icd::HostChannel                   *channel_;
     bool                                draws_window_;
     bool                                reads_window_;
     uint32_t                            read_buffer_;
     uint32_t                            viewport_width_;
     uint32_t                            viewport_height_;
+    uint64_t                            shown_calls_;
+    uint64_t                            resolved_calls_;
 
     bool                                ever_current_;
 

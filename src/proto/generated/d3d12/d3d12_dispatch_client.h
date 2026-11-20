@@ -30,15 +30,22 @@ namespace av::d3d12proto {
 // when the host has a device, which follows every queue's progress so it can tell when a block's last heap and
 // resource are done with, 0 when it has none. The guest then gives each heap memory of its own.
 [[nodiscard]] bool av_d3d12_QueryHeapSlices12(::av::ClientTransport& t, uint32_t* supported);
+// Whether the host makes a CPU-visible heap's memory itself: 1 when its GPU driver refuses to import the host
+// memory the guest opened, so CreateHeap12 of an upload or readback heap with no `memory` makes a heap of native memory
+// and answers the handle `placed` that a placed host memory request of the guest takes the mapping by, 0 when the guest
+// opens the memory first and CreateHeap12 names it.
+[[nodiscard]] bool av_d3d12_QueryHeapPlacement12(::av::ClientTransport& t, uint32_t* placed);
 // A heap of `size` bytes. A heap of a CPU-visible type (upload, readback, or custom with a CPU page)
 // is the window of `size` bytes at `offset` in the host memory the guest opened and imported, named by the handle
 // IMPORT_BLOB answered as `memory`; the window lies inside that memory, and `offset` is a multiple of 64 KiB.
 // It can hold only buffers (docs/host-memory.md). The host keeps the memory's imported heap until the guest has
 // released the memory, every heap and resource in it is destroyed and the GPU is done with it. Any other heap is the
 // host GPU's own and memory and offset are ignored. The host keeps only the heap flags that name how
-// the heap may be used: a guest never reads memory it did not write. hresult is
+// the heap may be used: a guest never reads memory it did not write. A heap of a CPU-visible type with `memory` 0,
+// asked of a host that answered QueryHeapPlacement12 with 1, is made of native host memory instead and `placed` names
+// it, the handle of the placed host memory request that maps it; `placed` is 0 for every other heap. hresult is
 // S_OK, or the host's own answer when it made no heap - E_OUTOFMEMORY when it has no memory for one.
-[[nodiscard]] bool av_d3d12_CreateHeap12(::av::ClientTransport& t, uint32_t heap, const HeapProperties& properties, uint32_t flags, uint64_t size, uint64_t alignment, uint64_t memory, uint64_t offset, uint32_t* hresult);
+[[nodiscard]] bool av_d3d12_CreateHeap12(::av::ClientTransport& t, uint32_t heap, const HeapProperties& properties, uint32_t flags, uint64_t size, uint64_t alignment, uint64_t memory, uint64_t offset, uint32_t* hresult, uint64_t* placed);
 // A resource with a heap of its own on the host GPU. A buffer is found by `address` from then on.
 // hresult is S_OK, or the host's own answer when it made no resource - E_OUTOFMEMORY when it has no memory for one.
 [[nodiscard]] bool av_d3d12_CreateCommittedResource12(::av::ClientTransport& t, uint32_t resource, const HeapProperties& properties, uint32_t heap_flags, const ResourceDesc& desc, uint32_t state, const ClearValue& clear, uint64_t address, uint32_t* hresult);
@@ -54,6 +61,19 @@ namespace av::d3d12proto {
 // the host GPU's Direct3D 11 device under `key`, the identity the miniport minted over its kernel allocation,
 // which the compositor opens it by. The same memory on both devices: nothing is copied.
 [[nodiscard]] bool av_d3d12_ShareResource12(::av::ClientTransport& t, uint32_t resource, uint64_t key);
+// `object`, a heap or a committed resource that is not a swap chain texture, is shown to the Direct3D 12
+// sessions of the host adapter under `key`, the identity the miniport minted over its kernel allocation, which
+// another process opens it by. The same host object in every session: nothing is copied.
+[[nodiscard]] bool av_d3d12_ShareObject12(::av::ClientTransport& t, uint32_t object, uint64_t key);
+// The heap or resource another session shared under `key` becomes `object` in this one. `kind` is 1 for a
+// resource, 2 for a heap and 0 when no session shared `key`; a resource answers its description and is placed at
+// `address` in the guest's space, a heap its size.
+[[nodiscard]] bool av_d3d12_OpenObject12(::av::ClientTransport& t, uint32_t object, uint64_t key, uint64_t address, uint32_t* kind, uint32_t* dimension, uint32_t* height, uint32_t* depth_or_array, uint32_t* mip_levels, uint32_t* format, uint32_t* sample_count, uint32_t* flags, uint64_t* width, uint64_t* size);
+// `resource`, a 2D texture of one mip, one layer and one sample laid out in rows of `row_pitch` bytes, is made over
+// `memory`, the pages the guest lent across adapters (a lent allocation named the way CreateResource names one): the
+// host GPU's image over the same pages, which the other adapter's device reads and writes as well. Nothing is
+// copied. `hresult` is 0, or E_OUTOFMEMORY when the host's device takes no image over those pages.
+[[nodiscard]] bool av_d3d12_AdoptLentImage12(::av::ClientTransport& t, uint32_t resource, uint64_t memory, const ResourceDesc& desc, uint32_t row_pitch, uint32_t* hresult);
 // A resource at `offset` in a heap made by CreateHeap12. A buffer is found by `address` from then on.
 [[nodiscard]] bool av_d3d12_CreatePlacedResource12(::av::ClientTransport& t, uint32_t resource, uint32_t heap, uint64_t offset, const ResourceDesc& desc, uint32_t state, const ClearValue& clear, uint64_t address);
 // A resource with no memory of its own: its 64 KiB tiles are mapped to heaps' by UpdateTileMappings12 on a
@@ -79,13 +99,14 @@ namespace av::d3d12proto {
 // What ExecuteIndirect12 reads each command from: byte_stride bytes a command, laid out as the
 // arguments say. root is the root signature the arguments that set root parameters name, 0 for none. An argument
 // that carries a GPU address - a vertex or index buffer view, a constant buffer, shader resource or unordered access
-// view buffer - is refused: the GPU would read the guest's address from the argument buffer, which the host cannot
-// translate.
+// view buffer - holds the guest's address, which the host translates on the GPU before ExecuteIndirect12 runs.
 [[nodiscard]] bool av_d3d12_CreateCommandSignature12(::av::ClientTransport& t, uint32_t signature, uint32_t root, uint32_t byte_stride, uint32_t argument_count, const IndirectArgument* arguments);
 // A graphics pipeline state. Each stage's code is what the DDI gave the driver - a DXBC or DXIL
 // container, a DXIL program, or a DXBC token stream - and empty for a stage the pipeline does not have; the
-// signatures are every stage's, as registers. The input layout names vertex shader input registers.
-[[nodiscard]] bool av_d3d12_CreateGraphicsPipeline12(::av::ClientTransport& t, uint32_t pipeline, uint32_t root, const GraphicsState& state, uint32_t element_count, const InputElement* elements, uint32_t signature_count, const SignatureEntry* signatures, const void* vs, uint64_t vs_size, const void* hs, uint64_t hs_size, const void* ds, uint64_t ds_size, const void* gs, uint64_t gs_size, const void* ps, uint64_t ps_size);
+// signatures are every stage's, as registers. The input layout names vertex shader input registers. The
+// geometry shader's stream output declaration, if it has one, is stream_out with its buffer strides and the stream
+// that is rasterized (0xFFFFFFFF for none).
+[[nodiscard]] bool av_d3d12_CreateGraphicsPipeline12(::av::ClientTransport& t, uint32_t pipeline, uint32_t root, const GraphicsState& state, uint32_t element_count, const InputElement* elements, uint32_t signature_count, const SignatureEntry* signatures, uint32_t stream_out_count, const StreamOutDeclaration* stream_out, uint32_t stride_count, const uint32_t* strides, uint32_t rasterized_stream, const void* vs, uint64_t vs_size, const void* hs, uint64_t hs_size, const void* ds, uint64_t ds_size, const void* gs, uint64_t gs_size, const void* ps, uint64_t ps_size, const void* ms, uint64_t ms_size, const void* as, uint64_t as_size);
 [[nodiscard]] bool av_d3d12_CreateComputePipeline12(::av::ClientTransport& t, uint32_t pipeline, uint32_t root, const void* cs, uint64_t cs_size);
 [[nodiscard]] bool av_d3d12_CreateCommandQueue12(::av::ClientTransport& t, uint32_t queue, uint32_t type, uint32_t priority, uint32_t flags);
 [[nodiscard]] bool av_d3d12_CreateCommandAllocator12(::av::ClientTransport& t, uint32_t allocator, uint32_t type);
@@ -132,6 +153,16 @@ namespace av::d3d12proto {
 [[nodiscard]] bool av_d3d12_DrawInstanced12(::av::ClientTransport& t, uint32_t list, uint32_t vertex_count, uint32_t instance_count, uint32_t start_vertex, uint32_t start_instance);
 [[nodiscard]] bool av_d3d12_DrawIndexedInstanced12(::av::ClientTransport& t, uint32_t list, uint32_t index_count, uint32_t instance_count, uint32_t start_index, int32_t base_vertex, uint32_t start_instance);
 [[nodiscard]] bool av_d3d12_Dispatch12(::av::ClientTransport& t, uint32_t list, uint32_t x, uint32_t y, uint32_t z);
+// Runs the mesh pipeline set on `list` over x by y by z groups; the host refuses counts past its dispatch limit.
+[[nodiscard]] bool av_d3d12_DispatchMesh12(::av::ClientTransport& t, uint32_t list, uint32_t x, uint32_t y, uint32_t z);
+// The base shading rate (D3D12_SHADING_RATE) and the two combiners (D3D12_SHADING_RATE_COMBINER) that merge it
+// with the pipeline's per-primitive rate and then the shading rate image's for the draws after.
+[[nodiscard]] bool av_d3d12_SetShadingRate12(::av::ClientTransport& t, uint32_t list, uint32_t base_rate, uint32_t combiner0, uint32_t combiner1);
+// The R8_UINT texture whose texels give the rate of each tile for the draws after; 0 unbinds it.
+[[nodiscard]] bool av_d3d12_SetShadingRateImage12(::av::ClientTransport& t, uint32_t list, uint32_t image);
+// Enhanced barriers: type 0 global, 1 texture (the layouts and subresource range of `resource`, flag 1 discards),
+// 2 buffer. Texture barriers apply only to a resource that no legacy transition has named, and the other way round.
+[[nodiscard]] bool av_d3d12_Barrier12(::av::ClientTransport& t, uint32_t list, uint32_t count, const LayoutBarrier* barriers);
 [[nodiscard]] bool av_d3d12_CopyBufferRegion12(::av::ClientTransport& t, uint32_t list, uint32_t destination, uint64_t destination_offset, uint32_t source, uint64_t source_offset, uint64_t bytes);
 [[nodiscard]] bool av_d3d12_CopyTextureRegion12(::av::ClientTransport& t, uint32_t list, const CopyLocation& destination, uint32_t x, uint32_t y, uint32_t z, const CopyLocation& source, uint32_t has_box, const Box& box);
 [[nodiscard]] bool av_d3d12_CopyResource12(::av::ClientTransport& t, uint32_t list, uint32_t destination, uint32_t source);
@@ -163,6 +194,8 @@ namespace av::d3d12proto {
 [[nodiscard]] bool av_d3d12_GetClockOrigin12(::av::ClientTransport& t, uint32_t queue, uint64_t* ticks, uint64_t* frequency);
 // The depth range a pixel's stored depth must lie in for the draws after; both within 0 to 1.
 [[nodiscard]] bool av_d3d12_SetDepthBounds12(::av::ClientTransport& t, uint32_t list, float minimum, float maximum);
+// The stencil reference of front-facing and of back-facing triangles for the draws after.
+[[nodiscard]] bool av_d3d12_SetFrontAndBackStencilRef12(::av::ClientTransport& t, uint32_t list, uint32_t front, uint32_t back);
 // Draws and dispatches after are skipped by the 64-bit value at `offset` in `buffer`: zero skips when op is
 // D3D12_PREDICATION_OP_NOT_EQUAL_ZERO, non-zero when it is EQUAL_ZERO. buffer 0 turns predication off.
 [[nodiscard]] bool av_d3d12_SetPredication12(::av::ClientTransport& t, uint32_t list, uint32_t buffer, uint64_t offset, uint32_t op);
@@ -176,5 +209,30 @@ namespace av::d3d12proto {
 // Plays the closed bundle `bundle` inside the recording `list`; the list keeps alive what the bundle recorded.
 // A bundle cannot play a bundle.
 [[nodiscard]] bool av_d3d12_ExecuteBundle12(::av::ClientTransport& t, uint32_t list, uint32_t bundle);
+// A raytracing state object. type is D3D12_STATE_OBJECT_TYPE; parent is the state object it grows from, 0 for
+// none. Each subobject names what it holds: a root signature or collection by id, a library by its `a` byte offset and
+// `b` byte size in `libraries` and its exports by the range `first` and `count` of `exports`, a hit group by the byte
+// offsets in `names` of its export and its shaders (0xFFFFFFFF for none). names is UTF-16, each string ending in a zero
+// unit; an association ties a subobject to the export it names. hresult is S_OK, or the host's own answer when it
+// made no state object.
+[[nodiscard]] bool av_d3d12_CreateStateObject12(::av::ClientTransport& t, uint32_t object, uint32_t parent, uint32_t type, uint32_t subobject_count, const StateSubobject* subobjects, uint32_t export_count, const StateExport* exports, uint32_t association_count, const StateAssociation* associations, const void* names, uint64_t names_size, const void* libraries, uint64_t libraries_size, uint32_t* hresult);
+// The 32 bytes the host's GetShaderIdentifier answers for the export `name` (UTF-16); found is 0 when there is none.
+[[nodiscard]] bool av_d3d12_StateObjectIdentifier12(::av::ClientTransport& t, uint32_t object, const void* name, uint64_t name_size, uint32_t* found, ShaderIdentifier* identifier);
+// The host's GetShaderStackSize of the export `name` (UTF-16), or GetPipelineStackSize when name is empty; 0xFFFFFFFF when it has none.
+[[nodiscard]] bool av_d3d12_StateObjectStackSize12(::av::ClientTransport& t, uint32_t object, const void* name, uint64_t name_size, uint32_t* size);
+[[nodiscard]] bool av_d3d12_SetPipelineStackSize12(::av::ClientTransport& t, uint32_t object, uint32_t bytes);
+// The host's sizes for an acceleration structure of this shape. Addresses are not read: only whether each is set
+// matters.
+[[nodiscard]] bool av_d3d12_AccelerationStructurePrebuild12(::av::ClientTransport& t, uint32_t type, uint32_t flags, uint32_t num_descs, uint32_t layout, uint32_t geometry_count, const RaytracingGeometry* geometries, uint32_t* hresult, uint64_t* result_bytes, uint64_t* scratch_bytes, uint64_t* update_scratch_bytes);
+// Builds an acceleration structure of `destination` from geometries or from `instances`, with `scratch`. Every
+// address is a guest address and must lie in one buffer; the host refuses an unmapped one and one whose room is
+// smaller than the sizes its own prebuild info gives. postbuilds are written once the build is done.
+[[nodiscard]] bool av_d3d12_BuildAccelerationStructure12(::av::ClientTransport& t, uint32_t list, uint32_t type, uint32_t flags, uint32_t num_descs, uint32_t layout, uint64_t destination, uint64_t source, uint64_t scratch, uint64_t instances, uint32_t geometry_count, const RaytracingGeometry* geometries, uint32_t postbuild_count, const RaytracingPostbuild* postbuilds);
+// Writes the postbuild information `type` of each of `sources` in turn at `destination`.
+[[nodiscard]] bool av_d3d12_EmitAccelerationStructurePostbuild12(::av::ClientTransport& t, uint32_t list, uint32_t type, uint64_t destination, uint32_t source_count, const uint64_t* sources);
+[[nodiscard]] bool av_d3d12_CopyAccelerationStructure12(::av::ClientTransport& t, uint32_t list, uint64_t destination, uint64_t source, uint32_t mode);
+[[nodiscard]] bool av_d3d12_SetStateObject12(::av::ClientTransport& t, uint32_t list, uint32_t object);
+// Traces width by height by depth rays with the state object set on `list`; the tables are guest addresses.
+[[nodiscard]] bool av_d3d12_DispatchRays12(::av::ClientTransport& t, uint32_t list, const RayTable& raygen, const RayTable& miss, const RayTable& hit, const RayTable& callable, uint32_t width, uint32_t height, uint32_t depth);
 
 }  // namespace av::d3d12proto

@@ -1107,7 +1107,7 @@ public:
         called(kCmd_clGetKernelSubGroupInfo);
         handed(HandleKind::kernel, kernel);
         handed(HandleKind::device, device);
-        if (input_value != nullptr) touched(input_value, static_cast<size_t>(static_cast<uint64_t>(input_value_size)));
+        if (input_value != nullptr) touched(input_value, static_cast<size_t>(static_cast<uint64_t>(input_value_size) / sizeof(size_t)) * sizeof(size_t));
         if (param_value != nullptr) touched(param_value, static_cast<size_t>(param_value_size));
         return CL_SUCCESS;
     }

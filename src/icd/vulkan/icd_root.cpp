@@ -43,6 +43,7 @@ namespace av::icd {
 namespace {
 constexpr const char *dma_buf_extension = "VK_EXT_external_memory_dma_buf";
 constexpr const char *win32_memory_extension = "VK_KHR_external_memory_win32";
+constexpr const char *descriptor_buffer_extension = "VK_EXT_descriptor_buffer";
 
 using Entry = vkicd::generated::Entry;
 using Level = vkicd::generated::DispatchLevel;
@@ -100,6 +101,13 @@ const Entry        local_rows[] = {
             reinterpret_cast<PFN_vkVoidFunction>(&local_vkCreateDescriptorUpdateTemplate), Level::device},
     {"vkCreateDescriptorUpdateTemplateKHR",
             reinterpret_cast<PFN_vkVoidFunction>(&local_vkCreateDescriptorUpdateTemplateKHR), Level::device},
+    {"vkGetAccelerationStructureOpaqueCaptureDescriptorDataEXT", reinterpret_cast<PFN_vkVoidFunction>(&local_vkGetAccelerationStructureOpaqueCaptureDescriptorDataEXT), Level::device},
+    {"vkGetBufferOpaqueCaptureDescriptorDataEXT", reinterpret_cast<PFN_vkVoidFunction>(&local_vkGetBufferOpaqueCaptureDescriptorDataEXT), Level::device},
+    {"vkGetImageOpaqueCaptureDescriptorDataEXT", reinterpret_cast<PFN_vkVoidFunction>(&local_vkGetImageOpaqueCaptureDescriptorDataEXT), Level::device},
+    {"vkGetImageViewOpaqueCaptureDescriptorDataEXT", reinterpret_cast<PFN_vkVoidFunction>(&local_vkGetImageViewOpaqueCaptureDescriptorDataEXT), Level::device},
+    {"vkGetSamplerOpaqueCaptureDescriptorDataEXT", reinterpret_cast<PFN_vkVoidFunction>(&local_vkGetSamplerOpaqueCaptureDescriptorDataEXT), Level::device},
+    {"vkCreateImage", reinterpret_cast<PFN_vkVoidFunction>(&local_vkCreateImage), Level::device},
+    {"vkDestroyImage", reinterpret_cast<PFN_vkVoidFunction>(&local_vkDestroyImage), Level::device},
     {"vkDestroyDescriptorUpdateTemplate",
             reinterpret_cast<PFN_vkVoidFunction>(&local_vkDestroyDescriptorUpdateTemplate), Level::device},
     {"vkDestroyDescriptorUpdateTemplateKHR",
@@ -228,6 +236,33 @@ constexpr ExtensionPolicy::Row reported_extensions[] = {
     {"VK_AMD_buffer_marker", 1u, "reported_extensions.an_extension_with_no_structure_of_its_own_is_enabled_on_the_host"},
     {"VK_AMD_shader_core_properties", 2u, "reported_extensions.an_extension_with_no_structure_of_its_own_is_enabled_on_the_host"},
     {"VK_AMD_shader_core_properties2", 1u, "reported_extensions.an_extension_with_no_structure_of_its_own_is_enabled_on_the_host"},
+    {"VK_EXT_blend_operation_advanced", 2u, "reported_extensions.every_feature_structure_an_application_chains_reaches_the_host"},
+    {"VK_EXT_shader_object", 1u, "vulkan_binaries.a_shader_binary_the_host_did_not_hand_out_is_refused"},
+    {"VK_KHR_pipeline_binary", 1u, "vulkan_binaries.a_pipeline_binary_the_host_did_not_hand_out_is_refused"},
+    {"VK_KHR_deferred_host_operations", 4u, "reported_extensions.an_extension_with_no_structure_of_its_own_is_enabled_on_the_host"},
+    {"VK_KHR_acceleration_structure", 13u, "vulkan_addresses.a_forged_vertex_index_or_instance_address_is_refused"},
+    {"VK_KHR_ray_tracing_pipeline", 1u, "vulkan_addresses.a_shader_binding_table_outside_every_buffer_or_a_trace_too_large_is_refused"},
+    {"VK_KHR_ray_query", 1u, "vulkan_addresses.a_giant_primitive_count_reads_past_its_buffer_and_is_refused"},
+    {"VK_KHR_ray_tracing_maintenance1", 1u, "reported_extensions.every_feature_structure_an_application_chains_reaches_the_host"},
+    {"VK_KHR_ray_tracing_position_fetch", 1u, "reported_extensions.every_feature_structure_an_application_chains_reaches_the_host"},
+    {"VK_EXT_pipeline_library_group_handles", 1u, "reported_extensions.every_feature_structure_an_application_chains_reaches_the_host"},
+    {"VK_EXT_host_image_copy", 1u, "generated_host_copy.a_memory_to_image_copy_sends_exactly_the_bytes_the_region_touches"},
+    {"VK_EXT_multi_draw", 1u, "generated_multi_draw.a_strided_array_arrives_at_the_host_packed_with_the_host_s_own_stride"},
+    {"VK_EXT_color_write_enable", 1u, "reported_extensions.every_feature_structure_an_application_chains_reaches_the_host"},
+    {"VK_EXT_vertex_input_dynamic_state", 2u, "reported_extensions.every_feature_structure_an_application_chains_reaches_the_host"},
+    {"VK_EXT_provoking_vertex", 1u, "reported_extensions.every_feature_structure_an_application_chains_reaches_the_host"},
+    {"VK_EXT_primitive_topology_list_restart", 1u, "reported_extensions.every_feature_structure_an_application_chains_reaches_the_host"},
+    {"VK_EXT_depth_clip_control", 1u, "reported_extensions.every_feature_structure_an_application_chains_reaches_the_host"},
+    {"VK_EXT_image_2d_view_of_3d", 1u, "reported_extensions.every_feature_structure_an_application_chains_reaches_the_host"},
+    {"VK_EXT_shader_atomic_float", 1u, "reported_extensions.every_feature_structure_an_application_chains_reaches_the_host"},
+    {"VK_EXT_shader_atomic_float2", 1u, "reported_extensions.every_feature_structure_an_application_chains_reaches_the_host"},
+    {"VK_KHR_shader_clock", 1u, "reported_extensions.every_feature_structure_an_application_chains_reaches_the_host"},
+    {"VK_EXT_primitives_generated_query", 1u, "reported_extensions.every_feature_structure_an_application_chains_reaches_the_host"},
+    {"VK_EXT_depth_clamp_zero_one", 1u, "reported_extensions.every_feature_structure_an_application_chains_reaches_the_host"},
+    {"VK_KHR_shader_relaxed_extended_instruction", 1u, "reported_extensions.every_feature_structure_an_application_chains_reaches_the_host"},
+    {"VK_EXT_depth_range_unrestricted", 1u, "reported_extensions.an_extension_with_no_structure_of_its_own_is_enabled_on_the_host"},
+    {"VK_EXT_post_depth_coverage", 1u, "reported_extensions.an_extension_with_no_structure_of_its_own_is_enabled_on_the_host"},
+    {"VK_KHR_shader_non_semantic_info", 1u, "reported_extensions.an_extension_with_no_structure_of_its_own_is_enabled_on_the_host"},
 };
 constexpr uint32_t reported_extension_count = sizeof reported_extensions / sizeof reported_extensions[0];
 struct InstanceExtension {
@@ -258,8 +293,8 @@ IcdRoot::IcdRoot(BlockSource &memory, Kmt &kmt, ThreadLock &lock, ThreadLock &se
       api_version_(vulkan_1_3), before_instance_(local_rows, before_instance_rows),
       entry_points_(local_rows, local_row_count),
       extensions_(reported_extensions, reported_extension_count), batches_(memory), memories_(memory), handles_(memory), shared_handles_(kmt, lock, memory), connections_(memory), pending_(nullptr), spans_(memory),
-      entries_(*this), presentation_(memory, kmt, windows, chains, log, *this, entries_, present_thread, handed, shown, present_lock), wakes_(wake_thread), templates_(memory, lock),
-      translation_(lock, handles_, templates_),
+      entries_(*this), presentation_(memory, kmt, windows, chains, log, *this, entries_, present_thread, handed, shown, present_lock), wakes_(wake_thread), templates_(memory, lock), host_copies_(memory),
+      translation_(lock, handles_, templates_, host_copies_),
       externals_(lock, memory), kernel_refusal_(0u), idle_skipped_(0u), idle_waited_(0u),
       memory_handles_(VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT,
                       VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT),
@@ -649,7 +684,13 @@ VkResult IcdRoot::create_device(VkPhysicalDevice physical_device, const VkDevice
         vkproto::av_vkCreateDevice(made->connection()->transport(), translation_, physical_device, &forwarded, allocator, &host);
     if (result != VK_SUCCESS) return result;
     *device = static_cast<VkDevice>(wrap_child(LoaderHandle::Kind::device, host, *made));
-    return *device != VK_NULL_HANDLE ? VK_SUCCESS : VK_ERROR_OUT_OF_HOST_MEMORY;
+    if (*device == VK_NULL_HANDLE) return VK_ERROR_OUT_OF_HOST_MEMORY;
+    if (asked.named(descriptor_buffer_extension)) {
+        LoaderHandle *const created = handle_of(*device, LoaderHandle::Kind::device);
+        DeviceMemory *const placing = created != nullptr ? memory_of(*created) : nullptr;
+        if (placing != nullptr) placing->enable_placement();
+    }
+    return VK_SUCCESS;
 }
 
 void IcdRoot::release_device_memory(LoaderHandle &device)
@@ -695,6 +736,34 @@ void IcdRoot::destroy_descriptor_update_template(VkDevice device, VkDescriptorUp
     AV_SCOPE("IcdRoot::destroy_descriptor_update_template");
     templates_.forget(made);
     vkicd::generated::Wrap_vkDestroyDescriptorUpdateTemplate(device, made, allocator);
+}
+
+VkResult IcdRoot::create_image(VkDevice device, const VkImageCreateInfo *create, const VkAllocationCallbacks *allocator,
+                               VkImage *made)
+{
+    AV_SCOPE("IcdRoot::create_image");
+    if (create == nullptr || made == nullptr) return VK_ERROR_INITIALIZATION_FAILED;
+    const VkResult result = vkicd::generated::Wrap_vkCreateImage(device, create, allocator, made);
+    if (result != VK_SUCCESS) return result;
+    bool recorded = false;
+    {
+        const ThreadLockHold held(lock_);
+        recorded = host_copies_.record(HandleBits(*made).value(), HandleBits(device).value(), *create);
+    }
+    if (recorded) return VK_SUCCESS;
+    vkicd::generated::Wrap_vkDestroyImage(device, *made, allocator);
+    *made = VK_NULL_HANDLE;
+    return VK_ERROR_OUT_OF_HOST_MEMORY;
+}
+
+void IcdRoot::destroy_image(VkDevice device, VkImage image, const VkAllocationCallbacks *allocator)
+{
+    AV_SCOPE("IcdRoot::destroy_image");
+    {
+        const ThreadLockHold held(lock_);
+        host_copies_.forget(HandleBits(image).value());
+    }
+    vkicd::generated::Wrap_vkDestroyImage(device, image, allocator);
 }
 
 VkFlags IcdRoot::memory_share_type(const Connection &connection) const
@@ -1039,6 +1108,10 @@ void IcdRoot::destroy_device(VkDevice device, const VkAllocationCallbacks *alloc
 {
     AV_SCOPE("IcdRoot::destroy_device");
     templates_.forget_device(device);
+    {
+        const ThreadLockHold held(lock_);
+        host_copies_.forget_device(HandleBits(device).value());
+    }
     LoaderHandle *const made = handle_of(device, LoaderHandle::Kind::device);
     if (made == nullptr) return;
     {

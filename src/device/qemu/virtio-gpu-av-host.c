@@ -443,6 +443,37 @@ static void av_respond(void *opaque, void *request, const uint8_t *bytes, size_t
     virtio_gpu_ctrl_response(VIRTIO_GPU(r), request, &response.header, size);
 }
 
+static void *av_keep_request(void *opaque, void *request)
+{
+    struct virtio_gpu_ctrl_command *cmd = request;
+    const unsigned int in = cmd->elem.in_num;
+    const unsigned int out = cmd->elem.out_num;
+    struct virtio_gpu_ctrl_command *kept = g_malloc(sizeof(*kept) + (in + out) * (sizeof(hwaddr) + sizeof(struct iovec)));
+
+    *kept = *cmd;
+    kept->elem.in_addr = (hwaddr *)(kept + 1);
+    kept->elem.out_addr = kept->elem.in_addr + in;
+    kept->elem.in_sg = (struct iovec *)(kept->elem.out_addr + out);
+    kept->elem.out_sg = kept->elem.in_sg + in;
+    memcpy(kept->elem.in_addr, cmd->elem.in_addr, in * sizeof(hwaddr));
+    memcpy(kept->elem.out_addr, cmd->elem.out_addr, out * sizeof(hwaddr));
+    memcpy(kept->elem.in_sg, cmd->elem.in_sg, in * sizeof(struct iovec));
+    memcpy(kept->elem.out_sg, cmd->elem.out_sg, out * sizeof(struct iovec));
+    kept->finished = false;
+    cmd->finished = true;
+    return kept;
+}
+
+static void av_release_request(void *opaque, void *kept, int answered)
+{
+    struct virtio_gpu_ctrl_command *cmd = kept;
+
+    if (!answered) {
+        virtqueue_detach_element(cmd->vq, &cmd->elem, 0);
+    }
+    g_free(cmd);
+}
+
 static int av_resource_exists(void *opaque, uint32_t id)
 {
     VirtIOGPUAv *r = opaque;
@@ -789,6 +820,7 @@ static void av_read_gpus(VirtIOGPUAv *r)
     VkInstance instance;
 
     r->gpu_count = 0;
+    av_device_close_implicit_layers();
     if (vkCreateInstance(&create, NULL, &instance) != VK_SUCCESS) {
         return;
     }
@@ -1058,6 +1090,8 @@ void virtio_gpu_av_host_init(VirtIOGPUAv *r)
         .raise_fence_interrupt = av_raise_fence_interrupt,
         .read_request = av_read_request,
         .respond = av_respond,
+        .keep_request = av_keep_request,
+        .release_request = av_release_request,
         .resource_exists = av_resource_exists,
         .create_recording = av_create_recording,
         .append_recording = av_append_recording,

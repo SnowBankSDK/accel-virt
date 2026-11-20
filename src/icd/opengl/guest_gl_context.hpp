@@ -11,6 +11,9 @@
 #include "icd/opengl/reported_gl_errors.hpp"
 #include "icd/opengl/buffer_shadows.hpp"
 #include "icd/opengl/client_array_state.hpp"
+#include "icd/opengl/client_vertex_state.hpp"
+#include "icd/opengl/debug_delivery_transport.hpp"
+#include "icd/opengl/gl_debug_messages.hpp"
 #include "icd/opengl/gl_extension_list.hpp"
 #include "icd/common/present_pacing.hpp"
 #include "icd/common/locked_timeline.hpp"
@@ -80,6 +83,7 @@ public:
     [[nodiscard]] Status share(uint32_t share_name);
     void                 lend();
     uint32_t             slice_group() const;
+    uint32_t             group_root() const;
     uint32_t             slices_owned() const;
     uint32_t             slices_pinned() const;
     uint32_t             slices_busy() const;
@@ -93,8 +97,10 @@ public:
     [[nodiscard]] Status run_held();
     void                 end_frame();
     BatchMark            mark() const;
+    uint64_t             calls_sent() const;
 
     ClientArrayState &arrays();
+    ClientVertexState &vertex();
     PinnedBuffers    &pinned();
     UniformShapes    &uniforms();
     QueryShapes      &queries();
@@ -104,6 +110,7 @@ public:
     BufferShadows         &shadows();
     SlicedBuffers         &slices();
     void                   read_sliced(uint32_t buffer, intptr_t offset, intptr_t size, void *data);
+    void                   write_sliced(uint32_t buffer, intptr_t offset, intptr_t size, const void *data);
     GlExternalObjects     &externals();
     PixelStagingBuffer    &staging();
 
@@ -115,11 +122,12 @@ public:
     const char *string(uint32_t name) const;
     const GrantedProfile &profile() const;
     icd::PresentPacing   &pacing();
+    const icd::HostChannel &channel() const;
+    icd::HostChannel       &channel();
     uint64_t              adapter_luid() const;
     void                  asking(GrantedProfile::Rung rung);
-    void        set_debug_callback(uint64_t callback, uint64_t user);
-    uint64_t    debug_callback() const;
-    uint64_t    debug_user() const;
+    GlDebugMessages &debug();
+    void             deliver_debug();
 
     void report(StateWriter &writer, uint64_t handle) const;
 
@@ -155,6 +163,7 @@ private:
     icd::HostChannel               channel_;
     ReportedGlErrors               reported_;
     ClientArrayState               arrays_;
+    ClientVertexState              vertex_;
     UniformShapes                  uniforms_;
     QueryShapes                    queries_;
     GrantedProfile                 profile_;
@@ -170,8 +179,8 @@ private:
     GlExternalObjects              externals_;
     PinnedBuffers                  pinned_;
     char                           strings_[strings][string_bytes];
-    uint64_t                       debug_callback_;
-    uint64_t                       debug_user_;
+    GlDebugMessages                debug_;
+    DebugDeliveryTransport         delivery_;
     uint64_t                       luid_;
 
     friend struct GuestGlContextProbe;

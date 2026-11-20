@@ -18,6 +18,7 @@ struct AvVramGate {
     uint64_t (*cap)(void *account);
     int      (*take_host)(void *account, uint64_t bytes);
     void     (*give_host)(void *account, uint64_t bytes);
+    int      (*relief_wanted)(void *account);
 };
 
 #ifdef __cplusplus

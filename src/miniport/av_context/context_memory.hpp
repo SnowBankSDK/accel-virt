@@ -21,6 +21,7 @@ public:
 
     [[nodiscard]] Status allocate(uint8_t order, uint32_t reply_bytes);
     [[nodiscard]] Status map_into_process();
+    void                 leave_process();
     void                 release();
     void                 abandon();
 

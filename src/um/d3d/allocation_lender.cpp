@@ -18,7 +18,7 @@ void AllocationLender::bind(const D3DDDI_DEVICECALLBACKS *callbacks, HANDLE runt
     runtime_ = runtime;
 }
 
-Status AllocationLender::lend(D3DKMT_HANDLE allocation, uint64_t bytes, HostAllocation *&made) const
+Status AllocationLender::lend(uint32_t allocation, uint64_t bytes, HostAllocation *&made) const
 {
     AV_SCOPE("AllocationLender::lend");
     made = nullptr;

@@ -204,6 +204,15 @@ struct SignatureEntry {
 static_assert(sizeof(SignatureEntry) == 32, "SignatureEntry crosses as 32 bytes");
 static_assert(__is_trivially_copyable(SignatureEntry), "SignatureEntry is plain data");
 
+struct StreamOutDeclaration {
+    uint32_t stream;
+    uint32_t output_slot;
+    uint32_t register_index;
+    uint32_t mask;
+};
+static_assert(sizeof(StreamOutDeclaration) == 16, "StreamOutDeclaration crosses as 16 bytes");
+static_assert(__is_trivially_copyable(StreamOutDeclaration), "StreamOutDeclaration is plain data");
+
 struct InputElement {
     uint32_t input_slot;
     uint32_t aligned_byte_offset;
@@ -238,13 +247,11 @@ struct RasterizerDesc {
     float depth_bias_clamp;
     float slope_scaled_depth_bias;
     uint32_t depth_clip;
-    uint32_t multisample;
-    uint32_t antialiased_line;
+    uint32_t line_mode;
     uint32_t forced_sample_count;
     uint32_t conservative;
-    uint32_t reserved;
 };
-static_assert(sizeof(RasterizerDesc) == 48, "RasterizerDesc crosses as 48 bytes");
+static_assert(sizeof(RasterizerDesc) == 40, "RasterizerDesc crosses as 40 bytes");
 static_assert(__is_trivially_copyable(RasterizerDesc), "RasterizerDesc is plain data");
 
 struct StencilOp {
@@ -265,9 +272,20 @@ struct DepthStencilDesc {
     uint32_t stencil_write_mask;
     StencilOp front;
     StencilOp back;
+    uint32_t depth_bounds_enable;
+    uint32_t back_read_mask;
+    uint32_t back_write_mask;
+    uint32_t reserved;
 };
-static_assert(sizeof(DepthStencilDesc) == 56, "DepthStencilDesc crosses as 56 bytes");
+static_assert(sizeof(DepthStencilDesc) == 72, "DepthStencilDesc crosses as 72 bytes");
 static_assert(__is_trivially_copyable(DepthStencilDesc), "DepthStencilDesc is plain data");
+
+struct ViewInstanceLocation {
+    uint32_t viewport_index;
+    uint32_t render_target_index;
+};
+static_assert(sizeof(ViewInstanceLocation) == 8, "ViewInstanceLocation crosses as 8 bytes");
+static_assert(__is_trivially_copyable(ViewInstanceLocation), "ViewInstanceLocation is plain data");
 
 struct GraphicsState {
     uint32_t alpha_to_coverage;
@@ -284,9 +302,33 @@ struct GraphicsState {
     uint32_t sample_count;
     uint32_t sample_quality;
     uint32_t flags;
+    uint32_t view_instance_count;
+    uint32_t view_instancing_flags;
+    ViewInstanceLocation view_instances[4];
 };
-static_assert(sizeof(GraphicsState) == 496, "GraphicsState crosses as 496 bytes");
+static_assert(sizeof(GraphicsState) == 544, "GraphicsState crosses as 544 bytes");
 static_assert(__is_trivially_copyable(GraphicsState), "GraphicsState is plain data");
+
+struct LayoutBarrier {
+    uint32_t type;
+    uint32_t flags;
+    uint32_t sync_before;
+    uint32_t sync_after;
+    uint32_t access_before;
+    uint32_t access_after;
+    uint32_t layout_before;
+    uint32_t layout_after;
+    uint32_t resource;
+    uint32_t first_mip;
+    uint32_t mip_count;
+    uint32_t first_slice;
+    uint32_t slice_count;
+    uint32_t first_plane;
+    uint32_t plane_count;
+    uint32_t reserved;
+};
+static_assert(sizeof(LayoutBarrier) == 64, "LayoutBarrier crosses as 64 bytes");
+static_assert(__is_trivially_copyable(LayoutBarrier), "LayoutBarrier is plain data");
 
 struct Barrier {
     uint32_t type;
@@ -366,7 +408,75 @@ struct TileRange {
 static_assert(sizeof(TileRange) == 12, "TileRange crosses as 12 bytes");
 static_assert(__is_trivially_copyable(TileRange), "TileRange is plain data");
 
+struct StateSubobject {
+    uint32_t type;
+    uint32_t object;
+    uint32_t first;
+    uint32_t count;
+    uint32_t a;
+    uint32_t b;
+    uint32_t c;
+    uint32_t d;
+};
+static_assert(sizeof(StateSubobject) == 32, "StateSubobject crosses as 32 bytes");
+static_assert(__is_trivially_copyable(StateSubobject), "StateSubobject is plain data");
+
+struct StateExport {
+    uint32_t name;
+    uint32_t rename;
+    uint32_t flags;
+    uint32_t reserved;
+};
+static_assert(sizeof(StateExport) == 16, "StateExport crosses as 16 bytes");
+static_assert(__is_trivially_copyable(StateExport), "StateExport is plain data");
+
+struct StateAssociation {
+    uint32_t subobject;
+    uint32_t name;
+};
+static_assert(sizeof(StateAssociation) == 8, "StateAssociation crosses as 8 bytes");
+static_assert(__is_trivially_copyable(StateAssociation), "StateAssociation is plain data");
+
+struct RaytracingGeometry {
+    uint32_t type;
+    uint32_t flags;
+    uint32_t index_format;
+    uint32_t vertex_format;
+    uint32_t index_count;
+    uint32_t vertex_count;
+    uint64_t transform;
+    uint64_t index_buffer;
+    uint64_t start;
+    uint64_t stride;
+    uint64_t count;
+};
+static_assert(sizeof(RaytracingGeometry) == 64, "RaytracingGeometry crosses as 64 bytes");
+static_assert(__is_trivially_copyable(RaytracingGeometry), "RaytracingGeometry is plain data");
+
+struct RaytracingPostbuild {
+    uint64_t destination;
+    uint32_t type;
+    uint32_t reserved;
+};
+static_assert(sizeof(RaytracingPostbuild) == 16, "RaytracingPostbuild crosses as 16 bytes");
+static_assert(__is_trivially_copyable(RaytracingPostbuild), "RaytracingPostbuild is plain data");
+
+struct RayTable {
+    uint64_t start;
+    uint64_t size;
+    uint64_t stride;
+};
+static_assert(sizeof(RayTable) == 24, "RayTable crosses as 24 bytes");
+static_assert(__is_trivially_copyable(RayTable), "RayTable is plain data");
+
+struct ShaderIdentifier {
+    uint32_t value[8];
+};
+static_assert(sizeof(ShaderIdentifier) == 32, "ShaderIdentifier crosses as 32 bytes");
+static_assert(__is_trivially_copyable(ShaderIdentifier), "ShaderIdentifier is plain data");
+
 struct Caps12 {
+    uint32_t layout;
     uint32_t feature_level;
     uint32_t shader_model;
     uint32_t resource_binding_tier;
@@ -385,8 +495,35 @@ struct Caps12 {
     uint32_t wave_lane_max;
     uint32_t total_lanes;
     uint32_t output_merger_logic_op;
+    uint32_t min_precision;
+    uint32_t ps_stencil_ref;
+    uint32_t native_16bit_ops;
+    uint32_t atomic_int64_typed;
+    uint32_t atomic_int64_group_shared;
+    uint32_t barycentrics;
+    uint32_t vp_rt_array_without_gs;
+    uint32_t advanced_texture_ops;
+    uint32_t writeable_msaa_textures;
+    uint32_t sample_cmp_gradient_bias;
+    uint32_t extended_command_info;
+    uint32_t depth_bounds;
+    uint32_t view_instancing_tier;
+    uint32_t mesh_shader_tier;
+    uint32_t vrs_tier;
+    uint32_t vrs_additional_rates;
+    uint32_t vrs_tile_size;
+    uint32_t vrs_per_primitive_viewport;
+    uint32_t vrs_sum_combiner;
+    uint32_t enhanced_barriers;
+    uint32_t relaxed_format_casting;
+    uint32_t write_immediate_queues;
+    uint32_t copy_queue_timestamps;
+    uint32_t atomic_int64_heap;
+    uint32_t programmable_sample_positions_tier;
+    uint32_t render_pass_tier;
+    uint32_t raytracing_tier;
 };
-static_assert(sizeof(Caps12) == 84, "Caps12 crosses as 84 bytes");
+static_assert(sizeof(Caps12) == 196, "Caps12 crosses as 196 bytes");
 static_assert(__is_trivially_copyable(Caps12), "Caps12 is plain data");
 
 }  // namespace av::d3d12proto

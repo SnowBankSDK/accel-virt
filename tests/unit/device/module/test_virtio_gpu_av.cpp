@@ -27,6 +27,7 @@
 #include "harness/host/loopback_renderer_peer.hpp"
 #include "harness/host/mock_host.hpp"
 #include "harness/recording/recorded_file.hpp"
+#include "harness/host/main_loop_pump.hpp"
 #include "harness/host/mock_request.hpp"
 #include "harness/context/ring_blob_writer.hpp"
 #include "proto/context/capset_info.hpp"
@@ -154,10 +155,13 @@ TEST(virtio_gpu_av_realize, binds_once_and_contexts_follow)
   CHECK_EQ(device.contexts(), 2u);
   CHECK_STATUS(device.destroy_context(1u), Status::ok);
   CHECK_STATUS(device.destroy_context(1u), Status::not_found);
+  CHECK(host.wait_for_main_loop_work(1u, 5000u));
+  CHECK_EQ(host.run_main_loop(), 1u);
+  CHECK_EQ(device.contexts(), 1u);
   device.reset();
   CHECK(device.invariants_hold());
   CHECK_EQ(device.contexts(), 0u);
-  CHECK_EQ(host.live_threads(), 0u); }
+  CHECK_EQ(host.live_threads(), 1u); }
 
 TEST(virtio_gpu_av_realize, pci_identity_is_the_bound_gpus_and_nothing_before_realize)
 { MockHost host;
@@ -246,6 +250,7 @@ TEST(virtio_gpu_av_control, a_host_blob_is_the_librarys_memory_where_the_guest_m
   create.context(5u).u32(host_blob).u32(2u).u32(1u).u32(0u).u64(upload).u64(0x2000u);
   MockRequest made(create.bytes(), create.size());
   CHECK(device.control(&made, 0x010Cu));
+  CHECK(av::settle_device(host, device));
   CHECK_EQ(made.response_type(), 0x1100u);
   CHECK_EQ(executor.held_memory(), 1u);
   GpuRequestBuilder map(0x0208u);
@@ -263,6 +268,7 @@ TEST(virtio_gpu_av_control, a_host_blob_is_the_librarys_memory_where_the_guest_m
   }
   CHECK(device.invariants_hold());
   device.reset();
+  CHECK(av::settle_device(host, device));
   CHECK_EQ(host.live_placements(), 0u);
   CHECK_EQ(executor.held_memory(), 0u);
   CHECK_EQ(executor.memory_frees(), 1u);
@@ -277,7 +283,8 @@ TEST(virtio_gpu_av_report, an_unrealized_device_says_so_and_has_no_contexts)
   device.report(writer);
   CHECK(std::strcmp(writer.dump(), "device/0 realized=false\ndevice/0/host_blobs/0 live=0\n"
                                   "device/0/window_stats/0 attached=false stable=false\n"
-                                  "device/0/contexts/0 live=0") == 0); }
+                                  "device/0/contexts/0 live=0 reaping=0 refused_attaches=0\n"
+                                  "device/0/service/0 running=false outstanding=0 held=0") == 0); }
 
 TEST(virtio_gpu_av_control, an_unrealized_device_answers_nothing_and_offers_no_capset)
 { MockHost host;
@@ -337,6 +344,7 @@ TEST(virtio_gpu_av_control, a_reset_releases_every_shared_object_on_the_bound_gp
                Status::ok);
   CHECK_EQ(executor.shared_releases(), 0u);
   device.reset();
+  CHECK(av::settle_device(host, device));
   CHECK_EQ(executor.shared_releases(), 1u);
   CHECK(executor.last_shared_release() == 0u);
   CHECK_EQ(executor.domains_opened(), 1u);
@@ -438,15 +446,15 @@ TEST(virtio_gpu_av_control, answers_context_requests_and_reset_destroys_contexts
   CHECK(std::strncmp(writer.dump(), "device/3 realized=true gpu=0 capsets=1 blobs=2 scanouts=0 host_window_bytes=65536 contexts=1 driver_ok=true\n"
                                     "device/3/host_blobs/0 live=0\n"
                                     "device/3/window_stats/0 attached=false stable=false\n"
-                                    "device/3/contexts/0 live=1\n"
+                                    "device/3/contexts/0 live=1 reaping=0 refused_attaches=0\n"
                                     "device/3/contexts/0/context/7 name= bound=true sub_api=1 version=2.0 ring=1 "
-                                    "ring_order=12 fence=2 doorbell=0 reply=0 attached=",
+                                    "ring_order=12 fence=2 doorbell=0 reply=0 lane_of=0 attached=",
                      std::strlen("device/3 realized=true gpu=0 capsets=1 blobs=2 scanouts=0 host_window_bytes=65536 contexts=1 driver_ok=true\n"
                                  "device/3/host_blobs/0 live=0\n"
                                  "device/3/window_stats/0 attached=false stable=false\n"
-                                 "device/3/contexts/0 live=1\n"
+                                 "device/3/contexts/0 live=1 reaping=0 refused_attaches=0\n"
                                  "device/3/contexts/0/context/7 name= bound=true sub_api=1 version=2.0 ring=1 "
-                                 "ring_order=12 fence=2 doorbell=0 reply=0 attached=")) == 0);
+                                 "ring_order=12 fence=2 doorbell=0 reply=0 lane_of=0 attached=")) == 0);
   CHECK(std::strstr(writer.dump(), "\ndevice/3/contexts/0/context/7/worker/0 running=true ") != nullptr);
   device.reset();
   CHECK_EQ(device.contexts(), 0u);
@@ -577,7 +585,7 @@ TEST(virtio_gpu_av, lifecycle_is_main_loop_only)
                    &device, thread),
                Status::ok);
   host.join_thread(thread);
-  for (int violation = 0; violation < 20; violation++) CHECK(host.claim(HostViolation::main_loop_required));
+  for (int violation = 0; violation < 26; violation++) CHECK(host.claim(HostViolation::main_loop_required));
   CHECK_EQ(host.unclaimed_violations(), 0u);
   CHECK_EQ(host.logged(), 1u); }
 
@@ -711,7 +719,7 @@ TEST(virtio_gpu_av_realize, opens_the_recording_its_properties_asked_for)
   CHECK(device.invariants_hold()); }
 
 namespace {
-void bind_and_destroy(VirtioGpuAv &device, std::uint32_t context)
+void bind_and_destroy(MockHost &host, VirtioGpuAv &device, std::uint32_t context)
 {
     GpuRequestBuilder create(0x0200u);
     create.context(context).u32(0u).u32(0x72u).zeros(64u);
@@ -732,6 +740,8 @@ void bind_and_destroy(VirtioGpuAv &device, std::uint32_t context)
     MockRequest destroy_request(destroy.bytes(), destroy.size());
     CHECK(device.control(&destroy_request, 0x0201u));
     CHECK_EQ(destroy_request.response_type(), 0x1100u);
+    CHECK(host.wait_for_main_loop_work(1u, 5000u));
+    static_cast<void>(host.run_main_loop());
 }
 
 }
@@ -753,8 +763,8 @@ TEST(virtio_gpu_av_realize, record_wrap_decides_what_the_ceiling_does)
       CHECK_STATUS(device.realize("auto", false, &executor.table(), &options, nullptr, nullptr, 0u, 0u, message), Status::ok);
       device.status(DriverStatus::driver_ok);
       make_the_ring(host, device);
-      bind_and_destroy(device, 7u);
-      bind_and_destroy(device, 8u);
+      bind_and_destroy(host, device, 7u);
+      bind_and_destroy(host, device, 8u);
       av::RecordedFile file(host, "run.av");
       CHECK_EQ(file.header().wraps(), c.wraps);
       CHECK(host.recording_length("run.av") <= ceiling);
@@ -1128,7 +1138,7 @@ TEST(virtio_gpu_av_display_clock, the_frame_latched_at_a_blank_is_exported_and_s
   CHECK(!rig.device.post_frame(0u, 7u, 0x51u));
   CHECK(rig.device.invariants_hold()); }
 
-TEST(virtio_gpu_av_display_clock, a_latched_frame_is_exported_on_the_main_loop_when_no_thread_can_export_it)
+TEST(virtio_gpu_av_display_clock, a_latched_frame_is_never_exported_on_the_main_loop_even_when_no_thread_can_export_it)
 { ClockedDevice rig;
   CHECK_EQ(rig.register_page(0x401000u), 0x1100u);
   CHECK(rig.device.post_frame(0u, 5u, 0x51u));
@@ -1136,9 +1146,9 @@ TEST(virtio_gpu_av_display_clock, a_latched_frame_is_exported_on_the_main_loop_w
   rig.host.set_clock(1000u + 16666667u);
   CHECK(rig.host.wait_for_main_loop_work(1u, 2000u));
   CHECK_EQ(rig.host.run_main_loop(), 1u);
-  CHECK_EQ(rig.host.images_shown(0u), 1u);
+  CHECK_EQ(rig.host.images_shown(0u), 0u);
   rig.device.show_exported_images();
-  CHECK_EQ(rig.host.images_shown(0u), 1u);
+  CHECK_EQ(rig.host.images_shown(0u), 0u);
   CHECK(rig.device.invariants_hold()); }
 
 TEST(virtio_gpu_av_display_clock, a_host_with_no_lock_for_the_clock_is_not_realized)
@@ -1153,13 +1163,13 @@ TEST(virtio_gpu_av_display_clock, a_host_with_no_lock_for_the_clock_is_not_reali
       mutexes = host.live_mutexes();
   }
   VirtioGpuAv device(host);
-  host.fail_mutex_at(mutexes - 1u);
+  host.fail_mutex_at(mutexes - 2u);
   char       bytes[128];
   TextBuffer message(bytes, sizeof bytes);
   CHECK_STATUS(device.realize("auto", false, nullptr, nullptr, nullptr, nullptr, 0u, 0u, message), Status::no_memory);
   CHECK(std::strstr(message.text(), "display clock") != nullptr);
   VirtioGpuAv engineless(host);
-  host.fail_mutex_at(mutexes);
+  host.fail_mutex_at(mutexes - 1u);
   TextBuffer other(bytes, sizeof bytes);
   CHECK_STATUS(engineless.realize("auto", false, nullptr, nullptr, nullptr, nullptr, 0u, 0u, other), Status::no_memory);
   CHECK(std::strstr(other.text(), "present engine") != nullptr); }
@@ -1173,6 +1183,7 @@ TEST(virtio_gpu_av_present_engine, the_engine_is_offered_takes_presents_and_stop
   page.u64(0x402000u);
   MockRequest registered(page.bytes(), page.size());
   CHECK(rig.device.control(&registered, 0x02F6u));
+  CHECK(av::pump_main_loop(rig.host, [&registered] { return registered.answered(); }));
   CHECK_EQ(registered.response_type(), 0x1100u);
   std::uint32_t magic = 0u;
   std::memcpy(&magic, rig.host.guest_ram(0x402000u), sizeof magic);
@@ -1189,7 +1200,7 @@ TEST(virtio_gpu_av_present_engine, the_engine_is_offered_takes_presents_and_stop
   CHECK_EQ(completed, 1u);
   CHECK(rig.device.invariants_hold());
   rig.device.reset();
-  CHECK_EQ(rig.host.live_threads(), threads - 1u);
+  CHECK_EQ(rig.host.live_threads(), threads);
   MockRequest after(present.bytes(), present.size());
   CHECK(rig.device.control(&after, 0x02F7u));
   CHECK_EQ(after.response_type(), 0x1205u);
@@ -1232,6 +1243,8 @@ TEST(virtio_gpu_av_export, serves_the_bound_gpu_s_surfaces_and_revokes_them_at_a
   release.u64(0x51u);
   MockRequest release_request(release.bytes(), release.size());
   CHECK(device.control(&release_request, 0x02F1u));
+  CHECK(av::settle_device(host, device));
+  CHECK_EQ(release_request.response_type(), 0x1100u);
   CHECK_STATUS(consumer.receive(answer), Status::ok);
   CHECK(answer.operation() == av::ExportOperation::revoked);
   CHECK_EQ(answer.surface(), 0x51u);
@@ -1356,6 +1369,7 @@ TEST(virtio_gpu_av_invariants, a_host_blob_a_present_engine_or_an_export_connect
   av::VirtioGpuAvProbe::place_host_blob(blobs, av::HostBlobId::first);
   CHECK(!blobs.invariants_hold());
   blobs.reset();
+  CHECK(av::settle_device(host, blobs));
   VirtioGpuAv presents(host);
   av::VirtioGpuAvProbe::break_presents(presents, av::PresentEngine::depth);
   CHECK(!presents.invariants_hold());

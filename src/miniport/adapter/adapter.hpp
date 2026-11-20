@@ -334,6 +334,7 @@ private:
     void                 restore_scanouts();
     [[nodiscard]] Status power_down();
     [[nodiscard]] Status follow_commit(uint32_t source);
+    void                 retime_display(uint32_t source, const DisplayMode &mode);
     void                 follow_output_count(uint32_t outputs);
     void                 log_unlike_outputs();
     [[nodiscard]] Status follow_display_info();
@@ -343,6 +344,7 @@ private:
     void                 refresh_scanout(uint64_t now);
     void                 follow_display_change();
     void                 log_status(const char *step, int32_t status);
+    [[nodiscard]] Status unbind_av(void *context);
     void                 log_failure(const char *step, int32_t status);
     void                 log_refused_gdi_surface(const DxgkargGetStandardAllocationDriverDataRecord &request);
     void                 log_allocation(const DxgkargCreateAllocationRecord &request, int32_t status);

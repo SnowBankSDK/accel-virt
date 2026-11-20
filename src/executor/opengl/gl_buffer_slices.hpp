@@ -1,6 +1,7 @@
 #ifndef AV_GL_BUFFER_SLICES_HPP
 #define AV_GL_BUFFER_SLICES_HPP
 
+#include "executor/opengl/gl_upload_ring.hpp"
 #include "proto/generated/glmem/glmem_dispatch_server.h"
 #include "proto/generated/opengl/gl_real_dispatch.h"
 
@@ -22,6 +23,8 @@ public:
     GlBufferSlices &operator=(const GlBufferSlices &) = delete;
 
     void install();
+    void release();
+    void forget();
 
     bool knows(uint32_t command_id) const;
     [[nodiscard]] bool run(uint32_t command_id, WireReader &payload, WireWriter &reply, WireArena &arena);
@@ -30,6 +33,7 @@ public:
     bool on_PlaceBufferSlice(uint32_t buffer, uint64_t memory, uint64_t offset, uint64_t bytes,
                              uint32_t &placed) override;
     bool on_ForgetBufferSlice(uint32_t buffer) override;
+    bool on_WriteBufferSlice(uint32_t buffer, uint64_t offset, const uint8_t *data, uint64_t data_size) override;
 
     bool on_buffer_storage_mem(GLenum target, GLsizeiptr size, GLuint memory, GLuint64 offset);
     bool on_named_buffer_storage_mem(GLuint buffer, GLsizeiptr size, GLuint memory, GLuint64 offset);
@@ -60,6 +64,7 @@ private:
     GlErrorQueue    &errors_;
     DriverLog       &lines_;
     GlMemoryObjects &memories_;
+    GlUploadRing     ring_;
 };
 
 }

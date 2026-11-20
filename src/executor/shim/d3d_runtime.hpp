@@ -8,6 +8,7 @@ struct IDXGIAdapter1;
 struct ID3D11Device;
 struct ID3D11DeviceContext;
 struct AvVramGate;
+struct AvLifecycleGates;
 
 namespace av {
 
@@ -25,6 +26,7 @@ public:
     void               close();
 
     void give_vram_gate(const AvVramGate &gate) const;
+    uint32_t give_lifecycle_gates(const AvLifecycleGates &gates) const;
 
     IDXGIAdapter1 *adapter_for(const uint8_t *uuid) const;
     int32_t create_device11(IDXGIAdapter1 *adapter, ID3D11Device *&device, ID3D11DeviceContext *&context,
@@ -32,9 +34,14 @@ public:
     IDirect3D9 *create_d3d9() const;
     int32_t create_device12(const uint8_t *uuid, void *&device) const;
     int32_t open_dmabuf_heap(void *device, void *address, int fd, uint64_t size, void *&heap) const;
+    int32_t create_exported_heap(void *device, const void *desc, int &fd, void *&heap) const;
+    bool    exports_heaps() const;
     int32_t export_image(void *resource, Vkd3dImageExport &image) const;
     int32_t export_fence(void *fence, int &fd) const;
     void    abandon_waits(void *device) const;
+    uint32_t take_out_of_memory() const;
+    bool    translates_indirect_addresses() const;
+    void    set_indirect_va_table(void *list, uint64_t table) const;
     int32_t serialize_root_signature(const void *desc, void *&blob) const;
 
 private:
@@ -46,14 +53,20 @@ private:
     using Create9 = IDirect3D9 *(*)(uint32_t sdk_version);
     using OpenDmabufHeap = int32_t (*)(void *device, void *address, int fd, uint64_t size, const void *riid,
                                        void **heap);
+    using CreateExportedHeap = int32_t (*)(void *device, const void *desc, int *fd, const void *riid, void **heap);
     using SerializeRoot = int32_t (*)(const void *desc, void **blob, void **errors);
     using ExportImage = int32_t (*)(void *resource, Vkd3dImageExport *image);
     using ExportFence = int32_t (*)(void *fence, int *fd);
     using SetVramGate = void (*)(const AvVramGate *gate);
+    using SetLifecycleGates = void (*)(const AvLifecycleGates *gates);
+    using TakeOutOfMemory = uint32_t (*)();
     using AbandonWaits = void (*)(void *device);
+    using SetIndirectTable = int32_t (*)(void *list, uint64_t table);
 
     void *open_library(const char *name) const;
-    uint32_t vulkan_index(const uint8_t *uuid) const;
+    uint32_t vulkan_index(const uint8_t *uuid, uint32_t &count) const;
+    int32_t  create_device12_at(uint32_t index, void *&device) const;
+    bool     made_on(void *device, const uint8_t *uuid) const;
 
     void *dxgi_;
     void *d3d11_;
@@ -65,10 +78,14 @@ private:
     GetInterface12 get_interface12_;
     Create9        create9_;
     OpenDmabufHeap open_dmabuf_heap_;
+    CreateExportedHeap create_exported_heap_;
     SerializeRoot  serialize_root_;
     ExportImage    export_image_;
     ExportFence    export_fence_;
     AbandonWaits   abandon_waits_;
+    SetIndirectTable set_indirect_table_;
+    TakeOutOfMemory  take_memory11_;
+    TakeOutOfMemory  take_memory9_;
 };
 
 }

@@ -36,9 +36,9 @@ constexpr uint32_t copy_discard = 0x2u;
 D3d11Device::D3d11Device(d3d::D3dSession &session, BlockSource &memory, KeyedLog &log, const D3d11HostCaps &caps,
                          d3d::D3dCallTrace &trace, const d3d::SharedRowsRequest &rows)
     : session_(session), memory_(memory), shadows_(memory), maps_(memory), lines_(log), refused_(lines_), loss_(lines_), caps_(caps), runtime_{}, core_layer_{}, kernel_(), lender_(session), clock_(), allocations_(kernel_, lines_, clock_),
-      core_(nullptr), dxgi_(nullptr), channel_(), slices_(), parent_(nullptr), recording_lock_(), caller_(), call_mutex_(), calls_(call_mutex_, caller_), recording_(),
-      recorded_(), context_(nullptr), present_order_(), packets_(), feature_level_(0u),
-      guest_surfaces_(memory, Pool::paged), guest_lock_refused_(), pages_read_refused_(), pages_read_late_(), present_refused_(), present_flags_(~0u), follow_refused_(), token_refused_(), frame_(1u),
+      core_(nullptr), dxgi_(nullptr), channel_(), slices_(), parent_(nullptr), watermark_(), recording_lock_(), caller_(), call_mutex_(), calls_(call_mutex_, caller_), recording_(),
+      recorded_(), context_(nullptr), present_order_(), lane_(), feature_level_(0u),
+      guest_surfaces_(memory, Pool::paged), guest_lock_refused_(), pages_read_refused_(), pages_read_late_(), present_refused_(), present_flags_(~0u), follow_refused_(), token_refused_(), frame_(1u), geometry_binding_{}, geometry_passthrough_(false), geometry_sent_(0u), topology_(0u), query_short_noted_(false),
       trace_(trace), rows_(rows), context_number_(trace.number_context())
 {
     AV_SCOPE("D3d11Device::D3d11Device");
@@ -59,11 +59,17 @@ D3d11Device::~D3d11Device()
         static_cast<void>(channel_.object().flush());
         channel_.destroy();
     }
-    if (packets_.constructed()) packets_.destroy();
     if (present_order_.constructed()) present_order_.destroy();
+    if (lane_.constructed()) lane_.destroy();
     if (joined) session_.shared_memory().reclaim();
     if (joined) session_.leave();
     kernel_.destroy_context(context_);
+}
+
+const D3d11HostCaps &D3d11Device::caps() const
+{
+    AV_SCOPE("D3d11Device::caps");
+    return caps_;
 }
 
 HRESULT D3d11Device::initialize(uint32_t adapter, const D3D10DDIARG_CREATEDEVICE &create)
@@ -81,15 +87,16 @@ HRESULT D3d11Device::initialize(uint32_t adapter, const D3D10DDIARG_CREATEDEVICE
     feature_level_ = level < sizeof(feature_levels) / sizeof(feature_levels[0]) ? feature_levels[level] : 0u;
     const HRESULT joined = session_.join(adapter);
     if (FAILED(joined)) return joined;
-    static_cast<void>(present_order_.construct(kernel_.callbacks(), kernel_.runtime(), context_, session_.transport(), lines_));
-    static_cast<void>(packets_.construct(kernel_.callbacks(), kernel_.runtime(), session_.transport(), session_.lock(), lines_, context_));
+    static_cast<void>(lane_.construct(kernel_.callbacks(), kernel_.runtime(), context_, session_, lines_));
+    static_cast<void>(present_order_.construct(kernel_.callbacks(), kernel_.runtime(), context_, session_.transport(), lines_,
+                                               lane_.object()));
     static_cast<void>(channel_.construct(session_.stream(), session_.lock(), session_.next_id()));
     uint32_t hresult = 1u, made = 0u;
     if (!channel_.object().open(feature_level_, hresult, made) || hresult != 0u) {
         lines_.write("the host made no Direct3D 11 device");
         channel_.destroy();
-        packets_.destroy();
         present_order_.destroy();
+        lane_.destroy();
         const bool exhausted = session_.exhausted();
         session_.leave();
         return d3d::SessionRefusal(exhausted).for_d3d();
@@ -168,7 +175,7 @@ bool D3d11Device::staging_pending(ResourceRecord &resource)
 {
     AV_SCOPE("D3d11Device::staging_pending");
     if (resource.gpu_wrote == 0u) return false;
-    if (!session_.shared_memory().gpu_pending(resource.gpu_wrote)) {
+    if (watermark_.known_done(resource.write_order) || !session_.shared_memory().gpu_pending(resource.gpu_wrote)) {
         resource.gpu_wrote = 0u;
         return false;
     }
@@ -181,7 +188,9 @@ void D3d11Device::note_gpu_write(D3D10DDI_HRESOURCE handle)
     AV_SCOPE("D3d11Device::note_gpu_write");
     if (parent_ != nullptr) return;
     ResourceRecord &resource = record(handle);
-    if ((resource.cpu_access & D3D10_DDI_CPU_ACCESS_READ) != 0u) resource.gpu_wrote = session_.shared_memory().gpu_fence();
+    if ((resource.cpu_access & D3D10_DDI_CPU_ACCESS_READ) == 0u) return;
+    resource.gpu_wrote = session_.shared_memory().gpu_fence();
+    resource.write_order = watermark_.stamp_write();
 }
 
 HRESULT D3d11Device::initialize_deferred(D3d11Device &parent, const D3D11DDIARG_CREATEDEFERREDCONTEXT &create)
@@ -351,6 +360,25 @@ bool D3d11Device::upload_piece_of(uint32_t resource, uint32_t subresource, const
 bool D3d11Device::read_back(const ResourceRecord &resource, uint32_t subresource, uint8_t *out, size_t capacity)
 {
     AV_SCOPE("D3d11Device::read_back");
+    if (capacity <= TransferRoom::whole_read_most) return read_piece_of(resource, subresource, out, capacity);
+    for (size_t offset = 0u; offset < capacity;) {
+        const size_t piece = capacity - offset < TransferRoom::lent_bytes ? capacity - offset : TransferRoom::lent_bytes;
+        const uint64_t wanted[1] = {static_cast<uint64_t>(piece)};
+        if (!wire().make_room_for_blobs(wanted, 1u)) return false;
+        uint32_t hresult = 1u, row_pitch = 0u, depth_pitch = 0u;
+        uint64_t read = 0u;
+        if (!d3dproto::av_d3d_ReadSubresourceRange(wire(), resource.stamp.id(), subresource, offset, &hresult, &row_pitch,
+                                                    &depth_pitch, out + offset, piece, &read) ||
+            hresult != 0u || read != piece)
+            return false;
+        offset += piece;
+    }
+    return true;
+}
+
+bool D3d11Device::read_piece_of(const ResourceRecord &resource, uint32_t subresource, uint8_t *out, size_t capacity)
+{
+    AV_SCOPE("D3d11Device::read_piece_of");
     const uint64_t wanted_2[1] = {static_cast<uint64_t>(capacity)};
     if (!wire().make_room_for_blobs(wanted_2, 1u)) return false;
     uint32_t hresult = 1u, row_pitch = 0u, depth_pitch = 0u;
@@ -531,6 +559,7 @@ VOID D3d11Device::command_list_execute(D3D11DDI_HCOMMANDLIST handle)
         return;
     }
     const Status ran = wire().execute(list.commands, list.length);
+    forget_pipeline_mirrors();
     if (ran == Status::ok) return;
     LogLine(lines_)
         .text("a command list of ")
@@ -629,6 +658,7 @@ VOID D3d11Device::create_command_list(const D3D11DDIARG_CREATECOMMANDLIST *args,
         return;
     }
     D3d11Device   &context = d3d::DeviceBlock<D3d11Device>(args->hDeferredContext.pDrvPrivate).device();
+    context.forget_pipeline_mirrors();
     const size_t   bytes = context.wire().recorded_bytes();
     uint8_t *const commands = bytes == 0u ? nullptr : static_cast<uint8_t *>(memory_.allocate(bytes, Pool::paged));
     if (bytes != 0u && commands == nullptr) {
@@ -699,54 +729,6 @@ VOID D3d11Device::recycle_destroy_command_list(D3D11DDI_HCOMMANDLIST handle)
 {
     AV_SCOPE("D3d11Device::recycle_destroy_command_list");
     destroy_command_list(handle);
-}
-
-VOID D3d11Device::update_tile_mappings(D3D10DDI_HRESOURCE, UINT, const D3DWDDM1_3DDI_TILED_RESOURCE_COORDINATE *,
-                                       const D3DWDDM1_3DDI_TILE_REGION_SIZE *, D3D10DDI_HRESOURCE, UINT, const UINT *,
-                                       const UINT *, const UINT *, UINT)
-{
-    AV_SCOPE("D3d11Device::update_tile_mappings");
-    not_implemented("pfnUpdateTileMappings");
-}
-
-VOID D3d11Device::copy_tile_mappings(D3D10DDI_HRESOURCE, const D3DWDDM1_3DDI_TILED_RESOURCE_COORDINATE *,
-                                     D3D10DDI_HRESOURCE, const D3DWDDM1_3DDI_TILED_RESOURCE_COORDINATE *,
-                                     const D3DWDDM1_3DDI_TILE_REGION_SIZE *, UINT)
-{
-    AV_SCOPE("D3d11Device::copy_tile_mappings");
-    not_implemented("pfnCopyTileMappings");
-}
-
-VOID D3d11Device::copy_tiles(D3D10DDI_HRESOURCE, const D3DWDDM1_3DDI_TILED_RESOURCE_COORDINATE *,
-                             const D3DWDDM1_3DDI_TILE_REGION_SIZE *, D3D10DDI_HRESOURCE, UINT64, UINT)
-{
-    AV_SCOPE("D3d11Device::copy_tiles");
-    not_implemented("pfnCopyTiles");
-}
-
-VOID D3d11Device::update_tiles(D3D10DDI_HRESOURCE, const D3DWDDM1_3DDI_TILED_RESOURCE_COORDINATE *,
-                               const D3DWDDM1_3DDI_TILE_REGION_SIZE *, const void *, UINT)
-{
-    AV_SCOPE("D3d11Device::update_tiles");
-    not_implemented("pfnUpdateTiles");
-}
-
-VOID D3d11Device::tiled_resource_barrier(D3D11DDI_HANDLETYPE, void *, D3D11DDI_HANDLETYPE, void *)
-{
-    AV_SCOPE("D3d11Device::tiled_resource_barrier");
-}
-
-VOID D3d11Device::get_mip_packing(D3D10DDI_HRESOURCE, UINT *packed, UINT *tiles)
-{
-    AV_SCOPE("D3d11Device::get_mip_packing");
-    if (packed != nullptr) *packed = 0u;
-    if (tiles != nullptr) *tiles = 0u;
-}
-
-VOID D3d11Device::resize_tile_pool(D3D10DDI_HRESOURCE, UINT64)
-{
-    AV_SCOPE("D3d11Device::resize_tile_pool");
-    not_implemented("pfnResizeTilePool");
 }
 
 VOID D3d11Device::get_resource_layout(D3D10DDI_HRESOURCE handle, UINT count, D3DKMT_HANDLE *allocation,

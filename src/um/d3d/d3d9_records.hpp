@@ -8,6 +8,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+namespace av {
+class HostAllocation;
+}
+
 namespace av::d3d9 {
 
 struct D3d9Subresource {
@@ -46,7 +50,11 @@ struct D3d9Resource {
     HANDLE               allocation_resource;
     uint32_t             allocation_pitch;
     bool                 opened;
+    bool                 cross_adapter;
+    bool                 open_refused;
+    HostAllocation      *lent;
     uint64_t             shared_key;
+    uint64_t             leased;
     d3d::PresentCount    presents;
     uint32_t             named_point;
 };

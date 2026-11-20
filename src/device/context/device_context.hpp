@@ -26,6 +26,7 @@ class ExecutorLibrary;
 class ExecutorShares;
 class FenceInterrupts;
 class ContextSetup;
+class HostBlobErrand;
 class HostBlobOwners;
 class Host;
 class StateWriter;
@@ -43,11 +44,15 @@ public:
     DeviceContext &operator=(const DeviceContext &) = delete;
 
     [[nodiscard]] Status start();
+    void                 retire();
+    Worker              &worker();
     [[nodiscard]] Status post(const WorkItem &item);
     [[nodiscard]] Status  bind(const ContextSetup &setup, const CapsetInfo &capset);
     Status                refused(const char *step, Status status) const;
     const ContextBinding &binding() const;
+    [[nodiscard]] Status hand_placement(HostBlobErrand &errand);
     uint32_t             id() const;
+    uint32_t             lane_of() const;
     bool                 running() const;
     void                 report(StateWriter &writer);
 
@@ -56,6 +61,7 @@ private:
     DevicePulse          &pulse_;
     WireRecorder  &recorder_;
     uint32_t       id_;
+    uint32_t       lane_of_;
     ContextLabel   label_;
     ContextBinding binding_;
     FenceReporter   fences_;

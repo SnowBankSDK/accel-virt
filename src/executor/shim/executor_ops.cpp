@@ -2,16 +2,19 @@
 #include "core/trace/function_scope.hpp"
 #include "device/abi/av_executor.h"
 #include "executor/context_session.hpp"
+#include "executor/egl_entry_gate.hpp"
 #include "executor/executor_log.hpp"
 #include "executor/executor_root.hpp"
 #include "device/host/stdio_log.hpp"
 #include "device/shim/host_trace.hpp"
+#include "device/shim/implicit_layer_gate.hpp"
 #include "executor/shim/loader_host_apis.hpp"
 #include "executor/shim/reporter_state_source.hpp"
 #include "device/shim/state_socket.hpp"
 #include "proto/resources/surface_pair.hpp"
 #include "proto/resources/surface_point.hpp"
 
+#include <EGL/egl.h>
 #include <dlfcn.h>
 
 namespace {
@@ -35,6 +38,7 @@ public:
         AV_SCOPE("Library::root");
         if (!asked_) {
             asked_ = true;
+            av::ImplicitLayerGate().close_implicit_layers();
             (void)trace_.construct();
             (void)trace_.object().start("executor");
             (void)sink_.construct(stderr);
@@ -329,6 +333,39 @@ void channel_stats(void *, AvExecutor *executor, uint32_t context_id, const uint
     if (session != nullptr && body != nullptr) session->channel_stats(context_id, body, size);
 }
 
+uint32_t place_memory(void *, AvExecutor *executor, uint64_t size, uint32_t request, AvHostMemory *memory)
+{
+    AV_SCOPE("place_memory");
+    if (memory == nullptr) return 1u;
+    return library.root().place_memory(session_of(executor), size, request, *memory) == av::Status::ok ? 0u : 1u;
+}
+
+uint64_t extend_lease(void *, AvExecutor *executor, uint32_t kind, uint64_t bytes, uint64_t least)
+{
+    AV_SCOPE("extend_lease");
+    return library.root().extend_lease(session_of(executor), kind, bytes, least);
+}
+
+void return_lease(void *, AvExecutor *executor, uint32_t kind, uint64_t bytes)
+{
+    AV_SCOPE("return_lease");
+    library.root().return_lease(session_of(executor), kind, bytes);
+}
+
+void *leave_thread(void *)
+{
+    AV_SCOPE("leave_thread");
+    void *const kept = av::EglEntryGate::process().retire();
+    if (kept != nullptr) static_cast<void>(eglReleaseThread());
+    return kept;
+}
+
+void thread_joined(void *, void *left)
+{
+    AV_SCOPE("thread_joined");
+    av::EglEntryGate::process().joined(left);
+}
+
 const AvExecutorOps table = {AV_EXECUTOR_ABI_VERSION,
                               nullptr,
                               sub_apis,
@@ -363,7 +400,12 @@ const AvExecutorOps table = {AV_EXECUTOR_ABI_VERSION,
                               compose_planes,
                               lose_device,
                               answer_part,
-                              channel_stats};
+                              channel_stats,
+                              place_memory,
+                              extend_lease,
+                              return_lease,
+                              leave_thread,
+                              thread_joined};
 
 }
 

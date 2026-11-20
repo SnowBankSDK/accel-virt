@@ -68,9 +68,28 @@ void RingConsumer::attach()
     AV_SCOPE("RingConsumer::attach");
     host_.require_worker("RingConsumer::attach");
     attached_ = prepared_;
-    if (!attached_ || executor_.start() == Status::ok) return;
+    if (!attached_) return;
+    const Status started = executor_.start();
+    if (!fences_.attach_settled()) {
+        faulted_ = true;
+        executor_.stop();
+        return;
+    }
+    if (started == Status::ok) return;
     fault(FaultCode::no_executor, "the context's executor could not be created", 0u);
     fences_.signal();
+}
+
+void *RingConsumer::leave_thread() const
+{
+    AV_SCOPE("RingConsumer::leave_thread");
+    return executor_.leave_thread();
+}
+
+void RingConsumer::thread_joined(void *left) const
+{
+    AV_SCOPE("RingConsumer::thread_joined");
+    executor_.thread_joined(left);
 }
 
 void RingConsumer::abandon()
@@ -135,6 +154,12 @@ Status RingConsumer::consume_next()
         serving_ = false;
         note_work();
     });
+    if (batch.after() != 0u &&
+        !executor_.session_reached(batch.after(), host_.monotonic_nanoseconds() + watchdog_.limit())) {
+        if (!executor_.abandoned())
+            fault(FaultCode::batch_order, "the session never ran what a lane batch follows, at", batch.after());
+        return Status::invalid_state;
+    }
     if (ordering_ != nullptr) ordering_->wait_before(*this, batch.published_at());
     note_clock(batch.published_at());
     __atomic_store_n(&running_end_, head_ + batch.span(), __ATOMIC_RELEASE);
@@ -145,6 +170,7 @@ Status RingConsumer::consume_next()
         return ran;
     }
     __atomic_store_n(&head_, head_ + batch.span(), __ATOMIC_RELEASE);
+    executor_.consumed(head_);
     if (ordering_ != nullptr) ordering_->progressed();
     last_fence_ = batch.fence_id();
     batches_++;

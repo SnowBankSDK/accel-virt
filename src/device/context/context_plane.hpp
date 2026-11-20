@@ -15,6 +15,9 @@ class SurfacePoint;
 
 class CapsetInfo;
 class ContextSetup;
+class Errand;
+class HostBlobErrand;
+class ServiceThread;
 class StateWriter;
 
 class ContextPlane {
@@ -26,6 +29,8 @@ public:
     [[nodiscard]] virtual Status allocate_memory(uint32_t context, uint64_t key, uint64_t size, uint32_t request,
                                                  AvHostMemory &memory) = 0;
     virtual void                 free_memory(uint64_t key) = 0;
+    [[nodiscard]] virtual Status hand_memory(HostBlobErrand &errand, ServiceThread &service) = 0;
+    [[nodiscard]] virtual Status hand_off(Errand &errand, ServiceThread &service) = 0;
     [[nodiscard]] virtual Status alias_memory(uint64_t key, const ContextPlane &lender, uint64_t lender_key,
                                               AvHostMemory &memory) = 0;
     virtual uint32_t             memory_domain() const = 0;
@@ -36,8 +41,11 @@ public:
     virtual bool                 holds(uint32_t id) = 0;
     [[nodiscard]] virtual Status bind(uint32_t id, const ContextSetup &setup, const CapsetInfo &capset) = 0;
     virtual bool                 holds_doorbell(uint32_t index) = 0;
+    virtual bool                 retiring_pins(uint32_t resource) = 0;
+    virtual bool                 awaits_retiring_writer(uint32_t resource) = 0;
     virtual bool                 can_share(uint32_t asking, uint32_t share) = 0;
     virtual uint32_t             live() const = 0;
+    virtual uint32_t             reaping() const = 0;
 
     virtual void blob_created(uint32_t id) = 0;
     virtual void blob_released(uint32_t id) = 0;

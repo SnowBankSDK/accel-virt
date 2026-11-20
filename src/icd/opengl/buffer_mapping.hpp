@@ -19,6 +19,7 @@ public:
     enum : uint32_t {
         map_read = 0x0001u, map_write = 0x0002u, map_invalidate_range = 0x0004u, map_invalidate_buffer = 0x0008u,
         map_flush_explicit = 0x0010u, map_unsynchronized = 0x0020u, map_persistent = 0x0040u,
+        map_coherent = 0x0080u,
     };
     static constexpr uint64_t max_length = uint64_t{1} << 30u;
 
@@ -28,6 +29,7 @@ public:
     uint32_t buffer() const;
     uint32_t access() const;
     bool     persistent_writes() const;
+    bool     writes_readers_see() const;
     [[nodiscard]] Status mark(uint64_t offset, uint64_t length);
     void     take_marked(uint64_t &from, uint64_t &to);
 

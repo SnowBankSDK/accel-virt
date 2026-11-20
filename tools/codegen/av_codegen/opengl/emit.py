@@ -72,6 +72,8 @@ def _client_params(cmd: Command, defaults: bool = False) -> list[str]:
                 out.append(f"size_t {p.name}_bytes")
             out.append(f"bool {p.name}_is_offset" +
                        (" = false" if defaults else ""))
+        elif _wide_array(p):
+            out.append(f"const int64_t* {p.name}")
         else:
             out.append(f"{p.type.cpp()} {p.name}")
     return out
@@ -115,7 +117,16 @@ def _count_expr(p: Param) -> str:
     raise AssertionError(f"no count for {p.name}: {length.kind}")
 
 
+WIDE_POINTER_SIZED = ("GLintptr", "GLsizeiptr")
+
+
+def _wide_array(p: Param) -> bool:
+    return p.role is Role.ARRAY_IN and p.type.base in WIDE_POINTER_SIZED
+
+
 def _storage_type(p: Param) -> str:
+    if _wide_array(p):
+        return "int64_t"
     return "uint8_t" if p.type.base == "void" else p.type.base
 
 
@@ -632,6 +643,8 @@ VRAM_GUARDED = (
     "glRenderbufferStorage", "glRenderbufferStorageMultisample", "glNamedRenderbufferStorage",
     "glNamedRenderbufferStorageMultisample",
     "glDeleteRenderbuffers", "glDeleteBuffers", "glDeleteTextures",
+    "glTexParameteri", "glTexParameteriv", "glTextureParameteri", "glTextureParameteriv",
+    "glTexPageCommitmentARB", "glTexturePageCommitmentEXT",
 )
 
 TEXTURE_FOLLOWED = ("glCreateTextures", "glGenTextures", "glBindTexture", "glBindMultiTextureEXT", "glTextureImage1DEXT",
@@ -1394,6 +1407,11 @@ def _helper_elements(cmd: Command, p: Param, text: str) -> list[str]:
                 "    GLint av_program_length = 0;",
                 "    av_gl.glGetNamedProgramivEXT(program, target, 0x8627, &av_program_length);",
                 f"    const uint64_t {n}_elements = av_program_length > 0 ? static_cast<uint64_t>(av_program_length) : 0;"]
+    if "program_string_bytes(" in text:
+        return ["    if (av_gl.glGetProgramivARB == nullptr) return false;",
+                "    GLint av_program_length = 0;",
+                "    av_gl.glGetProgramivARB(target, 0x8627, &av_program_length);",
+                f"    const uint64_t {n}_elements = av_program_length > 0 ? static_cast<uint64_t>(av_program_length) : 0;"]
     if "map_point_values(" in text and cmd.name.startswith("glMap1"):
         return [f"    uint64_t {n}_elements = 0;",
                 f"    if (!map_points(target, order, stride, 1, 0, {n}_elements)) return false;"]
@@ -1569,6 +1587,58 @@ def _output_room(cmd: Command, p: Param) -> list[str]:
     return out
 
 
+FRAMEBUFFER_LABELS = {"glObjectLabel": ("identifier", "name"), "glGetObjectLabel": ("identifier", "name"),
+                      "glLabelObjectEXT": ("type", "object"), "glGetObjectLabelEXT": ("type", "object")}
+
+FRAMEBUFFER_BINDING_QUERIES = ("glGetIntegerv", "glGetInteger64v", "glGetFloatv", "glGetDoublev")
+
+GL_FRAMEBUFFER = "0x8D40u"
+FRAMEBUFFER_BINDINGS = ("0x8CA6u", "0x8CAAu")
+
+
+def _server_framebuffer_names(cmd: Command) -> list[str]:
+    out: list[str] = []
+    named = "av_gl.av_framebuffer_named != nullptr"
+    for name in _framebuffer_scalars(cmd):
+        if cmd.name.startswith("glBind"):
+            out.append(f"    if (av_gl.av_framebuffer_bound != nullptr && "
+                       f"!av_gl.av_framebuffer_bound(av_gl.av_framebuffer_user, &{name})) return av_refuse(0x0502u);")
+        elif cmd.name.startswith("glIs"):
+            out.append(f"    if ({named} && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &{name})) {{")
+            out.append("        av_reply.write_varint(0);")
+            out.append("        return true;")
+            out.append("    }")
+        else:
+            out.append(f"    if ({named} && !av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &{name})) "
+                       "return av_refuse(0x0502u);")
+    if cmd.name in FRAMEBUFFER_LABELS:
+        kind, name = FRAMEBUFFER_LABELS[cmd.name]
+        out.append(f"    if ({kind} == {GL_FRAMEBUFFER} && {named} && "
+                   f"!av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &{name})) return av_refuse(0x0501u);")
+    for p in cmd.params:
+        if p.object_class == "framebuffer" and p.role is Role.ARRAY_IN:
+            out.append("    if (av_gl.av_framebuffers_deleted != nullptr) {")
+            out.append(f"        av_gl.av_framebuffers_deleted(av_gl.av_framebuffer_user, {p.length.text}, {p.name});")
+            out.append("        return true;")
+            out.append("    }")
+    return out
+
+
+def _server_framebuffer_answers(cmd: Command) -> list[str]:
+    out: list[str] = []
+    for p in cmd.params:
+        if p.object_class == "framebuffer" and p.role is Role.ARRAY_OUT:
+            out.append(f"    if (av_gl.av_framebuffers_made != nullptr && {p.name} != nullptr) "
+                       f"av_gl.av_framebuffers_made(av_gl.av_framebuffer_user, {p.length.text}, {p.name});")
+    if cmd.name in FRAMEBUFFER_BINDING_QUERIES:
+        data = cmd.params[1]
+        asked = " || ".join(f"pname == {value}" for value in FRAMEBUFFER_BINDINGS)
+        out.append(f"    if (av_gl.av_framebuffer_guest != nullptr && {data.name} != nullptr && ({asked}))")
+        out.append(f"        {data.name}[0] = static_cast<{data.type.base}>(av_gl.av_framebuffer_guest("
+                   f"av_gl.av_framebuffer_user, static_cast<GLuint>({data.name}[0])));")
+    return out
+
+
 def emit_server(reg: Registry, out_dir: Path) -> None:
     h = [HEADER, "#pragma once\n",
          "#include <stddef.h>", "#include <stdint.h>\n",
@@ -1635,6 +1705,7 @@ def emit_server(reg: Registry, out_dir: Path) -> None:
              if p.role is Role.PIXELS_OUT and p.type.base != "void"
              else (f"({p.name}_packs ? {p.name}_packed : {p.name})" if p in packed else p.name))
             for p in cmd.params)
+        c.extend(_server_framebuffer_names(cmd))
         c.append(f"    if (av_gl.{cmd.name} == nullptr) return false;")
         if cmd.name in VRAM_GUARDED:
             scalars = ", ".join(
@@ -1666,6 +1737,7 @@ def emit_server(reg: Registry, out_dir: Path) -> None:
         if cmd.name in TEXTURE_FOLLOWED:
             after = f"av_gl.av_after_{cmd.name}"
             c.append(f"    if ({after} != nullptr) {after}(av_gl.av_texture_user, {call_args});")
+        c.extend(_server_framebuffer_answers(cmd))
         for p in packed:
             c.append(f"    if ({p.name}_packs) av_gl.av_unpack_blob(av_gl.av_blob_user);")
         if cmd.mints_handle:
@@ -1787,6 +1859,13 @@ def emit_real_dispatch(reg: Registry, out_dir: Path) -> None:
            "    void (*av_record_error)(void*, uint32_t) = nullptr;",
            "    void* av_error_user = nullptr;",
            "",
+           "    bool (*av_framebuffer_named)(void*, GLuint*) = nullptr;",
+           "    bool (*av_framebuffer_bound)(void*, GLuint*) = nullptr;",
+           "    GLuint (*av_framebuffer_guest)(void*, GLuint) = nullptr;",
+           "    void (*av_framebuffers_made)(void*, GLsizei, GLuint*) = nullptr;",
+           "    void (*av_framebuffers_deleted)(void*, GLsizei, const GLuint*) = nullptr;",
+           "    void* av_framebuffer_user = nullptr;",
+           "",
            "    // The vertex array objects a draw found reading only from",
            "    // buffers (arrays_verified). Mutable because dispatch is handed",
            "    // the table const: these are a cache of what the context would",
@@ -1869,19 +1948,21 @@ HANDWRITTEN = {
     "glFinish",
     "glBufferStorage",
     "glGetBufferPointerv", "glGetNamedBufferPointerv",
-    "glGetVertexAttribPointerv",
+    "glGetVertexAttribPointerv", "glGetVertexAttribPointervARB", "glGetProgramStringARB",
     "glDebugMessageCallback",
     "glPixelStorei", "glPixelStoref",
     "glBindBuffer", "glDeleteBuffers",
     "glGetUniformLocation", "glGetAttribLocation",
     "glLinkProgram", "glDeleteProgram",
     "glGenBuffers", "glGenVertexArrays", "glGenTextures",
-    "glFlush",
-    "glBindFramebuffer", "glDrawBuffer", "glReadBuffer", "glReadPixels", "glViewport",
+    "glFlush", "glEnable", "glDisable", "glDeleteTextures",
+    "glGetTextureHandleARB", "glGetTextureSamplerHandleARB", "glMakeTextureHandleResidentARB", "glMakeTextureHandleNonResidentARB", "glGetImageHandleARB", "glMakeImageHandleResidentARB", "glMakeImageHandleNonResidentARB", "glUniformHandleui64ARB", "glUniformHandleui64vARB", "glProgramUniformHandleui64ARB", "glProgramUniformHandleui64vARB", "glIsTextureHandleResidentARB", "glIsImageHandleResidentARB",
+    "glBindFramebuffer", "glIsFramebuffer", "glDrawBuffer", "glReadBuffer", "glReadPixels", "glViewport",
 
     "glVertexPointer", "glNormalPointer", "glColorPointer",
     "glSecondaryColorPointer", "glIndexPointer", "glEdgeFlagPointer",
-    "glFogCoordPointer", "glTexCoordPointer", "glVertexAttribPointer",
+    "glFogCoordPointer", "glTexCoordPointer", "glVertexAttribPointer", "glVertexAttribPointerARB",
+    "glEnableVertexAttribArrayARB", "glDisableVertexAttribArrayARB",
     "glInterleavedArrays",
     "glEnableClientState", "glDisableClientState",
     "glEnableVertexAttribArray", "glDisableVertexAttribArray",
@@ -1907,6 +1988,7 @@ BIND_SHADOW = {
 }
 
 ANSWERED_BY_GUEST_NAMES = {
+    "glGetUnsignedBytevEXT": "::av::glicd::answer_device_luid(pname, data)",
     "glGetBufferParameteriv": "::av::glicd::answer_buffer_map_state(target, pname, params)",
     "glGetBufferParameteri64v": "::av::glicd::answer_buffer_map_state(target, pname, params)",
     "glGetNamedBufferParameteriv": "::av::glicd::answer_named_buffer_map_state(buffer, pname, params)",
@@ -2098,6 +2180,9 @@ def _icd_forward_args(cmd: Command) -> list[str]:
             if _stated_size(cmd) is None:
                 args.append(f"av_{p.name}_bytes")
             args.append(f"av_{p.name}_offset")
+        elif _wide_array(p) and p.length is not None:
+            args.append(f"::av::glicd::wide_intptrs({p.name}, "
+                        f"static_cast<size_t>({p.length.text}), {1 if p.name == 'sizes' else 0}u)")
         else:
             args.append(p.name)
     return args
@@ -2130,19 +2215,60 @@ def _icd_pixel_bytes(cmd: Command, p: Param) -> str:
             f"{depth}, {packing})")
 
 
+def _framebuffer_scalars(cmd) -> list[str]:
+    return [p.name for p in cmd.params
+            if p.object_class == "framebuffer" and p.type.pointer_depth == 0]
+
+
 def _framebuffer_names(cmd) -> list[str]:
     if cmd.name == "glIsFramebuffer" or cmd.name == "glBindFramebuffer":
         return []
-    wanted = {"framebuffer", "srcFramebuffer", "dstFramebuffer",
-              "readFramebuffer", "drawFramebuffer"}
-    return [p.name for p in cmd.params
-            if p.name in wanted and p.type.pointer_depth == 0]
+    return _framebuffer_scalars(cmd)
 
 
-def _reads_buffers(cmd) -> bool:
-    name = cmd.name
-    return (name.startswith("glDraw") or name.startswith("glMultiDraw") or
-            name.startswith("glDispatchCompute"))
+STAGE_ARRAYS = {"glDrawArraysInstancedBaseInstance"}
+
+STAGE_ELEMENTS = {
+    "glDrawElementsBaseVertex": "basevertex",
+    "glDrawElementsInstancedBaseVertex": "basevertex",
+    "glDrawElementsInstancedBaseInstance": "0",
+    "glDrawElementsInstancedBaseVertexBaseInstance": "basevertex",
+    "glDrawRangeElementsBaseVertex": "basevertex",
+}
+
+STAGE_MULTI_ARRAYS = {"glMultiDrawArrays"}
+
+STAGE_MULTI_ELEMENTS = {
+    "glMultiDrawElements": "nullptr",
+    "glMultiDrawElementsBaseVertex": "basevertex",
+}
+
+REFUSE_CLIENT_ARRAYS = {
+    "glDrawArraysIndirect", "glDrawElementsIndirect", "glMultiDrawArraysIndirect",
+    "glMultiDrawArraysIndirectCount", "glMultiDrawElementsIndirect",
+    "glMultiDrawElementsIndirectCount", "glDrawTransformFeedback",
+    "glDrawTransformFeedbackInstanced", "glDrawTransformFeedbackStream",
+    "glDrawTransformFeedbackStreamInstanced",
+}
+
+
+def _client_array_staging(name: str) -> tuple[list[str], list[str], str]:
+    if name in STAGE_ARRAYS:
+        return (["    if (!::av::glicd::stage_client_arrays(first, count)) return;"], [], "")
+    if name in STAGE_ELEMENTS:
+        return ([f"    if (!::av::glicd::stage_client_elements(type, count, indices, {STAGE_ELEMENTS[name]})) return;"],
+                [], "")
+    if name in STAGE_MULTI_ARRAYS:
+        return (["    if (!::av::glicd::stage_client_multi_arrays(first, count, drawcount)) return;"], [], "")
+    if name in STAGE_MULTI_ELEMENTS:
+        return (["    const uint64_t* staged_offsets = nullptr;",
+                 f"    if (!::av::glicd::stage_client_multi_elements(count, type, indices, drawcount, "
+                 f"{STAGE_MULTI_ELEMENTS[name]}, staged_offsets)) return;"], [], "staged")
+    if name in REFUSE_CLIENT_ARRAYS:
+        return (["    if (::av::glicd::refuse_client_arrays()) return;"], [], "")
+    if name == "glBegin":
+        return (["    ::av::glicd::begin_client_primitives();"], [], "")
+    return ([], [], "")
 
 
 class GenerationError(Exception):
@@ -2197,6 +2323,20 @@ def emit_icd(reg: Registry, out_dir: Path, proc_table: list[str]) -> None:
            "namespace av::glicd::generated {", ""]
     forwarded: list[str] = []
     handwritten: list[str] = []
+    for name in sorted(reg.reads_window):
+        cmd = reg.commands.get(name)
+        if cmd is None or _icd_is_handwritten(cmd) or _ret_kind(cmd) != "void":
+            raise GenerationError(f"reads_window: {name} is not a generated void entry point")
+    for name in sorted(reg.reads_buffers):
+        cmd = reg.commands.get(name)
+        if cmd is None or _icd_is_handwritten(cmd):
+            raise GenerationError(f"reads_buffers: {name} is not a generated entry point")
+    for name in sorted(reg.orders_mappings):
+        cmd = reg.commands.get(name)
+        if cmd is None or _icd_is_handwritten(cmd):
+            raise GenerationError(f"orders_mappings: {name} is not a generated entry point")
+        if name in reg.reads_buffers:
+            raise GenerationError(f"orders_mappings: {name} is listed as a buffer reader too")
     for cmd in reg.commands.values():
         if cmd.api != "gl":
             continue
@@ -2222,22 +2362,36 @@ def emit_icd(reg: Registry, out_dir: Path, proc_table: list[str]) -> None:
             out.append(f"    if (::av::glicd::{SLICED_PBO_REFUSED[cmd.name]}()) return;")
         if cmd.name in SLICED_BUFFER_ANSWERS:
             out.append(f"    if (::av::glicd::{SLICED_BUFFER_ANSWERS[cmd.name]}) return;")
-        if _reads_buffers(cmd):
+        if cmd.name in reg.reads_buffers:
             out.append("    ::av::glicd::flush_persistent_mappings();")
+        if cmd.name in reg.orders_mappings:
+            out.append("    ::av::glicd::order_persistent_mappings();")
         if cmd.name in BIND_SHADOW_FORGETS:
             out.append("    ::av::glicd::forget_bindings();")
         kind = _ret_kind(cmd)
         prologue = _icd_prologue(cmd)
+        staging, _, staged_offsets = _client_array_staging(cmd.name)
+        if staged_offsets:
+            args = args.replace("::av::glicd::offsets_of(indices, static_cast<size_t>(drawcount))",
+                                "(staged_offsets != nullptr ? staged_offsets : "
+                                "::av::glicd::offsets_of(indices, static_cast<size_t>(drawcount)))")
         if kind == "void":
             out.append("    if (av_t == nullptr) return;")
+            out += staging
             if cmd.name in BIND_SHADOW:
                 out.append(f"    if ({BIND_SHADOW[cmd.name]}) return;")
             if cmd.name in ANSWERED_BY_GUEST_NAMES:
                 out.append(f"    if ({ANSWERED_BY_GUEST_NAMES[cmd.name]}) return;")
             out += prologue
             out += _icd_buffer_writes(cmd)
+            if cmd.name in reg.reads_window:
+                out.append("    const bool av_resolved = ::av::glicd::resolve_window_read();")
             out.append(f"    ::av::glproto::av_{cmd.name}({args});")
+            if cmd.name in STAGE_ELEMENTS or cmd.name in STAGE_MULTI_ELEMENTS:
+                out.append("    ::av::glicd::finish_client_draw();")
             out += _icd_epilogue(cmd)
+            if cmd.name in reg.reads_window:
+                out.append("    if (av_resolved) ::av::glicd::window_read_done();")
         elif kind == "sync":
             out.append("    if (av_t == nullptr) return nullptr;")
             out += prologue

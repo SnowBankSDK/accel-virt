@@ -1,5 +1,8 @@
 #include "executor/opencl/opencl_backend.hpp"
 
+#include "executor/opencl/cl_buffer_bounds.hpp"
+#include "executor/opencl/cl_sampler_arguments.hpp"
+
 #include "executor/opencl/cl_image_bytes.hpp"
 #include "executor/teardown_budget.hpp"
 #include "executor/byte_ledger.hpp"
@@ -15,6 +18,7 @@
 #include <CL/cl_gl.h>
 
 #include "executor/shim/gl_context.hpp"
+#include "executor/host_lifecycle_gate.hpp"
 #include "executor/shim/gl_display.hpp"
 #include "executor/shim/gl_host_import.hpp"
 #include "executor/shim/gl_shared_buffer.hpp"
@@ -80,7 +84,7 @@ OpenClBackend::OpenClBackend(DriverLog &lines) : OpenClBackend(heap_, lines)
 }
 
 OpenClBackend::OpenClBackend(BlockSource &blocks, DriverLog &lines)
-    : clproto::RealDispatch(guest_), heap_(), blocks_(blocks), bound_(nullptr), envelope_(), arguments_(), binaries_(), il_(), argument_kinds_(),
+    : clproto::RealDispatch(guest_), heap_(), blocks_(blocks), bound_(nullptr), lifecycle_(nullptr), envelope_(), arguments_(), binaries_(), il_(), argument_kinds_(),
       vehicle_(), import_(), buffers_(), renderbuffer_textures_(), object_bytes_(),
       direct_(blocks, vehicle_, renderbuffer_textures_), copied_(blocks, object_bytes_, renderbuffer_textures_),
       gl_(nullptr), reaches_gl_(false), imports_(false), context_(nullptr), queue_(nullptr), handles_(blocks),
@@ -108,6 +112,7 @@ bool OpenClBackend::initialize(const OpenClDevice *device, const GlDisplay *disp
     AV_SCOPE("OpenClBackend::initialize");
     imported_ = &imports;
     bound_ = device;
+    lifecycle_ = display != nullptr ? display->lifecycle() : nullptr;
     if (bound_ == nullptr) return false;
     static_cast<void>(envelope_.identify(static_cast<cl_platform_id>(bound_->platform()),
                                          static_cast<cl_device_id>(bound_->device())));
@@ -158,12 +163,17 @@ cl_int OpenClBackend::capped_device_info(cl_device_id device, cl_device_info par
 {
     AV_SCOPE("OpenClBackend::capped_device_info");
     if (param_name == CL_DEVICE_GLOBAL_FREE_MEMORY_AMD) {
-        const cl_int asked = RealDispatch::on_clGetDeviceInfo(device, param_name, param_value_size, param_value,
-                                                              param_value_size_ret);
-        if (asked != CL_SUCCESS || param_value == nullptr || param_value_size < sizeof(size_t)) return asked;
+        if (!device_memory_.bound())
+            return RealDispatch::on_clGetDeviceInfo(device, param_name, param_value_size, param_value,
+                                                    param_value_size_ret);
+        constexpr size_t entries = 2u;
+        if (param_value_size_ret != nullptr) *param_value_size_ret = entries * sizeof(size_t);
+        if (param_value == nullptr) return CL_SUCCESS;
+        if (param_value_size < sizeof(size_t)) return CL_INVALID_VALUE;
         size_t *const kilobytes = static_cast<size_t *>(param_value);
-        const uint64_t free_kib = device_memory_.free_bytes() / 1024u;
-        if (free_kib < kilobytes[0]) kilobytes[0] = static_cast<size_t>(free_kib);
+        const size_t  free_kib = static_cast<size_t>(device_memory_.free_bytes() / 1024u);
+        kilobytes[0] = free_kib;
+        if (param_value_size >= entries * sizeof(size_t)) kilobytes[1] = free_kib;
         return CL_SUCCESS;
     }
     cl_ulong     host_value = 0u;
@@ -172,8 +182,8 @@ cl_int OpenClBackend::capped_device_info(cl_device_id device, cl_device_info par
     if (param_value_size_ret != nullptr) *param_value_size_ret = sizeof host_value;
     if (param_value == nullptr) return CL_SUCCESS;
     if (param_value_size < sizeof host_value) return CL_INVALID_VALUE;
-    const cl_ulong cap = device_memory_.cap();
-    *static_cast<cl_ulong *>(param_value) = host_value < cap ? host_value : cap;
+    const cl_ulong advertised = device_memory_.advertised();
+    *static_cast<cl_ulong *>(param_value) = host_value < advertised ? host_value : advertised;
     return CL_SUCCESS;
 }
 
@@ -350,9 +360,11 @@ bool OpenClBackend::shares_with_gl(const GlDisplay &display) const
         CL_GL_CONTEXT_KHR,   reinterpret_cast<cl_context_properties>(vehicle_.handle()),
         CL_EGL_DISPLAY_KHR,  reinterpret_cast<cl_context_properties>(display.handle()),
         0};
-    cl_device_id const one = static_cast<cl_device_id>(bound_->device());
-    cl_int             made = CL_SUCCESS;
-    cl_context const   asked = ::clCreateContext(named, 1u, &one, nullptr, nullptr, &made);
+    cl_device_id const      one = static_cast<cl_device_id>(bound_->device());
+    cl_int                  made = CL_SUCCESS;
+    const HostLifecycleHold hold(lifecycle_);
+    if (!hold.held()) return false;
+    cl_context const asked = ::clCreateContext(named, 1u, &one, nullptr, nullptr, &made);
     if (asked == nullptr) { AV_UNTESTABLE("no host beside a test here refuses a GL-sharing context; OpenClBackendProbe takes the copy path on one that shares"); return false; }
     static_cast<void>(::clReleaseContext(asked));
     return true;
@@ -373,8 +385,21 @@ cl_context OpenClBackend::on_clCreateContext(const cl_context_properties *proper
                                              const cl_device_id *devices, cl_int *errcode_ret)
 {
     AV_SCOPE("OpenClBackend::on_clCreateContext");
+    const HostLifecycleHold hold(lifecycle_);
+    if (!hold.held()) {
+        if (errcode_ret != nullptr) *errcode_ret = CL_OUT_OF_RESOURCES;
+        return nullptr;
+    }
     if (gl_ == nullptr) return RealDispatch::on_clCreateContext(properties, num_devices, devices, errcode_ret);
     return gl_->make_context(properties, num_devices, devices, errcode_ret);
+}
+
+cl_int OpenClBackend::on_clReleaseContext(cl_context context)
+{
+    AV_SCOPE("OpenClBackend::on_clReleaseContext");
+    const HostLifecycleHold hold(lifecycle_);
+    if (!hold.held()) return CL_OUT_OF_RESOURCES;
+    return RealDispatch::on_clReleaseContext(context);
 }
 
 bool OpenClBackend::knows(uint32_t command_id) const
@@ -617,8 +642,11 @@ cl_context OpenClBackend::on_clCreateContextFromType(const cl_context_properties
     AV_SCOPE("OpenClBackend::on_clCreateContextFromType");
     const cl_int refused = bound_ == nullptr ? CL_INVALID_PLATFORM : answers_type(device_type);
     if (refused == CL_SUCCESS) {
-        const cl_device_id device = static_cast<cl_device_id>(bound_->device());
-        return RealDispatch::on_clCreateContext(properties, 1u, &device, errcode_ret);
+        const cl_device_id      device = static_cast<cl_device_id>(bound_->device());
+        const HostLifecycleHold hold(lifecycle_);
+        if (hold.held()) return RealDispatch::on_clCreateContext(properties, 1u, &device, errcode_ret);
+        if (errcode_ret != nullptr) *errcode_ret = CL_OUT_OF_RESOURCES;
+        return nullptr;
     }
     if (errcode_ret != nullptr) *errcode_ret = refused;
     return nullptr;
@@ -630,6 +658,13 @@ cl_int OpenClBackend::answers_type(cl_device_type device_type) const
     if (device_type == 0u || (device_type != CL_DEVICE_TYPE_ALL && (device_type & ~defined_types) != 0u))
         return CL_INVALID_DEVICE_TYPE;
     return (device_type & (CL_DEVICE_TYPE_GPU | CL_DEVICE_TYPE_DEFAULT)) != 0u ? CL_SUCCESS : CL_DEVICE_NOT_FOUND;
+}
+
+void OpenClBackend::leave_device()
+{
+    AV_SCOPE("OpenClBackend::leave_device");
+    heap_.bind(nullptr, UINT64_MAX);
+    binaries_.bind(nullptr);
 }
 
 void OpenClBackend::let_go_of_thread()
@@ -647,6 +682,11 @@ void OpenClBackend::use_host_ram(ByteLedger *ledger, uint64_t limit)
     read_ahead_.use_host_ram(ledger);
     bounced_.use_host_ram(ledger);
     copied_.use_host_ram(ledger);
+}
+
+void OpenClBackend::lease_from(SessionLease *)
+{
+    AV_SCOPE("OpenClBackend::lease_from");
 }
 
 void OpenClBackend::shut_down()
@@ -771,6 +811,7 @@ void OpenClBackend::stop_pacing()
     marker_ = nullptr;
     paced_queue_ = nullptr;
     pacer_ = KernelPacer();
+    transfers_.stop();
 }
 
 uint64_t OpenClBackend::ran() const
@@ -987,7 +1028,7 @@ void *OpenClBackend::on_clEnqueueMapBuffer(cl_command_queue command_queue, cl_me
         ::clEnqueueMapBuffer(command_queue, buffer, blocking_map, map_flags, offset, size,
                              num_events_in_wait_list, event_wait_list, event, errcode_ret);
     if (mapped == nullptr) return nullptr;
-    if (mapped_.remember(mapped, static_cast<uint64_t>(size),
+    if (mapped_.share(mapped, static_cast<uint64_t>(size),
                          static_cast<uint64_t>(reinterpret_cast<uintptr_t>(buffer))) != Status::ok) { AV_UNTESTABLE("room was made above, and no host maps no bytes or past the end of the address space");
         static_cast<void>(::clEnqueueUnmapMemObject(command_queue, buffer, mapped, 0u, nullptr,
                                                     nullptr));
@@ -1014,6 +1055,7 @@ cl_int OpenClBackend::on_clEnqueueReadBuffer(cl_command_queue command_queue, cl_
 {
     AV_SCOPE("OpenClBackend::on_clEnqueueReadBuffer");
     static_cast<void>(blocking_read);
+    if (ptr == nullptr || !ClBufferBounds::range_inside(buffer, offset, size)) return CL_INVALID_VALUE;
     cl_int served = CL_SUCCESS;
     if (num_events_in_wait_list == 0u && event == nullptr && !guest_.holds(ptr) &&
         read_ahead_.read(command_queue, buffer, offset, size, ptr, served))
@@ -1041,6 +1083,8 @@ cl_int OpenClBackend::on_clEnqueueReadBufferRect(
 {
     AV_SCOPE("OpenClBackend::on_clEnqueueReadBufferRect");
     static_cast<void>(blocking_read);
+    if (!ClBufferBounds::rect_inside(buffer, buffer_origin, region, buffer_row_pitch, buffer_slice_pitch))
+        return CL_INVALID_VALUE;
     const bool into_arena = guest_.holds(ptr);
     if (!into_arena || !bounced_.bounces()) {
         const cl_int direct = RealDispatch::on_clEnqueueReadBufferRect(
@@ -1060,7 +1104,20 @@ cl_int OpenClBackend::on_clEnqueueWriteBuffer(cl_command_queue command_queue, cl
                                               const cl_event *event_wait_list, cl_event *event)
 {
     AV_SCOPE("OpenClBackend::on_clEnqueueWriteBuffer");
-    static_cast<void>(blocking_write);
+    if (ptr == nullptr || !ClBufferBounds::range_inside(buffer, offset, size)) return CL_INVALID_VALUE;
+    if (blocking_write != CL_TRUE && num_events_in_wait_list != 0u) {
+        cl_context context = nullptr;
+        if (::clGetCommandQueueInfo(command_queue, CL_QUEUE_CONTEXT, sizeof context, &context, nullptr) != CL_SUCCESS)
+            return CL_INVALID_COMMAND_QUEUE;
+        cl_int       made = CL_SUCCESS;
+        cl_mem const staged =
+            ::clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, size, const_cast<void *>(ptr), &made);
+        if (staged == nullptr) return made != CL_SUCCESS ? made : CL_OUT_OF_HOST_MEMORY;
+        const cl_int copied = ::clEnqueueCopyBuffer(command_queue, staged, buffer, 0u, offset, size,
+                                                  num_events_in_wait_list, event_wait_list, event);
+        ::clReleaseMemObject(staged);
+        return copied;
+    }
     return RealDispatch::on_clEnqueueWriteBuffer(command_queue, buffer, CL_TRUE, offset, size, ptr,
                                                  num_events_in_wait_list, event_wait_list, event);
 }
@@ -1087,10 +1144,84 @@ cl_int OpenClBackend::on_clEnqueueWriteBufferRect(
 {
     AV_SCOPE("OpenClBackend::on_clEnqueueWriteBufferRect");
     static_cast<void>(blocking_write);
+    if (!ClBufferBounds::rect_inside(buffer, buffer_origin, region, buffer_row_pitch, buffer_slice_pitch))
+        return CL_INVALID_VALUE;
     return RealDispatch::on_clEnqueueWriteBufferRect(
         command_queue, buffer, CL_TRUE, buffer_origin, host_origin, region, buffer_row_pitch,
         buffer_slice_pitch, host_row_pitch, host_slice_pitch, ptr, num_events_in_wait_list,
         event_wait_list, event);
+}
+
+cl_int OpenClBackend::on_clEnqueueCopyBuffer(cl_command_queue command_queue, cl_mem src_buffer, cl_mem dst_buffer,
+                                              size_t src_offset, size_t dst_offset, size_t size,
+                                              cl_uint num_events_in_wait_list, const cl_event *event_wait_list,
+                                              cl_event *event)
+{
+    AV_SCOPE("OpenClBackend::on_clEnqueueCopyBuffer");
+    if (!ClBufferBounds::range_inside(src_buffer, src_offset, size) ||
+        !ClBufferBounds::range_inside(dst_buffer, dst_offset, size))
+        return CL_INVALID_VALUE;
+    const cl_int enqueued = RealDispatch::on_clEnqueueCopyBuffer(command_queue, src_buffer, dst_buffer, src_offset,
+                                                                  dst_offset, size, num_events_in_wait_list,
+                                                                  event_wait_list, event);
+    if (enqueued == CL_SUCCESS) transfers_.transferred(command_queue, size);
+    return enqueued;
+}
+
+cl_int OpenClBackend::on_clEnqueueCopyBufferRect(cl_command_queue command_queue, cl_mem src_buffer, cl_mem dst_buffer,
+                                                 const size_t *src_origin, const size_t *dst_origin,
+                                                 const size_t *region, size_t src_row_pitch, size_t src_slice_pitch,
+                                                 size_t dst_row_pitch, size_t dst_slice_pitch,
+                                                 cl_uint num_events_in_wait_list, const cl_event *event_wait_list,
+                                                 cl_event *event)
+{
+    AV_SCOPE("OpenClBackend::on_clEnqueueCopyBufferRect");
+    if (!ClBufferBounds::rect_inside(src_buffer, src_origin, region, src_row_pitch, src_slice_pitch) ||
+        !ClBufferBounds::rect_inside(dst_buffer, dst_origin, region, dst_row_pitch, dst_slice_pitch))
+        return CL_INVALID_VALUE;
+    const cl_int enqueued = RealDispatch::on_clEnqueueCopyBufferRect(
+        command_queue, src_buffer, dst_buffer, src_origin, dst_origin, region, src_row_pitch, src_slice_pitch,
+        dst_row_pitch, dst_slice_pitch, num_events_in_wait_list, event_wait_list, event);
+    if (enqueued == CL_SUCCESS) transfers_.transferred(command_queue, region[0] * region[1] * region[2]);
+    return enqueued;
+}
+
+cl_int OpenClBackend::on_clEnqueueFillBuffer(cl_command_queue command_queue, cl_mem buffer, const void *pattern,
+                                             size_t pattern_size, size_t offset, size_t size,
+                                             cl_uint num_events_in_wait_list, const cl_event *event_wait_list,
+                                             cl_event *event)
+{
+    AV_SCOPE("OpenClBackend::on_clEnqueueFillBuffer");
+    if (pattern == nullptr || !ClBufferBounds::range_inside(buffer, offset, size)) return CL_INVALID_VALUE;
+    const cl_int enqueued = RealDispatch::on_clEnqueueFillBuffer(command_queue, buffer, pattern, pattern_size, offset,
+                                                                  size, num_events_in_wait_list, event_wait_list,
+                                                                  event);
+    if (enqueued == CL_SUCCESS) transfers_.transferred(command_queue, size);
+    return enqueued;
+}
+
+cl_sampler OpenClBackend::on_clCreateSamplerWithProperties(cl_context context,
+                                                           const cl_sampler_properties *sampler_properties,
+                                                           cl_int *errcode_ret)
+{
+    AV_SCOPE("OpenClBackend::on_clCreateSamplerWithProperties");
+    if (context == nullptr || !ClSamplerArguments::properties_valid(sampler_properties)) {
+        if (errcode_ret != nullptr) *errcode_ret = context == nullptr ? CL_INVALID_CONTEXT : CL_INVALID_VALUE;
+        return nullptr;
+    }
+    return RealDispatch::on_clCreateSamplerWithProperties(context, sampler_properties, errcode_ret);
+}
+
+cl_sampler OpenClBackend::on_clCreateSampler(cl_context context, cl_bool normalized_coords,
+                                             cl_addressing_mode addressing_mode, cl_filter_mode filter_mode,
+                                             cl_int *errcode_ret)
+{
+    AV_SCOPE("OpenClBackend::on_clCreateSampler");
+    if (context == nullptr || !ClSamplerArguments::modes_valid(normalized_coords, addressing_mode, filter_mode)) {
+        if (errcode_ret != nullptr) *errcode_ret = context == nullptr ? CL_INVALID_CONTEXT : CL_INVALID_VALUE;
+        return nullptr;
+    }
+    return RealDispatch::on_clCreateSampler(context, normalized_coords, addressing_mode, filter_mode, errcode_ret);
 }
 
 cl_mem OpenClBackend::on_clCreateFromGLBuffer(cl_context context, cl_mem_flags flags, cl_GLuint bufobj,

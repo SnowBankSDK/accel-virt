@@ -1,6 +1,7 @@
 #include "device/abi/entry_points.hpp"
 #include "device/control/control_request.hpp"
 #include "device/fence/fence_interrupts.hpp"
+#include "device/control/held_requests.hpp"
 #include "device/present/present_engine.hpp"
 #include "device/present/present_frames.hpp"
 #include "harness/context/recording_context_plane.hpp"
@@ -69,9 +70,10 @@ struct Rig {
     PresentScene              scene;
     av::RecordingContextPlane plane;
     av::PresentFrames      snapshots;
+    av::HeldRequests          held;
     PresentEngine             engine;
 
-    Rig() : host(), interrupts(host), scene(host), plane(), snapshots(plane, gpu), engine(host, interrupts)
+    Rig() : host(), interrupts(host), scene(host), plane(), snapshots(plane, gpu), held(host), engine(host, interrupts, held)
     {
         CHECK_STATUS(interrupts.initialize(), Status::ok);
         CHECK_STATUS(interrupts.connect(), Status::ok);
@@ -126,7 +128,7 @@ TEST(present_engine, presents_are_moved_in_order_and_complete_in_the_page)
   CHECK(rig.reaches(4u, progress));
   CHECK(rig.host.live_guest_mappings() <= 1u + 3u);
   rig.engine.detach();
-  CHECK_EQ(rig.host.live_threads(), 0u);
+  CHECK_EQ(rig.host.live_threads(), 1u);
   CHECK_EQ(rig.host.live_guest_mappings(), 0u);
   CHECK(rig.engine.invariants_hold()); }
 
@@ -220,7 +222,7 @@ TEST(present_engine, a_page_registered_again_counts_from_one_and_a_reset_holds_n
   CHECK(rig.reaches(1u, progress));
   CHECK(rig.scene.copied(5u, 1u));
   CHECK_STATUS(rig.engine.attach(0u, rig.snapshots), Status::ok);
-  CHECK_EQ(rig.host.live_threads(), 0u);
+  CHECK_EQ(rig.host.live_threads(), 1u);
   CHECK_EQ(rig.host.live_guest_mappings(), 0u);
   CHECK_EQ(rig.send(rig.scene.blt(2u, 0u, 1u)), err_invalid_parameter);
   CHECK(rig.engine.invariants_hold()); }
@@ -230,8 +232,9 @@ TEST(present_engine, an_engine_that_cannot_start_holds_nothing)
   FenceInterrupts interrupts(host);
   PresentScene    scene(host);
   const av::PresentFrames none;
+  av::HeldRequests        held(host);
   {
-      PresentEngine engine(host, interrupts);
+      PresentEngine engine(host, interrupts, held);
       CHECK_STATUS(engine.attach(PresentScene::engine_page, none), Status::invalid_state);
       engine.detach();
       host.fail_mutex_at(1u);
@@ -294,7 +297,8 @@ TEST(present_engine, an_engine_never_initialized_takes_nothing_and_a_lost_wake_e
   PresentScene    scene(host);
   av::RecordingContextPlane plane;
   av::PresentFrames snapshots(plane, gpu);
-  PresentEngine   idle(host, interrupts);
+  av::HeldRequests held(host);
+  PresentEngine   idle(host, interrupts, held);
   const GpuRequestBuilder request = scene.blt(1u, 0u, 1u);
   MockRequest             mock(request.bytes(), request.size());
   ControlRequest          control(host, &mock);
@@ -344,7 +348,7 @@ TEST(present_engine, the_invariant_catches_a_ring_of_slots_a_tally_or_a_thread_t
   PresentEngineProbe::set_wake(rig.engine, nullptr);
   CHECK(!rig.engine.invariants_hold());
   PresentEngineProbe::set_wake(rig.engine, wake);
-  CHECK(!rig.engine.invariants_hold());
+  CHECK(rig.engine.invariants_hold());
   PresentEngineProbe::set_thread(rig.engine, nullptr);
   CHECK(rig.engine.invariants_hold()); }
 

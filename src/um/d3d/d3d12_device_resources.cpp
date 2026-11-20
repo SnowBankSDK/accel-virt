@@ -1,7 +1,11 @@
 #include "core/log/log_line.hpp"
+#include "core/platform/thread_lock_hold.hpp"
 #include "core/trace/function_scope.hpp"
 #include "core/log/keyed_log.hpp"
 #include "guest/transport/host_allocation.hpp"
+#include "icd/d3d/kernel_heap.hpp"
+#include "icd/d3d/kernel_surface.hpp"
+#include "proto/d3d/d3d9_present_format.hpp"
 #include "proto/resources/allocation_descriptor.hpp"
 #include "proto/generated/d3d12/d3d12_dispatch_client.h"
 #include "um/d3d/d3d12_device.hpp"
@@ -17,6 +21,7 @@ constexpr uint32_t heap_shared = 0x1u;
 constexpr uint32_t deny_buffers = 0x4u;
 constexpr uint32_t deny_rt_ds_textures = 0x40u;
 constexpr uint32_t deny_non_rt_ds_textures = 0x80u;
+constexpr uint32_t row_major_alignment = 256u;
 constexpr uint32_t allow_render_target = 0x1u;
 constexpr uint32_t allow_depth_stencil = 0x2u;
 constexpr uint32_t allow_unordered_access = 0x4u;
@@ -30,6 +35,8 @@ constexpr uint64_t buffer_alignment = uint64_t{64} * 1024u;
 constexpr uint64_t refused_size = ~uint64_t{0};
 constexpr uint64_t suballocated_heap_bytes_most = uint64_t{4} << 20u;
 constexpr UINT32   no_additional_data_alignment = 1u;
+constexpr uint32_t open_attempts = 64u;
+constexpr uint32_t shared_heap_kind = 2u;
 
 uint32_t state_of_layout(D3D12DDI_BARRIER_LAYOUT layout)
 {
@@ -174,6 +181,16 @@ HRESULT D3d12Device::make_heap(const D3D12DDIARG_CREATEHEAP_0001 &args, HeapReco
             return charged;
         }
     }
+    if (heap.type != heap_default && placed_heaps_) {
+        const HRESULT placed = place_heap(args, heap);
+        if (FAILED(placed)) {
+            addresses_.release(heap.address, args.ByteSize);
+            heap.address = 0u;
+            return placed;
+        }
+        heap.made = 1u;
+        return S_OK;
+    }
     if (heap.type != heap_default) {
         const HRESULT memory = heap_memory(args, heap);
         if (FAILED(memory)) {
@@ -211,8 +228,9 @@ HRESULT D3d12Device::send_heap(const HeapRecord &heap, uint64_t alignment)
         return S_OK;
     }
     uint32_t hresult = 0u;
+    uint64_t placed = 0u;
     if (!sent(d3d12proto::av_d3d12_CreateHeap12(wire(), heap.header.stamp.id(), properties_of(heap.type), heap.flags,
-                                                 size, alignment, memory, offset, &hresult),
+                                                 size, alignment, memory, offset, &hresult, &placed),
               "CreateHeap12"))
         return DXGI_ERROR_DEVICE_REMOVED;
     return static_cast<HRESULT>(hresult);
@@ -227,8 +245,14 @@ HRESULT D3d12Device::charge_heap(HeapRecord &heap)
             .text(" the host reports, with ").number(commitment_.committed()).text(" committed").write();
         return E_OUTOFMEMORY;
     }
+    if (!session_.lease().take(heap.size)) {
+        commitment_.release(heap.size);
+        LogLine(lines_).text("a heap of ").number(heap.size).text(" bytes is past what the host can lease").write();
+        return E_OUTOFMEMORY;
+    }
     heap.charged = heap.size;
-    heap.asked = admission == d3d::D3d12Commitment::Admission::ask ? 1u : 0u;
+    heap.leased = heap.size;
+    heap.asked = 0u;
     return S_OK;
 }
 
@@ -237,6 +261,8 @@ void D3d12Device::uncharge_heap(HeapRecord &heap)
     AV_SCOPE("D3d12Device::uncharge_heap");
     commitment_.release(heap.charged);
     heap.charged = 0u;
+    session_.lease().give(heap.leased);
+    heap.leased = 0u;
 }
 
 HRESULT D3d12Device::heap_memory(const D3D12DDIARG_CREATEHEAP_0001 &args, HeapRecord &heap)
@@ -249,6 +275,23 @@ HRESULT D3d12Device::heap_memory(const D3D12DDIARG_CREATEHEAP_0001 &args, HeapRe
     if (small && memories_.take_slice(kind, args.ByteSize, heap.backing) == Status::ok) return S_OK;
     if (memories_.open_dedicated(kind, args.ByteSize, heap.backing) == Status::ok) return S_OK;
     lines_.write("no host memory for an upload or readback heap");
+    return E_OUTOFMEMORY;
+}
+
+HRESULT D3d12Device::place_heap(const D3D12DDIARG_CREATEHEAP_0001 &args, HeapRecord &heap)
+{
+    AV_SCOPE("D3d12Device::place_heap");
+    const ThreadLockHold held(session_.placement_lock());
+    uint32_t             hresult = 0u;
+    uint64_t             placed = 0u;
+    if (!sent(d3d12proto::av_d3d12_CreateHeap12(wire(), heap.header.stamp.id(), properties_of(heap.type), heap.flags,
+                                                 heap.size, args.Alignment, 0u, 0u, &hresult, &placed),
+              "CreateHeap12"))
+        return DXGI_ERROR_DEVICE_REMOVED;
+    if (FAILED(static_cast<HRESULT>(hresult))) return static_cast<HRESULT>(hresult);
+    if (placed != 0u && memories_.place(heap.size, placed, heap.backing) == Status::ok) return S_OK;
+    lines_.write("the device mapped no host memory for a native heap");
+    static_cast<void>(sent(d3d12proto::av_d3d12_Destroy12(wire(), heap.header.stamp.id()), "Destroy12"));
     return E_OUTOFMEMORY;
 }
 
@@ -356,10 +399,12 @@ HRESULT D3d12Device::heap_and_resource(const D3D12DDIARG_CREATEHEAP_0001 *heap_a
         if (committed && unsized) {
             uint64_t alignment = buffer_alignment;
             sized.ByteSize = allocation_bytes(resource_desc(*args), alignment);
+            if (sized.ByteSize == refused_size) return E_INVALIDARG;
             if (sized.Alignment < alignment) sized.Alignment = alignment;
         }
         const HRESULT made = make_heap(sized, heap, committed);
-        if (FAILED(made) || args == nullptr) return made;
+        if (FAILED(made)) return made;
+        if (args == nullptr) return kernel_heap(heap, runtime, nullptr);
         if (handle.pDrvPrivate == nullptr) return E_INVALIDARG;
         const bool shown = committed && !unsized && args->ResourceType == D3D12DDI_RT_TEXTURE2D;
         if (shown) heap.flags |= heap_shared;
@@ -370,7 +415,8 @@ HRESULT D3d12Device::heap_and_resource(const D3D12DDIARG_CREATEHEAP_0001 *heap_a
             addresses_.release(heap.address, sized.ByteSize);
             heap.address = 0u;
         }
-        if (FAILED(resource_made) || !shown) return resource_made;
+        if (FAILED(resource_made)) return resource_made;
+        if (!shown) return kernel_heap(heap, runtime, &resource);
         const HRESULT shown_made = show(resource, runtime, *args);
         heap.allocation = resource.allocation;
         return shown_made;
@@ -403,15 +449,87 @@ D3D12DDI_HEAP_AND_RESOURCE_SIZES D3d12Device::calc_private_opened_heap_and_resou
 }
 
 HRESULT D3d12Device::open_heap_and_resource(const D3D12DDIARG_OPENHEAP_0003 *args, D3D12DDI_HHEAP heap_handle,
-                                            D3D12DDI_HRTRESOURCE, D3D12DDI_HPROTECTEDRESOURCESESSION_0030,
+                                            D3D12DDI_HRTRESOURCE runtime, D3D12DDI_HPROTECTEDRESOURCESESSION_0030,
                                             D3D12DDI_HRESOURCE handle)
 {
     AV_SCOPE("D3d12Device::open_heap_and_resource");
-    if (args == nullptr || heap_handle.pDrvPrivate == nullptr || handle.pDrvPrivate == nullptr ||
-        args->NumAllocations != 1u || args->pOpenAllocationInfo == nullptr)
+    if (args == nullptr || heap_handle.pDrvPrivate == nullptr || args->NumAllocations != 1u ||
+        args->pOpenAllocationInfo == nullptr)
         return E_INVALIDARG;
-    return open_existing(*args, *static_cast<HeapRecord *>(heap_handle.pDrvPrivate),
-                         *static_cast<ResourceRecord *>(handle.pDrvPrivate));
+    const D3DDDI_OPENALLOCATIONINFO &opened = args->pOpenAllocationInfo[0];
+    HeapRecord                      &heap = *static_cast<HeapRecord *>(heap_handle.pDrvPrivate);
+    d3d::KernelHeap                  host;
+    if (host.open(args->pPrivateDriverData, args->PrivateDriverDataSize, opened.pPrivateDriverData,
+                  opened.PrivateDriverDataSize) == Status::ok)
+        return open_host_object(*args, host.key(), host.bytes(), heap, static_cast<ResourceRecord *>(handle.pDrvPrivate),
+                                runtime);
+    d3d::KernelSurface surface;
+    if (surface.open(args->pPrivateDriverData, args->PrivateDriverDataSize, opened.pPrivateDriverData,
+                     opened.PrivateDriverDataSize) == Status::ok &&
+        !surface.across_adapters())
+        return open_host_object(*args, surface.key(), surface.opened_bytes(), heap,
+                                static_cast<ResourceRecord *>(handle.pDrvPrivate), runtime);
+    if (handle.pDrvPrivate == nullptr) return E_INVALIDARG;
+    ResourceRecord &resource = *static_cast<ResourceRecord *>(handle.pDrvPrivate);
+    const HRESULT   existing = open_existing(*args, heap, resource);
+    if (SUCCEEDED(existing)) {
+        resource.allocation = opened.hAllocation;
+        resource.runtime_resource = runtime.handle;
+    }
+    return existing;
+}
+
+HRESULT D3d12Device::open_host_object(const D3D12DDIARG_OPENHEAP_0003 &args, uint64_t key, uint64_t bytes,
+                                      HeapRecord &heap, ResourceRecord *resource, D3D12DDI_HRTRESOURCE runtime)
+{
+    AV_SCOPE("D3d12Device::open_host_object");
+    if (key == 0u || bytes == 0u) return E_INVALIDARG;
+    heap = HeapRecord{};
+    stamp(heap.header, HeapRecord::tag, next_id());
+    heap.type = heap_default;
+    heap.size = bytes;
+    heap.address = addresses_.reserve(heap.size);
+    if (heap.address == 0u) return E_OUTOFMEMORY;
+    const uint32_t object = resource != nullptr ? next_id() : heap.header.stamp.id();
+    uint32_t       kind = 0u, dimension = 0u, height = 0u, depth_or_array = 0u, mip_levels = 0u, format = 0u;
+    uint32_t       sample_count = 0u, flags = 0u;
+    uint64_t       width = 0u, size = 0u;
+    bool           sent_open = true;
+    for (uint32_t attempt = 0u; sent_open && kind == 0u && attempt < open_attempts; attempt++)
+        sent_open = d3d12proto::av_d3d12_OpenObject12(wire(), object, key, heap.address, &kind, &dimension, &height,
+                                                      &depth_or_array, &mip_levels, &format, &sample_count, &flags,
+                                                      &width, &size);
+    if (!sent_open || kind == 0u) {
+        lines_.write("a shared heap or resource no Direct3D 12 session on the host made");
+        addresses_.release(heap.address, heap.size);
+        heap = HeapRecord{};
+        return E_INVALIDARG;
+    }
+    heap.allocation = args.pOpenAllocationInfo[0].hAllocation;
+    heap.runtime_object = runtime.handle;
+    heap.key = key;
+    if (kind == shared_heap_kind) {
+        heap.made = 1u;
+        if (resource != nullptr) *resource = ResourceRecord{};
+        return S_OK;
+    }
+    if (resource == nullptr) return E_INVALIDARG;
+    d3d12proto::ResourceDesc desc = {};
+    desc.dimension = dimension;
+    desc.width = width;
+    desc.height = height;
+    desc.depth_or_array = depth_or_array;
+    desc.mip_levels = mip_levels;
+    desc.format = format;
+    desc.sample_count = sample_count;
+    desc.flags = flags;
+    record_resource(desc, *resource);
+    resource->header.stamp = d3d::RecordStamp(ResourceRecord::tag, object);
+    resource->address = dimension == buffer_dimension ? heap.address : 0u;
+    resource->placed_in = &heap;
+    resource->allocation = args.pOpenAllocationInfo[0].hAllocation;
+    resource->runtime_resource = runtime.handle;
+    return S_OK;
 }
 
 HRESULT D3d12Device::open_existing(const D3D12DDIARG_OPENHEAP_0003 &args, HeapRecord &heap, ResourceRecord &resource)
@@ -422,8 +540,15 @@ HRESULT D3d12Device::open_existing(const D3D12DDIARG_OPENHEAP_0003 &args, HeapRe
     if (opened.pPrivateDriverData == nullptr ||
         described.decode(static_cast<const uint8_t *>(opened.pPrivateDriverData), opened.PrivateDriverDataSize) !=
             Status::ok ||
-        described.kind() != AllocationKind::cross_adapter || !described.cpu_visible() || described.layout().height() != 1u ||
-        described.layout().format() != 0u) {
+        described.kind() != AllocationKind::cross_adapter || !described.cpu_visible()) {
+        unsupported("pfnOpenHeapAndResource of a shared heap");
+        return E_INVALIDARG;
+    }
+    const SurfaceLayout &surface = described.layout();
+    const bool           rows = surface.height() == 1u && surface.format() == 0u;
+    D3d9PresentFormat    presented(0u);
+    if (!rows && (!surface.is_surface() || !presented.take_ddi(surface.format()) || surface.pitch() % row_major_alignment != 0u ||
+                  surface.bytes() > described.size())) {
         unsupported("pfnOpenHeapAndResource of a shared heap");
         return E_INVALIDARG;
     }
@@ -446,6 +571,7 @@ HRESULT D3d12Device::open_existing(const D3D12DDIARG_OPENHEAP_0003 &args, HeapRe
         heap.address = 0u;
         return E_OUTOFMEMORY;
     }
+    if (!rows) return adopt_lent_image(surface, presented.dxgi(), lent->handle(), heap, resource);
     const HRESULT sent_heap = send_heap(heap, buffer_alignment);
     if (FAILED(sent_heap)) {
         release_heap_memory(heap);
@@ -467,6 +593,39 @@ HRESULT D3d12Device::open_existing(const D3D12DDIARG_OPENHEAP_0003 &args, HeapRe
     return make_resource(spanning, nullptr, heap, 0u, resource);
 }
 
+HRESULT D3d12Device::adopt_lent_image(const SurfaceLayout &surface, uint32_t format, uint64_t memory, HeapRecord &heap,
+                                      ResourceRecord &resource)
+{
+    AV_SCOPE("D3d12Device::adopt_lent_image");
+    constexpr uint32_t texture2d = 3u;
+    constexpr uint32_t row_major = 1u;
+    d3d12proto::ResourceDesc desc = {};
+    desc.dimension = texture2d;
+    desc.width = surface.width();
+    desc.height = surface.height();
+    desc.depth_or_array = 1u;
+    desc.mip_levels = 1u;
+    desc.format = format;
+    desc.sample_count = 1u;
+    desc.layout = row_major;
+    desc.flags = allow_render_target | allow_cross_adapter;
+    record_resource(desc, resource);
+    uint32_t hresult = 1u;
+    if (!sent(d3d12proto::av_d3d12_AdoptLentImage12(wire(), resource.header.stamp.id(), memory, desc, surface.pitch(),
+                                                    &hresult),
+              "AdoptLentImage12") ||
+        hresult != 0u) {
+        if (hresult != 0u) lines_.write("the host made no image over the rows another adapter lent");
+        resource = ResourceRecord{};
+        release_heap_memory(heap);
+        addresses_.release(heap.address, heap.size);
+        heap = HeapRecord{};
+        return E_OUTOFMEMORY;
+    }
+    resource.placed_in = &heap;
+    return S_OK;
+}
+
 void D3d12Device::give_back(const ResourceRecord &resource)
 {
     AV_SCOPE("D3d12Device::give_back");
@@ -477,15 +636,78 @@ void D3d12Device::give_back(const ResourceRecord &resource)
     if (FAILED(freed)) refused_.failed("pfnDeallocateCb for a shown resource", freed);
 }
 
+HRESULT D3d12Device::allocate_heap(HeapRecord &heap, D3D12DDI_HRTRESOURCE runtime, ResourceRecord *resource)
+{
+    AV_SCOPE("D3d12Device::allocate_heap");
+    if (heap.size == 0u) return S_OK;
+    const uint32_t  object = resource != nullptr ? resource->header.stamp.id() : heap.header.stamp.id();
+    d3d::KernelHeap kernel(heap.size, object);
+    if (kernel.make() != Status::ok) return E_INVALIDARG;
+    D3D12DDI_ALLOCATION_INFO_0022 info = {};
+    info.pPrivateDriverData = kernel.allocation_data();
+    info.PrivateDriverDataSize = d3d::KernelHeap::allocation_bytes;
+    D3D12DDICB_ALLOCATE_0022 allocate = {};
+    allocate.pPrivateDriverData = kernel.resource_data();
+    allocate.PrivateDriverDataSize = d3d::KernelHeap::resource_bytes;
+    allocate.hResource = runtime.handle;
+    allocate.NumAllocations = 1u;
+    allocate.pAllocationInfo = &info;
+    const HRESULT made = core_->pfnAllocateCb(runtime_, &allocate);
+    if (FAILED(made)) {
+        refused_.failed("pfnAllocateCb for a heap", made);
+        return made;
+    }
+    heap.allocation = info.hAllocation;
+    heap.runtime_object = runtime.handle;
+    heap.key = kernel.key();
+    if (resource != nullptr) {
+        resource->allocation = info.hAllocation;
+        resource->runtime_resource = runtime.handle;
+    }
+    if (heap.key == 0u || heap.type != heap_default) return S_OK;
+    return sent(d3d12proto::av_d3d12_ShareObject12(wire(), object, heap.key), "ShareObject12") ? S_OK
+                                                                                                : DXGI_ERROR_DEVICE_REMOVED;
+}
+
+HRESULT D3d12Device::kernel_heap(HeapRecord &heap, D3D12DDI_HRTRESOURCE runtime, ResourceRecord *resource)
+{
+    AV_SCOPE("D3d12Device::kernel_heap");
+    const HRESULT allocated = allocate_heap(heap, runtime, resource);
+    if (SUCCEEDED(allocated)) return allocated;
+    if (resource != nullptr)
+        static_cast<void>(sent(d3d12proto::av_d3d12_Destroy12(wire(), resource->header.stamp.id()), "Destroy12"));
+    if (heap.made != 0u)
+        static_cast<void>(sent(d3d12proto::av_d3d12_Destroy12(wire(), heap.header.stamp.id()), "Destroy12"));
+    release_heap_memory(heap);
+    uncharge_heap(heap);
+    addresses_.release(heap.address, heap.size);
+    if (resource != nullptr) *resource = ResourceRecord{};
+    heap = HeapRecord{};
+    return allocated;
+}
+
+void D3d12Device::give_back_heap(HeapRecord &heap)
+{
+    AV_SCOPE("D3d12Device::give_back_heap");
+    if (heap.allocation == 0u) return;
+    D3D12DDICB_DEALLOCATE_0022 deallocate = {};
+    deallocate.hResource = heap.runtime_object;
+    const HRESULT freed = core_->pfnDeallocateCb(runtime_, &deallocate);
+    if (FAILED(freed)) refused_.failed("pfnDeallocateCb for a heap", freed);
+    heap.allocation = 0u;
+}
+
 VOID D3d12Device::destroy_heap_and_resource(D3D12DDI_HHEAP heap_handle, D3D12DDI_HRESOURCE handle)
 {
     AV_SCOPE("D3d12Device::destroy_heap_and_resource");
+    D3DKMT_HANDLE released = 0u;
     if (handle.pDrvPrivate != nullptr) {
         ResourceRecord &resource = *static_cast<ResourceRecord *>(handle.pDrvPrivate);
         if (resource.header.stamp.holds(ResourceRecord::tag))
         {
             static_cast<void>(sent(d3d12proto::av_d3d12_Destroy12(wire(), resource.header.stamp.id()), "Destroy12"));
             give_back(resource);
+            released = resource.allocation;
         }
         resource = ResourceRecord{};
     }
@@ -493,6 +715,8 @@ VOID D3d12Device::destroy_heap_and_resource(D3D12DDI_HHEAP heap_handle, D3D12DDI
     HeapRecord &heap = *static_cast<HeapRecord *>(heap_handle.pDrvPrivate);
     if (!heap.header.stamp.holds(HeapRecord::tag)) return;
     if (heap.made != 0u) static_cast<void>(sent(d3d12proto::av_d3d12_Destroy12(wire(), heap.header.stamp.id()), "Destroy12"));
+    if (heap.allocation == released) heap.allocation = 0u;
+    give_back_heap(heap);
     release_heap_memory(heap);
     uncharge_heap(heap);
     session_.shared_memory().reclaim();

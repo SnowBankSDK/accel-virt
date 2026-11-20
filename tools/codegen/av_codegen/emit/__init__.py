@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from . import (
     client_dispatch,
+    command_extensions,
     command_names,
+    format_layout,
     icd_entries,
     ids,
     serialize,
@@ -15,6 +17,8 @@ from . import (
 ALL_BACKENDS = (
     ids,
     command_names,
+    command_extensions,
+    format_layout,
     serialize,
     client_dispatch,
     server_dispatch,
@@ -27,7 +31,9 @@ ALL_BACKENDS = (
 __all__ = [
     "ALL_BACKENDS",
     "client_dispatch",
+    "command_extensions",
     "command_names",
+    "format_layout",
     "icd_entries",
     "ids",
     "serialize",

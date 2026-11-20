@@ -33,6 +33,7 @@ public:
     std::uint32_t waiting();
     void              hold_creates();
     void              release_creates();
+    void              hold_creates_of(std::uint32_t sub_api);
     std::uint32_t     creates_waiting();
     std::uint32_t     option_creates();
     std::uint32_t     signals_set();
@@ -41,6 +42,11 @@ public:
     void              lose_host_device();
     void              set_losable(bool losable);
     std::uint32_t     losses();
+    void              set_lease_room(std::uint64_t bytes);
+    std::uint32_t     lease_extensions();
+    std::uint64_t     lease_returned();
+    std::uint32_t     last_lease_kind();
+    std::uint64_t     last_lease_least();
     AvContextOptions last_options();
     AvExecutor      *last_share();
     bool              last_share_live();
@@ -69,6 +75,8 @@ public:
     void          set_memory_caching(std::uint32_t caching);
     std::uint32_t memory_allocations();
     std::uint32_t memory_frees();
+    std::uint32_t placements();
+    void          refuse_placement_at(std::uint32_t nth);
     std::uint32_t held_memory();
     std::uint32_t live_memory();
     struct MemoryRequest {
@@ -78,12 +86,15 @@ public:
         std::uint32_t request;
     };
     MemoryRequest last_memory_request();
+    MemoryRequest last_placement();
     std::uint8_t *memory_bytes(std::uint32_t domain, std::uint64_t key);
     int           answered_descriptor(std::uint32_t domain, std::uint64_t key);
     std::uint32_t imported();
     std::uint32_t last_role();
     std::uint64_t last_arena_base();
     std::uint32_t released();
+    std::uint32_t threads_left() const { return threads_left_.load(); }
+    std::uint32_t threads_joined() const { return threads_joined_.load(); }
     void          refuse_import_at(std::uint32_t nth);
     void          withhold_handle_at(std::uint32_t nth);
     void          answer_handle(std::uint64_t handle);
@@ -195,6 +206,13 @@ private:
     std::atomic<bool>          host_lost_{false};
     std::atomic<bool>          losable_{true};
     std::atomic<std::uint32_t> losses_{0u};
+    std::atomic<std::uint64_t> lease_room_{UINT64_MAX};
+    std::atomic<std::uint32_t> lease_extensions_{0u};
+    std::atomic<std::uint64_t> lease_returned_{0u};
+    std::atomic<std::uint32_t> threads_left_{0u};
+    std::atomic<std::uint32_t> threads_joined_{0u};
+    std::atomic<std::uint32_t> last_lease_kind_{0u};
+    std::atomic<std::uint64_t> last_lease_least_{0u};
     std::uint32_t              signals_set_;
     void                     (*signal_)(void *context);
     void                      *signal_context_;
@@ -202,6 +220,7 @@ private:
     AvExecutor               *last_share_;
     bool                       last_share_live_;
     bool                       creates_held_;
+    std::uint32_t              held_sub_apis_;
     std::uint32_t              creates_waiting_;
     std::uint32_t              refuse_domain_ = 0u;
     std::uint32_t              domains_opened_ = 0u;
@@ -248,6 +267,9 @@ private:
     std::uint32_t              memory_caching_ = AV_MEMORY_WRITE_BACK;
     std::uint32_t              memory_allocations_ = 0u;
     std::uint32_t              memory_frees_ = 0u;
+    std::uint32_t              placements_ = 0u;
+    std::uint32_t              refuse_placement_ = 0u;
+    MemoryRequest              last_placement_ = {};
     MemoryRequest              last_memory_request_ = {};
 };
 

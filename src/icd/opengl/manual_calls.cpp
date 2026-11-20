@@ -12,9 +12,12 @@
 #include "icd/opengl/granted_profile.hpp"
 
 #include "core/trace/function_scope.hpp"
+#include "icd/opengl/bindless_handles.hpp"
 #include "icd/opengl/buffer_pieces.hpp"
 #include "icd/opengl/buffer_shadows.hpp"
 #include "icd/opengl/client_array_state.hpp"
+#include "icd/opengl/client_vertex_draw.hpp"
+#include "icd/opengl/client_vertex_state.hpp"
 #include "icd/opengl/current_contexts.hpp"
 #include "icd/opengl/gl_context_table.hpp"
 #include "icd/opengl/guest_gl_context.hpp"
@@ -148,7 +151,11 @@ void ManualCalls::buffer_sub_data(uint32_t target, intptr_t offset, intptr_t siz
     AV_SCOPE("ManualCalls::buffer_sub_data");
     GuestGlContext *const context = sending();
     if (context == nullptr) return;
-    if (sliced_buffer(*context, target) != 0u) return context->record(gl_invalid_operation);
+    const uint32_t sliced = sliced_buffer(*context, target);
+    if (sliced != 0u) return context->write_sliced(sliced, offset, size, data);
+    uint32_t bound = 0u;
+    if (bound_to(*context, target, bound) && context->mappings().refuses_subdata(bound))
+        return context->record(gl_invalid_operation);
     wrote_bound(*context, target, offset, size, data);
     BufferPieces pieces(*context->wire());
     if (pieces.cuts_write(size, data))
@@ -161,7 +168,8 @@ void ManualCalls::named_buffer_sub_data(uint32_t buffer, intptr_t offset, intptr
     AV_SCOPE("ManualCalls::named_buffer_sub_data");
     GuestGlContext *const context = sending();
     if (context == nullptr) return;
-    if (context->slices().holds(buffer)) return context->record(gl_invalid_operation);
+    if (context->mappings().refuses_subdata(buffer)) return context->record(gl_invalid_operation);
+    if (context->slices().holds(buffer)) return context->write_sliced(buffer, offset, size, data);
     if (offset >= 0 && size >= 0)
         context->shadows().wrote(buffer, static_cast<uint64_t>(offset), static_cast<uint64_t>(size), data);
     BufferPieces pieces(*context->wire());
@@ -175,7 +183,8 @@ void ManualCalls::named_buffer_sub_data_ext(uint32_t buffer, intptr_t offset, in
     AV_SCOPE("ManualCalls::named_buffer_sub_data_ext");
     GuestGlContext *const context = sending();
     if (context == nullptr) return;
-    if (context->slices().holds(buffer)) return context->record(gl_invalid_operation);
+    if (context->mappings().refuses_subdata(buffer)) return context->record(gl_invalid_operation);
+    if (context->slices().holds(buffer)) return context->write_sliced(buffer, offset, size, data);
     if (offset >= 0 && size >= 0)
         context->shadows().wrote(buffer, static_cast<uint64_t>(offset), static_cast<uint64_t>(size), data);
     BufferPieces pieces(*context->wire());
@@ -191,6 +200,7 @@ void ManualCalls::get_buffer_sub_data(uint32_t target, intptr_t offset, intptr_t
     if (context == nullptr) return;
     const uint32_t sliced = sliced_buffer(*context, target);
     if (sliced != 0u) return context->read_sliced(sliced, offset, size, data);
+    context->mappings().flush_persistent(*context->wire());
     BufferPieces pieces(*context->wire());
     if (pieces.cuts_read(size, data))
         return pieces.read(target, offset, static_cast<size_t>(size), static_cast<uint8_t *>(data));
@@ -203,6 +213,7 @@ void ManualCalls::get_named_buffer_sub_data(uint32_t buffer, intptr_t offset, in
     GuestGlContext *const context = sending();
     if (context == nullptr) return;
     if (context->slices().holds(buffer)) return context->read_sliced(buffer, offset, size, data);
+    context->mappings().flush_persistent(*context->wire());
     BufferPieces pieces(*context->wire());
     if (pieces.cuts_read(size, data))
         return pieces.read_named(buffer, offset, static_cast<size_t>(size), static_cast<uint8_t *>(data));
@@ -215,6 +226,7 @@ void ManualCalls::get_named_buffer_sub_data_ext(uint32_t buffer, intptr_t offset
     GuestGlContext *const context = sending();
     if (context == nullptr) return;
     if (context->slices().holds(buffer)) return context->read_sliced(buffer, offset, size, data);
+    context->mappings().flush_persistent(*context->wire());
     BufferPieces pieces(*context->wire());
     if (pieces.cuts_read(size, data))
         return pieces.read_named_ext(buffer, offset, static_cast<size_t>(size), static_cast<uint8_t *>(data));
@@ -437,7 +449,9 @@ void ManualCalls::client_attributes_pushed(uint32_t mask)
 {
     AV_SCOPE("ManualCalls::client_attributes_pushed");
     GuestGlContext *const context = sending();
-    if (context != nullptr) context->arrays().push_client(mask);
+    if (context == nullptr) return;
+    context->arrays().push_client(mask);
+    context->vertex().push(mask);
 }
 
 void ManualCalls::client_attributes_popped()
@@ -446,6 +460,7 @@ void ManualCalls::client_attributes_popped()
     GuestGlContext *const context = sending();
     if (context == nullptr) return;
     context->arrays().pop_client();
+    context->vertex().pop();
     context->shadows().forget_all();
 }
 
@@ -453,7 +468,9 @@ void ManualCalls::client_attributes_reset(uint32_t mask)
 {
     AV_SCOPE("ManualCalls::client_attributes_reset");
     GuestGlContext *const context = sending();
-    if (context != nullptr) context->arrays().reset_client(mask);
+    if (context == nullptr) return;
+    context->arrays().reset_client(mask);
+    context->vertex().reset(mask);
 }
 
 void ManualCalls::vertex_array_elements(uint32_t array, uint32_t buffer)
@@ -523,11 +540,11 @@ void ManualCalls::pointer(uint32_t pname, void **params)
     GuestGlContext *const context = currents_.current();
     if (context == nullptr || params == nullptr) return;
     if (pname == gl_debug_callback_function) {
-        *params = reinterpret_cast<void *>(static_cast<uintptr_t>(context->debug_callback()));
+        *params = reinterpret_cast<void *>(static_cast<uintptr_t>(context->debug().function()));
         return;
     }
     if (pname != gl_debug_callback_user_param) return record(gl_invalid_enum);
-    *params = reinterpret_cast<void *>(static_cast<uintptr_t>(context->debug_user()));
+    *params = reinterpret_cast<void *>(static_cast<uintptr_t>(context->debug().user()));
 }
 
 void ManualCalls::pixel_store(uint32_t pname, int32_t value)
@@ -578,6 +595,7 @@ void ManualCalls::gen_buffers(int32_t count, uint32_t *buffers)
 {
     AV_SCOPE("ManualCalls::gen_buffers");
     GuestGlContext *const context = sending();
+    if (context != nullptr && count < 0) return context->record(gl_invalid_value);
     if (context != nullptr) glproto::av_glGenBuffers(*context->wire(), count, buffers);
 }
 
@@ -585,6 +603,7 @@ void ManualCalls::gen_textures(int32_t count, uint32_t *textures)
 {
     AV_SCOPE("ManualCalls::gen_textures");
     GuestGlContext *const context = sending();
+    if (context != nullptr && count < 0) return context->record(gl_invalid_value);
     if (context != nullptr) glproto::av_glGenTextures(*context->wire(), count, textures);
 }
 
@@ -592,6 +611,7 @@ void ManualCalls::gen_vertex_arrays(int32_t count, uint32_t *arrays)
 {
     AV_SCOPE("ManualCalls::gen_vertex_arrays");
     GuestGlContext *const context = sending();
+    if (context != nullptr && count < 0) return context->record(gl_invalid_value);
     if (context != nullptr) glproto::av_glGenVertexArrays(*context->wire(), count, arrays);
 }
 
@@ -600,7 +620,8 @@ void ManualCalls::bind_vertex_array(uint32_t array)
     AV_SCOPE("ManualCalls::bind_vertex_array");
     GuestGlContext *const context = sending();
     if (context == nullptr) return;
-    if (context->arrays().bind_vertex_array(array) != Status::ok) context->record(GuestGlContext::gl_out_of_memory);
+    if (context->arrays().bind_vertex_array(array) != Status::ok || context->vertex().bind(array) != Status::ok)
+        context->record(GuestGlContext::gl_out_of_memory);
     glproto::av_glBindVertexArray(*context->wire(), array);
 }
 
@@ -610,6 +631,7 @@ void ManualCalls::delete_vertex_arrays(int32_t count, const uint32_t *arrays)
     GuestGlContext *const context = sending();
     if (context == nullptr) return;
     context->arrays().delete_vertex_arrays(count, arrays);
+    context->vertex().forget(count, arrays);
     glproto::av_glDeleteVertexArrays(*context->wire(), count, arrays);
 }
 
@@ -645,6 +667,7 @@ void ManualCalls::buffer_data(uint32_t target, intptr_t size, const void *data, 
     AV_SCOPE("ManualCalls::buffer_data");
     GuestGlContext *const context = sending();
     if (context == nullptr) return;
+    if (size < 0) return context->record(gl_invalid_value);
     if (target == PinnedBuffers::target) return pin_storage(*context, size, data);
     respecify_bound(*context, target, size, data != nullptr);
     BufferPieces pieces(*context->wire());
@@ -658,6 +681,7 @@ void ManualCalls::buffer_storage(uint32_t target, intptr_t size, const void *dat
     AV_SCOPE("ManualCalls::buffer_storage");
     GuestGlContext *const context = sending();
     if (context == nullptr) return;
+    if (size < 0) return context->record(gl_invalid_value);
     uint32_t buffer = 0u;
     if (context->slices().offers(size, flags) && bound_to(*context, target, buffer) &&
         context->slices().place(*context->wire(), buffer, static_cast<uint64_t>(size), flags, data) == Status::ok)
@@ -666,6 +690,7 @@ void ManualCalls::buffer_storage(uint32_t target, intptr_t size, const void *dat
     BufferPieces pieces(*context->wire());
     const bool   cut = pieces.cuts_write(size, data);
     glproto::av_glBufferStorage(*context->wire(), target, size, cut ? nullptr : data, flags | gl_dynamic_storage_bit);
+    if (bound_to(*context, target, buffer)) context->mappings().keep_flags(buffer, flags);
     if (cut) pieces.write(target, 0, static_cast<size_t>(size), static_cast<const uint8_t *>(data));
 }
 
@@ -674,6 +699,7 @@ void ManualCalls::named_buffer_data(uint32_t buffer, intptr_t size, const void *
     AV_SCOPE("ManualCalls::named_buffer_data");
     GuestGlContext *const context = sending();
     if (context == nullptr) return;
+    if (size < 0) return context->record(gl_invalid_value);
     context->shadows().respecify(buffer, size, data != nullptr);
     BufferPieces pieces(*context->wire());
     const bool   cut = pieces.cuts_write(size, data);
@@ -686,6 +712,7 @@ void ManualCalls::named_buffer_storage(uint32_t buffer, intptr_t size, const voi
     AV_SCOPE("ManualCalls::named_buffer_storage");
     GuestGlContext *const context = sending();
     if (context == nullptr) return;
+    if (size < 0) return context->record(gl_invalid_value);
     if (context->slices().place(*context->wire(), buffer, static_cast<uint64_t>(size), flags, data) == Status::ok)
         return;
     context->shadows().respecify(buffer, size, data != nullptr);
@@ -693,6 +720,7 @@ void ManualCalls::named_buffer_storage(uint32_t buffer, intptr_t size, const voi
     const bool   cut = pieces.cuts_write(size, data);
     glproto::av_glNamedBufferStorage(*context->wire(), buffer, size, cut ? nullptr : data,
                                      flags | gl_dynamic_storage_bit);
+    context->mappings().keep_flags(buffer, flags);
     if (cut) pieces.write_named(buffer, 0, static_cast<size_t>(size), static_cast<const uint8_t *>(data));
 }
 
@@ -701,6 +729,7 @@ void ManualCalls::named_buffer_data_ext(uint32_t buffer, intptr_t size, const vo
     AV_SCOPE("ManualCalls::named_buffer_data_ext");
     GuestGlContext *const context = sending();
     if (context == nullptr) return;
+    if (size < 0) return context->record(gl_invalid_value);
     context->shadows().respecify(buffer, size, data != nullptr);
     BufferPieces pieces(*context->wire());
     const bool   cut = pieces.cuts_write(size, data);
@@ -713,6 +742,7 @@ void ManualCalls::named_buffer_storage_ext(uint32_t buffer, intptr_t size, const
     AV_SCOPE("ManualCalls::named_buffer_storage_ext");
     GuestGlContext *const context = sending();
     if (context == nullptr) return;
+    if (size < 0) return context->record(gl_invalid_value);
     if (context->slices().place(*context->wire(), buffer, static_cast<uint64_t>(size), flags, data) == Status::ok)
         return;
     context->shadows().respecify(buffer, size, data != nullptr);
@@ -720,6 +750,7 @@ void ManualCalls::named_buffer_storage_ext(uint32_t buffer, intptr_t size, const
     const bool   cut = pieces.cuts_write(size, data);
     glproto::av_glNamedBufferStorageEXT(*context->wire(), buffer, size, cut ? nullptr : data,
                                         flags | gl_dynamic_storage_bit);
+    context->mappings().keep_flags(buffer, flags);
     if (cut) pieces.write_named_ext(buffer, 0, static_cast<size_t>(size), static_cast<const uint8_t *>(data));
 }
 
@@ -729,9 +760,19 @@ void ManualCalls::vertex_attrib_pointer(uint32_t index, int32_t size, uint32_t t
     AV_SCOPE("ManualCalls::vertex_attrib_pointer");
     GuestGlContext *const context = sending();
     if (context == nullptr) return;
-    if (context->arrays().client_pointer(address_of(pointer))) return context->record(gl_invalid_operation);
+    const bool client = context->arrays().client_pointer(address_of(pointer));
+    if (index >= ClientVertexState::generic_slots) {
+        if (client) return context->record(gl_invalid_operation);
+        context->arrays().set_attribute_pointer(index, address_of(pointer));
+        return glproto::av_glVertexAttribPointer(*context->wire(), index, size, type, normalized, stride,
+                                                 address_of(pointer));
+    }
+    if (client && !context->profile().legacy_calls_live()) return context->record(gl_invalid_operation);
+    const uint32_t error = context->vertex().validate(index, size, type, stride);
+    if (error != 0u) return context->record(error);
     context->arrays().set_attribute_pointer(index, address_of(pointer));
-    glproto::av_glVertexAttribPointer(*context->wire(), index, size, type, normalized, stride, address_of(pointer));
+    ClientVertexDraw draw(*context->wire(), context->vertex(), context->arrays(), context->shadows());
+    draw.pointer(index, size, type, normalized != 0u, stride, pointer);
 }
 
 void ManualCalls::enable_vertex_attrib_array(uint32_t index, bool enable)
@@ -739,8 +780,183 @@ void ManualCalls::enable_vertex_attrib_array(uint32_t index, bool enable)
     AV_SCOPE("ManualCalls::enable_vertex_attrib_array");
     GuestGlContext *const context = sending();
     if (context == nullptr) return;
+    if (index < ClientVertexState::generic_slots) {
+        ClientVertexDraw draw(*context->wire(), context->vertex(), context->arrays(), context->shadows());
+        return draw.enable(index, enable);
+    }
     if (enable) return glproto::av_glEnableVertexAttribArray(*context->wire(), index);
     glproto::av_glDisableVertexAttribArray(*context->wire(), index);
+}
+
+void ManualCalls::program_string(uint32_t target, uint32_t pname, void *string)
+{
+    AV_SCOPE("ManualCalls::program_string");
+    static constexpr uint32_t gl_program_length = 0x8627u;
+    GuestGlContext *const context = sending();
+    if (context == nullptr) return;
+    int32_t length = 0;
+    glproto::av_glGetProgramivARB(*context->wire(), target, gl_program_length, &length);
+    context->vertex().set_program_length(length);
+    glproto::av_glGetProgramStringARB(*context->wire(), target, pname, string);
+}
+
+void ManualCalls::array_pointer(uint32_t slot, int32_t size, uint32_t type, int32_t stride, const void *pointer)
+{
+    AV_SCOPE("ManualCalls::array_pointer");
+    GuestGlContext *const context = sending();
+    if (context == nullptr) return;
+    if (!context->profile().legacy_calls_live()) return context->record(gl_invalid_operation);
+    if (slot == ClientVertexState::texcoord_slot)
+        slot = context->vertex().texcoord_slot_of_unit(context->vertex().texcoord_unit());
+    const uint32_t error = context->vertex().validate(slot, size, type, stride);
+    if (error != 0u) return context->record(error);
+    ClientVertexDraw draw(*context->wire(), context->vertex(), context->arrays(), context->shadows());
+    draw.pointer(slot, size, type, false, stride, pointer);
+}
+
+void ManualCalls::client_state(uint32_t capability, bool enable)
+{
+    AV_SCOPE("ManualCalls::client_state");
+    GuestGlContext *const context = sending();
+    if (context == nullptr) return;
+    if (!context->profile().legacy_calls_live()) return context->record(gl_invalid_operation);
+    const uint32_t slot = context->vertex().slot_of_capability(capability);
+    if (slot == ClientVertexState::no_slot) return context->record(gl_invalid_enum);
+    ClientVertexDraw draw(*context->wire(), context->vertex(), context->arrays(), context->shadows());
+    draw.enable(slot, enable);
+}
+
+void ManualCalls::client_active_texture(uint32_t texture)
+{
+    AV_SCOPE("ManualCalls::client_active_texture");
+    GuestGlContext *const context = sending();
+    if (context == nullptr) return;
+    if (!context->profile().legacy_calls_live()) return context->record(gl_invalid_operation);
+    ClientVertexDraw draw(*context->wire(), context->vertex(), context->arrays(), context->shadows());
+    const uint32_t       error = draw.active_texture(texture);
+    if (error != 0u) context->record(error);
+}
+
+void ManualCalls::interleaved_arrays(uint32_t format, int32_t stride, const void *pointer)
+{
+    AV_SCOPE("ManualCalls::interleaved_arrays");
+    GuestGlContext *const context = sending();
+    if (context == nullptr) return;
+    if (!context->profile().legacy_calls_live()) return context->record(gl_invalid_operation);
+    ClientVertexDraw draw(*context->wire(), context->vertex(), context->arrays(), context->shadows());
+    const uint32_t       error = draw.interleaved(format, stride, pointer);
+    if (error != 0u) context->record(error);
+}
+
+void ManualCalls::array_element(int32_t index)
+{
+    AV_SCOPE("ManualCalls::array_element");
+    GuestGlContext *const context = sending();
+    if (context == nullptr) return;
+    if (!context->profile().legacy_calls_live()) return context->record(gl_invalid_operation);
+    if (index < 0) return context->record(gl_invalid_value);
+    ClientVertexDraw draw(*context->wire(), context->vertex(), context->arrays(), context->shadows());
+    draw.array_element(index);
+}
+
+void ManualCalls::begin_primitives()
+{
+    AV_SCOPE("ManualCalls::begin_primitives");
+    GuestGlContext *const context = currents_.current();
+    if (context == nullptr || !context->vertex().client_active() || context->wire() == nullptr) return;
+    ClientVertexDraw draw(*context->wire(), context->vertex(), context->arrays(), context->shadows());
+    draw.begin_immediate();
+}
+
+bool ManualCalls::stage_arrays(int32_t first, int32_t count)
+{
+    AV_SCOPE("ManualCalls::stage_arrays");
+    GuestGlContext *const context = currents_.current();
+    if (context == nullptr || context->wire() == nullptr || !context->vertex().client_active()) return true;
+    ClientVertexDraw draw(*context->wire(), context->vertex(), context->arrays(), context->shadows());
+    const uint32_t       error = draw.arrays(first, count);
+    if (error == 0u) return true;
+    draw.finish();
+    context->record(error);
+    return false;
+}
+
+bool ManualCalls::stage_elements(uint32_t type, int32_t count, const void *&indices, int32_t base_vertex)
+{
+    AV_SCOPE("ManualCalls::stage_elements");
+    GuestGlContext *const context = currents_.current();
+    if (context == nullptr || context->wire() == nullptr) return true;
+    if (!context->profile().legacy_calls_live()) {
+        if (indices != nullptr && context->arrays().bound_buffer(ClientArrayState::element_array_buffer) == 0u) {
+            context->record(gl_invalid_operation);
+            return false;
+        }
+        return true;
+    }
+    ClientVertexDraw draw(*context->wire(), context->vertex(), context->arrays(), context->shadows());
+    uint64_t             host = 0u;
+    const uint32_t       error = draw.elements(type, count, indices, base_vertex, host);
+    if (error != 0u) {
+        draw.finish();
+        context->record(error);
+        return false;
+    }
+    indices = reinterpret_cast<const void *>(static_cast<uintptr_t>(host));
+    return true;
+}
+
+bool ManualCalls::stage_multi_arrays(const int32_t *first, const int32_t *count, int32_t draws)
+{
+    AV_SCOPE("ManualCalls::stage_multi_arrays");
+    GuestGlContext *const context = currents_.current();
+    if (context == nullptr || context->wire() == nullptr || !context->vertex().client_active()) return true;
+    ClientVertexDraw draw(*context->wire(), context->vertex(), context->arrays(), context->shadows());
+    const uint32_t       error = draw.multi_arrays(first, count, draws);
+    if (error == 0u) return true;
+    draw.finish();
+    context->record(error);
+    return false;
+}
+
+bool ManualCalls::stage_multi_elements(const int32_t *count, uint32_t type, const void *const *indices, int32_t draws,
+                                       const int32_t *base_vertex, const uint64_t *&host_indices)
+{
+    AV_SCOPE("ManualCalls::stage_multi_elements");
+    host_indices = nullptr;
+    GuestGlContext *const context = currents_.current();
+    if (context == nullptr || context->wire() == nullptr) return true;
+    if (!context->profile().legacy_calls_live()) {
+        if (indices != nullptr && draws > 0 &&
+            context->arrays().bound_buffer(ClientArrayState::element_array_buffer) == 0u) {
+            context->record(gl_invalid_operation);
+            return false;
+        }
+        return true;
+    }
+    ClientVertexDraw draw(*context->wire(), context->vertex(), context->arrays(), context->shadows());
+    const uint32_t       error = draw.multi_elements(count, type, indices, draws, base_vertex, host_indices);
+    if (error == 0u) return true;
+    draw.finish();
+    context->record(error);
+    return false;
+}
+
+bool ManualCalls::refuse_indirect_draw()
+{
+    AV_SCOPE("ManualCalls::refuse_indirect_draw");
+    GuestGlContext *const context = currents_.current();
+    if (context == nullptr || !context->vertex().client_active()) return false;
+    context->record(gl_invalid_operation);
+    return true;
+}
+
+void ManualCalls::finish_client_draw()
+{
+    AV_SCOPE("ManualCalls::finish_client_draw");
+    GuestGlContext *const context = currents_.current();
+    if (context == nullptr || !context->vertex().indexed() || context->wire() == nullptr) return;
+    ClientVertexDraw draw(*context->wire(), context->vertex(), context->arrays(), context->shadows());
+    draw.finish();
 }
 
 void ManualCalls::draw_arrays(uint32_t mode, int32_t first, int32_t count, int32_t instances)
@@ -749,6 +965,7 @@ void ManualCalls::draw_arrays(uint32_t mode, int32_t first, int32_t count, int32
     GuestGlContext *const context = sending();
     if (context == nullptr) return;
     context->mappings().flush_persistent(*context->wire());
+    if (!stage_arrays(first, count)) return;
     if (instances < 0) return glproto::av_glDrawArrays(*context->wire(), mode, first, count);
     glproto::av_glDrawArraysInstanced(*context->wire(), mode, first, count, instances);
 }
@@ -758,10 +975,13 @@ void ManualCalls::draw_elements(uint32_t mode, int32_t count, uint32_t type, con
     AV_SCOPE("ManualCalls::draw_elements");
     GuestGlContext *const context = sending();
     if (context == nullptr) return;
-    if (!indices_cross(indices)) return context->record(gl_invalid_operation);
     context->mappings().flush_persistent(*context->wire());
-    if (instances < 0) return glproto::av_glDrawElements(*context->wire(), mode, count, type, address_of(indices));
-    glproto::av_glDrawElementsInstanced(*context->wire(), mode, count, type, address_of(indices), instances);
+    if (!stage_elements(type, count, indices, 0)) return;
+    if (instances < 0)
+        glproto::av_glDrawElements(*context->wire(), mode, count, type, address_of(indices));
+    else
+        glproto::av_glDrawElementsInstanced(*context->wire(), mode, count, type, address_of(indices), instances);
+    finish_client_draw();
 }
 
 void ManualCalls::draw_range_elements(uint32_t mode, uint32_t start, uint32_t end, int32_t count, uint32_t type,
@@ -770,9 +990,10 @@ void ManualCalls::draw_range_elements(uint32_t mode, uint32_t start, uint32_t en
     AV_SCOPE("ManualCalls::draw_range_elements");
     GuestGlContext *const context = sending();
     if (context == nullptr) return;
-    if (!indices_cross(indices)) return context->record(gl_invalid_operation);
     context->mappings().flush_persistent(*context->wire());
+    if (!stage_elements(type, count, indices, 0)) return;
     glproto::av_glDrawRangeElements(*context->wire(), mode, start, end, count, type, address_of(indices));
+    finish_client_draw();
 }
 
 void ManualCalls::flush()
@@ -780,6 +1001,7 @@ void ManualCalls::flush()
     AV_SCOPE("ManualCalls::flush");
     GuestGlContext *const context = sending();
     if (context == nullptr) return;
+    context->mappings().flush_persistent(*context->wire());
     glproto::av_glFlush(*context->wire());
     context->end_frame();
 }
@@ -793,7 +1015,9 @@ uint32_t ManualCalls::client_wait_sync(void *sync, uint32_t flags, uint64_t time
     SyncWaitProbe           probe(*context->wire(), address_of(sync), flags);
     icd::HostCompletionWait wait(kmt_, timeout);
     static_cast<void>(wait.run(probe));
-    return probe.result();
+    const uint32_t result = probe.result();
+    if (result == 0x911Au || result == 0x911Cu) context->mappings().refresh_persistent(*context->wire());
+    return result;
 }
 
 void ManualCalls::finish()
@@ -803,12 +1027,14 @@ void ManualCalls::finish()
     GuestGlContext *const context = sending();
     if (context == nullptr) return;
     ClientTransport &wire = *context->wire();
+    context->mappings().order_persistent(wire);
     const uint64_t   fence = glproto::av_glFenceSync(wire, gl_sync_gpu_commands_complete, 0u);
     if (fence == 0u) return glproto::av_glFinish(wire);
     SyncWaitProbe           probe(wire, fence, SyncWaitProbe::gl_sync_flush_commands_bit);
     icd::HostCompletionWait wait(kmt_, icd::SlicedWait::forever);
     static_cast<void>(wait.run(probe));
     glproto::av_glDeleteSync(wire, fence);
+    context->mappings().refresh_persistent(wire);
     context->pinned().reclaim();
 }
 
@@ -816,7 +1042,104 @@ void ManualCalls::debug_message_callback(void *callback, const void *user)
 {
     AV_SCOPE("ManualCalls::debug_message_callback");
     GuestGlContext *const context = currents_.current();
-    if (context != nullptr) context->set_debug_callback(address_of(callback), address_of(user));
+    if (context != nullptr) context->debug().set_callback(address_of(callback), address_of(user));
+}
+
+void ManualCalls::capability(uint32_t cap, bool on)
+{
+    AV_SCOPE("ManualCalls::capability");
+    GuestGlContext *const context = currents_.current();
+    if (context == nullptr) return;
+    if (context->debug().tracks(cap)) context->debug().enable(cap, on);
+    ClientTransport *const wire = context->wire();
+    if (wire == nullptr) return;
+    if (on) glproto::av_glEnable(*wire, cap);
+    else glproto::av_glDisable(*wire, cap);
+}
+
+uint64_t ManualCalls::texture_handle(uint32_t texture, uint32_t sampler, bool with_sampler)
+{
+    AV_SCOPE("ManualCalls::texture_handle");
+    GuestGlContext *const context = sending();
+    if (context == nullptr) return 0u;
+    ClientTransport &wire = *context->wire();
+    const uint64_t   handle = with_sampler ? glproto::av_glGetTextureSamplerHandleARB(wire, texture, sampler)
+                                          : glproto::av_glGetTextureHandleARB(wire, texture);
+    if (handle != 0u &&
+        contexts_.bindless().add(context->group_root(), handle, BindlessHandles::Kind::texture, texture) != Status::ok)
+        return 0u;
+    return handle;
+}
+
+uint64_t ManualCalls::image_handle(uint32_t texture, int32_t level, bool layered, int32_t layer, uint32_t format)
+{
+    AV_SCOPE("ManualCalls::image_handle");
+    GuestGlContext *const context = sending();
+    if (context == nullptr) return 0u;
+    const uint64_t handle =
+        glproto::av_glGetImageHandleARB(*context->wire(), texture, level, layered ? 1 : 0, layer, format);
+    if (handle != 0u &&
+        contexts_.bindless().add(context->group_root(), handle, BindlessHandles::Kind::image, texture) != Status::ok)
+        return 0u;
+    return handle;
+}
+
+void ManualCalls::make_handle_resident(uint64_t handle, bool image, bool resident, uint32_t access)
+{
+    AV_SCOPE("ManualCalls::make_handle_resident");
+    GuestGlContext *const context = sending();
+    if (context == nullptr) return;
+    const BindlessHandles::Kind kind = image ? BindlessHandles::Kind::image : BindlessHandles::Kind::texture;
+    if (!contexts_.bindless().valid(context->group_root(), handle, kind)) return record(gl_invalid_operation);
+    ClientTransport &wire = *context->wire();
+    if (image && resident) glproto::av_glMakeImageHandleResidentARB(wire, handle, access);
+    else if (image) glproto::av_glMakeImageHandleNonResidentARB(wire, handle);
+    else if (resident) glproto::av_glMakeTextureHandleResidentARB(wire, handle);
+    else glproto::av_glMakeTextureHandleNonResidentARB(wire, handle);
+}
+
+bool ManualCalls::handle_resident(uint64_t handle, bool image)
+{
+    AV_SCOPE("ManualCalls::handle_resident");
+    GuestGlContext *const context = sending();
+    if (context == nullptr) return false;
+    const BindlessHandles::Kind kind = image ? BindlessHandles::Kind::image : BindlessHandles::Kind::texture;
+    if (!contexts_.bindless().valid(context->group_root(), handle, kind)) {
+        record(gl_invalid_operation);
+        return false;
+    }
+    ClientTransport &wire = *context->wire();
+    return (image ? glproto::av_glIsImageHandleResidentARB(wire, handle)
+                  : glproto::av_glIsTextureHandleResidentARB(wire, handle)) != 0;
+}
+
+void ManualCalls::uniform_handles(uint32_t program, bool with_program, int32_t location, int32_t count,
+                                  const uint64_t *values)
+{
+    AV_SCOPE("ManualCalls::uniform_handles");
+    GuestGlContext *const context = sending();
+    if (context == nullptr) return;
+    if (count < 0) return record(gl_invalid_value);
+    if (values == nullptr && count > 0) return record(gl_invalid_value);
+    const uint32_t group = context->group_root();
+    for (int32_t at = 0; at < count; at++) {
+        const bool known = contexts_.bindless().valid(group, values[at], BindlessHandles::Kind::texture) ||
+                           contexts_.bindless().valid(group, values[at], BindlessHandles::Kind::image);
+        if (!known) return record(gl_invalid_operation);
+    }
+    ClientTransport &wire = *context->wire();
+    if (with_program) glproto::av_glProgramUniformHandleui64vARB(wire, program, location, count, values);
+    else glproto::av_glUniformHandleui64vARB(wire, location, count, values);
+}
+
+void ManualCalls::delete_textures(int32_t count, const uint32_t *textures)
+{
+    AV_SCOPE("ManualCalls::delete_textures");
+    forget_bindings();
+    GuestGlContext *const context = currents_.current();
+    if (context == nullptr || context->wire() == nullptr) return;
+    contexts_.bindless().forget_textures(context->group_root(), count, textures);
+    glproto::av_glDeleteTextures(*context->wire(), count, textures);
 }
 
 void ManualCalls::link_program(uint32_t program)
@@ -918,6 +1241,14 @@ void ManualCalls::bind_framebuffer(uint32_t target, uint32_t framebuffer)
     glproto::av_glBindFramebuffer(*context->wire(), target, framebuffers.name_of(framebuffer));
 }
 
+bool ManualCalls::is_framebuffer(uint32_t framebuffer)
+{
+    AV_SCOPE("ManualCalls::is_framebuffer");
+    GuestGlContext *const context = sending();
+    if (context == nullptr || framebuffer == 0u) return false;
+    return glproto::av_glIsFramebuffer(*context->wire(), framebuffer) != 0u;
+}
+
 void ManualCalls::draw_buffer(uint32_t buffer)
 {
     AV_SCOPE("ManualCalls::draw_buffer");
@@ -931,6 +1262,8 @@ void ManualCalls::read_buffer(uint32_t buffer)
     AV_SCOPE("ManualCalls::read_buffer");
     GuestGlContext *const context = sending();
     if (context == nullptr) return;
+    if (context->framebuffers().reads_window() && buffer >= 0x8CE0u && buffer <= 0x8CFFu)
+        return record(gl_invalid_operation);
     context->framebuffers().reading(buffer);
     glproto::av_glReadBuffer(*context->wire(), context->framebuffers().buffer_for(buffer, false));
 }
@@ -948,11 +1281,33 @@ void ManualCalls::read_pixels(int32_t x, int32_t y, int32_t width, int32_t heigh
     const size_t bytes = offset ? 0u : context->arrays().pixel_bytes(format, type, width, height, 1, true);
     if (sliced && !slice_pack_pixels(pixels, bytes)) return;
     ClientTransport &wire = *context->wire();
+    context->mappings().flush_persistent(wire);
+    const bool       resolved = context->framebuffers().resolved_read(wire, context->calls_sent());
     const bool       staged = !offset && context->staging().stage_download(wire, pixels, bytes);
+    uint64_t         start = 0u, row_bytes = 0u, stride = 0u;
+    uint8_t         *kept = nullptr;
+    if (!offset && !sliced && pixels != nullptr && bytes != 0u &&
+        context->arrays().pixel_layout(format, type, width, height, true, start, row_bytes, stride) &&
+        (stride != row_bytes || start != 0u))
+        kept = context->vertex().staging(bytes);
+    if (kept != nullptr) __builtin_memcpy(kept, pixels, bytes);
     glproto::av_glReadPixels(wire, x, y, width, height, format, type, staged ? nullptr : pixels,
                              staged ? 0u : bytes, offset || staged);
+    if (resolved) context->framebuffers().resolved_read_done(wire);
     if (staged) context->staging().finish_download(wire, pixels, bytes);
+    if (kept != nullptr) {
+        uint8_t *const into = static_cast<uint8_t *>(pixels);
+        __builtin_memcpy(into, kept, static_cast<size_t>(start < bytes ? start : bytes));
+        for (int32_t row = 0; row < height; row++) {
+            const uint64_t from = start + static_cast<uint64_t>(row) * stride + row_bytes;
+            const uint64_t to = start + static_cast<uint64_t>(row + 1) * stride;
+            if (from >= bytes || to <= from) continue;
+            const uint64_t end = to < bytes ? to : bytes;
+            __builtin_memcpy(into + from, kept + from, static_cast<size_t>(end - from));
+        }
+    }
     if (sliced) pack_slice_done();
+    if (resolved) context->framebuffers().resolved_through(context->calls_sent());
 }
 
 const uint8_t *ManualCalls::string(uint32_t name)
@@ -1358,13 +1713,6 @@ void ManualCalls::wrote_bound(GuestGlContext &context, uint32_t target, intptr_t
         context.shadows().forget_all();
     else if (offset >= 0 && size >= 0)
         context.shadows().wrote(buffer, static_cast<uint64_t>(offset), static_cast<uint64_t>(size), data);
-}
-
-bool ManualCalls::indices_cross(const void *indices)
-{
-    AV_SCOPE("ManualCalls::indices_cross");
-    GuestGlContext *const context = currents_.current();
-    return indices == nullptr || context->arrays().indices_are_offset();
 }
 
 }

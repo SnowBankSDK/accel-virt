@@ -3357,6 +3357,40 @@ VkResult av_vkGetPhysicalDeviceToolProperties(::av::ClientTransport& t, HandleTr
     return static_cast<VkResult>(result_code);
 }
 
+VkResult av_vkGetPipelineCacheData(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, VkPipelineCache pipelineCache, size_t* pDataSize, void* pData) {
+    AV_SCOPE("av_vkGetPipelineCacheData");
+    ::av::WireWriter payload = t.request_writer();
+    serialize_VkDevice(payload, handles, device);
+    serialize_VkPipelineCache(payload, handles, pipelineCache);
+    const uint8_t array_present = pData != nullptr ? 1 : 0;
+    payload.write_pod(array_present);
+    if (array_present) {
+        payload.write_pod<uint64_t>(*pDataSize);
+    }
+    const ::av::SyncCallScope av_call{t};
+    ::av::WireReader r{nullptr, 0u};
+    if (t.send_sync(::av::vkproto::kCmd_vkGetPipelineCacheData, payload, r) != ::av::TransportResult::ok) {
+        return VK_ERROR_DEVICE_LOST;
+    }
+    int32_t result_code = 0;
+    if (!r.read_pod(result_code)) {
+        return VK_ERROR_DEVICE_LOST;
+    }
+    uint64_t pDataSize_answered = 0;
+    if (!r.read_pod(pDataSize_answered)) {
+        return VK_ERROR_DEVICE_LOST;
+    }
+    if (array_present && (pDataSize_answered > *pDataSize ||
+        (pDataSize_answered != 0 && !r.read(pData, static_cast<size_t>(pDataSize_answered))))) {
+        return VK_ERROR_DEVICE_LOST;
+    }
+    if (pDataSize_answered > static_cast<uint64_t>(~size_t{0})) {
+        return VK_ERROR_DEVICE_LOST;
+    }
+    *pDataSize = static_cast<size_t>(pDataSize_answered);
+    return static_cast<VkResult>(result_code);
+}
+
 void av_vkGetPrivateData(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, VkObjectType objectType, uint64_t objectHandle, VkPrivateDataSlot privateDataSlot, uint64_t* pData) {
     AV_SCOPE("av_vkGetPrivateData");
     ::av::WireWriter payload = t.request_writer();
@@ -4728,6 +4762,31 @@ VkResult av_vkBuildAccelerationStructuresKHR(::av::ClientTransport& t, HandleTra
     return static_cast<VkResult>(result_code);
 }
 
+void av_vkCmdBindDescriptorBufferEmbeddedSamplersEXT(::av::ClientTransport& t, HandleTranslation& handles, VkCommandBuffer commandBuffer, VkPipelineBindPoint pipelineBindPoint, VkPipelineLayout layout, uint32_t set) {
+    AV_SCOPE("av_vkCmdBindDescriptorBufferEmbeddedSamplersEXT");
+    ::av::WireWriter payload = t.request_writer();
+    serialize_VkCommandBuffer(payload, handles, commandBuffer);
+    payload.write_pod(pipelineBindPoint);
+    serialize_VkPipelineLayout(payload, handles, layout);
+    payload.write_pod(set);
+    if (t.send_async(::av::vkproto::kCmd_vkCmdBindDescriptorBufferEmbeddedSamplersEXT, payload) != ::av::TransportResult::ok) {
+        return;
+    }
+}
+
+void av_vkCmdBindDescriptorBuffersEXT(::av::ClientTransport& t, HandleTranslation& handles, VkCommandBuffer commandBuffer, uint32_t bufferCount, const VkDescriptorBufferBindingInfoEXT* pBindingInfos) {
+    AV_SCOPE("av_vkCmdBindDescriptorBuffersEXT");
+    ::av::WireWriter payload = t.request_writer();
+    serialize_VkCommandBuffer(payload, handles, commandBuffer);
+    payload.write_pod(bufferCount);
+    for (uint32_t av_i = 0; av_i < static_cast<uint32_t>(bufferCount); ++av_i) {
+        serialize_VkDescriptorBufferBindingInfoEXT(payload, handles, pBindingInfos[av_i]);
+    }
+    if (t.send_async(::av::vkproto::kCmd_vkCmdBindDescriptorBuffersEXT, payload) != ::av::TransportResult::ok) {
+        return;
+    }
+}
+
 void av_vkCmdBindShadersEXT(::av::ClientTransport& t, HandleTranslation& handles, VkCommandBuffer commandBuffer, uint32_t stageCount, const VkShaderStageFlagBits* pStages, const VkShaderEXT* pShaders) {
     AV_SCOPE("av_vkCmdBindShadersEXT");
     ::av::WireWriter payload = t.request_writer();
@@ -5149,6 +5208,25 @@ void av_vkCmdSetDepthWriteEnableEXT(::av::ClientTransport& t, HandleTranslation&
     }
 }
 
+void av_vkCmdSetDescriptorBufferOffsetsEXT(::av::ClientTransport& t, HandleTranslation& handles, VkCommandBuffer commandBuffer, VkPipelineBindPoint pipelineBindPoint, VkPipelineLayout layout, uint32_t firstSet, uint32_t setCount, const uint32_t* pBufferIndices, const VkDeviceSize* pOffsets) {
+    AV_SCOPE("av_vkCmdSetDescriptorBufferOffsetsEXT");
+    ::av::WireWriter payload = t.request_writer();
+    serialize_VkCommandBuffer(payload, handles, commandBuffer);
+    payload.write_pod(pipelineBindPoint);
+    serialize_VkPipelineLayout(payload, handles, layout);
+    payload.write_pod(firstSet);
+    payload.write_pod(setCount);
+    for (uint32_t av_i = 0; av_i < static_cast<uint32_t>(setCount); ++av_i) {
+        payload.write_pod(pBufferIndices[av_i]);
+    }
+    for (uint32_t av_i = 0; av_i < static_cast<uint32_t>(setCount); ++av_i) {
+        payload.write_pod(pOffsets[av_i]);
+    }
+    if (t.send_async(::av::vkproto::kCmd_vkCmdSetDescriptorBufferOffsetsEXT, payload) != ::av::TransportResult::ok) {
+        return;
+    }
+}
+
 void av_vkCmdSetExtraPrimitiveOverestimationSizeEXT(::av::ClientTransport& t, HandleTranslation& handles, VkCommandBuffer commandBuffer, float extraPrimitiveOverestimationSize) {
     AV_SCOPE("av_vkCmdSetExtraPrimitiveOverestimationSizeEXT");
     ::av::WireWriter payload = t.request_writer();
@@ -5511,6 +5589,14 @@ VkResult av_vkCopyImageToImageEXT(::av::ClientTransport& t, HandleTranslation& h
 
 VkResult av_vkCopyImageToMemoryEXT(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, const VkCopyImageToMemoryInfo* pCopyImageToMemoryInfo) {
     AV_SCOPE("av_vkCopyImageToMemoryEXT");
+    for (uint32_t av_c = 0; av_c < pCopyImageToMemoryInfo->regionCount; ++av_c) {
+        uint64_t av_n = 0;
+        if (!handles.image_copy_bytes(pCopyImageToMemoryInfo->srcImage, pCopyImageToMemoryInfo->pRegions[av_c].imageSubresource,
+                pCopyImageToMemoryInfo->pRegions[av_c].imageExtent, pCopyImageToMemoryInfo->pRegions[av_c].memoryRowLength,
+                pCopyImageToMemoryInfo->pRegions[av_c].memoryImageHeight, av_n)) {
+            return VK_ERROR_FORMAT_NOT_SUPPORTED;
+        }
+    }
     ::av::WireWriter payload = t.request_writer();
     serialize_VkDevice(payload, handles, device);
     serialize_VkCopyImageToMemoryInfo(payload, handles, *pCopyImageToMemoryInfo);
@@ -5522,6 +5608,19 @@ VkResult av_vkCopyImageToMemoryEXT(::av::ClientTransport& t, HandleTranslation& 
     int32_t result_code = 0;
     if (!r.read_pod(result_code)) {
         return VK_ERROR_DEVICE_LOST;
+    }
+    if (result_code >= 0) {
+        for (uint32_t av_c = 0; av_c < pCopyImageToMemoryInfo->regionCount; ++av_c) {
+            uint64_t av_n = 0;
+            if (!handles.image_copy_bytes(pCopyImageToMemoryInfo->srcImage, pCopyImageToMemoryInfo->pRegions[av_c].imageSubresource,
+                    pCopyImageToMemoryInfo->pRegions[av_c].imageExtent, pCopyImageToMemoryInfo->pRegions[av_c].memoryRowLength,
+                    pCopyImageToMemoryInfo->pRegions[av_c].memoryImageHeight, av_n)) {
+        return VK_ERROR_DEVICE_LOST;
+            }
+            if (av_n != 0 && !r.read(pCopyImageToMemoryInfo->pRegions[av_c].pHostPointer, static_cast<size_t>(av_n))) {
+        return VK_ERROR_DEVICE_LOST;
+            }
+        }
     }
     return static_cast<VkResult>(result_code);
 }
@@ -5546,6 +5645,14 @@ VkResult av_vkCopyMemoryToAccelerationStructureKHR(::av::ClientTransport& t, Han
 
 VkResult av_vkCopyMemoryToImageEXT(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, const VkCopyMemoryToImageInfo* pCopyMemoryToImageInfo) {
     AV_SCOPE("av_vkCopyMemoryToImageEXT");
+    for (uint32_t av_c = 0; av_c < pCopyMemoryToImageInfo->regionCount; ++av_c) {
+        uint64_t av_n = 0;
+        if (!handles.image_copy_bytes(pCopyMemoryToImageInfo->dstImage, pCopyMemoryToImageInfo->pRegions[av_c].imageSubresource,
+                pCopyMemoryToImageInfo->pRegions[av_c].imageExtent, pCopyMemoryToImageInfo->pRegions[av_c].memoryRowLength,
+                pCopyMemoryToImageInfo->pRegions[av_c].memoryImageHeight, av_n)) {
+            return VK_ERROR_FORMAT_NOT_SUPPORTED;
+        }
+    }
     ::av::WireWriter payload = t.request_writer();
     serialize_VkDevice(payload, handles, device);
     serialize_VkCopyMemoryToImageInfo(payload, handles, *pCopyMemoryToImageInfo);
@@ -5786,6 +5893,67 @@ VkResult av_vkGetDeferredOperationResultKHR(::av::ClientTransport& t, HandleTran
     return static_cast<VkResult>(result_code);
 }
 
+void av_vkGetDescriptorEXT(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, const VkDescriptorGetInfoEXT* pDescriptorInfo, size_t dataSize, void* pDescriptor) {
+    AV_SCOPE("av_vkGetDescriptorEXT");
+    ::av::WireWriter payload = t.request_writer();
+    serialize_VkDevice(payload, handles, device);
+    serialize_VkDescriptorGetInfoEXT(payload, handles, *pDescriptorInfo);
+    payload.write_pod<uint64_t>(dataSize);
+    const ::av::SyncCallScope av_call{t};
+    ::av::WireReader r{nullptr, 0u};
+    if (t.send_sync(::av::vkproto::kCmd_vkGetDescriptorEXT, payload, r) != ::av::TransportResult::ok) {
+        return;
+    }
+    int32_t result_code = 0;
+    if (!r.read_pod(result_code)) {
+        return;
+    }
+    if (pDescriptor != nullptr && dataSize > 0) {
+        if (!r.read(pDescriptor, static_cast<size_t>(dataSize))) {
+        return;
+        }
+    }
+}
+
+void av_vkGetDescriptorSetLayoutBindingOffsetEXT(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, VkDescriptorSetLayout layout, uint32_t binding, VkDeviceSize* pOffset) {
+    AV_SCOPE("av_vkGetDescriptorSetLayoutBindingOffsetEXT");
+    ::av::WireWriter payload = t.request_writer();
+    serialize_VkDevice(payload, handles, device);
+    serialize_VkDescriptorSetLayout(payload, handles, layout);
+    payload.write_pod(binding);
+    const ::av::SyncCallScope av_call{t};
+    ::av::WireReader r{nullptr, 0u};
+    if (t.send_sync(::av::vkproto::kCmd_vkGetDescriptorSetLayoutBindingOffsetEXT, payload, r) != ::av::TransportResult::ok) {
+        return;
+    }
+    int32_t result_code = 0;
+    if (!r.read_pod(result_code)) {
+        return;
+    }
+    if (!r.read_pod(*pOffset)) {
+        return;
+    }
+}
+
+void av_vkGetDescriptorSetLayoutSizeEXT(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, VkDescriptorSetLayout layout, VkDeviceSize* pLayoutSizeInBytes) {
+    AV_SCOPE("av_vkGetDescriptorSetLayoutSizeEXT");
+    ::av::WireWriter payload = t.request_writer();
+    serialize_VkDevice(payload, handles, device);
+    serialize_VkDescriptorSetLayout(payload, handles, layout);
+    const ::av::SyncCallScope av_call{t};
+    ::av::WireReader r{nullptr, 0u};
+    if (t.send_sync(::av::vkproto::kCmd_vkGetDescriptorSetLayoutSizeEXT, payload, r) != ::av::TransportResult::ok) {
+        return;
+    }
+    int32_t result_code = 0;
+    if (!r.read_pod(result_code)) {
+        return;
+    }
+    if (!r.read_pod(*pLayoutSizeInBytes)) {
+        return;
+    }
+}
+
 void av_vkGetDeviceAccelerationStructureCompatibilityKHR(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, const VkAccelerationStructureVersionInfoKHR* pVersionInfo, VkAccelerationStructureCompatibilityKHR* pCompatibility) {
     AV_SCOPE("av_vkGetDeviceAccelerationStructureCompatibilityKHR");
     ::av::WireWriter payload = t.request_writer();
@@ -5930,6 +6098,40 @@ VkDeviceSize av_vkGetRayTracingShaderGroupStackSizeKHR(::av::ClientTransport& t,
         return static_cast<VkDeviceSize>(0);
     }
     return static_cast<VkDeviceSize>(result_code);
+}
+
+VkResult av_vkGetShaderBinaryDataEXT(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, VkShaderEXT shader, size_t* pDataSize, void* pData) {
+    AV_SCOPE("av_vkGetShaderBinaryDataEXT");
+    ::av::WireWriter payload = t.request_writer();
+    serialize_VkDevice(payload, handles, device);
+    serialize_VkShaderEXT(payload, handles, shader);
+    const uint8_t array_present = pData != nullptr ? 1 : 0;
+    payload.write_pod(array_present);
+    if (array_present) {
+        payload.write_pod<uint64_t>(*pDataSize);
+    }
+    const ::av::SyncCallScope av_call{t};
+    ::av::WireReader r{nullptr, 0u};
+    if (t.send_sync(::av::vkproto::kCmd_vkGetShaderBinaryDataEXT, payload, r) != ::av::TransportResult::ok) {
+        return VK_ERROR_DEVICE_LOST;
+    }
+    int32_t result_code = 0;
+    if (!r.read_pod(result_code)) {
+        return VK_ERROR_DEVICE_LOST;
+    }
+    uint64_t pDataSize_answered = 0;
+    if (!r.read_pod(pDataSize_answered)) {
+        return VK_ERROR_DEVICE_LOST;
+    }
+    if (array_present && (pDataSize_answered > *pDataSize ||
+        (pDataSize_answered != 0 && !r.read(pData, static_cast<size_t>(pDataSize_answered))))) {
+        return VK_ERROR_DEVICE_LOST;
+    }
+    if (pDataSize_answered > static_cast<uint64_t>(~size_t{0})) {
+        return VK_ERROR_DEVICE_LOST;
+    }
+    *pDataSize = static_cast<size_t>(pDataSize_answered);
+    return static_cast<VkResult>(result_code);
 }
 
 VkResult av_vkTransitionImageLayoutEXT(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, uint32_t transitionCount, const VkHostImageLayoutTransitionInfo* pTransitions) {
@@ -6154,6 +6356,45 @@ void av_vkGetImageSubresourceLayout2KHR(::av::ClientTransport& t, HandleTranslat
     if (!deserialize_VkSubresourceLayout2(r, handles, pLayout, t.decode_arena())) {
         return;
     }
+}
+
+VkResult av_vkGetPipelineBinaryDataKHR(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, const VkPipelineBinaryDataInfoKHR* pInfo, VkPipelineBinaryKeyKHR* pPipelineBinaryKey, size_t* pPipelineBinaryDataSize, void* pPipelineBinaryData) {
+    AV_SCOPE("av_vkGetPipelineBinaryDataKHR");
+    ::av::WireWriter payload = t.request_writer();
+    serialize_VkDevice(payload, handles, device);
+    serialize_VkPipelineBinaryDataInfoKHR(payload, handles, *pInfo);
+    payload.write_pod(pPipelineBinaryKey->sType);
+    serialize_pnext_chain(payload, handles, pPipelineBinaryKey->pNext);
+    const uint8_t array_present = pPipelineBinaryData != nullptr ? 1 : 0;
+    payload.write_pod(array_present);
+    if (array_present) {
+        payload.write_pod<uint64_t>(*pPipelineBinaryDataSize);
+    }
+    const ::av::SyncCallScope av_call{t};
+    ::av::WireReader r{nullptr, 0u};
+    if (t.send_sync(::av::vkproto::kCmd_vkGetPipelineBinaryDataKHR, payload, r) != ::av::TransportResult::ok) {
+        return VK_ERROR_DEVICE_LOST;
+    }
+    int32_t result_code = 0;
+    if (!r.read_pod(result_code)) {
+        return VK_ERROR_DEVICE_LOST;
+    }
+    if (!deserialize_VkPipelineBinaryKeyKHR(r, handles, pPipelineBinaryKey, t.decode_arena())) {
+        return VK_ERROR_DEVICE_LOST;
+    }
+    uint64_t pPipelineBinaryDataSize_answered = 0;
+    if (!r.read_pod(pPipelineBinaryDataSize_answered)) {
+        return VK_ERROR_DEVICE_LOST;
+    }
+    if (array_present && (pPipelineBinaryDataSize_answered > *pPipelineBinaryDataSize ||
+        (pPipelineBinaryDataSize_answered != 0 && !r.read(pPipelineBinaryData, static_cast<size_t>(pPipelineBinaryDataSize_answered))))) {
+        return VK_ERROR_DEVICE_LOST;
+    }
+    if (pPipelineBinaryDataSize_answered > static_cast<uint64_t>(~size_t{0})) {
+        return VK_ERROR_DEVICE_LOST;
+    }
+    *pPipelineBinaryDataSize = static_cast<size_t>(pPipelineBinaryDataSize_answered);
+    return static_cast<VkResult>(result_code);
 }
 
 VkResult av_vkGetPipelineKeyKHR(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, const VkPipelineCreateInfoKHR* pPipelineCreateInfo, VkPipelineBinaryKeyKHR* pPipelineKey) {
@@ -6485,12 +6726,30 @@ void av_vkCmdDrawMultiEXT(::av::ClientTransport& t, HandleTranslation& handles, 
     serialize_VkCommandBuffer(payload, handles, commandBuffer);
     payload.write_pod(drawCount);
     for (uint32_t av_i = 0; av_i < static_cast<uint32_t>(drawCount); ++av_i) {
-        serialize_VkMultiDrawInfoEXT(payload, pVertexInfo[av_i]);
+        serialize_VkMultiDrawInfoEXT(payload, (*reinterpret_cast<const VkMultiDrawInfoEXT*>(reinterpret_cast<const uint8_t*>(pVertexInfo) + static_cast<size_t>(av_i) * stride)));
     }
     payload.write_pod(instanceCount);
     payload.write_pod(firstInstance);
-    payload.write_pod(stride);
+    (void)stride;
     if (t.send_async(::av::vkproto::kCmd_vkCmdDrawMultiEXT, payload) != ::av::TransportResult::ok) {
+        return;
+    }
+}
+
+void av_vkCmdDrawMultiIndexedEXT(::av::ClientTransport& t, HandleTranslation& handles, VkCommandBuffer commandBuffer, uint32_t drawCount, const VkMultiDrawIndexedInfoEXT* pIndexInfo, uint32_t instanceCount, uint32_t firstInstance, uint32_t stride, const int32_t* pVertexOffset) {
+    AV_SCOPE("av_vkCmdDrawMultiIndexedEXT");
+    ::av::WireWriter payload = t.request_writer();
+    serialize_VkCommandBuffer(payload, handles, commandBuffer);
+    payload.write_pod(drawCount);
+    for (uint32_t av_i = 0; av_i < static_cast<uint32_t>(drawCount); ++av_i) {
+        serialize_VkMultiDrawIndexedInfoEXT(payload, (*reinterpret_cast<const VkMultiDrawIndexedInfoEXT*>(reinterpret_cast<const uint8_t*>(pIndexInfo) + static_cast<size_t>(av_i) * stride)));
+    }
+    payload.write_pod(instanceCount);
+    payload.write_pod(firstInstance);
+    (void)stride;
+    payload.write_pod<uint8_t>(pVertexOffset != nullptr ? 1 : 0);
+    if (pVertexOffset != nullptr) { payload.write_pod(*pVertexOffset); }
+    if (t.send_async(::av::vkproto::kCmd_vkCmdDrawMultiIndexedEXT, payload) != ::av::TransportResult::ok) {
         return;
     }
 }
@@ -6750,6 +7009,141 @@ void av_vkGetShaderModuleIdentifierEXT(::av::ClientTransport& t, HandleTranslati
         return;
     }
     if (!deserialize_VkShaderModuleIdentifierEXT(r, handles, pIdentifier, t.decode_arena())) {
+        return;
+    }
+}
+
+void av_vkCmdExecuteGeneratedCommandsEXT(::av::ClientTransport& t, HandleTranslation& handles, VkCommandBuffer commandBuffer, VkBool32 isPreprocessed, const VkGeneratedCommandsInfoEXT* pGeneratedCommandsInfo) {
+    AV_SCOPE("av_vkCmdExecuteGeneratedCommandsEXT");
+    ::av::WireWriter payload = t.request_writer();
+    serialize_VkCommandBuffer(payload, handles, commandBuffer);
+    payload.write_pod(isPreprocessed);
+    serialize_VkGeneratedCommandsInfoEXT(payload, handles, *pGeneratedCommandsInfo);
+    if (t.send_async(::av::vkproto::kCmd_vkCmdExecuteGeneratedCommandsEXT, payload) != ::av::TransportResult::ok) {
+        return;
+    }
+}
+
+void av_vkCmdPreprocessGeneratedCommandsEXT(::av::ClientTransport& t, HandleTranslation& handles, VkCommandBuffer commandBuffer, const VkGeneratedCommandsInfoEXT* pGeneratedCommandsInfo, VkCommandBuffer stateCommandBuffer) {
+    AV_SCOPE("av_vkCmdPreprocessGeneratedCommandsEXT");
+    ::av::WireWriter payload = t.request_writer();
+    serialize_VkCommandBuffer(payload, handles, commandBuffer);
+    serialize_VkGeneratedCommandsInfoEXT(payload, handles, *pGeneratedCommandsInfo);
+    serialize_VkCommandBuffer(payload, handles, stateCommandBuffer);
+    if (t.send_async(::av::vkproto::kCmd_vkCmdPreprocessGeneratedCommandsEXT, payload) != ::av::TransportResult::ok) {
+        return;
+    }
+}
+
+VkResult av_vkCreateIndirectCommandsLayoutEXT(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, const VkIndirectCommandsLayoutCreateInfoEXT* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkIndirectCommandsLayoutEXT* pIndirectCommandsLayout) {
+    AV_SCOPE("av_vkCreateIndirectCommandsLayoutEXT");
+    ::av::WireWriter payload = t.request_writer();
+    serialize_VkDevice(payload, handles, device);
+    serialize_VkIndirectCommandsLayoutCreateInfoEXT(payload, handles, *pCreateInfo);
+    (void)pAllocator;  // VkAllocationCallbacks not crossed over the wire
+    const ::av::SyncCallScope av_call{t};
+    ::av::WireReader r{nullptr, 0u};
+    if (t.send_sync(::av::vkproto::kCmd_vkCreateIndirectCommandsLayoutEXT, payload, r) != ::av::TransportResult::ok) {
+        return VK_ERROR_DEVICE_LOST;
+    }
+    int32_t result_code = 0;
+    if (!r.read_pod(result_code)) {
+        return VK_ERROR_DEVICE_LOST;
+    }
+    if (!r.read_pod(*pIndirectCommandsLayout)) {
+        return VK_ERROR_DEVICE_LOST;
+    }
+    return static_cast<VkResult>(result_code);
+}
+
+VkResult av_vkCreateIndirectExecutionSetEXT(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, const VkIndirectExecutionSetCreateInfoEXT* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkIndirectExecutionSetEXT* pIndirectExecutionSet) {
+    AV_SCOPE("av_vkCreateIndirectExecutionSetEXT");
+    ::av::WireWriter payload = t.request_writer();
+    serialize_VkDevice(payload, handles, device);
+    serialize_VkIndirectExecutionSetCreateInfoEXT(payload, handles, *pCreateInfo);
+    (void)pAllocator;  // VkAllocationCallbacks not crossed over the wire
+    const ::av::SyncCallScope av_call{t};
+    ::av::WireReader r{nullptr, 0u};
+    if (t.send_sync(::av::vkproto::kCmd_vkCreateIndirectExecutionSetEXT, payload, r) != ::av::TransportResult::ok) {
+        return VK_ERROR_DEVICE_LOST;
+    }
+    int32_t result_code = 0;
+    if (!r.read_pod(result_code)) {
+        return VK_ERROR_DEVICE_LOST;
+    }
+    if (!r.read_pod(*pIndirectExecutionSet)) {
+        return VK_ERROR_DEVICE_LOST;
+    }
+    return static_cast<VkResult>(result_code);
+}
+
+void av_vkDestroyIndirectCommandsLayoutEXT(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, VkIndirectCommandsLayoutEXT indirectCommandsLayout, const VkAllocationCallbacks* pAllocator) {
+    AV_SCOPE("av_vkDestroyIndirectCommandsLayoutEXT");
+    ::av::WireWriter payload = t.request_writer();
+    serialize_VkDevice(payload, handles, device);
+    serialize_VkIndirectCommandsLayoutEXT(payload, handles, indirectCommandsLayout);
+    (void)pAllocator;  // VkAllocationCallbacks not crossed over the wire
+    if (t.send_async(::av::vkproto::kCmd_vkDestroyIndirectCommandsLayoutEXT, payload) != ::av::TransportResult::ok) {
+        return;
+    }
+}
+
+void av_vkDestroyIndirectExecutionSetEXT(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, VkIndirectExecutionSetEXT indirectExecutionSet, const VkAllocationCallbacks* pAllocator) {
+    AV_SCOPE("av_vkDestroyIndirectExecutionSetEXT");
+    ::av::WireWriter payload = t.request_writer();
+    serialize_VkDevice(payload, handles, device);
+    serialize_VkIndirectExecutionSetEXT(payload, handles, indirectExecutionSet);
+    (void)pAllocator;  // VkAllocationCallbacks not crossed over the wire
+    if (t.send_async(::av::vkproto::kCmd_vkDestroyIndirectExecutionSetEXT, payload) != ::av::TransportResult::ok) {
+        return;
+    }
+}
+
+void av_vkGetGeneratedCommandsMemoryRequirementsEXT(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, const VkGeneratedCommandsMemoryRequirementsInfoEXT* pInfo, VkMemoryRequirements2* pMemoryRequirements) {
+    AV_SCOPE("av_vkGetGeneratedCommandsMemoryRequirementsEXT");
+    ::av::WireWriter payload = t.request_writer();
+    serialize_VkDevice(payload, handles, device);
+    serialize_VkGeneratedCommandsMemoryRequirementsInfoEXT(payload, handles, *pInfo);
+    payload.write_pod(pMemoryRequirements->sType);
+    serialize_pnext_chain(payload, handles, pMemoryRequirements->pNext);
+    const ::av::SyncCallScope av_call{t};
+    ::av::WireReader r{nullptr, 0u};
+    if (t.send_sync(::av::vkproto::kCmd_vkGetGeneratedCommandsMemoryRequirementsEXT, payload, r) != ::av::TransportResult::ok) {
+        return;
+    }
+    int32_t result_code = 0;
+    if (!r.read_pod(result_code)) {
+        return;
+    }
+    if (!deserialize_VkMemoryRequirements2(r, handles, pMemoryRequirements, t.decode_arena())) {
+        return;
+    }
+}
+
+void av_vkUpdateIndirectExecutionSetPipelineEXT(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, VkIndirectExecutionSetEXT indirectExecutionSet, uint32_t executionSetWriteCount, const VkWriteIndirectExecutionSetPipelineEXT* pExecutionSetWrites) {
+    AV_SCOPE("av_vkUpdateIndirectExecutionSetPipelineEXT");
+    ::av::WireWriter payload = t.request_writer();
+    serialize_VkDevice(payload, handles, device);
+    serialize_VkIndirectExecutionSetEXT(payload, handles, indirectExecutionSet);
+    payload.write_pod(executionSetWriteCount);
+    for (uint32_t av_i = 0; av_i < static_cast<uint32_t>(executionSetWriteCount); ++av_i) {
+        serialize_VkWriteIndirectExecutionSetPipelineEXT(payload, handles, pExecutionSetWrites[av_i]);
+    }
+    if (t.send_async(::av::vkproto::kCmd_vkUpdateIndirectExecutionSetPipelineEXT, payload) != ::av::TransportResult::ok) {
+        return;
+    }
+}
+
+void av_vkUpdateIndirectExecutionSetShaderEXT(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, VkIndirectExecutionSetEXT indirectExecutionSet, uint32_t executionSetWriteCount, const VkWriteIndirectExecutionSetShaderEXT* pExecutionSetWrites) {
+    AV_SCOPE("av_vkUpdateIndirectExecutionSetShaderEXT");
+    ::av::WireWriter payload = t.request_writer();
+    serialize_VkDevice(payload, handles, device);
+    serialize_VkIndirectExecutionSetEXT(payload, handles, indirectExecutionSet);
+    payload.write_pod(executionSetWriteCount);
+    for (uint32_t av_i = 0; av_i < static_cast<uint32_t>(executionSetWriteCount); ++av_i) {
+        serialize_VkWriteIndirectExecutionSetShaderEXT(payload, handles, pExecutionSetWrites[av_i]);
+    }
+    if (t.send_async(::av::vkproto::kCmd_vkUpdateIndirectExecutionSetShaderEXT, payload) != ::av::TransportResult::ok) {
         return;
     }
 }

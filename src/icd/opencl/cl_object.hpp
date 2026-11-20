@@ -3,6 +3,7 @@
 
 #include "icd/common/id_mint.hpp"
 #include "icd/opencl/cl_info_answers.hpp"
+#include "icd/opencl/cl_mem_extent.hpp"
 
 #include <CL/cl.h>
 #include <CL/cl_icd.h>
@@ -15,6 +16,10 @@ class HostAllocation;
 
 namespace av::clicd {
 
+class ClKernelArgs;
+class ClKernelShape;
+class ClReplicas;
+class ClProgramSource;
 class GuestClContext;
 
 struct ClObjectProbe;
@@ -50,6 +55,41 @@ public:
 
     ClObject *nearest(Kind kind);
 
+    static constexpr uint32_t program_typed_arguments = 1u;
+    static constexpr uint32_t program_arguments_asked = 2u;
+    static constexpr uint32_t program_non_uniform = 4u;
+    static constexpr uint32_t kernel_unshaped = 8u;
+    static constexpr uint32_t program_from_source = 16u;
+    static constexpr uint32_t program_failed = 32u;
+    static constexpr uint32_t event_settled = 64u;
+    static constexpr uint32_t mem_from_gl = 128u;
+    static constexpr uint32_t queue_gated = 256u;
+    static constexpr uint32_t queue_poisoned = 512u;
+    static constexpr uint32_t mem_touched = 1024u;
+
+    void            keep_source(ClProgramSource *source);
+    ClProgramSource *source() const;
+    void            rewire(uint64_t wire);
+    void            rehome(GuestClContext *context, uint64_t wire);
+    void            note_use(uint64_t queue);
+    uint64_t        last_queue() const;
+    void            keep_replicas(ClReplicas *replicas);
+    ClReplicas     *replicas() const;
+    void            keep_args(ClKernelArgs *args);
+    ClKernelArgs   *args() const;
+    void            keep_shape(ClKernelShape *shape);
+    ClKernelShape  *shape() const;
+    ClMemExtent    &extent();
+    const ClMemExtent &extent() const;
+    void            keep_companion(ClObject *companion);
+    ClObject       *companion() const;
+    void            keep_flags(uint64_t flags);
+    uint64_t        flags() const;
+    void            keep_command_type(uint32_t type);
+    uint32_t        command_type() const;
+    void            keep_traits(uint32_t traits);
+    uint32_t        traits() const;
+
     void     retain();
     bool     release();
     uint32_t references() const;
@@ -81,6 +121,16 @@ private:
     uint8_t               *application_memory_;
     HostAllocation        *lent_;
     ClObject              *sliced_from_;
+    ClKernelShape         *shape_;
+    ClReplicas            *replicas_;
+    ClKernelArgs          *args_;
+    uint64_t               last_queue_;
+    ClProgramSource       *source_;
+    ClObject              *companion_;
+    uint64_t               flags_;
+    ClMemExtent            extent_;
+    uint32_t               command_type_;
+    uint32_t               traits_;
     uint32_t               references_;
     uint32_t               children_;
     Kind                   kind_;

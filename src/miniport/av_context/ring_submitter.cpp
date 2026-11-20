@@ -79,6 +79,9 @@ Status RingSubmitter::submit(const SubmissionDescriptor &submission)
     AV_SCOPE("RingSubmitter::submit");
     platform_.require_irql_at_most(Irql::dispatch, "RingSubmitter::submit");
     if (ring_ == nullptr || failed_) return Status::invalid_state;
+    if (submission.end() <= tail_ && submission.begin() < submission.end() &&
+        submission.fence_id() <= fences_.highest_submitted())
+        return Status::ok;
     uint64_t published = tail_;
     if (shared_tail_ && adopt_published_tail(submission, published) != Status::ok)
         return Status::invalid_parameter;

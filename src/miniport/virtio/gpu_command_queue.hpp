@@ -21,6 +21,7 @@ class GpuCommandQueue {
 public:
     static constexpr uint32_t slot_count = 16u;
     static constexpr uint32_t wide_slot = slot_count;
+    static constexpr uint32_t exchange_slot = slot_count + 1u;
 
     GpuCommandQueue(Platform &platform, VirtioPciTransport &transport, uint16_t index, uint32_t response_bytes,
                     uint32_t wide_bytes, LockRank rank);
@@ -45,15 +46,17 @@ private:
     size_t slots_bytes() const;
     size_t offset_of(uint32_t slot) const;
     size_t request_bytes_of(uint32_t slot) const;
-    static constexpr uint32_t no_slot = slot_count + 1u;
+    size_t wide_part_bytes() const;
+    size_t exchange_request_bytes() const;
+    static constexpr uint32_t no_slot = exchange_slot + 1u;
     static constexpr uint32_t poll_microseconds = 20u;
     static constexpr uint64_t spin_ticks = 20000u;
     static constexpr uint64_t sleep_ticks = 100000u;
     static constexpr uint64_t patience_ticks = 30000000u;
 
     uint32_t slot_for(size_t length) const;
-    [[nodiscard]] Status send_locked(const uint8_t *request, size_t length, const VirtqSegment *payload,
-                                     uint16_t payload_count, uint32_t &slot);
+    [[nodiscard]] Status send_locked(uint32_t slot, const uint8_t *request, size_t length,
+                                     const VirtqSegment *payload, uint16_t payload_count);
     [[nodiscard]] Status exchange_segments(const uint8_t *request, size_t length, const VirtqSegment *payload,
                                            uint16_t payload_count, uint8_t *response, size_t capacity,
                                            uint32_t &written);
@@ -75,7 +78,7 @@ private:
     uint32_t            awaited_written_;
     uint32_t            abandoned_slot_;
     WakeEvent           answer_;
-    bool                busy_[slot_count + 1u];
+    bool                busy_[no_slot];
     uint8_t             slot_of_head_[VirtQueue::max_size];
     uint32_t            in_flight_;
 

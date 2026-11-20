@@ -635,6 +635,8 @@ TEST(renderer_service_context, answers_create_and_destroy_with_the_planes_outcom
   CHECK_STATUS(rig.context(Kind::destroy_context, context_id, 42u), Status::ok);
   CHECK_STATUS(rig.reply(sequence).status(), Status::ok);
   CHECK_EQ(RendererServiceProbe::plane(rig.service()).live(), 0u);
+  CHECK(rig.host().wait_for_main_loop_work(1u, 5000u));
+  CHECK_EQ(rig.host().run_main_loop(), 1u);
   CHECK_STATUS(rig.context(Kind::destroy_context, context_id, 43u), Status::ok);
   CHECK_STATUS(rig.reply(sequence).status(), Status::not_found);
   CHECK_EQ(sequence, 43u);

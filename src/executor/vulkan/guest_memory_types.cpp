@@ -1,10 +1,11 @@
 #include "executor/vulkan/guest_memory_types.hpp"
 
 #include "core/trace/function_scope.hpp"
+#include "proto/vulkan/placed_memory_types.hpp"
 
 namespace av {
 
-GuestMemoryTypes::GuestMemoryTypes() : properties_(), hosts_{}, backed_(0u), host_types_(0u)
+GuestMemoryTypes::GuestMemoryTypes() : properties_(), hosts_{}, backed_(0u), host_types_(0u), placed_(0u)
 {
     AV_SCOPE("GuestMemoryTypes::GuestMemoryTypes");
 }
@@ -24,13 +25,20 @@ void GuestMemoryTypes::learn(const VkPhysicalDeviceMemoryProperties &host, uint3
         if ((host.memoryTypes[type].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0u)
             sourced |= backed & (1u << type);
     const uint32_t twins = twin_origins(host, sourced);
+    uint32_t       room = VK_MAX_MEMORY_TYPES - host_types_ - static_cast<uint32_t>(__builtin_popcount(twins));
     for (uint32_t type = 0u; type < host_types_; type++) {
         const VkMemoryType &kind = host.memoryTypes[type];
         const bool          source = (sourced & (1u << type)) != 0u;
         if ((twins & (1u << type)) != 0u) append(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, kind.heapIndex, type, false);
         append(source ? kind.propertyFlags : kind.propertyFlags & ~host_access, kind.heapIndex, type, source);
+        if (source && room != 0u && (kind.propertyFlags & cached_coherent_mask) == cached_coherent) {
+            append(kind.propertyFlags & ~static_cast<VkMemoryPropertyFlags>(VK_MEMORY_PROPERTY_HOST_COHERENT_BIT), kind.heapIndex,
+                   type, true);
+            room--;
+        }
     }
     order();
+    placed_ = PlacedMemoryTypes::mask(properties_);
 }
 
 uint32_t GuestMemoryTypes::twin_origins(const VkPhysicalDeviceMemoryProperties &host, uint32_t backed) const
@@ -136,6 +144,12 @@ uint32_t GuestMemoryTypes::source_type(uint32_t guest) const
 {
     AV_SCOPE("GuestMemoryTypes::source_type");
     return guest < properties_.memoryTypeCount && (backed_ & (1u << guest)) != 0u ? hosts_[guest] : no_type;
+}
+
+bool GuestMemoryTypes::placed(uint32_t guest) const
+{
+    AV_SCOPE("GuestMemoryTypes::placed");
+    return guest < properties_.memoryTypeCount && (placed_ & (1u << guest)) != 0u;
 }
 
 uint32_t GuestMemoryTypes::guest_bits(uint32_t host_bits) const

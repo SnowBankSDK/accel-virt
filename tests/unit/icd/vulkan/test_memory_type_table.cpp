@@ -134,7 +134,7 @@ TEST(memory_type_table, intel_s_device_local_heap_is_the_host_s_size)
   CHECK_EQ(answer.memoryTypes[7].propertyFlags, 0u);
   CHECK_EQ(answer.memoryHeaps[1].size, 0u); }
 
-TEST(memory_type_table, nvidia_s_host_heap_sits_on_the_non_local_budget)
+TEST(memory_type_table, nvidia_s_host_heap_is_the_host_s_size_whatever_the_non_local_budget)
 { TableRig      rig;
   MemoryTypeTable table(rig.kmt(), rig.adapter());
   CHECK_STATUS(table.build(nvidia()), Status::ok);
@@ -143,14 +143,38 @@ TEST(memory_type_table, nvidia_s_host_heap_sits_on_the_non_local_budget)
   CHECK_EQ(answer.memoryTypeCount, 6u);
   CHECK_EQ(answer.memoryHeapCount, 2u);
   CHECK_EQ(answer.memoryHeaps[0].size, 1024u * mib);
-  CHECK_EQ(answer.memoryHeaps[1].size, shared_budget);
+  CHECK_EQ(answer.memoryHeaps[1].size, 2u * 1024u * mib);
   CHECK_EQ(answer.memoryHeaps[1].flags, 0u);
   CHECK_EQ(answer.memoryTypes[0].heapIndex, 1u);
   CHECK_EQ(answer.memoryTypes[4].propertyFlags, visible | coherent | cached);
   const bool visible_types[] = {false, false, false, true, true, false};
   for (std::uint32_t type = 0u; type < 6u; type++) CHECK_EQ(table.host_visible(type), visible_types[type]); }
 
-TEST(memory_type_table, the_budget_of_each_heap_is_its_size)
+TEST(memory_type_table, a_host_visible_heap_is_no_larger_than_the_adapters_shared_segment_as_the_kernel_reports_it)
+{ TableRig rig;
+  rig.kmt().set_segment_sizes(1024u * mib, 0u, 512u * mib);
+  MemoryTypeTable table(rig.kmt(), rig.adapter());
+  CHECK_STATUS(table.build(nvidia()), Status::ok);
+  CHECK(table.invariants_hold());
+  VkPhysicalDeviceMemoryProperties answer = answered(table);
+  CHECK_EQ(answer.memoryHeaps[0].size, 1024u * mib);
+  CHECK_EQ(answer.memoryHeaps[1].size, 512u * mib);
+  CHECK_EQ(answer.memoryHeaps[1].flags, 0u);
+  VkPhysicalDeviceMemoryBudgetPropertiesEXT hosted = {};
+  VkPhysicalDeviceMemoryBudgetPropertiesEXT budget = {};
+  table.budget(budget, hosted);
+  CHECK_EQ(budget.heapBudget[1], 512u * mib);
+  rig.kmt().set_segment_sizes(1024u * mib, 0u, 4096u * mib);
+  CHECK_STATUS(table.build(nvidia()), Status::ok);
+  answer = answered(table);
+  CHECK_EQ(answer.memoryHeaps[1].size, 2u * 1024u * mib);
+  rig.kmt().set_segment_sizes(16u * mib, 0u, 16u * mib);
+  CHECK_STATUS(table.build(intel()), Status::ok);
+  answer = answered(table);
+  CHECK_EQ(answer.memoryHeaps[0].size, 1024u * mib);
+  CHECK_EQ(answer.memoryHeaps[0].flags, static_cast<VkMemoryHeapFlags>(VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)); }
+
+TEST(memory_type_table, the_budget_of_each_heap_is_its_size_unless_the_adapter_budget_is_lower)
 { TableRig      rig;
   MemoryTypeTable table(rig.kmt(), rig.adapter());
   CHECK_STATUS(table.build(nvidia()), Status::ok);
@@ -165,7 +189,7 @@ TEST(memory_type_table, the_budget_of_each_heap_is_its_size)
   CHECK(budget.pNext == &budget);
   CHECK_EQ(budget.heapBudget[0], 1024u * mib);
   CHECK_EQ(budget.heapUsage[0], local_usage);
-  CHECK_EQ(budget.heapBudget[1], shared_budget);
+  CHECK_EQ(budget.heapBudget[1], 2u * 1024u * mib);
   CHECK_EQ(budget.heapUsage[1], shared_usage);
   for (std::uint32_t heap = 2u; heap < VK_MAX_MEMORY_HEAPS; heap++) {
       CHECK_EQ(budget.heapBudget[heap], 0u);
@@ -173,7 +197,7 @@ TEST(memory_type_table, the_budget_of_each_heap_is_its_size)
   }
 }
 
-TEST(memory_type_table, a_rebuild_reads_the_budgets_again)
+TEST(memory_type_table, a_rebuild_reads_the_budgets_again_and_the_heap_sizes_stay)
 { TableRig      rig;
   MemoryTypeTable table(rig.kmt(), rig.adapter());
   CHECK_STATUS(table.build(nvidia()), Status::ok);
@@ -189,7 +213,7 @@ TEST(memory_type_table, a_rebuild_reads_the_budgets_again)
   CHECK_EQ(budget.heapBudget[1], 32u * mib);
   CHECK_EQ(budget.heapUsage[1], 7u * mib);
   CHECK_EQ(answered(table).memoryHeaps[0].size, 1024u * mib);
-  CHECK_EQ(answered(table).memoryHeaps[1].size, 32u * mib); }
+  CHECK_EQ(answered(table).memoryHeaps[1].size, 2u * 1024u * mib); }
 
 TEST(memory_type_table, thirty_two_types_on_sixteen_heaps_are_taken)
 { TableRig rig;
@@ -201,7 +225,7 @@ TEST(memory_type_table, thirty_two_types_on_sixteen_heaps_are_taken)
   CHECK(table.invariants_hold());
   CHECK(table.host_visible(31u));
   CHECK_EQ(answered(table).memoryTypes[31].heapIndex, 15u);
-  CHECK_EQ(answered(table).memoryHeaps[15].size, shared_budget); }
+  CHECK_EQ(answered(table).memoryHeaps[15].size, 16u * 1024u * mib); }
 
 TEST(memory_type_table, a_host_with_no_types_is_taken_with_its_heaps)
 { TableRig      rig;
@@ -269,9 +293,6 @@ TEST(memory_type_table, invariants_refuse_a_type_on_a_heap_past_the_heaps_or_a_c
   CHECK(!table.invariants_hold());
   MemoryTypeTableProbe::properties(table).memoryTypes[3].heapIndex = 1u;
   CHECK(table.invariants_hold());
-  MemoryTypeTableProbe::properties(table).memoryHeaps[1].size = 1u;
-  CHECK(!table.invariants_hold());
-  MemoryTypeTableProbe::properties(table).memoryHeaps[1].size = shared_budget;
   MemoryTypeTableProbe::properties(table).memoryHeaps[0].size = 1u;
   CHECK(table.invariants_hold());
   MemoryTypeTableProbe::properties(table).memoryTypeCount = VK_MAX_MEMORY_TYPES + 1u;
@@ -336,3 +357,15 @@ TEST(memory_type_table, the_usage_of_a_heap_is_the_larger_of_the_adapter_s_and_t
   CHECK_EQ(budget.heapBudget[0], 4096u * mib);
   CHECK_EQ(budget.heapUsage[2], 0u);
   CHECK_EQ(budget.heapBudget[2], 0u); }
+
+TEST(memory_type_table, the_host_visible_types_that_have_a_twin_are_placed_and_a_rebuild_forgets_them)
+{ TableRig      rig;
+  MemoryTypeTable table(rig.kmt(), rig.adapter());
+  for (std::uint32_t type = 0u; type < VK_MAX_MEMORY_TYPES; type++) CHECK(!table.placed(type));
+  CHECK_STATUS(table.build(intel()), Status::ok);
+  const bool placed[] = {false, true, true, false, false, true, true};
+  for (std::uint32_t type = 0u; type < 7u; type++) CHECK_EQ(table.placed(type), placed[type]);
+  CHECK(!table.placed(7u));
+  CHECK(!table.placed(VK_MAX_MEMORY_TYPES));
+  CHECK_STATUS(table.build(nvidia()), Status::ok);
+  for (std::uint32_t type = 0u; type < 6u; type++) CHECK(!table.placed(type)); }

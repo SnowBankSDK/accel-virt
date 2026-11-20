@@ -5,6 +5,7 @@
 #include "executor/source_memory.hpp"
 #include "core/support/status.hpp"
 #include "device/abi/av_executor.h"
+#include "executor/host_lifecycle_gate.hpp"
 #include "executor/opengl/opengl_backend.hpp"
 #include "executor/shim/gl_display.hpp"
 #include "executor/shim/loader_host_apis.hpp"
@@ -173,9 +174,10 @@ TEST(opengl_backend, a_gpu_with_no_display_opens_no_context)
   OpenGlBackend backend(backend_lines.log);
   CHECK(!backend.initialize(nullptr, nullptr, nullptr));
   av::GlDisplay display;
-  CHECK(!display.open(no_such_gpu));
+  av::HostLifecycleGate gate;
+  CHECK(!display.open(no_such_gpu, gate));
   CHECK(!display.open());
-  CHECK(!display.open(nullptr));
+  CHECK(!display.open(nullptr, gate));
   CHECK(!backend.initialize(&display, nullptr, nullptr));
   CHECK_EQ(backend.resolved(), 0u); }
 

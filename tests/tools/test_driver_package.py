@@ -159,6 +159,16 @@ class Provisioning(unittest.TestCase):
         install = re.search(r"\n    'install' \{(.*?)\n    \}", script, re.S).group(1)
         self.assertLess(install.index("NoDriverUpdates"), install.index("pnputil /add-driver"))
 
+    def test_the_install_keeps_dwm_off_displaycore_and_asks_for_the_reboot_that_applies_it(self):
+        script = (ROOT / "tools" / "guest" / "provision.ps1").read_text()
+        install = re.search(r"\n    'install' \{(.*?)\n    \}", script, re.S).group(1)
+        self.assertIn("SetDword 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\Dwm' DisableDDisplay 1", install)
+        self.assertNotIn("Remove-ItemProperty", install)
+        self.assertLess(install.index("DisableDDisplay 1"), install.index("pnputil /add-driver"))
+        exits = re.findall(r"exit (\S+)", install[install.index("DisableDDisplay 1"):])
+        self.assertEqual(exits[-1], "$RebootRequired")
+        self.assertNotIn("Remove-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\Dwm'", script)
+
     def test_recognises_the_device_by_its_subsystem_whatever_gpu_it_presents(self):
         script = (ROOT / "tools" / "guest" / "provision.ps1").read_text()
         pattern = re.compile(re.search(r"\$AvHardwareId = '([^']+)'", script).group(1), re.I)

@@ -36,6 +36,8 @@ class RawRegistry:
     handles: set[str] = field(default_factory=set)
     structs: dict[str, list[tuple[str, CType]]] = field(default_factory=dict)
     extensions: dict[str, RawExtension] = field(default_factory=dict)
+    typedefs: dict[str, str] = field(default_factory=dict)
+    enums: dict[str, str] = field(default_factory=dict)
 
 
 def _ctype_from(node: ET.Element) -> CType:
@@ -48,9 +50,18 @@ def _ctype_from(node: ET.Element) -> CType:
                  is_const="const" in leading)
 
 
-def parse(path: Path) -> RawRegistry:
+def _unnamed_member(struct: str, described: dict) -> tuple[str, CType]:
+    handle = described.get(struct, {}).get("handle")
+    if handle is None:
+        raise ValueError(f"{struct} has a member cl.xml does not name; describe it under "
+                         f"[structs.{struct}] in the profile")
+    return handle["name"], CType(base=f"cl_{handle['kind']}")
+
+
+def parse(path: Path, described: dict | None = None) -> RawRegistry:
     root = ET.parse(path).getroot()
     reg = RawRegistry()
+    described = described or {}
 
     types = root.find("types")
     if types is not None:
@@ -61,14 +72,25 @@ def parse(path: Path) -> RawRegistry:
                 text = "".join(t.itertext())
                 if name.startswith("cl_") and "_cl_" in text and "*" in text:
                     reg.handles.add(name)
+                aliased = t.findtext("type")
+                if name and aliased and text.lstrip().startswith("typedef") and "*" not in text:
+                    reg.typedefs[name] = aliased.strip()
             elif category == "struct":
                 name = t.get("name") or ""
                 members: list[tuple[str, CType]] = []
                 for m in t.findall("member"):
-                    mname = m.findtext("name") or ""
+                    mname = m.findtext("name")
+                    if mname is None:
+                        members.append(_unnamed_member(name, described))
+                        continue
                     members.append((mname, _ctype_from(m)))
                 if name:
                     reg.structs[name] = members
+
+    for enum in root.iter("enum"):
+        value = enum.get("value")
+        if value is not None:
+            reg.enums[enum.get("name") or ""] = value
 
     since: dict[str, str] = {}
     for feature in root.findall("feature"):

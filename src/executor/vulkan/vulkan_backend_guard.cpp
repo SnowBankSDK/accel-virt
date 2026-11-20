@@ -75,6 +75,17 @@ void VulkanBackend::destroy(VulkanDestroyKind kind, uint64_t device, uint64_t pa
         RealVulkanDispatch::on_vkDestroyAccelerationStructureKHR(made_by, reinterpret_cast<VkAccelerationStructureKHR>(handle),
                                                                 nullptr);
         return;
+    case VulkanDestroyKind::shader:
+        RealVulkanDispatch::on_vkDestroyShaderEXT(made_by, reinterpret_cast<VkShaderEXT>(handle), nullptr);
+        return;
+    case VulkanDestroyKind::indirect_commands_layout:
+        RealVulkanDispatch::on_vkDestroyIndirectCommandsLayoutEXT(
+            made_by, reinterpret_cast<VkIndirectCommandsLayoutEXT>(handle), nullptr);
+        return;
+    case VulkanDestroyKind::indirect_execution_set:
+        RealVulkanDispatch::on_vkDestroyIndirectExecutionSetEXT(
+            made_by, reinterpret_cast<VkIndirectExecutionSetEXT>(handle), nullptr);
+        return;
     case VulkanDestroyKind::imported_memory: {
         GuestDevice *const owner = device_of(device);
         if (owner != nullptr) owner->memory().release(handle);
@@ -206,9 +217,22 @@ VkResult VulkanBackend::on_vkCreateAccelerationStructureKHR(VkDevice device,
                                                             VkAccelerationStructureKHR *pAccelerationStructure)
 {
     AV_SCOPE("VulkanBackend::on_vkCreateAccelerationStructureKHR");
+    if ((pCreateInfo->createFlags & VK_ACCELERATION_STRUCTURE_CREATE_DEVICE_ADDRESS_CAPTURE_REPLAY_BIT_KHR) != 0u ||
+        pCreateInfo->deviceAddress != 0u) {
+        lines_.write("an acceleration structure asked to be placed at a captured address; refused");
+        return VK_ERROR_FEATURE_NOT_PRESENT;
+    }
+    uint64_t held = 0u;
+    uint64_t end = 0u;
+    if (!addresses_.buffer_bytes(number(device), number(pCreateInfo->buffer), held) ||
+        __builtin_add_overflow(pCreateInfo->offset, pCreateInfo->size, &end) || end > held) {
+        lines_.write("an acceleration structure does not fit inside the buffer it names; refused");
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
     const VkResult made =
         RealVulkanDispatch::on_vkCreateAccelerationStructureKHR(device, pCreateInfo, nullptr, pAccelerationStructure);
-    if (made != VK_SUCCESS ||
+    if (made != VK_SUCCESS) return made;
+    if (addresses_.note_structure(number(device), number(*pAccelerationStructure), pCreateInfo->size) &&
         guard_.depends(number(*pAccelerationStructure), number(pCreateInfo->buffer), number(device)))
         return made;
     RealVulkanDispatch::on_vkDestroyAccelerationStructureKHR(device, *pAccelerationStructure, nullptr);

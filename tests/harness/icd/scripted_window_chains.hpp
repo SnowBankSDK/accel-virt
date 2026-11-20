@@ -16,6 +16,7 @@ public:
     void refuse_opens(bool refuse);
     void refuse_presents(bool refuse);
     void hold_copies(bool hold);
+    void settle_after_looks(std::uint32_t looks);
 
     bool open(void *window, std::uint64_t luid, std::uint32_t width, std::uint32_t height, icd::SlotLayout layout,
               std::uint32_t slots, std::uint64_t *ids, std::uint64_t *bytes) override;
@@ -39,6 +40,8 @@ private:
     bool          refuse_opens_;
     bool          refuse_presents_;
     bool          holds_copies_;
+    std::uint32_t settle_looks_;
+    std::uint32_t looks_[max_slots];
     std::uint32_t opens_;
     std::uint32_t presents_;
     std::uint32_t closes_;

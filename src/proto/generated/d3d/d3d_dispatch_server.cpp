@@ -1075,6 +1075,151 @@ static bool decode_BltResource(ServerDispatch& s, ::av::WireReader& r, ::av::Wir
     return true;
 }
 
+static bool decode_ResourceTiling11(ServerDispatch& s, ::av::WireReader& r, ::av::WireWriter& reply, ::av::WireArena& arena) {
+    AV_SCOPE("server:d3d:ResourceTiling11");
+    (void)s;
+    (void)reply;
+    (void)arena;
+    uint32_t resource{};
+    if (!r.read_pod(resource)) return false;
+    uint32_t tiles{};
+    uint32_t packed_mips{};
+    uint32_t packed_tiles{};
+    if (r.remaining() != 0u) return false;
+    if (!s.on_ResourceTiling11(resource, tiles, packed_mips, packed_tiles)) return false;
+    reply.write_pod(tiles);
+    reply.write_pod(packed_mips);
+    reply.write_pod(packed_tiles);
+    return true;
+}
+
+static bool decode_UpdateTileMappings11(ServerDispatch& s, ::av::WireReader& r, ::av::WireWriter& reply, ::av::WireArena& arena) {
+    AV_SCOPE("server:d3d:UpdateTileMappings11");
+    (void)s;
+    (void)reply;
+    (void)arena;
+    uint32_t resource{};
+    if (!r.read_pod(resource)) return false;
+    uint32_t region_count{};
+    if (!r.read_pod(region_count)) return false;
+    if (region_count > 256u) return false;
+    TileRegion* regions = nullptr;
+    if (region_count != 0u) {
+        regions = arena.allocate<TileRegion>(region_count);
+        if (regions == nullptr) return false;
+        if (!r.read(regions, sizeof(TileRegion) * region_count)) return false;
+    }
+    uint32_t pool{};
+    if (!r.read_pod(pool)) return false;
+    uint32_t range_count{};
+    if (!r.read_pod(range_count)) return false;
+    if (range_count > 256u) return false;
+    TileRange* ranges = nullptr;
+    if (range_count != 0u) {
+        ranges = arena.allocate<TileRange>(range_count);
+        if (ranges == nullptr) return false;
+        if (!r.read(ranges, sizeof(TileRange) * range_count)) return false;
+    }
+    uint32_t flags{};
+    if (!r.read_pod(flags)) return false;
+    if (r.remaining() != 0u) return false;
+    if (!s.on_UpdateTileMappings11(resource, region_count, regions, pool, range_count, ranges, flags)) return false;
+    return true;
+}
+
+static bool decode_CopyTileMappings11(ServerDispatch& s, ::av::WireReader& r, ::av::WireWriter& reply, ::av::WireArena& arena) {
+    AV_SCOPE("server:d3d:CopyTileMappings11");
+    (void)s;
+    (void)reply;
+    (void)arena;
+    uint32_t destination{};
+    if (!r.read_pod(destination)) return false;
+    TileCoordinate destination_start{};
+    if (!r.read_pod(destination_start)) return false;
+    uint32_t source{};
+    if (!r.read_pod(source)) return false;
+    TileCoordinate source_start{};
+    if (!r.read_pod(source_start)) return false;
+    TileSize size{};
+    if (!r.read_pod(size)) return false;
+    uint32_t flags{};
+    if (!r.read_pod(flags)) return false;
+    if (r.remaining() != 0u) return false;
+    if (!s.on_CopyTileMappings11(destination, destination_start, source, source_start, size, flags)) return false;
+    return true;
+}
+
+static bool decode_CopyTiles11(ServerDispatch& s, ::av::WireReader& r, ::av::WireWriter& reply, ::av::WireArena& arena) {
+    AV_SCOPE("server:d3d:CopyTiles11");
+    (void)s;
+    (void)reply;
+    (void)arena;
+    uint32_t resource{};
+    if (!r.read_pod(resource)) return false;
+    TileCoordinate start{};
+    if (!r.read_pod(start)) return false;
+    TileSize size{};
+    if (!r.read_pod(size)) return false;
+    uint32_t buffer{};
+    if (!r.read_pod(buffer)) return false;
+    uint64_t buffer_offset{};
+    if (!r.read_pod(buffer_offset)) return false;
+    uint32_t flags{};
+    if (!r.read_pod(flags)) return false;
+    if (r.remaining() != 0u) return false;
+    if (!s.on_CopyTiles11(resource, start, size, buffer, buffer_offset, flags)) return false;
+    return true;
+}
+
+static bool decode_UpdateTiles11(ServerDispatch& s, ::av::WireReader& r, ::av::WireWriter& reply, ::av::WireArena& arena) {
+    AV_SCOPE("server:d3d:UpdateTiles11");
+    (void)s;
+    (void)reply;
+    (void)arena;
+    uint32_t resource{};
+    if (!r.read_pod(resource)) return false;
+    TileCoordinate start{};
+    if (!r.read_pod(start)) return false;
+    TileSize size{};
+    if (!r.read_pod(size)) return false;
+    uint32_t flags{};
+    if (!r.read_pod(flags)) return false;
+    const uint8_t* data = nullptr;
+    uint64_t data_size = 0u;
+    if (!read_bytes(s, r, arena, data, data_size)) return false;
+    if (r.remaining() != 0u) return false;
+    if (!s.on_UpdateTiles11(resource, start, size, flags, data, data_size)) return false;
+    return true;
+}
+
+static bool decode_ResizeTilePool11(ServerDispatch& s, ::av::WireReader& r, ::av::WireWriter& reply, ::av::WireArena& arena) {
+    AV_SCOPE("server:d3d:ResizeTilePool11");
+    (void)s;
+    (void)reply;
+    (void)arena;
+    uint32_t pool{};
+    if (!r.read_pod(pool)) return false;
+    uint64_t bytes{};
+    if (!r.read_pod(bytes)) return false;
+    if (r.remaining() != 0u) return false;
+    if (!s.on_ResizeTilePool11(pool, bytes)) return false;
+    return true;
+}
+
+static bool decode_TiledResourceBarrier11(ServerDispatch& s, ::av::WireReader& r, ::av::WireWriter& reply, ::av::WireArena& arena) {
+    AV_SCOPE("server:d3d:TiledResourceBarrier11");
+    (void)s;
+    (void)reply;
+    (void)arena;
+    uint32_t before{};
+    if (!r.read_pod(before)) return false;
+    uint32_t after{};
+    if (!r.read_pod(after)) return false;
+    if (r.remaining() != 0u) return false;
+    if (!s.on_TiledResourceBarrier11(before, after)) return false;
+    return true;
+}
+
 static bool decode_ResolveSubresource(ServerDispatch& s, ::av::WireReader& r, ::av::WireWriter& reply, ::av::WireArena& arena) {
     AV_SCOPE("server:d3d:ResolveSubresource");
     (void)s;
@@ -1169,6 +1314,34 @@ static bool decode_ReadSubresource(ServerDispatch& s, ::av::WireReader& r, ::av:
     if (!read_out_bytes(s, r, arena, data, data_capacity, data_in_blob)) return false;
     if (r.remaining() != 0u) return false;
     if (!s.on_ReadSubresource(resource, subresource, hresult, row_pitch, depth_pitch, data, data_capacity, data_size)) return false;
+    reply.write_pod(hresult);
+    reply.write_pod(row_pitch);
+    reply.write_pod(depth_pitch);
+    write_out_bytes(reply, data, data_size, data_capacity, data_in_blob);
+    return true;
+}
+
+static bool decode_ReadSubresourceRange(ServerDispatch& s, ::av::WireReader& r, ::av::WireWriter& reply, ::av::WireArena& arena) {
+    AV_SCOPE("server:d3d:ReadSubresourceRange");
+    (void)s;
+    (void)reply;
+    (void)arena;
+    uint32_t resource{};
+    if (!r.read_pod(resource)) return false;
+    uint32_t subresource{};
+    if (!r.read_pod(subresource)) return false;
+    uint64_t offset{};
+    if (!r.read_pod(offset)) return false;
+    uint32_t hresult{};
+    uint32_t row_pitch{};
+    uint32_t depth_pitch{};
+    uint8_t* data = nullptr;
+    uint64_t data_capacity = 0u;
+    uint64_t data_size = 0u;
+    bool data_in_blob = false;
+    if (!read_out_bytes(s, r, arena, data, data_capacity, data_in_blob)) return false;
+    if (r.remaining() != 0u) return false;
+    if (!s.on_ReadSubresourceRange(resource, subresource, offset, hresult, row_pitch, depth_pitch, data, data_capacity, data_size)) return false;
     reply.write_pod(hresult);
     reply.write_pod(row_pitch);
     reply.write_pod(depth_pitch);
@@ -1351,11 +1524,19 @@ bool knows_command(uint32_t cmd_id) {
         case kCmd_CopyResource:
         case kCmd_CopySubresourceRegion:
         case kCmd_BltResource:
+        case kCmd_ResourceTiling11:
+        case kCmd_UpdateTileMappings11:
+        case kCmd_CopyTileMappings11:
+        case kCmd_CopyTiles11:
+        case kCmd_UpdateTiles11:
+        case kCmd_ResizeTilePool11:
+        case kCmd_TiledResourceBarrier11:
         case kCmd_ResolveSubresource:
         case kCmd_GenerateMips:
         case kCmd_CopyStructureCount:
         case kCmd_UpdateSubresource:
         case kCmd_ReadSubresource:
+        case kCmd_ReadSubresourceRange:
         case kCmd_PresentPoint:
         case kCmd_QueryBufferSlices11:
         case kCmd_BindBufferSlice:
@@ -1429,11 +1610,19 @@ bool dispatch_command(ServerDispatch& s, uint32_t cmd_id, ::av::WireReader& r,
         case kCmd_CopyResource: return decode_CopyResource(s, r, reply, arena);
         case kCmd_CopySubresourceRegion: return decode_CopySubresourceRegion(s, r, reply, arena);
         case kCmd_BltResource: return decode_BltResource(s, r, reply, arena);
+        case kCmd_ResourceTiling11: return decode_ResourceTiling11(s, r, reply, arena);
+        case kCmd_UpdateTileMappings11: return decode_UpdateTileMappings11(s, r, reply, arena);
+        case kCmd_CopyTileMappings11: return decode_CopyTileMappings11(s, r, reply, arena);
+        case kCmd_CopyTiles11: return decode_CopyTiles11(s, r, reply, arena);
+        case kCmd_UpdateTiles11: return decode_UpdateTiles11(s, r, reply, arena);
+        case kCmd_ResizeTilePool11: return decode_ResizeTilePool11(s, r, reply, arena);
+        case kCmd_TiledResourceBarrier11: return decode_TiledResourceBarrier11(s, r, reply, arena);
         case kCmd_ResolveSubresource: return decode_ResolveSubresource(s, r, reply, arena);
         case kCmd_GenerateMips: return decode_GenerateMips(s, r, reply, arena);
         case kCmd_CopyStructureCount: return decode_CopyStructureCount(s, r, reply, arena);
         case kCmd_UpdateSubresource: return decode_UpdateSubresource(s, r, reply, arena);
         case kCmd_ReadSubresource: return decode_ReadSubresource(s, r, reply, arena);
+        case kCmd_ReadSubresourceRange: return decode_ReadSubresourceRange(s, r, reply, arena);
         case kCmd_PresentPoint: return decode_PresentPoint(s, r, reply, arena);
         case kCmd_QueryBufferSlices11: return decode_QueryBufferSlices11(s, r, reply, arena);
         case kCmd_BindBufferSlice: return decode_BindBufferSlice(s, r, reply, arena);

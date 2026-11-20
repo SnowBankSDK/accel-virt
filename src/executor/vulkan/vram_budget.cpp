@@ -17,6 +17,13 @@ void VramBudget::bind(ByteLedger *vram, ByteLedger *host)
     host_account_.bind(host);
 }
 
+void VramBudget::reserve_from(SessionLease *lease)
+{
+    AV_SCOPE("VramBudget::reserve_from");
+    account_.reserve_from(lease);
+    host_account_.reserve_from(lease);
+}
+
 void VramBudget::learn(const VkPhysicalDeviceMemoryProperties &host)
 {
     AV_SCOPE("VramBudget::learn");
@@ -38,11 +45,47 @@ bool VramBudget::system(uint32_t heap) const
 void VramBudget::clamp(VkPhysicalDeviceMemoryProperties &answer) const
 {
     AV_SCOPE("VramBudget::clamp");
-    const uint64_t cap = account_.cap();
-    const uint64_t host_cap = host_account_.cap();
+    const uint64_t cap = account_.advertised();
+    const uint64_t host_cap = host_account_.advertised();
     for (uint32_t heap = 0u; heap < answer.memoryHeapCount && heap < VK_MAX_MEMORY_HEAPS; heap++) {
         const uint64_t limit = capped(heap) ? cap : host_cap;
         if (limit < answer.memoryHeaps[heap].size) answer.memoryHeaps[heap].size = limit;
+    }
+}
+
+void VramBudget::clamp(VkPhysicalDeviceProperties2 &answer) const
+{
+    AV_SCOPE("VramBudget::clamp");
+    VkPhysicalDeviceMemoryProperties view = host_;
+    clamp(view);
+    uint64_t largest = 0u;
+    for (uint32_t heap = 0u; heap < view.memoryHeapCount && heap < VK_MAX_MEMORY_HEAPS; heap++)
+        if (view.memoryHeaps[heap].size > largest) largest = view.memoryHeaps[heap].size;
+    if (largest == 0u) return;
+    for (auto *link = static_cast<VkBaseOutStructure *>(answer.pNext); link != nullptr; link = link->pNext) {
+        switch (link->sType) {
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_3_PROPERTIES: {
+            auto &limits = *reinterpret_cast<VkPhysicalDeviceMaintenance3Properties *>(link);
+            if (limits.maxMemoryAllocationSize > largest) limits.maxMemoryAllocationSize = largest;
+            break;
+        }
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES: {
+            auto &limits = *reinterpret_cast<VkPhysicalDeviceVulkan11Properties *>(link);
+            if (limits.maxMemoryAllocationSize > largest) limits.maxMemoryAllocationSize = largest;
+            break;
+        }
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_PROPERTIES: {
+            auto &limits = *reinterpret_cast<VkPhysicalDeviceMaintenance4Properties *>(link);
+            if (limits.maxBufferSize > largest) limits.maxBufferSize = largest;
+            break;
+        }
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_PROPERTIES: {
+            auto &limits = *reinterpret_cast<VkPhysicalDeviceVulkan13Properties *>(link);
+            if (limits.maxBufferSize > largest) limits.maxBufferSize = largest;
+            break;
+        }
+        default: break;
+        }
     }
 }
 
@@ -50,9 +93,11 @@ void VramBudget::report(VkPhysicalDeviceMemoryBudgetPropertiesEXT &budget) const
 {
     AV_SCOPE("VramBudget::report");
     const uint64_t cap = account_.cap();
-    const uint64_t ledger_used = account_.used();
-    const uint64_t host_cap = host_account_.cap();
+    const uint64_t held = account_.held();
+    const uint64_t room = account_.admissible();
     const uint64_t host_used = host_account_.used();
+    const uint64_t host_room = host_account_.admissible();
+    const uint64_t host_cap = host_room > UINT64_MAX - host_used ? UINT64_MAX : host_used + host_room;
     for (uint32_t heap = 0u; heap < VK_MAX_MEMORY_HEAPS; heap++) {
         if (heap >= host_.memoryHeapCount) {
             budget.heapBudget[heap] = 0u;
@@ -61,8 +106,8 @@ void VramBudget::report(VkPhysicalDeviceMemoryBudgetPropertiesEXT &budget) const
         }
         const bool     local = capped(heap);
         const uint64_t size = host_.memoryHeaps[heap].size;
-        const uint64_t usage = local ? ledger_used : (host_account_.bound() ? host_used : used_[heap]);
-        const uint64_t ceiling = local ? cap : host_cap;
+        const uint64_t usage = local ? held : (host_account_.bound() ? host_used : used_[heap]);
+        const uint64_t ceiling = local ? (usage >= cap || room >= cap - usage ? cap : usage + room) : host_cap;
         const uint64_t limit = ceiling < size ? ceiling : size;
         budget.heapUsage[heap] = usage;
         budget.heapBudget[heap] = limit > usage ? limit : usage;

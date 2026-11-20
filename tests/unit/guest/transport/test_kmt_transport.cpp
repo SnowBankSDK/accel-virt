@@ -270,9 +270,11 @@ TEST(kmt_transport, an_async_command_lands_a_batch_and_a_submission)
   KmtTransport transport(fixture.connection(), SubApi::vulkan, 12u,
                          reply_bytes, transport_staging, sizeof transport_staging);
   CHECK_STATUS(transport.initialize(), Status::ok);
+  CHECK_EQ(transport.calls_sent(), 0u);
   WireWriter writer = transport.request_writer();
   writer.write_u32(0xCAFEu);
   CHECK(transport.send_async(0x10001u, writer) == TransportResult::ok);
+  CHECK_EQ(transport.calls_sent(), 1u);
   const std::uint8_t *ring = fixture.kmt().ring_of(transport.context());
   CHECK(ring != nullptr);
   BatchHeader batch;
@@ -316,6 +318,7 @@ TEST(kmt_transport, a_sync_command_reads_the_reply_the_device_wrote)
   writer.write_u32(7u);
   WireReader got(nullptr, 0u);
   CHECK(transport.send_sync(0x10002u, writer, got) == TransportResult::ok);
+  CHECK_EQ(transport.calls_sent(), 1u);
   CHECK_EQ(got.read_u32(), 1u);
   transport.end_call();
   CHECK_EQ(got.read_u32(), 2u);
@@ -2209,116 +2212,6 @@ TEST(kmt_transport_holding, the_invariant_catches_more_held_than_the_block_holds
   holding.transport().hold_in(block, sizeof block);
   CHECK(holding.transport().invariants_hold()); }
 
-TEST(kmt_transport_release, a_transport_that_is_not_established_or_reads_no_fence_page_takes_no_route)
-{ Fixture fixture;
-  CHECK_STATUS(fixture.open(), Status::ok);
-  std::uint8_t transport_staging[staging_bytes] = {};
-  KmtTransport transport(fixture.connection(), SubApi::opengl, 12u, reply_bytes, transport_staging,
-                         sizeof transport_staging);
-  RecordingReleaseRoute route;
-  CHECK_STATUS(transport.release_by(route), Status::not_supported);
-  CHECK(!transport.routed_by(route));
-  CHECK(!transport.releases_by_packet());
-  fixture.kmt().answer_views_up_to(av::ContextViewsRecord::without_fence);
-  CHECK_STATUS(transport.initialize(), Status::ok);
-  CHECK_STATUS(transport.release_by(route), Status::not_supported);
-  CHECK(!transport.routed_by(route));
-  CHECK(!transport.releases_by_packet());
-  transport.teardown(); }
-
-TEST(kmt_transport_release, a_route_is_taken_once_a_second_waits_and_a_third_is_refused)
-{ Fixture fixture;
-  CHECK_STATUS(fixture.open(), Status::ok);
-  std::uint8_t transport_staging[staging_bytes] = {};
-  KmtTransport transport(fixture.connection(), SubApi::opengl, 12u, reply_bytes, transport_staging,
-                         sizeof transport_staging);
-  CHECK_STATUS(transport.initialize(), Status::ok);
-  RecordingReleaseRoute first;
-  RecordingReleaseRoute second;
-  RecordingReleaseRoute third;
-  CHECK_STATUS(transport.release_by(first), Status::ok);
-  CHECK(transport.routed_by(first));
-  CHECK(transport.releases_by_packet());
-  CHECK_STATUS(transport.release_by(first), Status::ok);
-  CHECK_STATUS(transport.release_by(second), Status::ok);
-  CHECK(transport.routed_by(second));
-  CHECK_STATUS(transport.release_by(second), Status::ok);
-  CHECK_STATUS(transport.release_by(third), Status::no_space);
-  CHECK(!transport.routed_by(third));
-  CHECK(transport.invariants_hold());
-  transport.teardown();
-  CHECK(!transport.releases_by_packet());
-  CHECK(!transport.routed_by(first)); }
-
-TEST(kmt_transport_release, a_routed_submission_reaches_the_route_and_not_the_kernel)
-{ Fixture fixture;
-  CHECK_STATUS(fixture.open(), Status::ok);
-  std::uint8_t transport_staging[staging_bytes] = {};
-  KmtTransport transport(fixture.connection(), SubApi::opengl, 12u, reply_bytes, transport_staging,
-                         sizeof transport_staging);
-  CHECK_STATUS(transport.initialize(), Status::ok);
-  RecordingReleaseRoute route;
-  CHECK_STATUS(transport.release_by(route), Status::ok);
-  const std::uint32_t submitted = fixture.kmt().calls(MockKmt::Call::submit);
-  WireWriter          writer = transport.request_writer();
-  writer.write_u32(3u);
-  CHECK(transport.send_async(0x30001u, writer) == TransportResult::ok);
-  CHECK_EQ(route.releases(), 1u);
-  CHECK_EQ(route.last().ring(), transport.ring());
-  CHECK_EQ(route.last().batch().fence_id(), transport.published_fence());
-  CHECK_EQ(fixture.kmt().calls(MockKmt::Call::submit), submitted);
-  CHECK_EQ(transport.submissions_through_kernel(), 0u);
-  CHECK(transport.invariants_hold());
-  transport.teardown(); }
-
-TEST(kmt_transport_release, letting_go_of_the_standby_keeps_the_route_and_letting_go_of_the_route_promotes_the_standby)
-{ Fixture fixture;
-  CHECK_STATUS(fixture.open(), Status::ok);
-  std::uint8_t transport_staging[staging_bytes] = {};
-  KmtTransport transport(fixture.connection(), SubApi::opengl, 12u, reply_bytes, transport_staging,
-                         sizeof transport_staging);
-  CHECK_STATUS(transport.initialize(), Status::ok);
-  RecordingReleaseRoute first;
-  RecordingReleaseRoute second;
-  CHECK_STATUS(transport.release_by(first), Status::ok);
-  CHECK_STATUS(transport.release_by(second), Status::ok);
-  transport.release_directly(second);
-  CHECK(!transport.routed_by(second));
-  CHECK(transport.routed_by(first));
-  CHECK(transport.releases_by_packet());
-  CHECK_STATUS(transport.release_by(second), Status::ok);
-  transport.release_directly(first);
-  CHECK(!transport.routed_by(first));
-  CHECK(transport.routed_by(second));
-  CHECK(transport.releases_by_packet());
-  WireWriter writer = transport.request_writer();
-  writer.write_u32(3u);
-  CHECK(transport.send_async(0x30001u, writer) == TransportResult::ok);
-  CHECK_EQ(second.releases(), 1u);
-  CHECK_EQ(first.releases(), 0u);
-  transport.teardown(); }
-
-TEST(kmt_transport_release, the_last_route_is_let_go_after_the_published_work_completed_and_submission_returns_to_the_kernel)
-{ Fixture fixture;
-  CHECK_STATUS(fixture.open(), Status::ok);
-  std::uint8_t transport_staging[staging_bytes] = {};
-  KmtTransport transport(fixture.connection(), SubApi::opengl, 12u, reply_bytes, transport_staging,
-                         sizeof transport_staging);
-  CHECK_STATUS(transport.initialize(), Status::ok);
-  RecordingReleaseRoute route;
-  CHECK_STATUS(transport.release_by(route), Status::ok);
-  transport.release_directly(route);
-  CHECK(!transport.routed_by(route));
-  CHECK(!transport.releases_by_packet());
-  transport.release_directly(route);
-  WireWriter writer = transport.request_writer();
-  writer.write_u32(3u);
-  CHECK(transport.send_async(0x30001u, writer) == TransportResult::ok);
-  CHECK_EQ(route.releases(), 0u);
-  CHECK_EQ(transport.submissions_through_kernel(), 1u);
-  CHECK(transport.invariants_hold());
-  transport.teardown(); }
-
 TEST(kmt_transport_holding, the_covering_fence_counts_the_batch_a_flush_would_publish)
 { Fixture fixture;
   CHECK_STATUS(fixture.open(), Status::ok);
@@ -2445,37 +2338,6 @@ TEST(kmt_transport, a_gate_held_twice_counts_once_and_one_past_the_table_is_pass
   for (std::uint32_t index = 0u; index < 4u; index++) CHECK_EQ(gates[index].passes(), 1u);
   CHECK_EQ(gates[4].passes(), 1u); }
 
-TEST(kmt_transport, a_route_is_not_taken_by_a_transport_that_is_lost_or_cannot_be_asked)
-{ Up up;
-  RecordingReleaseRoute route;
-  CHECK_STATUS(up.transport().release_by(route), Status::not_supported);
-  CHECK_STATUS(up.transport().initialize(), Status::ok);
-  up.kmt().fail_at(MockKmt::Call::submit, 1u, MockKmt::invalid_parameter);
-  WireWriter writer = up.transport().request_writer();
-  writer.write_u32(1u);
-  CHECK(up.transport().send_async(0x30001u, writer) == TransportResult::failed);
-  CHECK(up.transport().faulted());
-  CHECK_STATUS(up.transport().release_by(route), Status::invalid_state);
-  CHECK(!up.transport().routed_by(route)); }
-
-TEST(kmt_transport, a_route_let_go_of_by_a_lost_transport_is_not_waited_for)
-{ Up up;
-  CHECK_STATUS(up.transport().initialize(), Status::ok);
-  RecordingReleaseRoute route;
-  CHECK_STATUS(up.transport().release_by(route), Status::ok);
-  up.send();
-  up.kmt().fail_at(MockKmt::Call::wait_for_context, 1u, MockKmt::invalid_parameter);
-  WireReader reply(nullptr, 0u);
-  WireWriter lost = up.transport().request_writer();
-  lost.write_u32(2u);
-  CHECK(up.transport().send_sync(0x30002u, lost, reply) == TransportResult::failed);
-  CHECK(up.transport().faulted());
-  const std::uint32_t waits = up.kmt().calls(MockKmt::Call::wait_for_context);
-  up.transport().release_directly(route);
-  CHECK(!up.transport().routed_by(route));
-  CHECK(!up.transport().releases_by_packet());
-  CHECK_EQ(up.kmt().calls(MockKmt::Call::wait_for_context), waits); }
-
 TEST(kmt_transport, a_transport_not_established_or_lost_holds_and_sends_nothing)
 { Up up;
   std::uint8_t framed[12u] = {};
@@ -2510,63 +2372,6 @@ TEST(kmt_transport, a_gate_held_while_another_thread_has_the_table_waits_for_it)
   up.send();
   CHECK_EQ(gate.passes(), 1u); }
 
-TEST(kmt_transport, a_wait_on_a_routed_context_is_not_a_kernel_wait)
-{ Up up;
-  CHECK_STATUS(up.transport().initialize(), Status::ok);
-  RecordingReleaseRoute route;
-  CHECK_STATUS(up.transport().release_by(route), Status::ok);
-  up.send();
-  const std::uint32_t waits = up.kmt().calls(MockKmt::Call::wait_for_context);
-  up.kmt().complete_on_page(up.transport().context(), 1u);
-  CHECK_STATUS(up.transport().await_gpu(1u), Status::ok);
-  CHECK_EQ(up.kmt().calls(MockKmt::Call::wait_for_context), waits); }
-
-TEST(kmt_transport, an_answer_waited_for_through_a_route_is_waited_for_on_the_page)
-{ Up up;
-  CHECK_STATUS(up.transport().initialize(), Status::ok);
-  RecordingReleaseRoute route;
-  CHECK_STATUS(up.transport().release_by(route), Status::ok);
-  SlowDevice device(up.kmt(), up.transport().context(), false, 1u, 200u);
-  up.kmt().reads_clock(&device, millisecond);
-  WireWriter writer = up.transport().request_writer();
-  writer.write_u32(1u);
-  WireReader reply(nullptr, 0u);
-  CHECK(up.transport().send_sync(0x30002u, writer, reply) == TransportResult::failed);
-  up.kmt().reads_clock(nullptr, 0u);
-  CHECK_EQ(up.kmt().calls(MockKmt::Call::wait_for_context), 0u);
-  CHECK_EQ(route.long_waits(), 0u);
-  CHECK(up.transport().faulted()); }
-
-TEST(kmt_transport, a_route_is_told_when_the_page_takes_longer_than_a_few_seconds)
-{ Up up;
-  CHECK_STATUS(up.transport().initialize(), Status::ok);
-  RecordingReleaseRoute route;
-  CHECK_STATUS(up.transport().release_by(route), Status::ok);
-  constexpr std::uint32_t slow = 4000u;
-  SlowDevice device(up.kmt(), up.transport().context(), false, 1u, slow);
-  up.kmt().reads_clock(&device, millisecond);
-  WireWriter writer = up.transport().request_writer();
-  writer.write_u32(1u);
-  WireReader reply(nullptr, 0u);
-  CHECK(up.transport().send_sync(0x30002u, writer, reply) == TransportResult::failed);
-  up.kmt().reads_clock(nullptr, 0u);
-  CHECK(device.reads() >= slow);
-  CHECK_EQ(route.long_waits(), 1u); }
-
-TEST(kmt_transport, a_page_that_goes_silent_behind_a_route_gives_up_the_wait)
-{ Up up;
-  CHECK_STATUS(up.transport().initialize(), Status::ok);
-  RecordingReleaseRoute route;
-  CHECK_STATUS(up.transport().release_by(route), Status::ok);
-  SlowDevice device(up.kmt(), up.transport().context(), false, 1u, 0u);
-  up.kmt().reads_clock(&device, millisecond);
-  WireWriter writer = up.transport().request_writer();
-  writer.write_u32(1u);
-  WireReader reply(nullptr, 0u);
-  CHECK(up.transport().send_sync(0x30002u, writer, reply) == TransportResult::failed);
-  up.kmt().reads_clock(nullptr, 0u);
-  CHECK(up.transport().faulted()); }
-
 namespace {
 
 class Consumer final : public av::ClockReader {
@@ -2592,20 +2397,6 @@ private:
 };
 
 }
-
-TEST(kmt_transport, a_wait_on_a_routed_context_for_a_batch_the_page_has_not_shown_waits_on_the_page)
-{ Up up;
-  CHECK_STATUS(up.transport().initialize(), Status::ok);
-  RecordingReleaseRoute route;
-  CHECK_STATUS(up.transport().release_by(route), Status::ok);
-  up.send();
-  const std::uint32_t waits = up.kmt().calls(MockKmt::Call::wait_for_context);
-  SlowDevice device(up.kmt(), up.transport().context(), true, 1u, 50u);
-  up.kmt().reads_clock(&device, millisecond);
-  CHECK_STATUS(up.transport().await_gpu(1u), Status::ok);
-  up.kmt().reads_clock(nullptr, 0u);
-  CHECK(device.reads() >= 50u);
-  CHECK_EQ(up.kmt().calls(MockKmt::Call::wait_for_context), waits); }
 
 TEST(kmt_transport, a_batch_longer_than_the_ring_is_refused_with_nothing_to_wait_for)
 { Up up;
@@ -2860,3 +2651,152 @@ TEST(kmt_transport, a_batch_that_fits_the_empty_ring_but_not_the_unconsumed_tail
   const std::size_t length = frame_batch(framed, 0x10001u, most, false);
   CHECK(up.transport().hold_framed(framed, length) == TransportResult::failed);
   CHECK_EQ(sent_commands(up.kmt()), 1u); }
+
+TEST(kmt_transport_lane, a_session_batch_crosses_without_a_kernel_call_while_its_host_is_awake)
+{ Fixture fixture;
+  fixture.kmt().accept_tail_publishing();
+  CHECK_STATUS(fixture.open(), Status::ok);
+  std::uint8_t staging[staging_bytes] = {};
+  KmtTransport session(fixture.connection(), SubApi::d3d, 12u, reply_bytes, staging, sizeof staging);
+  CHECK_STATUS(session.initialize(), Status::ok);
+  fixture.kmt().ring_of(session.context())[5] = 1u;
+  const std::uint32_t before = fixture.kmt().calls(MockKmt::Call::submit);
+  for (std::uint32_t index = 0u; index < 4u; index++) {
+      WireWriter writer = session.request_writer();
+      writer.write_u32(index);
+      CHECK(session.send_async(0x30001u, writer) == TransportResult::ok);
+  }
+  CHECK_EQ(fixture.kmt().calls(MockKmt::Call::submit), before);
+  CHECK_EQ(session.submissions(), 4u);
+  CHECK_EQ(session.submissions_through_kernel(), 0u);
+  session.teardown(); }
+
+TEST(kmt_transport_lane, each_lane_batch_is_one_release_packet_on_its_lane_after_what_the_session_published)
+{ Fixture fixture;
+  fixture.kmt().accept_tail_publishing();
+  CHECK_STATUS(fixture.open(), Status::ok);
+  std::uint8_t staging[staging_bytes] = {};
+  std::uint8_t held[4096] = {};
+  KmtTransport session(fixture.connection(), SubApi::d3d, 12u, reply_bytes, staging, sizeof staging);
+  CHECK_STATUS(session.initialize(), Status::ok);
+  session.hold_in(held, sizeof held);
+  std::uint8_t          lane_staging[staging_bytes] = {};
+  KmtTransport          lane(fixture.connection(), SubApi::d3d, 12u, reply_bytes, lane_staging, sizeof lane_staging);
+  RecordingReleaseRoute route;
+  CHECK_STATUS(lane.initialize_lane(session, route), Status::ok);
+  CHECK(lane.lane());
+  CHECK(!session.lane());
+  AvContextRecord record;
+  CHECK_STATUS(record.decode(fixture.kmt().last_private(), fixture.kmt().last_private_size()), Status::ok);
+  CHECK_EQ(record.options().share_context(), session.ring());
+  for (std::uint32_t round = 0u; round < 3u; round++) {
+      WireWriter recorded = session.request_writer();
+      recorded.write_u32(round);
+      CHECK(session.send_async(0x30001u, recorded) == TransportResult::ok);
+      CHECK(session.held() != 0u);
+      const std::uint32_t submits = fixture.kmt().calls(MockKmt::Call::submit);
+      WireWriter executed = lane.request_writer();
+      executed.write_u32(round);
+      CHECK(lane.send_async(0x30002u, executed) == TransportResult::ok);
+      CHECK_EQ(route.releases(), round + 1u);
+      CHECK_EQ(fixture.kmt().calls(MockKmt::Call::submit), submits);
+      CHECK_EQ(session.held(), 0u);
+      CHECK_EQ(route.last().ring(), lane.ring());
+      const std::uint8_t *const ring = fixture.kmt().ring_of(lane.context());
+      std::uint8_t header_bytes[BatchHeader::encoded_size] = {};
+      std::memcpy(header_bytes, ring + 32u + (route.last().batch().begin() & ((1u << 12u) - 1u)), sizeof header_bytes);
+      BatchHeader header;
+      CHECK_STATUS(header.decode(header_bytes, sizeof header_bytes), Status::ok);
+      CHECK(header.after() == session.published_end());
+      CHECK(header.after() != 0u);
+  }
+  CHECK_EQ(session.submissions_through_kernel(), 0u);
+  CHECK_EQ(lane.submissions_through_kernel(), 0u);
+  lane.teardown();
+  session.teardown(); }
+
+TEST(kmt_transport_lane, a_lane_needs_an_established_session_that_is_no_lane_itself)
+{ Fixture fixture;
+  CHECK_STATUS(fixture.open(), Status::ok);
+  std::uint8_t          staging[staging_bytes] = {};
+  std::uint8_t          lane_staging[staging_bytes] = {};
+  KmtTransport          session(fixture.connection(), SubApi::d3d, 12u, reply_bytes, staging, sizeof staging);
+  KmtTransport          lane(fixture.connection(), SubApi::d3d, 12u, reply_bytes, lane_staging, sizeof lane_staging);
+  RecordingReleaseRoute route;
+  CHECK_STATUS(lane.initialize_lane(session, route), Status::invalid_state);
+  CHECK_STATUS(session.initialize(), Status::ok);
+  CHECK_STATUS(lane.initialize_lane(lane, route), Status::invalid_state);
+  CHECK_STATUS(lane.initialize_lane(session, route), Status::ok);
+  std::uint8_t further_staging[staging_bytes] = {};
+  KmtTransport further(fixture.connection(), SubApi::d3d, 12u, reply_bytes, further_staging, sizeof further_staging);
+  CHECK_STATUS(further.initialize_lane(lane, route), Status::invalid_state);
+  lane.teardown();
+  session.teardown(); }
+
+namespace {
+
+class LaneUp {
+public:
+    LaneUp() : session_(fixture_.connection(), SubApi::d3d, 12u, reply_bytes, staging_, sizeof staging_),
+               lane_(fixture_.connection(), SubApi::d3d, 12u, reply_bytes, lane_staging_, sizeof lane_staging_)
+    {
+        CHECK_STATUS(fixture_.open(), Status::ok);
+        CHECK_STATUS(session_.initialize(), Status::ok);
+        CHECK_STATUS(lane_.initialize_lane(session_, route_), Status::ok);
+    }
+    ~LaneUp()
+    {
+        lane_.teardown();
+        session_.teardown();
+    }
+    MockKmt               &kmt() { return fixture_.kmt(); }
+    KmtTransport          &lane() { return lane_; }
+    RecordingReleaseRoute &route() { return route_; }
+    TransportResult        call()
+    {
+        WireWriter writer = lane_.request_writer();
+        writer.write_u32(1u);
+        WireReader reply(nullptr, 0u);
+        return lane_.send_sync(0x30002u, writer, reply);
+    }
+
+private:
+    Fixture               fixture_;
+    std::uint8_t          staging_[staging_bytes] = {};
+    std::uint8_t          lane_staging_[staging_bytes] = {};
+    KmtTransport          session_;
+    KmtTransport          lane_;
+    RecordingReleaseRoute route_;
+};
+
+}
+
+TEST(kmt_transport_lane, a_wait_on_a_lane_is_a_wait_on_its_page_and_never_a_kernel_wait)
+{ LaneUp up;
+  WireWriter writer = up.lane().request_writer();
+  writer.write_u32(1u);
+  CHECK(up.lane().send_async(0x30001u, writer) == TransportResult::ok);
+  CHECK_EQ(up.route().releases(), 1u);
+  const std::uint32_t waits = up.kmt().calls(MockKmt::Call::wait_for_context);
+  up.kmt().complete_on_page(up.lane().context(), 1u);
+  CHECK_STATUS(up.lane().await_gpu(1u), Status::ok);
+  CHECK_EQ(up.kmt().calls(MockKmt::Call::wait_for_context), waits); }
+
+TEST(kmt_transport_lane, a_lane_is_told_when_its_page_takes_longer_than_a_few_seconds)
+{ LaneUp up;
+  constexpr std::uint32_t slow = 4000u;
+  SlowDevice device(up.kmt(), up.lane().context(), false, 1u, slow);
+  up.kmt().reads_clock(&device, millisecond);
+  CHECK(up.call() == TransportResult::failed);
+  up.kmt().reads_clock(nullptr, 0u);
+  CHECK(device.reads() >= slow);
+  CHECK_EQ(up.route().long_waits(), 1u);
+  CHECK_EQ(up.kmt().calls(MockKmt::Call::wait_for_context), 0u); }
+
+TEST(kmt_transport_lane, a_lane_page_that_goes_silent_gives_up_the_wait)
+{ LaneUp up;
+  SlowDevice device(up.kmt(), up.lane().context(), false, 1u, 0u);
+  up.kmt().reads_clock(&device, millisecond);
+  CHECK(up.call() == TransportResult::failed);
+  up.kmt().reads_clock(nullptr, 0u);
+  CHECK(up.lane().faulted()); }

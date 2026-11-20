@@ -1,4 +1,5 @@
 #include "executor/host_ram_ledger.hpp"
+#include "executor/vram_account.hpp"
 #include "executor/vram_gate.hpp"
 #include "executor/vram_ledger.hpp"
 #include "harness/executor/mock_host_apis.hpp"
@@ -36,7 +37,7 @@ TEST(vram_gate, the_table_tells_the_embedder_its_size_and_every_callback)
   CHECK(abi.self == &rig.gate);
   CHECK(abi.open != nullptr && abi.take != nullptr && abi.give != nullptr && abi.close != nullptr);
   CHECK(abi.free_bytes != nullptr && abi.cap != nullptr);
-  CHECK(abi.take_host != nullptr && abi.give_host != nullptr); }
+  CHECK(abi.take_host != nullptr && abi.give_host != nullptr && abi.relief_wanted != nullptr); }
 
 TEST(vram_gate, an_account_opens_for_a_known_card_and_not_for_an_unknown_one)
 { Rig rig;
@@ -161,3 +162,47 @@ TEST(gate_account, with_no_host_ledger_the_host_side_takes_everything)
   av::GateAccount account(vram, nullptr);
   CHECK(!account.host().bound());
   CHECK(account.host().take(1000 * gib)); }
+
+TEST(vram_gate_relief, a_refused_take_asks_every_other_holder_of_that_card_once_and_calls_none_of_them)
+{ Rig rig;
+  const AvVramGate &abi = rig.gate.abi();
+  void *const holder = abi.open(abi.self, card);
+  void *const second = abi.open(abi.self, card);
+  CHECK_EQ(abi.take(holder, 8 * gib), 1);
+  CHECK_EQ(abi.relief_wanted(holder), 0);
+  av::VramAccount backend(rig.apis.ledger());
+  CHECK(backend.take(gib));
+  CHECK_EQ(abi.relief_wanted(holder), 0);
+  const std::uint64_t used = rig.apis.ledger().used();
+  CHECK(!backend.take(64 * gib));
+  CHECK_EQ(rig.apis.ledger().used(), used);
+  CHECK_EQ(abi.relief_wanted(holder), 1);
+  CHECK_EQ(abi.relief_wanted(holder), 0);
+  CHECK_EQ(abi.relief_wanted(second), 1);
+  CHECK_EQ(abi.relief_wanted(nullptr), 0);
+  abi.give(holder, 8 * gib);
+  CHECK(backend.take(8 * gib));
+  abi.close(abi.self, second);
+  abi.close(abi.self, holder); }
+
+TEST(vram_gate_relief, the_holder_that_is_taking_is_not_asked)
+{ Rig rig;
+  const AvVramGate &abi = rig.gate.abi();
+  void *const holder = abi.open(abi.self, card);
+  CHECK_EQ(abi.take(holder, 14 * gib), 1);
+  CHECK_EQ(abi.take(holder, 4 * gib), 0);
+  CHECK_EQ(abi.relief_wanted(holder), 0);
+  abi.close(abi.self, holder); }
+
+TEST(vram_gate_relief, a_host_ram_refusal_asks_the_holders_that_charge_host_ram)
+{ Rig rig;
+  const AvVramGate &abi = rig.gate.abi();
+  void *const holder = abi.open(abi.self, card);
+  CHECK_EQ(abi.take_host(holder, 6 * gib), 1);
+  av::VramAccount session(rig.apis.host_ram());
+  CHECK(!session.take(5 * gib));
+  CHECK_EQ(abi.relief_wanted(holder), 1);
+  abi.give_host(holder, 6 * gib);
+  CHECK(session.take(8 * gib));
+  CHECK_EQ(rig.apis.host_ram().used(), 8 * gib);
+  abi.close(abi.self, holder); }

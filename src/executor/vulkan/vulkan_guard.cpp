@@ -25,7 +25,10 @@ bool holdable(vkproto::HandleKind kind)
     case vkproto::HandleKind::pipeline_layout:
     case vkproto::HandleKind::query_pool:
     case vkproto::HandleKind::render_pass:
-    case vkproto::HandleKind::sampler: return true;
+    case vkproto::HandleKind::sampler:
+    case vkproto::HandleKind::shader_ext:
+    case vkproto::HandleKind::indirect_commands_layout_ext:
+    case vkproto::HandleKind::indirect_execution_set_ext: return true;
     default: return false;
     }
 }
@@ -316,6 +319,13 @@ void VulkanGuard::submitted(uint64_t mark, uint64_t device, uint64_t queue, cons
     if (value != 0u) progress_.commit_timeline(mark, queue, value);
     else progress_.commit(mark, queue);
     held(mark, device, submits, count);
+}
+
+void VulkanGuard::sparse_bound(uint64_t mark, uint64_t queue, uint64_t value)
+{
+    AV_SCOPE("VulkanGuard::sparse_bound");
+    if (value != 0u) progress_.commit_timeline(mark, queue, value);
+    else progress_.commit(mark, queue);
 }
 
 bool VulkanGuard::timeline(uint64_t device, uint64_t queue, VkSemaphore &semaphore, uint64_t &value)

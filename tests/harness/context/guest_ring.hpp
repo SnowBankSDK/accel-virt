@@ -14,7 +14,8 @@ public:
     GuestRing(std::uint8_t *bytes, std::uint8_t order);
 
     void          write_batch(std::uint64_t fence, std::uint32_t length);
-    void          write_batch(std::uint64_t fence, const std::uint8_t *payload, std::uint32_t length);
+    void          write_batch(std::uint64_t fence, const std::uint8_t *payload, std::uint32_t length,
+                              std::uint64_t after = 0u);
     void          publish();
     void          publish(std::uint64_t tail);
     void          store(std::uint64_t offset, std::uint64_t value);

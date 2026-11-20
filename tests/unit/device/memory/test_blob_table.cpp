@@ -1,5 +1,6 @@
 #include "core/support/status.hpp"
 #include "device/control/control_request.hpp"
+#include "device/control/held_requests.hpp"
 #include "device/memory/blob_resource.hpp"
 #include "device/memory/blob_table.hpp"
 #include "device/memory/blob_window.hpp"
@@ -51,7 +52,7 @@ struct BlobTableProbe {
     static void place(BlobTable &table, std::uint32_t id)
     {
         std::uint32_t slot = 0u;
-        static_cast<void>(table.ids_.insert(id, BlobTable::Entry{make(table, id), false}, slot));
+        static_cast<void>(table.ids_.insert(id, BlobTable::Entry{make(table, id), false, nullptr, 0u}, slot));
     }
     static void rename(BlobTable &table, std::uint32_t id, std::uint32_t named)
     {
@@ -366,6 +367,50 @@ TEST(blob_table_retire, a_pinned_blob_keeps_its_id_takes_no_new_pin_and_goes_wit
   CHECK_STATUS(fixture.table().pin(1u, 0u), Status::ok);
   fixture.table().unpin(1u);
   CHECK(fixture.table().contains(1u));
+  CHECK(fixture.table().invariants_hold()); }
+
+TEST(blob_table_answer_when_left, the_answer_owed_for_a_retiring_blob_goes_when_its_writer_leaves_or_with_its_last_pin)
+{ Fixture fixture;
+  av::HeldRequests held(fixture.host());
+  const av::HeldRequests::Answering given = [](Status status) -> std::uint32_t { return status == Status::ok ? 0x1100u : 0x1200u; };
+  const std::uint8_t bytes[24] = {};
+  MockRequest left(bytes, sizeof bytes);
+  MockRequest swept(bytes, sizeof bytes);
+  MockRequest unknown(bytes, sizeof bytes);
+  ControlRequest left_request(fixture.host(), &left);
+  ControlRequest swept_request(fixture.host(), &swept);
+  ControlRequest unknown_request(fixture.host(), &unknown);
+  CHECK_STATUS(fixture.create(1u), Status::ok);
+  CHECK_STATUS(fixture.create(2u), Status::ok);
+  CHECK_STATUS(fixture.table().pin(1u, 0u), Status::ok);
+  CHECK_STATUS(fixture.table().pin(2u, 0u), Status::ok);
+  CHECK_STATUS(fixture.table().retire(1u), Status::ok);
+  CHECK_STATUS(fixture.table().retire(2u), Status::ok);
+  std::uint32_t ticket = av::HeldRequests::no_ticket;
+  CHECK_STATUS(held.hold(left_request, given, ticket), Status::ok);
+  fixture.table().answer_when_left(1u, held, ticket);
+  CHECK_STATUS(held.hold(swept_request, given, ticket), Status::ok);
+  fixture.table().answer_when_left(2u, held, ticket);
+  CHECK(!left.answered());
+  CHECK(!swept.answered());
+  CHECK_EQ(held.held(), 2u);
+  fixture.table().writer_left(3u);
+  fixture.table().writer_left(1u);
+  CHECK(left.answered());
+  CHECK_EQ(left.response_type(), 0x1100u);
+  CHECK(!swept.answered());
+  CHECK(fixture.table().contains(1u));
+  fixture.table().writer_left(1u);
+  fixture.table().unpin(2u);
+  CHECK(swept.answered());
+  CHECK_EQ(swept.response_type(), 0x1100u);
+  CHECK(!fixture.table().contains(2u));
+  CHECK_STATUS(held.hold(unknown_request, given, ticket), Status::ok);
+  fixture.table().answer_when_left(9u, held, ticket);
+  CHECK(unknown.answered());
+  CHECK_EQ(unknown.response_type(), 0x1100u);
+  CHECK_EQ(held.held(), 0u);
+  fixture.table().unpin(1u);
   CHECK(fixture.table().invariants_hold()); }
 
 TEST(blob_table_retire, an_unpinned_blob_that_is_not_retiring_stays)

@@ -11,7 +11,8 @@
 namespace av::d3d {
 
 D3dDeviceChannel::D3dDeviceChannel(D3dCommandStream &stream, ThreadLock &lock, uint32_t device)
-    : stream_(stream), lock_(lock), device_(device), cleared_at_(~uint64_t{0}), selection_(stream, device),
+    : stream_(&stream), lock_(lock), device_(device), cleared_at_(~uint64_t{0}),
+      selection_(stream, device),
       locked_(selection_, lock)
 {
     AV_SCOPE("D3dDeviceChannel::D3dDeviceChannel");
@@ -23,13 +24,32 @@ uint32_t D3dDeviceChannel::device() const
     return device_;
 }
 
+Status D3dDeviceChannel::move_to(D3dCommandStream &stream)
+{
+    AV_SCOPE("D3dDeviceChannel::move_to");
+    const ThreadLockHold release(lock_);
+    if (&stream == stream_) return Status::ok;
+    const Status flushed = stream_->flush();
+    stream_->forget(device_);
+    stream_ = &stream;
+    selection_.move_to(stream);
+    cleared_at_ = ~uint64_t{0};
+    return flushed;
+}
+
+bool D3dDeviceChannel::speaks_on(const D3dCommandStream &stream) const
+{
+    AV_SCOPE("D3dDeviceChannel::speaks_on");
+    return stream_ == &stream;
+}
+
 bool D3dDeviceChannel::open(uint32_t feature_level, uint32_t &hresult, uint32_t &level)
 {
     AV_SCOPE("D3dDeviceChannel::open");
     const ThreadLockHold release(lock_);
     hresult = 1u;
-    if (!d3dproto::av_d3d_CreateDevice11(stream_, device_, feature_level, 0u, &hresult, &level)) return false;
-    if (hresult == 0u) stream_.selected(device_);
+    if (!d3dproto::av_d3d_CreateDevice11(*stream_, device_, feature_level, 0u, &hresult, &level)) return false;
+    if (hresult == 0u) stream_->selected(device_);
     return true;
 }
 
@@ -38,8 +58,8 @@ bool D3dDeviceChannel::open9(uint32_t &hresult)
     AV_SCOPE("D3dDeviceChannel::open9");
     const ThreadLockHold release(lock_);
     hresult = 1u;
-    if (!d3d9proto::av_d3d9_CreateDevice9(stream_, device_, 0u, &hresult)) return false;
-    if (hresult == 0u) stream_.selected(device_);
+    if (!d3d9proto::av_d3d9_CreateDevice9(*stream_, device_, 0u, &hresult)) return false;
+    if (hresult == 0u) stream_->selected(device_);
     return true;
 }
 
@@ -47,48 +67,48 @@ Status D3dDeviceChannel::flush()
 {
     AV_SCOPE("D3dDeviceChannel::flush");
     const ThreadLockHold release(lock_);
-    return stream_.flush();
+    return stream_->flush();
 }
 
 Status D3dDeviceChannel::application_flush()
 {
     AV_SCOPE("D3dDeviceChannel::application_flush");
     const ThreadLockHold release(lock_);
-    if (!stream_.speak_as(device_)) return Status::invalid_state;
-    return stream_.application_flush();
+    if (!stream_->speak_as(device_)) return Status::invalid_state;
+    return stream_->application_flush();
 }
 
 Status D3dDeviceChannel::run_held()
 {
     AV_SCOPE("D3dDeviceChannel::run_held");
     const ThreadLockHold release(lock_);
-    return stream_.run_held();
+    return stream_->run_held();
 }
 
 Status D3dDeviceChannel::take_recorded(uint8_t *out, size_t capacity, size_t &length)
 {
     AV_SCOPE("D3dDeviceChannel::take_recorded");
     const ThreadLockHold release(lock_);
-    return stream_.take_recorded(out, capacity, length);
+    return stream_->take_recorded(out, capacity, length);
 }
 
 size_t D3dDeviceChannel::recorded_bytes()
 {
     AV_SCOPE("D3dDeviceChannel::recorded_bytes");
     const ThreadLockHold release(lock_);
-    return stream_.recorded_bytes();
+    return stream_->recorded_bytes();
 }
 
 Status D3dDeviceChannel::execute(const uint8_t *commands, size_t length)
 {
     AV_SCOPE("D3dDeviceChannel::execute");
     const ThreadLockHold release(lock_);
-    if (!stream_.speak_as(device_)) return Status::invalid_state;
-    if (stream_.recorded_total() != cleared_at_ && !d3dproto::av_d3d_ClearState11(stream_)) return Status::invalid_state;
-    const Status appended = stream_.append_recorded(commands, length);
+    if (!stream_->speak_as(device_)) return Status::invalid_state;
+    if (stream_->recorded_total() != cleared_at_ && !d3dproto::av_d3d_ClearState11(*stream_)) return Status::invalid_state;
+    const Status appended = stream_->append_recorded(commands, length);
     if (appended != Status::ok) return appended;
-    if (!d3dproto::av_d3d_ClearState11(stream_)) return Status::invalid_state;
-    cleared_at_ = stream_.recorded_total();
+    if (!d3dproto::av_d3d_ClearState11(*stream_)) return Status::invalid_state;
+    cleared_at_ = stream_->recorded_total();
     return Status::ok;
 }
 
@@ -96,44 +116,44 @@ bool D3dDeviceChannel::make_room_for_blobs(const uint64_t *sizes, uint32_t count
 {
     AV_SCOPE("D3dDeviceChannel::make_room_for_blobs");
     bool inline_all = true;
-    for (uint32_t index = 0u; index < count; index++) inline_all = inline_all && stream_.room().inline_both(static_cast<size_t>(sizes[index]));
+    for (uint32_t index = 0u; index < count; index++) inline_all = inline_all && stream_->room().inline_both(static_cast<size_t>(sizes[index]));
     if (inline_all) return true;
     const ThreadLockHold release(lock_);
-    return stream_.make_room_for_blobs(sizes, count);
+    return stream_->make_room_for_blobs(sizes, count);
 }
 
 ClientBlobLease D3dDeviceChannel::open_region(uint64_t bytes)
 {
     AV_SCOPE("D3dDeviceChannel::open_region");
     const ThreadLockHold release(lock_);
-    return stream_.open_region(bytes);
+    return stream_->open_region(bytes);
 }
 
 void D3dDeviceChannel::close_region(const ClientBlobLease &region)
 {
     AV_SCOPE("D3dDeviceChannel::close_region");
     const ThreadLockHold release(lock_);
-    stream_.close_region(region);
+    stream_->close_region(region);
 }
 
 const TransferRoom &D3dDeviceChannel::room() const
 {
     AV_SCOPE("D3dDeviceChannel::room");
-    return stream_.room();
+    return stream_->room();
 }
 
 void D3dDeviceChannel::note(ChannelCounter counter, uint64_t amount)
 {
     AV_SCOPE("D3dDeviceChannel::note");
-    stream_.note(counter, amount);
+    stream_->note(counter, amount);
 }
 
 bool D3dDeviceChannel::close()
 {
     AV_SCOPE("D3dDeviceChannel::close");
     const ThreadLockHold release(lock_);
-    const bool sent = d3dproto::av_d3d_DestroyDevice11(stream_, device_);
-    stream_.forget(device_);
+    const bool sent = d3dproto::av_d3d_DestroyDevice11(*stream_, device_);
+    stream_->forget(device_);
     return sent;
 }
 
@@ -141,8 +161,8 @@ bool D3dDeviceChannel::close9()
 {
     AV_SCOPE("D3dDeviceChannel::close9");
     const ThreadLockHold release(lock_);
-    const bool sent = d3d9proto::av_d3d9_Destroy9(stream_, device_);
-    stream_.forget(device_);
+    const bool sent = d3d9proto::av_d3d9_Destroy9(*stream_, device_);
+    stream_->forget(device_);
     return sent;
 }
 
@@ -191,7 +211,7 @@ ClientBlobArena &D3dDeviceChannel::blobs()
 bool D3dDeviceChannel::invariants_hold() const
 {
     AV_SCOPE("D3dDeviceChannel::invariants_hold");
-    return locked_.invariants_hold() && stream_.invariants_hold();
+    return locked_.invariants_hold() && stream_->invariants_hold();
 }
 
 }

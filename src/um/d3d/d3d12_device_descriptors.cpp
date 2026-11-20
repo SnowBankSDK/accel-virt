@@ -1,4 +1,5 @@
 #include "core/trace/function_scope.hpp"
+#include "proto/d3d/descriptor_heap_rules.hpp"
 #include "proto/generated/d3d12/d3d12_dispatch_client.h"
 #include "um/d3d/d3d12_device.hpp"
 
@@ -31,6 +32,9 @@ HRESULT D3d12Device::create_descriptor_heap(const D3D12DDIARG_CREATE_DESCRIPTOR_
 {
     AV_SCOPE("D3d12Device::create_descriptor_heap");
     if (args == nullptr || handle.pDrvPrivate == nullptr) return E_INVALIDARG;
+    if (!DescriptorHeapRules::admits_type(static_cast<uint32_t>(args->Type)) ||
+        !DescriptorHeapRules::admits_count(args->NumDescriptors))
+        return E_INVALIDARG;
     DescriptorHeapRecord &heap = *static_cast<DescriptorHeapRecord *>(handle.pDrvPrivate);
     heap = DescriptorHeapRecord{};
     stamp(heap.header, DescriptorHeapRecord::tag, next_id());
@@ -43,6 +47,7 @@ HRESULT D3d12Device::create_descriptor_heap(const D3D12DDIARG_CREATE_DESCRIPTOR_
         const DescriptorSlot slot = {heap.header.stamp.id(), index};
         __builtin_memcpy(slots + static_cast<size_t>(index) * descriptor_bytes, &slot, sizeof(slot));
     }
+    if (heap.count == 0u) return S_OK;
     if (!sent(d3d12proto::av_d3d12_CreateDescriptorHeap12(wire(), heap.header.stamp.id(), heap.type, heap.count, heap.flags),
               "CreateDescriptorHeap12"))
         return E_OUTOFMEMORY;
@@ -53,7 +58,7 @@ VOID D3d12Device::destroy_descriptor_heap(D3D12DDI_HDESCRIPTORHEAP handle)
 {
     AV_SCOPE("D3d12Device::destroy_descriptor_heap");
     DescriptorHeapRecord &heap = *static_cast<DescriptorHeapRecord *>(handle.pDrvPrivate);
-    static_cast<void>(sent(d3d12proto::av_d3d12_Destroy12(wire(), heap.header.stamp.id()), "Destroy12"));
+    if (heap.count != 0u) static_cast<void>(sent(d3d12proto::av_d3d12_Destroy12(wire(), heap.header.stamp.id()), "Destroy12"));
     heap = DescriptorHeapRecord{};
 }
 
@@ -75,6 +80,8 @@ D3D12DDI_GPU_DESCRIPTOR_HANDLE D3d12Device::get_gpu_descriptor_handle_for_heap_s
 {
     AV_SCOPE("D3d12Device::get_gpu_descriptor_handle_for_heap_start");
     D3D12DDI_GPU_DESCRIPTOR_HANDLE start = {};
+    const auto *const heap = static_cast<const DescriptorHeapRecord *>(handle.pDrvPrivate);
+    if (heap == nullptr || (heap->flags & api_shader_visible) == 0u) return start;
     start.ptr = static_cast<UINT64>(id_of(handle.pDrvPrivate)) << gpu_heap_shift;
     return start;
 }

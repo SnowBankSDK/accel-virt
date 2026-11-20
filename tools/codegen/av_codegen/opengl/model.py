@@ -52,6 +52,7 @@ class Param:
     size_param: str | None = None
     length_param: str | None = None
     has_lengths: bool = False
+    object_class: str = ""
 
     @property
     def is_out(self) -> bool:
@@ -102,6 +103,9 @@ class Registry:
     aliases: dict[str, str] = field(default_factory=dict)
     synchronous: set[str] = field(default_factory=set)
     read_into_blob: set[str] = field(default_factory=set)
+    reads_window: set[str] = field(default_factory=set)
+    reads_buffers: set[str] = field(default_factory=set)
+    orders_mappings: set[str] = field(default_factory=set)
     tier_major: int = 1
     tier_minor: int = 0
     carried_extensions: list[str] = field(default_factory=list)

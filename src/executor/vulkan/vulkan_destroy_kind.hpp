@@ -27,7 +27,10 @@ enum class VulkanDestroyKind : uint8_t {
     memory,
     imported_memory,
     imported_semaphore,
-    acceleration_structure
+    acceleration_structure,
+    shader,
+    indirect_commands_layout,
+    indirect_execution_set
 };
 
 }

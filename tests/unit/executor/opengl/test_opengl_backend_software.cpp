@@ -6,6 +6,7 @@
 #include "core/log/driver_log.hpp"
 #include "device/abi/av_executor.h"
 #include "executor/executor_log.hpp"
+#include "executor/host_lifecycle_gate.hpp"
 #include "executor/opengl/opengl_backend.hpp"
 #include "executor/sharing/shared_image_shape.hpp"
 #include "executor/shim/gl_display.hpp"
@@ -300,6 +301,53 @@ TEST(opengl_backend_software, drain_finishes_the_work_and_brings_the_reached_mar
   backend.gpu_progress(marked, reached);
   CHECK_EQ(marked, 1u);
   CHECK_EQ(reached, 1u);
+  backend.shut_down(); }
+
+TEST(opengl_backend_software, no_fence_is_made_while_an_occlusion_query_is_open_and_the_owed_one_follows_its_end)
+{ if (skipped()) return;
+  OpenGlBackend backend(executor_log.opengl());
+  CHECK(backend.initialize(software().display(), nullptr, nullptr));
+  const av::glproto::RealGl &gl = OpenGlBackendProbe::gl(backend);
+  constexpr std::uint64_t samples_passed = 0x8914u;
+  GLuint query = 0u;
+  gl.glGenQueries(1, &query);
+  CHECK(Command(av::glproto::kCmd_glBeginQuery).varint(samples_passed).varint(query).run(backend));
+  backend.end_batch();
+  std::uint64_t marked = 0u, reached = 0u;
+  backend.gpu_progress(marked, reached);
+  CHECK_EQ(marked, 0u);
+  backend.end_batch();
+  backend.gpu_progress(marked, reached);
+  CHECK_EQ(marked, 0u);
+  CHECK(Command(av::glproto::kCmd_glEndQuery).varint(samples_passed).run(backend));
+  backend.gpu_progress(marked, reached);
+  CHECK_EQ(marked, 1u);
+  backend.end_batch();
+  backend.gpu_progress(marked, reached);
+  CHECK_EQ(marked, 2u);
+  backend.shut_down(); }
+
+TEST(opengl_backend_software, no_fence_is_made_while_advanced_blending_is_enabled_until_something_needs_the_gpu)
+{ if (skipped()) return;
+  OpenGlBackend backend(executor_log.opengl());
+  CHECK(backend.initialize(software().display(), nullptr, nullptr));
+  CHECK(Command(av::glproto::kCmd_glBlendEquation).varint(0x9294u).run(backend));
+  CHECK(Command(av::glproto::kCmd_glEnable).varint(0x0BE2u).run(backend));
+  std::uint64_t marked = 0u, reached = 0u;
+  backend.end_batch();
+  backend.end_batch();
+  backend.gpu_progress(marked, reached);
+  CHECK_EQ(marked, 0u);
+  CHECK(Command(av::glproto::kCmd_glFlush).run(backend));
+  backend.gpu_progress(marked, reached);
+  CHECK_EQ(marked, 1u);
+  backend.end_batch();
+  CHECK(Command(av::glproto::kCmd_glDisable).varint(0x0BE2u).run(backend));
+  backend.gpu_progress(marked, reached);
+  CHECK_EQ(marked, 2u);
+  backend.end_batch();
+  backend.gpu_progress(marked, reached);
+  CHECK_EQ(marked, 3u);
   backend.shut_down(); }
 
 namespace {
@@ -987,3 +1035,47 @@ TEST(opengl_backend_software, a_backend_killed_after_any_of_its_commands_drains_
       CHECK_EQ(OpenGlBackendProbe::images(backend).count(), 0u);
       backend.shut_down();
   } }
+
+namespace {
+
+struct GatedCreate {
+    const av::GlDisplay *display;
+    bool                 made;
+};
+
+void *create_and_close(void *held)
+{
+    auto *const create = static_cast<GatedCreate *>(held);
+    OpenGlBackend backend(executor_log.opengl());
+    create->made = backend.initialize(create->display, nullptr, nullptr);
+    backend.shut_down();
+    return nullptr;
+}
+
+}
+
+TEST(opengl_backend_software, a_context_create_waits_for_the_gpus_lifecycle_gate_and_is_refused_when_its_holder_stays_inside)
+{ if (skipped()) return;
+  constexpr std::uint64_t      wait_ns = 100000000u;
+  static av::HostLifecycleGate gate(wait_ns);
+  static av::GlDisplay         display;
+  CHECK(display.open(software().uuid(), gate));
+  CHECK(display.lifecycle() == &gate);
+  const std::uint64_t entered = gate.entries();
+  CHECK(gate.enter());
+  GatedCreate refused{&display, true};
+  pthread_t   thread;
+  CHECK_EQ(pthread_create(&thread, nullptr, create_and_close, &refused), 0);
+  CHECK_EQ(pthread_join(thread, nullptr), 0);
+  CHECK(!refused.made);
+  CHECK_EQ(gate.refusals(), 1u);
+  gate.leave();
+  GatedCreate pair[2] = {{&display, false}, {&display, false}};
+  pthread_t   creators[2];
+  for (std::uint32_t at = 0u; at < 2u; at++)
+      CHECK_EQ(pthread_create(&creators[at], nullptr, create_and_close, &pair[at]), 0);
+  for (pthread_t creator : creators) CHECK_EQ(pthread_join(creator, nullptr), 0);
+  CHECK(pair[0].made);
+  CHECK(pair[1].made);
+  CHECK_EQ(gate.entries(), entered + 5u);
+  CHECK_EQ(gate.refusals(), 1u); }

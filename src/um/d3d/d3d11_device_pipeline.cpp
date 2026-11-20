@@ -1,6 +1,7 @@
 #include "core/log/keyed_log.hpp"
 #include "core/trace/function_scope.hpp"
 #include "icd/d3d/list_pieces.hpp"
+#include "icd/d3d/query_kind.hpp"
 #include "proto/generated/d3d/d3d_dispatch_client.h"
 #include "um/d3d/d3d11_device.hpp"
 #include "um/d3d/d3d_session.hpp"
@@ -29,7 +30,59 @@ constexpr uint32_t whole_buffer = 0u;
 void D3d11Device::set_shader(uint32_t stage, D3D10DDI_HSHADER shader)
 {
     AV_SCOPE("D3d11Device::set_shader");
-    static_cast<void>(d3dproto::av_d3d_SetShader(wire(), stage, id_of(shader.pDrvPrivate)));
+    if (stage != stage_geometry) {
+        static_cast<void>(d3dproto::av_d3d_SetShader(wire(), stage, id_of(shader.pDrvPrivate)));
+        return;
+    }
+    geometry_binding_ = StreamPassthroughRecord{};
+    geometry_passthrough_ = false;
+    if (shader.pDrvPrivate != nullptr) {
+        const auto &record = *static_cast<const StreamPassthroughRecord *>(shader.pDrvPrivate);
+        geometry_passthrough_ = record.head.resource == StreamPassthroughRecord::marker;
+        if (geometry_passthrough_) geometry_binding_ = record;
+        else geometry_binding_.head = record.head;
+    }
+    bind_geometry_shader();
+}
+
+uint32_t D3d11Device::passthrough_variant_id() const
+{
+    AV_SCOPE("D3d11Device::passthrough_variant_id");
+    if (!geometry_passthrough_) return geometry_binding_.head.stamp.id();
+    switch (topology_) {
+    case D3D10_DDI_PRIMITIVE_TOPOLOGY_LINELIST:
+    case D3D10_DDI_PRIMITIVE_TOPOLOGY_LINESTRIP: return geometry_binding_.variant[0];
+    case D3D10_DDI_PRIMITIVE_TOPOLOGY_TRIANGLELIST:
+    case D3D10_DDI_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP: return geometry_binding_.variant[1];
+    case D3D10_DDI_PRIMITIVE_TOPOLOGY_LINELIST_ADJ:
+    case D3D10_DDI_PRIMITIVE_TOPOLOGY_LINESTRIP_ADJ: return geometry_binding_.variant[2];
+    case D3D10_DDI_PRIMITIVE_TOPOLOGY_TRIANGLELIST_ADJ:
+    case D3D10_DDI_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP_ADJ: return geometry_binding_.variant[3];
+    default: return geometry_binding_.head.stamp.id();
+    }
+}
+
+void D3d11Device::bind_geometry_shader()
+{
+    AV_SCOPE("D3d11Device::bind_geometry_shader");
+    geometry_sent_ = passthrough_variant_id();
+    static_cast<void>(d3dproto::av_d3d_SetShader(wire(), stage_geometry, geometry_sent_));
+}
+
+void D3d11Device::rebind_geometry_variant()
+{
+    AV_SCOPE("D3d11Device::rebind_geometry_variant");
+    if (!geometry_passthrough_ || passthrough_variant_id() == geometry_sent_) return;
+    bind_geometry_shader();
+}
+
+void D3d11Device::forget_pipeline_mirrors()
+{
+    AV_SCOPE("D3d11Device::forget_pipeline_mirrors");
+    geometry_binding_ = StreamPassthroughRecord{};
+    geometry_passthrough_ = false;
+    geometry_sent_ = 0u;
+    topology_ = 0u;
 }
 
 void D3d11Device::set_constant_buffers(uint32_t stage, UINT start, UINT count, const D3D10DDI_HRESOURCE *buffers,
@@ -292,6 +345,8 @@ VOID D3d11Device::ia_set_index_buffer(D3D10DDI_HRESOURCE buffer, DXGI_FORMAT for
 VOID D3d11Device::ia_set_topology(D3D10_DDI_PRIMITIVE_TOPOLOGY topology)
 {
     AV_SCOPE("D3d11Device::ia_set_topology");
+    topology_ = static_cast<uint32_t>(topology);
+    rebind_geometry_variant();
     static_cast<void>(d3dproto::av_d3d_SetTopology(wire(), static_cast<uint32_t>(topology)));
 }
 
@@ -579,6 +634,7 @@ VOID D3d11Device::query_end(D3D10DDI_HQUERY query)
     QueryRecord &record = *static_cast<QueryRecord *>(query.pDrvPrivate);
     record.last_end = session_.query_results().ended();
     record.first_miss = 0u;
+    if (record.type == d3d::QueryKind::event_type) record.event_order = watermark_.ended();
     static_cast<void>(d3dproto::av_d3d_EndQuery(wire(), record.stamp.id()));
     if (record.waited_on != 0u && wire().flush() != Status::ok) lost(__func__);
 }
@@ -588,8 +644,10 @@ VOID D3d11Device::query_get_data(D3D10DDI_HQUERY handle, void *data, UINT size, 
     AV_SCOPE("D3d11Device::query_get_data");
     QueryRecord &query = *static_cast<QueryRecord *>(handle.pDrvPrivate);
     constexpr uint64_t patience_per_second = 500u;
-    if (session_.query_results().read(query.stamp.id(), query.last_end, data, size < query.data_bytes ? size : query.data_bytes))
+    if (session_.query_results().read(query.stamp.id(), query.last_end, data, size < query.data_bytes ? size : query.data_bytes)) {
+        if (query.type == d3d::QueryKind::event_type) watermark_.seen(query.event_order);
         return;
+    }
     const uint64_t now = clock_.ticks();
     if (query.first_miss == 0u) query.first_miss = now;
     if (query.last_end != 0u && now - query.first_miss < clock_.frequency() / patience_per_second) {
@@ -609,7 +667,14 @@ VOID D3d11Device::query_get_data(D3D10DDI_HQUERY handle, void *data, UINT size, 
         still_drawing();
         return;
     }
-    if (data != nullptr && size != 0u) __builtin_memcpy(data, answer, static_cast<size_t>(size < answered ? size : answered));
+    if (query.type == d3d::QueryKind::event_type) watermark_.seen(query.event_order);
+    if (data == nullptr || size == 0u) return;
+    if (size > answered && !query_short_noted_) {
+        query_short_noted_ = true;
+        lines_.write("the host answered a query with fewer bytes than the guest asked for; the rest is zero");
+    }
+    __builtin_memset(data, 0, size);
+    __builtin_memcpy(data, answer, static_cast<size_t>(size < answered ? size : answered));
 }
 
 }

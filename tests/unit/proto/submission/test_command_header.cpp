@@ -54,7 +54,7 @@ TEST(command_header, round_trips_and_names_its_api)
 
 TEST(command_header_decode, a_size_below_the_header_or_an_unknown_flag_is_malformed)
 { struct Case { std::uint32_t size_word; };
-  const Case cases[] = {{0u}, {7u}, {0x01000007u}, {0x02000010u}, {0x80000010u}};
+  const Case cases[] = {{0u}, {7u}, {0x01000007u}, {0x04000010u}, {0x80000010u}};
   for (const Case &c : cases) {
       std::uint8_t bytes[CommandHeader::encoded_size] = {1, 0, 1, 0};
       std::memcpy(bytes + 4, &c.size_word, 4);
@@ -77,7 +77,7 @@ TEST(command_header_decode, survives_the_hostile_sweep)
   const av::HostileSweep sweep(rejects, bytes, sizeof bytes);
   sweep.run();
   CHECK(sweep.cases_run() > 64u);
-  const std::uint32_t acceptable = 32u + 24u + 1u + 1u;
+  const std::uint32_t acceptable = 32u + 24u + 1u + 1u + 2u;
   CHECK(sweep.rejections() >= sweep.cases_run() - acceptable); }
 
 TEST(command_header, the_shared_object_trio_are_transport_ids_and_are_all_different)

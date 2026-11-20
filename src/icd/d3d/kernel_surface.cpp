@@ -116,6 +116,18 @@ uint64_t KernelSurface::key() const
     return minted.object_id();
 }
 
+bool KernelSurface::across_adapters() const
+{
+    AV_SCOPE("KernelSurface::across_adapters");
+    return allocation_.descriptor().kind() == AllocationKind::cross_adapter;
+}
+
+uint64_t KernelSurface::opened_bytes() const
+{
+    AV_SCOPE("KernelSurface::opened_bytes");
+    return allocation_.descriptor().size();
+}
+
 bool KernelSurface::primary() const
 {
     AV_SCOPE("KernelSurface::primary");

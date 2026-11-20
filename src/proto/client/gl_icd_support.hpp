@@ -19,10 +19,14 @@ size_t           compressed_bytes(GLsizei width, GLsizei height, GLsizei depth, 
 size_t           level_bytes(GLenum target, GLint level, GLenum format, GLenum type) noexcept;
 size_t           compressed_level_bytes(GLenum target, GLint level, bool packing) noexcept;
 const uint64_t  *offsets_of(const void *const *offsets, size_t count) noexcept;
+const int64_t   *wide_intptrs(const GLintptr *values, size_t count, uint32_t which) noexcept;
 bool             pixel_buffer_bound(bool packing) noexcept;
 bool             query_buffer_bound() noexcept;
 GLuint           framebuffer_name(GLuint name) noexcept;
 void             flush_persistent_mappings() noexcept;
+void             order_persistent_mappings() noexcept;
+bool             resolve_window_read() noexcept;
+void             window_read_done() noexcept;
 void             forget_bindings() noexcept;
 bool             skip_active_texture(GLenum texture) noexcept;
 bool             skip_bind_texture(GLenum target, GLuint texture) noexcept;
@@ -40,6 +44,16 @@ void             client_attributes_pushed(GLbitfield mask) noexcept;
 void             client_attributes_popped() noexcept;
 void             client_attributes_reset(GLbitfield mask) noexcept;
 void             vertex_array_elements(GLuint array, GLuint buffer) noexcept;
+bool             stage_client_arrays(GLint first, GLsizei count) noexcept;
+bool             stage_client_elements(GLenum type, GLsizei count, const void *&indices, GLint base_vertex) noexcept;
+bool             stage_client_multi_arrays(const GLint *first, const GLsizei *count, GLsizei draws) noexcept;
+bool             stage_client_multi_elements(const GLsizei *count, GLenum type, const void *const *indices,
+                                             GLsizei draws, const GLint *base_vertex,
+                                             const uint64_t *&host_indices) noexcept;
+bool             refuse_client_arrays() noexcept;
+void             finish_client_draw() noexcept;
+void             begin_client_primitives() noexcept;
+bool             answer_device_luid(GLenum pname, GLubyte *data) noexcept;
 bool             answer_buffer_map_state(GLenum target, GLenum pname, GLint *params) noexcept;
 bool             answer_buffer_map_state(GLenum target, GLenum pname, GLint64 *params) noexcept;
 bool             answer_named_buffer_map_state(GLuint buffer, GLenum pname, GLint *params) noexcept;

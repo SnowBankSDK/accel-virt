@@ -14,6 +14,7 @@ option(AV_COVERAGE "instrument for llvm-cov"        OFF)
 option(AV_SANITIZE "build tests with ASan + UBSan"  ON)
 option(AV_FUZZ     "build libFuzzer targets"        OFF)
 option(AV_CHECKED "verify invariants around every mutation" ON)
+set(AV_D3D_RUNTIME_DIR "${CMAKE_SOURCE_DIR}/build-d3d/lib" CACHE PATH "the built DXVK and vkd3d-proton libraries the device tests load")
 option(AV_QEMU     "build the patched QEMU with the device and smoke-test it" OFF)
 if(AV_QEMU AND NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
@@ -54,6 +55,7 @@ file(GLOB_RECURSE AV_PORTABLE_SOURCES CONFIGURE_DEPENDS
 set(AV_KHRONOS_INCLUDE ${CMAKE_SOURCE_DIR}/third_party/khronos/include)
 set(AV_GENERATED_NAMES
   ${CMAKE_SOURCE_DIR}/src/proto/generated/vulkan/vk_command_names.cpp
+  ${CMAKE_SOURCE_DIR}/src/proto/generated/vulkan/vk_command_extensions.cpp
   ${CMAKE_SOURCE_DIR}/src/proto/generated/opencl/cl_command_names.cpp
   ${CMAKE_SOURCE_DIR}/src/proto/generated/opengl/gl_command_names.cpp
   ${CMAKE_SOURCE_DIR}/src/proto/generated/d3d/d3d_command_names.cpp
@@ -167,7 +169,7 @@ list(APPEND AV_DEVICE_SOURCES src/core/platform/lock_marks.cpp src/core/platform
 list(REMOVE_ITEM AV_DEVICE_SOURCES ${AV_RECORD_ENTRY})
 list(APPEND AV_DEVICE_SOURCES src/core/support/text_buffer.cpp src/core/support/byte_range.cpp
   src/core/support/bgra_rows.cpp
-  src/core/support/setting_text.cpp src/core/support/fnv1a_digest.cpp
+  src/core/support/setting_text.cpp src/core/support/fnv1a_digest.cpp src/core/support/vulkan_layer_filter.cpp
   src/core/log/driver_log.cpp src/core/log/log_line.cpp)
 list(FILTER AV_DEVICE_SOURCES EXCLUDE REGEX "/src/device/(shim/(posix_renderer|renderer_main)|renderer/)[^/]*\\.cpp$")
 list(REMOVE_ITEM AV_DEVICE_SOURCES ${AV_GENERATED_ALL})
@@ -360,6 +362,7 @@ foreach(src ${AV_UNIT_TESTS})
   set_tests_properties(${name} PROPERTIES
     ENVIRONMENT "LLVM_PROFILE_FILE=${CMAKE_BINARY_DIR}/coverage/${name}.profraw;MESA_SHADER_CACHE_DISABLE=true")
   if(name STREQUAL "test_d3d_backend_device" OR name STREQUAL "test_d3d_tir_device" OR
+     name STREQUAL "test_d3d_line_coverage_device" OR name STREQUAL "test_d3d12_sample_shading_device" OR name STREQUAL "test_d3d12_indirect_state_device" OR
      name STREQUAL "test_d3d12_session_device" OR
      name STREQUAL "test_d3d12_session_features_device" OR name STREQUAL "test_d3d12_session_tiles_device" OR
      name STREQUAL "test_d3d_gl_interop_device" OR name STREQUAL "test_d3d_cl_interop_device" OR
@@ -367,9 +370,10 @@ foreach(src ${AV_UNIT_TESTS})
      name STREQUAL "test_d3d_external_export_device" OR
      name STREQUAL "test_d3d9_session_device" OR
      name STREQUAL "test_d3d_vulkan_interop_device" OR name STREQUAL "test_d3d_device_loss_device" OR
-     name STREQUAL "test_fullstack_device_loss")
+     name MATCHES "^test_fullstack_" OR name STREQUAL "test_vulkan_backend" OR
+     name STREQUAL "test_compositor_memory_device" OR name STREQUAL "test_executor_root")
     set_property(TEST ${name} APPEND PROPERTY ENVIRONMENT
-      "ASAN_OPTIONS=detect_leaks=0;AV_D3D_PATH=${CMAKE_SOURCE_DIR}/build-d3d/lib;DXVK_LOG_PATH=${CMAKE_BINARY_DIR}")
+      "ASAN_OPTIONS=detect_leaks=0;AV_D3D_PATH=${AV_D3D_RUNTIME_DIR};DXVK_LOG_PATH=${CMAKE_BINARY_DIR}")
   endif()
   if(name STREQUAL "test_fullstack_av" OR name STREQUAL "test_fullstack_device_loss")
     target_sources(${name} PRIVATE ${AV_EXECUTOR_ENTRY})
@@ -380,6 +384,15 @@ foreach(src ${AV_UNIT_TESTS})
   endif()
   if(name STREQUAL "test_d3d_backend_device")
     target_sources(${name} PRIVATE ${CMAKE_SOURCE_DIR}/src/icd/d3d/passthrough_geometry_shader.cpp)
+  endif()
+  if(name STREQUAL "test_line_coverage_spirv")
+    target_include_directories(${name} SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/tools/line-coverage)
+  endif()
+  if(name STREQUAL "test_stream_swap_spirv")
+    target_include_directories(${name} SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/tools/stream-swap)
+  endif()
+  if(name STREQUAL "test_forced_coverage_spirv")
+    target_include_directories(${name} SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/tools/forced-coverage)
   endif()
   if(name STREQUAL "test_posix_renderer_host" OR name STREQUAL "test_renderer_process")
     target_link_libraries(${name} PRIVATE ${CMAKE_DL_LIBS})
@@ -739,6 +752,9 @@ endif()
 
 add_test(NAME check_spirv
          COMMAND python3 -B ${CMAKE_SOURCE_DIR}/tools/gen_spirv.py --check)
+
+add_test(NAME shared_header_patches
+         COMMAND python3 -B ${CMAKE_SOURCE_DIR}/tools/shared_header_patches.py --check)
 
 add_test(NAME extension_policy
          COMMAND python3 -B ${CMAKE_SOURCE_DIR}/tools/check_extension_policy.py ${CMAKE_SOURCE_DIR})

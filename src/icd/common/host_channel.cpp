@@ -70,12 +70,13 @@ Status HostChannel::open(GuestConnection &device, const GlContextOptions &option
         line.text(faulted ? "the context faulted opening its blob arena, status "
                           : "no blob arena for the context; bulk data crosses inline, status ")
             .number(static_cast<uint32_t>(arena));
-        if (faulted)
+        if (arena_failed_step_ != nullptr)
             line.text(", failed step ")
                 .text(arena_failed_step_)
                 .text(" returned ")
-                .number(static_cast<uint32_t>(arena_failed_status_))
-                .text(", host faulted ")
+                .number(static_cast<uint32_t>(arena_failed_status_));
+        if (faulted)
+            line.text(", host faulted ")
                 .number(transport_.object().host_faulted() ? 1u : 0u)
                 .text(" with code ")
                 .number(transport_.object().host_fault_code());
@@ -94,10 +95,12 @@ Status HostChannel::open_arena(GuestConnection &device)
     AV_SCOPE("HostChannel::open_arena");
     static_cast<void>(arena_.construct(device, transport_.object(), lines_));
     uint64_t bytes = arena_bytes_;
-    Status   opened = arena_.object().open(bytes);
-    while (opened != Status::ok && !transport_.object().faulted() && bytes / 2u >= KmtBlobArena::default_bytes) {
+    const bool     small = bytes < KmtBlobArena::default_bytes;
+    const uint64_t floor = small ? bytes : KmtBlobArena::default_bytes;
+    Status         opened = small ? arena_.object().open_small(bytes) : arena_.object().open(bytes);
+    while (opened != Status::ok && !transport_.object().faulted() && bytes / 2u >= floor) {
         bytes /= 2u;
-        opened = arena_.object().open(bytes);
+        opened = small ? arena_.object().open_small(bytes) : arena_.object().open(bytes);
     }
     if (opened != Status::ok) {
         arena_failed_step_ = arena_.object().failed_step();
@@ -137,6 +140,18 @@ Status HostChannel::open_memory(uint64_t bytes, HostMemoryRequest memory, const 
     const Status         room = keep(owner, kept);
     if (room != Status::ok) return counted(room);
     return counted(settle(kept, kept->allocation_.object().open(bytes, memory), made));
+}
+
+Status HostChannel::place_memory(uint64_t bytes, HostMemoryRequest memory, const void *owner, uint64_t named,
+                                 HostAllocation *&made)
+{
+    AV_SCOPE("HostChannel::place_memory");
+    made = nullptr;
+    const ThreadLockHold release(lock_);
+    Kept                *kept = nullptr;
+    const Status         room = keep(owner, kept);
+    if (room != Status::ok) return counted(room);
+    return counted(settle(kept, kept->allocation_.object().place(bytes, memory, named), made));
 }
 
 Status HostChannel::adopt_memory(void *address, uint64_t bytes, HostMemoryRequest memory, const void *owner,
@@ -389,6 +404,12 @@ const KmtTransport &HostChannel::transport() const
 {
     AV_SCOPE("HostChannel::transport");
     return transport_.object();
+}
+
+KmtBlobArena *HostChannel::arena()
+{
+    AV_SCOPE("HostChannel::arena");
+    return arena_.constructed() ? &arena_.object() : nullptr;
 }
 
 bool HostChannel::has_arena() const

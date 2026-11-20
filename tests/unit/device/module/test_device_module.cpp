@@ -82,7 +82,8 @@ TEST(device_module_report, writes_every_live_device_under_its_slot)
                                 "host_window_bytes=0 contexts=0 driver_ok=false\n"
                                 "module/0/device/1/host_blobs/0 live=0\n"
                                 "module/0/device/1/window_stats/0 attached=false stable=false\n"
-                                "module/0/device/1/contexts/0 live=0") == 0);
+                                "module/0/device/1/contexts/0 live=0 reaping=0 refused_attaches=0\n"
+                                "module/0/device/1/service/0 running=true outstanding=0 held=0") == 0);
   CHECK_STATUS(module.destroy(second), Status::ok); }
 
 TEST(device_module_destroy, finds_the_device_named_among_others)
@@ -209,7 +210,7 @@ std::uint32_t read_key_51(void *, std::uint32_t, std::uint64_t key, void *, std:
 
 }
 
-TEST(av_device_abi, av_device_export_image_and_export_head_hand_over_a_surface_only_for_a_key_the_executor_knows)
+TEST(av_device_abi, av_device_export_image_hands_over_a_surface_only_for_a_key_the_executor_knows_and_show_frame_needs_a_dmabuf_display)
 { MockHost host; MockHostOps ops(host);
   host.add_gpu(gpu);
   av::MockExecutorOps executor(AV_EXECUTOR_SUB_API_D3D);
@@ -223,12 +224,7 @@ TEST(av_device_abi, av_device_export_image_and_export_head_hand_over_a_surface_o
   CHECK_EQ(av_device_export_image(device, 0x51u, &image), 1);
   CHECK_EQ(image.fd, 12);
   CHECK_EQ(image.width, 640u);
-  AvExportedImage head = {};
-  CHECK_EQ(av_device_export_head(device, 0u, 0x51u, nullptr), 0);
-  CHECK_EQ(av_device_export_head(device, 0u, 0u, &head), 0);
-  CHECK_EQ(av_device_export_head(device, 0u, 0x52u, &head), 0);
-  CHECK_EQ(av_device_export_head(device, 0u, 0x51u, &head), 1);
-  CHECK_EQ(head.height, 480u);
+  CHECK_EQ(av_device_show_frame(device, 0u, 0x51u), 0);
   CHECK_EQ(av_device_destroy(device), 0); }
 
 TEST(av_device_abi, av_device_read_image_copies_a_surface_only_for_a_key_the_executor_knows)

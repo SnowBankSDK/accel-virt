@@ -11,6 +11,8 @@
 #include "device/abi/entry_points.hpp"
 #include "device/fence/device_pulse.hpp"
 #include "device/fence/fence_window.hpp"
+#include "device/memory/host_blob_errand.hpp"
+#include "device/host/env_setting.hpp"
 #include "device/host/stdio_log.hpp"
 #include "device/recording/wire_recorder.hpp"
 #include "device/context/ring_window.hpp"
@@ -24,11 +26,23 @@
 
 namespace av {
 
+namespace {
+
+uint64_t attach_limit()
+{
+    AV_SCOPE("attach_limit");
+    uint64_t milliseconds = 0u;
+    if (!EnvSetting("AV_ATTACH_LIMIT_MS").number(milliseconds)) return FenceReporter::attach_limit_ns;
+    return milliseconds * 1000000u;
+}
+
+}
+
 DeviceContext::DeviceContext(Host &host, BlobTable &blobs, HostBlobOwners &owners, FenceInterrupts &interrupts,
                              const ExecutorLibrary &library,
                              ExecutorShares &shares, WireRecorder &recorder, D3dOrdering &ordering,
                              DevicePulse &pulse, uint32_t id, const char *name)
-    : ordering_(ordering), pulse_(pulse), recorder_(recorder), id_(id), label_(name), binding_(host, blobs), fences_(host, interrupts, recorder, id),
+    : ordering_(ordering), pulse_(pulse), recorder_(recorder), id_(id), lane_of_(0u), label_(name), binding_(host, blobs), fences_(host, interrupts, recorder, id),
       imports_(host, owners, executor_, recorder, id),
       executor_(host, library, shares, id), staging_(host),
       batches_(host, executor_, imports_, staging_, fences_, recorder, id),
@@ -49,6 +63,21 @@ Status DeviceContext::start()
     AV_SCOPE("DeviceContext::start");
     worker_.connect_signal(signal_);
     return worker_.start();
+}
+
+void DeviceContext::retire()
+{
+    AV_SCOPE("DeviceContext::retire");
+    ordering_.remove(ring_);
+    pulse_.drop(fences_);
+    executor_.withdraw();
+    worker_.stop();
+}
+
+Worker &DeviceContext::worker()
+{
+    AV_SCOPE("DeviceContext::worker");
+    return worker_;
 }
 
 Status DeviceContext::post(const WorkItem &item)
@@ -101,15 +130,17 @@ Status DeviceContext::bind(const ContextSetup &setup, const CapsetInfo &capset)
     status = pulse_.carry(fences_);
     if (status != Status::ok) return refused("pulse", status);
     ScopeExit uncarry([this] { pulse_.drop(fences_); });
+    fences_.refuse_attach_after(attach_limit());
     status = worker_.post(WorkItem(&AvRingAttach, nullptr, &ring_));
     if (status != Status::ok) return refused("attach", status);
     uncarry.dismiss();
     disconnect.dismiss();
     withdraw.dismiss();
     unbind.dismiss();
+    lane_of_ = setup.sub_api() == SubApi::d3d ? setup.options().share_context() : 0u;
     if (setup.sub_api() == SubApi::d3d) {
-        ring_.order_with(ordering_);
-        ordering_.add(ring_, worker_);
+        if (lane_of_ == 0u) ring_.order_with(ordering_);
+        ordering_.add(ring_, worker_, lane_of_ == 0u);
     }
     recorder_.record_context_setup(id_, setup);
     return Status::ok;
@@ -121,10 +152,24 @@ const ContextBinding &DeviceContext::binding() const
     return binding_;
 }
 
+Status DeviceContext::hand_placement(HostBlobErrand &errand)
+{
+    AV_SCOPE("DeviceContext::hand_placement");
+    if (!binding_.bound()) return Status::invalid_state;
+    errand.place_through(executor_);
+    return worker_.post(errand.item());
+}
+
 uint32_t DeviceContext::id() const
 {
     AV_SCOPE("DeviceContext::id");
     return id_;
+}
+
+uint32_t DeviceContext::lane_of() const
+{
+    AV_SCOPE("DeviceContext::lane_of");
+    return lane_of_;
 }
 
 bool DeviceContext::running() const
@@ -152,6 +197,7 @@ void DeviceContext::report(StateWriter &writer)
         writer.number("fence", binding_.fence_resource());
         writer.number("doorbell", binding_.doorbell());
         writer.number("reply", binding_.reply_resource());
+        writer.number("lane_of", lane_of_);
     }
     writer.flag("attached", ring_.attached());
     writer.flag("faulted", ring_.faulted());

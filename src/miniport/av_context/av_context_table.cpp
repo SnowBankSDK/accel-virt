@@ -12,6 +12,7 @@
 #include "core/platform/wait_mutex_guard.hpp"
 #include "miniport/av_context/context_pages.hpp"
 #include "miniport/scheduling/execution_node.hpp"
+#include "miniport/scheduling/stamped_line.hpp"
 #include "core/platform/invariant_scope.hpp"
 #include "core/support/nt_status.hpp"
 #include "core/support/scope_exit.hpp"
@@ -23,30 +24,39 @@
 #include "miniport/memory/shared_object_release.hpp"
 #include "proto/escape/context_views_record.hpp"
 #include "proto/escape/av_context_record.hpp"
+#include "proto/context/context_capacity.hpp"
 #include "proto/context/sub_api.hpp"
 #include "proto/resources/allocation_kind.hpp"
 #include "proto/escape/host_window_record.hpp"
+#include "proto/escape/release_record.hpp"
 #include "proto/resources/host_blob_id.hpp"
 #include "proto/submission/ring_header.hpp"
 #include "proto/submission/submission_descriptor.hpp"
 
 namespace av {
 
+namespace {
+
+constexpr const char *cannot_order = "avgpu: a lane's batches cannot be released in order: the lane is lost";
+
+}
+
 AvContextTable::AvContextTable(Platform &platform, DxgkrnlInterface &dxgkrnl, AllocationTable &allocations,
                                  HostWindow &window)
     : platform_(platform), dxgkrnl_(dxgkrnl), allocations_(allocations), window_(window),
       lock_(platform, LockRank::av_context_slots),
       reader_(platform), bindings_(), contexts_{}, names_{}, memories_(), chunks_(platform), ids_(platform, HostBlobId::most), held_chunks_{}, orders_{},
-      wakes_{}, raised_{}, told_lost_{}, generations_{}, live_{}, request_{}, requests_(platform, LockRank::av_control_requests)
+      wakes_{}, raised_{}, told_lost_{}, generations_{}, live_{}, stranded_{}, stranded_count_(0u), lanes_{}, parents_{}, departed_{}, request_{}, requests_(platform, LockRank::av_control_requests), adapter_(0u)
       {
           AV_SCOPE("AvContextTable::AvContextTable");
+          for (uint32_t &parent : parents_) parent = no_slot;
       }
 
 AvContextTable::~AvContextTable()
 {
     AV_SCOPE("AvContextTable::~AvContextTable");
     for (uint32_t slot = 0u; slot < max_contexts; slot++) {
-        if (contexts_[slot] == nullptr) continue;
+        if (contexts_[slot] == nullptr && !stranded_[slot]) continue;
         release_chunks(slot, nullptr, true);
         release(slot);
     }
@@ -67,7 +77,7 @@ uint32_t AvContextTable::claim(void *context, bool &duplicate)
     duplicate = slot_of(context) != no_slot;
     if (duplicate) return no_slot;
     for (uint32_t slot = 0u; slot < max_contexts; slot++) {
-        if (contexts_[slot] != nullptr) continue;
+        if (contexts_[slot] != nullptr || stranded_[slot]) continue;
         contexts_[slot] = context;
         return slot;
     }
@@ -87,10 +97,12 @@ Status AvContextTable::resolve(uint32_t handle, AllocationKind kind, Allocation 
     return Status::ok;
 }
 
-Status AvContextTable::resolve_share(uint32_t slot, SubApi asking, uint32_t handle, uint32_t &context_id)
+Status AvContextTable::resolve_share(uint32_t slot, SubApi asking, uint32_t handle, uint32_t &context_id,
+                                     uint32_t &parent)
 {
     AV_SCOPE("AvContextTable::resolve_share");
     context_id = 0u;
+    parent = no_slot;
     if (handle == 0u) return Status::ok;
     AcquiredHandleData acquired(dxgkrnl_, handle);
     if (acquired.acquire() != Status::ok) return Status::invalid_parameter;
@@ -101,11 +113,26 @@ Status AvContextTable::resolve_share(uint32_t slot, SubApi asking, uint32_t hand
         const AvContextBinding &binding = bindings_[other].object();
         const Allocation &own = *names_[slot];
         const bool same_owner = asking == SubApi::opengl ? ring->held_with(own) : ring->held_in_process_of(own);
-        if (binding.sub_api() != SubApi::opengl || !same_owner) return Status::invalid_parameter;
+        if (!same_owner) return Status::invalid_parameter;
+        if (asking == SubApi::d3d) {
+            if (binding.sub_api() != SubApi::d3d || lanes_[other] || lost(other)) return Status::invalid_parameter;
+            if (lanes_of(other) >= ContextCapacity::lanes) return Status::no_space;
+            parent = other;
+        } else if (binding.sub_api() != SubApi::opengl) {
+            return Status::invalid_parameter;
+        }
         context_id = binding.context_id();
         return Status::ok;
     }
     return Status::invalid_parameter;
+}
+
+uint32_t AvContextTable::lanes_of(uint32_t parent) const
+{
+    AV_SCOPE("AvContextTable::lanes_of");
+    uint32_t count = 0u;
+    for (uint32_t slot = 0u; slot < max_contexts; slot++) count += contexts_[slot] != nullptr && parents_[slot] == parent ? 1u : 0u;
+    return count;
 }
 
 Status AvContextTable::bind(void *context, const AvContextRecord &record, VirtioGpuDevice &device,
@@ -116,6 +143,7 @@ Status AvContextTable::bind(void *context, const AvContextRecord &record, Virtio
     WaitMutexGuard                  sequence(requests_);
     InvariantScope<AvContextTable> guard(platform_, *this, "bind");
     if (context == nullptr) return Status::invalid_state;
+    if (stranded_count_ != 0u) settle_stranded(device);
     bool           duplicate = false;
     const uint32_t slot = claim(context, duplicate);
     if (duplicate) return Status::invalid_state;
@@ -131,9 +159,15 @@ Status AvContextTable::bind(void *context, const AvContextRecord &record, Virtio
         orders_[slot] = record.ring_order();
     }
     uint32_t     share = 0u;
+    uint32_t     parent = no_slot;
     const Status shared =
-        resolve_share(slot, record.sub_api(), record.options().share_context(), share);
+        resolve_share(slot, record.sub_api(), record.options().share_context(), share, parent);
     if (shared != Status::ok) return shared;
+    if (parent != no_slot) {
+        SpinLockGuard locked(lock_);
+        lanes_[slot] = true;
+        parents_[slot] = parent;
+    }
     static_cast<void>(memories_[slot].construct(platform_));
     ContextMemory &memory = memories_[slot].object();
     Status         status = memory.allocate(record.ring_order(), record.reply_bytes());
@@ -142,7 +176,10 @@ Status AvContextTable::bind(void *context, const AvContextRecord &record, Virtio
     const AvContextRecord sharing(record.sub_api(), record.ring_order(), record.ring(), record.reply_bytes(),
                                    record.options().sharing(share));
     status = set_up(slot, sharing, device, doorbells, capset);
-    if (status != Status::ok) return status;
+    if (status != Status::ok) {
+        if (stranded_[slot]) unwind.dismiss();
+        return status;
+    }
     unwind.dismiss();
     SpinLockGuard locked(lock_);
     live_[slot] = true;
@@ -164,10 +201,13 @@ Status AvContextTable::set_up(uint32_t slot, const AvContextRecord &record, Virt
     if (status == Status::ok || !bindings_[slot].constructed()) return status;
     AvContextBinding &binding = bindings_[slot].object();
     const bool         asked = binding.state() != GuestContext::State::idle;
-    if (binding.tear_down(device) != Status::ok) {
-        binding.abandon();
-        if (asked) memories_[slot].object().abandon();
+    if (binding.tear_down(device) == Status::ok) return status;
+    if (asked && device.running()) {
+        strand(slot);
+        return status;
     }
+    binding.abandon();
+    if (asked) memories_[slot].object().abandon();
     return status;
 }
 
@@ -177,12 +217,14 @@ Status AvContextTable::unbind(void *context, VirtioGpuDevice *device)
     platform_.require_irql_at_most(Irql::passive, "AvContextTable::unbind");
     WaitMutexGuard                  sequence(requests_);
     InvariantScope<AvContextTable> guard(platform_, *this, "unbind");
+    if (stranded_count_ != 0u && device != nullptr) settle_stranded(*device);
     uint32_t slot = no_slot;
     {
         SpinLockGuard locked(lock_);
         slot = slot_of(context);
         if (slot == no_slot) return Status::invalid_parameter;
         live_[slot] = false;
+        departed_[slot] = context;
     }
     AvContextBinding &binding = bindings_[slot].object();
     const bool held = binding.state() == GuestContext::State::established ||
@@ -190,6 +232,10 @@ Status AvContextTable::unbind(void *context, VirtioGpuDevice *device)
     const bool torn_down = held && device != nullptr && binding.tear_down(*device) == Status::ok;
     const bool let_go = torn_down || !held || device == nullptr;
     release_chunks(slot, torn_down ? device : nullptr, let_go);
+    if (!let_go && device->running()) {
+        strand(slot);
+        return Status::ok;
+    }
     if (!torn_down) binding.abandon();
     if (!let_go) memories_[slot].object().abandon();
     release(slot);
@@ -201,16 +247,53 @@ void AvContextTable::release(uint32_t slot)
     AV_SCOPE("AvContextTable::release");
     bindings_[slot].destroy();
     memories_[slot].destroy();
+    vacate(slot);
+}
+
+void AvContextTable::strand(uint32_t slot)
+{
+    AV_SCOPE("AvContextTable::strand");
+    memories_[slot].object().leave_process();
+    {
+        SpinLockGuard locked(lock_);
+        stranded_[slot] = true;
+    }
+    stranded_count_++;
+    vacate(slot);
+    StampedLine(platform_, adapter_, "avgpu: a context the device has not let go of keeps its doorbell and pages until it does")
+        .number("doorbell", slot)
+        .write();
+}
+
+void AvContextTable::settle_stranded(VirtioGpuDevice &device)
+{
+    AV_SCOPE("AvContextTable::settle_stranded");
+    for (uint32_t slot = 0u; slot < max_contexts; slot++) {
+        if (!stranded_[slot] || bindings_[slot].object().finish_tear_down(device) != Status::ok) continue;
+        bindings_[slot].destroy();
+        memories_[slot].destroy();
+        SpinLockGuard locked(lock_);
+        stranded_[slot] = false;
+        stranded_count_--;
+    }
+}
+
+void AvContextTable::vacate(uint32_t slot)
+{
+    AV_SCOPE("AvContextTable::vacate");
     void *wake = nullptr;
     {
         SpinLockGuard locked(lock_);
-        releases_[slot].clear();
         names_[slot] = nullptr;
         orders_[slot] = 0u;
         wake = wakes_[slot];
         wakes_[slot] = nullptr;
         raised_[slot] = 0u;
         told_lost_[slot] = false;
+        lanes_[slot] = false;
+        parents_[slot] = no_slot;
+        for (uint32_t &parent : parents_)
+            if (parent == slot) parent = no_slot;
         contexts_[slot] = nullptr;
     }
     if (wake != nullptr) {
@@ -430,78 +513,68 @@ Status AvContextTable::submit(void *context, const uint8_t *private_data, size_t
     SubmissionDescriptor submission;
     if (reader_.read(private_data, size, RingHeader(orders_[slot], 0u, 0u), submission) != Status::ok)
         return Status::invalid_parameter;
-    Status status = Status::ok;
-    if (releases_[slot].active())
-        in_turn(slot, submission);
-    else
-        status = bindings_[slot].object().submit(submission);
+    const Status status = bindings_[slot].object().submit(submission);
     if (status == Status::ok) awaited = submission.fence_id();
     return status;
 }
 
-Status AvContextTable::release_batch(void *context, const SubmissionDescriptor &batch, uint64_t &awaited)
+Status AvContextTable::release_batch(void *context, const ReleaseRecord &release, uint64_t &awaited)
 {
     AV_SCOPE("AvContextTable::release_batch");
     platform_.require_irql_at_most(Irql::dispatch, "AvContextTable::release_batch");
     awaited = 0u;
     SpinLockGuard  locked(lock_);
     const uint32_t slot = slot_of(context);
-    if (slot == no_slot || !live_[slot] || lost(slot)) return Status::invalid_parameter;
-    if (batch.validate_against(RingHeader(orders_[slot], 0u, 0u)) != Status::ok) return Status::invalid_parameter;
-    in_turn(slot, batch);
+    if (slot == no_slot || !live_[slot] || !lanes_[slot] || lost(slot)) return Status::invalid_parameter;
+    const SubmissionDescriptor &batch = release.batch();
+    if (batch.validate_against(RingHeader(orders_[slot], 0u, 0u)) != Status::ok) {
+        lose(slot, cannot_order, batch);
+        return Status::invalid_parameter;
+    }
+    return release_in_lane(slot, batch, awaited);
+}
+
+Status AvContextTable::release_in_lane(uint32_t slot, const SubmissionDescriptor &batch, uint64_t &awaited)
+{
+    AV_SCOPE("AvContextTable::release_in_lane");
     awaited = batch.fence_id();
+    if (bindings_[slot].object().submit(batch) != Status::ok) {
+        lose(slot, cannot_order, batch);
+        return Status::ok;
+    }
+    const uint32_t parent = parents_[slot];
+    if (parent != no_slot && live_[parent]) bindings_[parent].object().kick_if_behind();
     return Status::ok;
 }
 
-void AvContextTable::in_turn(uint32_t slot, const SubmissionDescriptor &batch)
-{
-    AV_SCOPE("AvContextTable::in_turn");
-    ReleaseQueue &queue = releases_[slot];
-    AvContextBinding &binding = bindings_[slot].object();
-    const ReleaseQueue::Turn turn = queue.arrive(batch, binding.next_begin());
-    if (turn == ReleaseQueue::Turn::held || turn == ReleaseQueue::Turn::released_already) return;
-    if (turn == ReleaseQueue::Turn::refused || binding.submit(batch) != Status::ok) {
-        lose(slot);
-        return;
-    }
-    queue.released(batch);
-    SubmissionDescriptor next;
-    while (queue.next_held(next)) {
-        if (binding.submit(next) != Status::ok) {
-            lose(slot);
-            return;
-        }
-        queue.released(next);
-    }
-}
-
-void AvContextTable::lose(uint32_t slot)
+void AvContextTable::lose(uint32_t slot, const char *why, const SubmissionDescriptor &batch)
 {
     AV_SCOPE("AvContextTable::lose");
-    bindings_[slot].object().fail();
-    releases_[slot].clear();
-    platform_.log("avgpu: a context's batches cannot be released in order: the context is lost");
+    StampedLine(platform_, adapter_, why)
+        .number("doorbell", slot)
+        .number("tail", bindings_[slot].object().next_begin())
+        .number("begin", batch.begin())
+        .number("end", batch.end())
+        .number("fence", batch.fence_id())
+        .write();
+    bindings_[slot].object().fail(FaultCode::batch_order);
 }
 
-bool AvContextTable::fault_if_held(void *context)
+void AvContextTable::adapter_is(uint64_t adapter)
 {
-    AV_SCOPE("AvContextTable::fault_if_held");
-    platform_.require_irql_at_most(Irql::dispatch, "AvContextTable::fault_if_held");
-    SpinLockGuard  locked(lock_);
-    const uint32_t slot = slot_of(context);
-    if (slot == no_slot || !live_[slot] || releases_[slot].held() == 0u) return false;
-    lose(slot);
-    return true;
+    AV_SCOPE("AvContextTable::adapter_is");
+    adapter_ = adapter;
 }
 
-void AvContextTable::kick(void *context)
+uint64_t AvContextTable::follow(void *context, uint64_t fence)
 {
-    AV_SCOPE("AvContextTable::kick");
-    platform_.require_irql_at_most(Irql::dispatch, "AvContextTable::kick");
+    AV_SCOPE("AvContextTable::follow");
+    platform_.require_irql_at_most(Irql::dispatch, "AvContextTable::follow");
     SpinLockGuard  locked(lock_);
     const uint32_t slot = slot_of(context);
-    if (slot == no_slot || !live_[slot] || lost(slot)) return;
+    if (slot == no_slot || !live_[slot] || lost(slot)) return fence;
     bindings_[slot].object().kick();
+    return fence;
 }
 
 bool AvContextTable::completed_already(void *context, uint64_t fence)
@@ -522,6 +595,11 @@ void AvContextTable::serve(ExecutionNode &node, HwQueueSubmissions &queues)
     platform_.require_irql_at_most(Irql::dispatch, "AvContextTable::serve");
     SpinLockGuard locked(lock_);
     for (uint32_t slot = 0u; slot < max_contexts; slot++) {
+        if (departed_[slot] != nullptr) {
+            node.finish(departed_[slot], UINT64_MAX);
+            queues.completed_through(departed_[slot], UINT64_MAX);
+            departed_[slot] = nullptr;
+        }
         if (!live_[slot]) continue;
         AvContextBinding &binding = bindings_[slot].object();
         static_cast<void>(binding.serve());
@@ -558,12 +636,19 @@ void AvContextTable::abandon_all()
     for (uint32_t slot = 0u; slot < max_contexts; slot++) {
         {
             SpinLockGuard locked(lock_);
-            if (!live_[slot]) continue;
-            live_[slot] = false;
-            releases_[slot].clear();
-            if (wakes_[slot] != nullptr) platform_.signal_event(wakes_[slot]);
+            if (stranded_[slot]) {
+                stranded_[slot] = false;
+                stranded_count_--;
+            } else {
+                if (!live_[slot]) continue;
+                live_[slot] = false;
+                if (wakes_[slot] != nullptr) platform_.signal_event(wakes_[slot]);
+            }
         }
         bindings_[slot].object().abandon();
+        if (contexts_[slot] != nullptr) continue;
+        bindings_[slot].destroy();
+        memories_[slot].destroy();
     }
 }
 
@@ -633,7 +718,7 @@ bool AvContextTable::holds(const void *context) const
 void AvContextTable::log_binding(uint32_t slot, uint32_t message, Status status)
 {
     AV_SCOPE("AvContextTable::log_binding");
-    char       bytes[96];
+    char       bytes[160];
     TextBuffer line(bytes, sizeof bytes);
     line.append("avgpu: av context on doorbell ");
     line.append_decimal(slot);
@@ -641,6 +726,11 @@ void AvContextTable::log_binding(uint32_t slot, uint32_t message, Status status)
     line.append_decimal(message);
     line.append(" status 0x");
     line.append_hex(static_cast<uint32_t>(NtStatus(status).value()), 8u);
+    line.append(" adapter ");
+    line.append_hex(adapter_, 16u);
+    line.append(" at ");
+    line.append_decimal(platform_.interrupt_time() / StampedLine::ticks_per_millisecond);
+    line.append(" ms");
     platform_.log(line.text());
 }
 
@@ -667,6 +757,7 @@ void AvContextTable::report(StateWriter &writer)
             writer.number("context_id", binding.context_id());
             writer.number("completed", binding.completed());
             writer.flag("live", live_[slot]);
+            writer.flag("lane", lanes_[slot]);
             writer.flag("lost", lost(slot));
             writer.flag("wakes", wakes_[slot] != nullptr);
             writer.number("raised", raised_[slot]);
@@ -685,10 +776,14 @@ bool AvContextTable::invariants_hold() const
         const bool running = memories_[slot].constructed() && memories_[slot].object().allocated() &&
                              memories_[slot].object().ring_view() != 0u;
         if (live_[slot] && !(bound_slot && running && bindings_[slot].constructed())) return false;
-        if (!bound_slot && (bindings_[slot].constructed() || memories_[slot].constructed() || names_[slot] != nullptr ||
+        if (stranded_[slot] && (bound_slot || !bindings_[slot].constructed() || !memories_[slot].constructed()))
+            return false;
+        if (!bound_slot && !stranded_[slot] && (bindings_[slot].constructed() || memories_[slot].constructed() || names_[slot] != nullptr ||
                             wakes_[slot] != nullptr || raised_[slot] != 0u || told_lost_[slot]))
             return false;
         if (bound_slot && names_[slot] == nullptr) return false;
+        if ((!bound_slot && (lanes_[slot] || parents_[slot] != no_slot)) || (parents_[slot] != no_slot && !lanes_[slot]))
+            return false;
         if (memories_[slot].constructed() && !memories_[slot].object().invariants_hold()) return false;
         uint32_t held = 0u;
         chunks_.for_each([slot, &held](const ContextChunk &chunk) { held += chunk.slot() == slot ? 1u : 0u; });

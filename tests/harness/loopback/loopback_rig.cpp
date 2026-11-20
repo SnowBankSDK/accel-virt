@@ -62,8 +62,17 @@ bool LoopbackRig::retire(std::uint32_t index)
     const Status torn = context(index).tear_down();
     platform_.set_irql(Irql::passive);
     static_cast<void>(driver_.converse(context(index)));
+    settle();
     return torn == Status::ok && context(index).release() == Status::ok &&
            context(index).state() == GuestContext::State::idle;
+}
+
+void LoopbackRig::settle()
+{
+    MockHost &host = device_.host();
+    for (int round = 0; round < 5000 && device_.device().reaping() != 0u; round++)
+        if (host.wait_for_main_loop_work(1u, 1u)) static_cast<void>(host.run_main_loop());
+    static_cast<void>(host.run_main_loop());
 }
 
 Status LoopbackRig::submit(std::uint32_t index, std::uint64_t fence, std::uint64_t begin, std::uint64_t end)

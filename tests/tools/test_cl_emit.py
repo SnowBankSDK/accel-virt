@@ -69,7 +69,7 @@ class Emitted(unittest.TestCase):
         cl_emit.emit_client(registry, cls.out)
         cl_emit.emit_server(registry, cls.out)
         cl_emit.emit_default_dispatch(registry, cls.out)
-        cls.client = (cls.out / "cl_dispatch_client.cpp").read_text()
+        cls.client = (cls.out / "cl_dispatch_client_words.h").read_text()
         cls.client_header = (cls.out / "cl_dispatch_client.h").read_text()
         cls.server = (cls.out / "cl_dispatch_server.cpp").read_text()
         cls.server_header = (cls.out / "cl_dispatch_server.h").read_text()
@@ -128,10 +128,10 @@ class LoweredFromTheRegistry(unittest.TestCase):
     def setUpClass(cls):
         if not CL_XML.is_file():
             raise unittest.SkipTest("no cl.xml; run tools/fetch_khronos_registries.py")
-        cls.raw = cl_parse.parse(CL_XML)
         cls.profile = cl_profile.load(
             ROOT / "tools" / "codegen" / "profiles" / "opencl.toml",
             ROOT / "tools" / "codegen" / "profiles" / "opencl_ids.toml")
+        cls.raw = cl_parse.parse(CL_XML, cls.profile.structs)
 
     def test_every_added_command_is_carried(self):
         self.assertTrue(set(ADDED).issubset(set(self.profile.commands)),
@@ -198,6 +198,84 @@ class LoweredFromTheRegistry(unittest.TestCase):
                 self.assertTrue(command.returns_address)
                 self.assertFalse(command.returns_handle)
                 self.assertFalse(command.returns_void)
+
+    def test_a_struct_member_cl_xml_does_not_name_is_refused_unless_the_profile_describes_it(self):
+        with self.assertRaisesRegex(ValueError, r"cl_image_desc has a member cl.xml does not name"):
+            cl_parse.parse(CL_XML)
+        members = dict(self.raw.structs["cl_image_desc"])
+        self.assertEqual(members["buffer"].base, "cl_mem")
+
+    def test_every_info_table_name_is_an_enum_of_cl_xml(self):
+        for command, table in self.profile.info.items():
+            for kind, names in table.items():
+                for name in names:
+                    with self.subTest(command=command, name=name):
+                        self.assertIn(name, self.raw.enums)
+                        self.assertIn(kind, cl_lower.INFO_KINDS)
+
+    def test_a_table_name_that_is_not_an_enum_is_refused(self):
+        profile = self.profile
+
+        class Misspelt:
+            def __getattr__(self, name):
+                return getattr(profile, name)
+
+            @property
+            def info(self):
+                tables = dict(profile.info)
+                tables["clGetDeviceInfo"] = {"size_t": ["CL_DEVICE_MAX_WORK_GROUP_SIZES"]}
+                return tables
+
+        with self.assertRaisesRegex(KeyError, "CL_DEVICE_MAX_WORK_GROUP_SIZES is not an enum of cl.xml"):
+            cl_lower.lower(self.raw, Misspelt())
+
+    def test_an_info_command_without_a_table_is_refused(self):
+        profile = self.profile
+
+        class Untabled:
+            def __getattr__(self, name):
+                return getattr(profile, name)
+
+            @property
+            def info(self):
+                tables = dict(profile.info)
+                del tables["clGetPipeInfo"]
+                return tables
+
+        with self.assertRaisesRegex(ValueError, r"clGetPipeInfo answers an info value and the profile has no"):
+            cl_lower.lower(self.raw, Untabled())
+
+    def test_every_info_command_of_the_profile_has_a_table(self):
+        registry = cl_lower.lower(self.raw, self.profile)
+        answering = {cmd.name for cmd in registry.commands.values()
+                     if any(p.role == cl_model.Role.INFO_VALUE for p in cmd.params)}
+        self.assertEqual(answering, set(self.profile.info))
+
+    def test_a_struct_with_word_members_is_never_copied_whole(self):
+        out = pathlib.Path(tempfile.mkdtemp())
+        try:
+            registry = cl_lower.lower(self.raw, self.profile)
+            cl_emit.emit_client(registry, out)
+            cl_emit.emit_server(registry, out)
+            client = (out / "cl_dispatch_client_words.h").read_text()
+            server = (out / "cl_dispatch_server.cpp").read_text()
+        finally:
+            shutil.rmtree(out)
+        self.assertNotIn("sizeof(*", client)
+        self.assertNotIn("r.read(wire_item, sizeof(*wire_item))", server)
+        body = function_body(client, "clCreateImage")
+        self.assertIn("b.write_varint(static_cast<uint64_t>(image_desc->image_width));", body)
+        self.assertIn("b.write_pod<uint64_t>(image_desc_buffer);", body)
+        self.assertNotIn("image_desc->buffer", body)
+        decode = function_body(server, "clCreateImage")
+        self.assertIn("s.handle_for(HandleKind::mem, wire_handle)", decode)
+
+    def test_a_raw_word_array_is_carried_word_by_word(self):
+        registry = cl_lower.lower(self.raw, self.profile)
+        params = {p.name: p for p in registry.commands["clGetKernelSubGroupInfo"].params}
+        self.assertEqual(params["input_value"].role, cl_model.Role.SCALAR_ARRAY)
+        self.assertEqual(params["input_value"].element, "size_t")
+        self.assertTrue(params["input_value"].len_bytes)
 
     def test_the_ids_of_the_added_commands_are_new_and_in_opencl_s_range(self):
         for name in ADDED:

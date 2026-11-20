@@ -54,6 +54,7 @@ public:
     uint32_t flush_held() override;
     void     retire();
     VkDevice device() const;
+    bool     lost() const;
     uint64_t presented() const;
     PresentPacing &pacing();
 
@@ -85,11 +86,13 @@ private:
     void                   release();
 
     WindowSurface &windows_;
+    const Connection &connection_;
     VkPresentQueue &presents_;
     PresentDevice  device_;
     ChainedImage   chained_;
     DriverLog     &lines_;
     PresentPacing  pacing_;
+    bool           queues_every_image_;
     uint64_t       luid_;
     VkDevice       app_device_;
     void          *window_;

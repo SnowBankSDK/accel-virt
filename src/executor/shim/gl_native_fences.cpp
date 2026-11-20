@@ -1,6 +1,7 @@
 #include "executor/shim/gl_native_fences.hpp"
 
 #include "core/trace/function_scope.hpp"
+#include "executor/egl_entry_gate.hpp"
 #include "executor/shim/gl_context.hpp"
 
 #include <EGL/egl.h>
@@ -17,6 +18,7 @@ GlNativeFences::GlNativeFences() : extensions_(), display_(nullptr), create_(nul
 void GlNativeFences::configure(const GlContext &context)
 {
     AV_SCOPE("GlNativeFences::configure");
+    const EglEntry entered;
     give_back();
     void *const display = context.display();
     if (display == nullptr) return;
@@ -53,6 +55,7 @@ bool GlNativeFences::available() const
 int GlNativeFences::make() const
 {
     AV_SCOPE("GlNativeFences::make");
+    const EglEntry entered;
     if (display_ == nullptr) return -1;
     void *const sync = create_(display_, EGL_SYNC_NATIVE_FENCE_ANDROID, nullptr);
     if (sync == nullptr) return -1;

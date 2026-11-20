@@ -61,7 +61,7 @@ TEST(cl_icd_root_programs, a_lost_context_refuses_every_program_and_kernel_entry
   if (!run.made()) return;
   cl_device_id          device = run.device();
   const cl_program      program = run.program();
-  const std::uint32_t   words[2] = {0x07230203u, 0u};
+  const std::uint32_t   words[5] = {0x07230203u, 0u, 0u, 0u, 0u};
   const unsigned char  *binary = binary_bytes;
   const std::size_t     length = sizeof binary_bytes;
   const char           *name = "h.h";
@@ -170,7 +170,7 @@ TEST(cl_icd_root_programs, a_program_from_binary_or_built_in_kernels_names_what_
   CHECK(rig.root().create_program_with_built_in_kernels(run.context(), 1u, &device, "k", &error) == nullptr);
   CHECK_EQ(error, CL_INVALID_VALUE);
 
-  const std::uint32_t words[2] = {0x07230203u, 0u};
+  const std::uint32_t words[5] = {0x07230203u, 0u, 0u, 0u, 0u};
   rig.host().cl_handle(0u, CL_SUCCESS);
   CHECK(rig.root().create_program_with_il(run.context(), words, sizeof words, &error) == nullptr);
   CHECK_EQ(error, CL_INVALID_VALUE);
@@ -202,6 +202,7 @@ TEST(cl_icd_root_programs, a_compile_or_link_the_api_or_the_host_refuses_tells_n
         nullptr);
   CHECK_EQ(error, CL_INVALID_VALUE);
   rig.host().cl_handle(0u, CL_SUCCESS);
+  rig.host().cl_handle(0u, CL_OUT_OF_RESOURCES);
   CHECK(rig.root().link_program(run.context(), 0u, nullptr, nullptr, 1u, &program, ClProgramNotify(), &error) ==
         nullptr);
   CHECK_EQ(error, CL_LINK_PROGRAM_FAILURE);
@@ -420,5 +421,33 @@ TEST(cl_icd_root_programs, a_host_that_makes_more_kernels_than_there_is_room_for
   CHECK_EQ(rig.root().create_kernels_in_program(run.program(), 3u, kernels, &made), CL_SUCCESS);
   CHECK_EQ(made, 4u);
   CHECK(kernels[0] != nullptr && kernels[1] != nullptr && kernels[2] != nullptr);
+  CHECK_EQ(rig.kmt().queued_answers(), 0u);
+  CHECK(rig.root().invariants_hold()); }
+
+TEST(cl_icd_root_programs, a_build_with_an_include_directory_reads_the_headers_here_and_reads_back_the_options_as_given)
+{ ClIcdRig     rig;
+  ClRunningRig run(rig);
+  CHECK(run.made());
+  if (!run.made()) return;
+  rig.headers().add("D:\\inc", "lsw_header.h", "#define LSW 7\n");
+  const char *source = "#include \"lsw_header.h\"\nint v = LSW;\n";
+  rig.host().cl_handle(host_other_program, CL_SUCCESS);
+  cl_int error = CL_SUCCESS;
+  const cl_program program = rig.root().create_program(run.context(), 1u, &source, nullptr, &error);
+  CHECK(program != nullptr);
+  if (program == nullptr) return;
+  rig.host().cl_handle(host_other_program + 1u, CL_SUCCESS);
+  rig.host().cl_result(CL_SUCCESS);
+  rig.host().cl_result(CL_SUCCESS);
+  const char *const options = "-D X=1 -I D:\\inc";
+  CHECK_EQ(rig.root().build_program(program, 0u, nullptr, options), CL_SUCCESS);
+  CHECK(rig.headers().asked() > 0u);
+  char   text[64] = {};
+  size_t bytes = 0u;
+  cl_device_id device = nullptr;
+  CHECK_EQ(rig.root().context_info(run.context(), CL_CONTEXT_DEVICES, sizeof device, &device, nullptr), CL_SUCCESS);
+  CHECK_EQ(rig.root().program_build_info(program, device, CL_PROGRAM_BUILD_OPTIONS, sizeof text, text, &bytes),
+           CL_SUCCESS);
+  CHECK_EQ(std::strcmp(text, options), 0);
   CHECK_EQ(rig.kmt().queued_answers(), 0u);
   CHECK(rig.root().invariants_hold()); }

@@ -21,7 +21,7 @@ ORDER = """# opengl32.dll sha256 0000
 0 glNewList
 1 glBegin
 2 glColor3b_InRGBA
-3 glEnable
+3 glCullFace
 4 glGetPointerv
 """
 
@@ -43,7 +43,7 @@ def registry():
         command("glBegin", [scalar("mode", "GLenum")], tier="compat", ident=2),
         command("glColor3b", [scalar("red", "GLbyte"), scalar("green", "GLbyte"), scalar("blue", "GLbyte")],
                 ident=3),
-        command("glEnable", [scalar("cap", "GLenum")], ident=4),
+        command("glCullFace", [scalar("cap", "GLenum")], ident=4),
         command("glDrawArrays", [scalar("mode", "GLenum"), scalar("first", "GLint"), scalar("count", "GLsizei")],
                 ident=5),
         command("glIsEnabled", [scalar("cap", "GLenum")], returns="GLboolean", ident=6),
@@ -67,6 +67,9 @@ def registry():
     reg.commands["glGetString"].return_type = CType(base="GLubyte", pointer_depth=1, is_const=True)
     reg.aliases["glDrawArraysEXT"] = "glDrawArrays"
     reg.driver_entries["glGetPointerv"] = ("void", "GLenum pname, void **params")
+    reg.reads_window = {"glReadnPixels"}
+    reg.reads_buffers = {"glTexSubImage2D"}
+    reg.orders_mappings = {"glCullFace"}
     return reg
 
 
@@ -101,7 +104,7 @@ class GeneratedGlIcd(unittest.TestCase):
             ("0", "reinterpret_cast<GlProc>(&Wrap_glNewList)"),
             ("1", "reinterpret_cast<GlProc>(&Wrap_glBegin)"),
             ("2", "reinterpret_cast<GlProc>(&Wrap_glColor3b)"),
-            ("3", "reinterpret_cast<GlProc>(&Wrap_glEnable)"),
+            ("3", "reinterpret_cast<GlProc>(&Wrap_glCullFace)"),
             ("4", "reinterpret_cast<GlProc>(&Wrap_glGetPointerv)"),
         ])
         self.assertIn("GlProc slots[kProcTableSlots];", self.table)
@@ -124,7 +127,7 @@ class GeneratedGlIcd(unittest.TestCase):
         for text in (self.header, self.source, self.table):
             self.assertNotIn('extern "C"', text)
         self.assertIn("namespace av::glicd::generated {", self.header)
-        self.assertIn("void APIENTRY Wrap_glEnable(GLenum cap);", self.header)
+        self.assertIn("void APIENTRY Wrap_glCullFace(GLenum cap);", self.header)
         self.assertIn("GLboolean APIENTRY Wrap_glIsEnabled(GLenum cap);", self.header)
         self.assertNotRegex(self.header, r"APIENTRY gl\w+\(")
         self.assertFalse((self.out / "gl_icd_exports.def").exists())
@@ -139,11 +142,11 @@ class GeneratedGlIcd(unittest.TestCase):
         self.assertIn("if (!::av::glicd::legacy_calls_live()) {", begin)
         self.assertIn("::av::glicd::refuse_legacy();", begin)
         self.assertIn("::av::glproto::av_glBegin(*av_t, mode);", begin)
-        self.assertNotIn("legacy_calls_live", body_of(self.source, "Wrap_glEnable"))
+        self.assertNotIn("legacy_calls_live", body_of(self.source, "Wrap_glCullFace"))
 
     def test_forwarding_entries_are_defined_and_handwritten_ones_are_left_to_the_icd(self):
-        self.assertIn("void APIENTRY Wrap_glEnable(GLenum cap) {", self.source)
-        self.assertIn("::av::glproto::av_glEnable(*av_t, cap);", body_of(self.source, "Wrap_glEnable"))
+        self.assertIn("void APIENTRY Wrap_glCullFace(GLenum cap) {", self.source)
+        self.assertIn("::av::glproto::av_glCullFace(*av_t, cap);", body_of(self.source, "Wrap_glCullFace"))
         self.assertIn("const GLubyte* APIENTRY Wrap_glGetString(GLenum name);", self.header)
         self.assertNotIn("Wrap_glGetString(GLenum name) {", self.source)
         self.assertNotIn("Wrap_glDrawArrays(GLenum mode, GLint first, GLsizei count) {", self.source)
@@ -161,6 +164,55 @@ class GeneratedGlIcd(unittest.TestCase):
         self.assertIn("::av::glicd::stage_download(data, av_data_bytes);", download)
         self.assertIn("if (av_data_staged) ::av::glicd::finish_download(data, av_data_bytes);", download)
         self.assertNotIn("stage", body_of(self.source, "Wrap_glGetQueryObjectiv"))
+
+    def test_a_read_of_the_window_is_resolved_around_its_command_only(self):
+        read = body_of(self.source, "Wrap_glReadnPixels")
+        resolve = read.index("const bool av_resolved = ::av::glicd::resolve_window_read();")
+        sent = read.index("::av::glproto::av_glReadnPixels(")
+        done = read.index("if (av_resolved) ::av::glicd::window_read_done();")
+        self.assertLess(read.index("if (av_t == nullptr) return;"), resolve)
+        self.assertLess(read.index("if (av_data_slice && !::av::glicd::slice_pack_pixels"), resolve)
+        self.assertLess(resolve, sent)
+        self.assertLess(sent, done)
+        self.assertLess(read.index("if (av_data_staged) ::av::glicd::finish_download(data, av_data_bytes);"), done)
+        for name in ("Wrap_glTexSubImage2D", "Wrap_glCullFace", "Wrap_glGetQueryObjectiv"):
+            self.assertNotIn("resolve_window_read", body_of(self.source, name), name)
+
+    def test_a_window_read_the_generator_does_not_forward_is_refused(self):
+        for name in ("glUnknown", "glGetString", "glIsEnabled"):
+            reg = registry()
+            reg.reads_window = {name}
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                with self.assertRaisesRegex(emit.GenerationError, name):
+                    emit.emit_icd(reg, pathlib.Path(directory), emit.read_proc_table(ORDER))
+
+    def test_only_a_command_the_profile_lists_as_reading_buffers_sends_persistent_writes_first(self):
+        upload = body_of(self.source, "Wrap_glTexSubImage2D")
+        flush = upload.index("::av::glicd::flush_persistent_mappings();")
+        self.assertLess(flush, upload.index("::av::glproto::av_glTexSubImage2D("))
+        for name in ("Wrap_glCullFace", "Wrap_glUniform1iv", "Wrap_glReadnPixels"):
+            self.assertNotIn("flush_persistent_mappings", body_of(self.source, name), name)
+
+    def test_an_ordering_command_sends_every_persistent_write_and_a_reader_only_the_ones_it_must_see(self):
+        ordering = body_of(self.source, "Wrap_glCullFace")
+        self.assertIn("::av::glicd::order_persistent_mappings();", ordering)
+        self.assertNotIn("flush_persistent_mappings", ordering)
+        self.assertNotIn("order_persistent_mappings", body_of(self.source, "Wrap_glTexSubImage2D"))
+
+    def test_an_ordering_command_that_is_also_a_reader_is_refused(self):
+        reg = registry()
+        reg.orders_mappings = {"glTexSubImage2D"}
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(emit.GenerationError, "glTexSubImage2D"):
+                emit.emit_icd(reg, pathlib.Path(directory), emit.read_proc_table(ORDER))
+
+    def test_a_buffer_reader_the_generator_does_not_forward_is_refused(self):
+        for name in ("glUnknown", "glGetString"):
+            reg = registry()
+            reg.reads_buffers = {name}
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                with self.assertRaisesRegex(emit.GenerationError, name):
+                    emit.emit_icd(reg, pathlib.Path(directory), emit.read_proc_table(ORDER))
 
     def test_a_staged_transfer_that_answers_a_value_is_refused(self):
         reg = registry()
@@ -184,7 +236,7 @@ class GeneratedGlIcd(unittest.TestCase):
         self.assertIn('#include "proto/client/sync_call_scope.hpp"', self.client)
 
     def test_a_one_way_call_ends_only_when_its_payload_is_dropped(self):
-        for name in ("av_glEnable", "av_glUniform1iv"):
+        for name in ("av_glCullFace", "av_glUniform1iv"):
             body = body_of(self.client, name)
             self.assertNotIn("SyncCallScope", body, name)
             self.assertEqual(body.count("av_t.end_call();"), 1, name)
@@ -211,6 +263,60 @@ class GeneratedGlIcd(unittest.TestCase):
         self.assertIn(".give_back(data_lease)", dropped)
 
 
+class ServerFramebufferNames(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        def framebuffer(name="framebuffer"):
+            return Param(name=name, type=CType(base="GLuint"), role=Role.SCALAR, object_class="framebuffer")
+        reg = Registry()
+        for cmd in [
+            command("glBindFramebuffer", [scalar("target", "GLenum"), framebuffer()], ident=1),
+            command("glIsFramebuffer", [framebuffer()], returns="GLboolean", ident=2),
+            command("glCheckNamedFramebufferStatus", [framebuffer(), scalar("target", "GLenum")], returns="GLenum",
+                    ident=3),
+            command("glBlitNamedFramebuffer", [framebuffer("readFramebuffer"), framebuffer("drawFramebuffer")],
+                    ident=4),
+            command("glObjectLabel", [scalar("identifier", "GLenum"), scalar("name", "GLuint")], ident=5),
+            command("glCullFace", [scalar("cap", "GLenum")], ident=6),
+        ]:
+            reg.commands[cmd.name] = cmd
+        cls.out = pathlib.Path(tempfile.mkdtemp())
+        emit.emit_server(reg, cls.out)
+        cls.server = (cls.out / "gl_dispatch_server.cpp").read_text()
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.out)
+
+    def decoder(self, name):
+        match = re.search(r"static bool decode_" + name + r"\(.*?\n\}\n", self.server, re.S)
+        assert match is not None, name
+        return match.group(0)
+
+    def test_every_framebuffer_name_crosses_the_contexts_table_before_the_host_call(self):
+        for name, names in (("glCheckNamedFramebufferStatus", ["framebuffer"]),
+                            ("glBlitNamedFramebuffer", ["readFramebuffer", "drawFramebuffer"])):
+            body = self.decoder(name)
+            for param in names:
+                line = (f"!av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &{param})) "
+                        "return av_refuse(0x0502u);")
+                self.assertIn(line, body, name)
+                self.assertLess(body.index(line), body.index(f"av_gl.{name}("), name)
+
+    def test_a_bind_may_make_the_name_and_a_question_about_an_unknown_one_is_answered_no(self):
+        self.assertIn("!av_gl.av_framebuffer_bound(av_gl.av_framebuffer_user, &framebuffer)) return av_refuse(0x0502u);",
+                      self.decoder("glBindFramebuffer"))
+        asked = self.decoder("glIsFramebuffer")
+        self.assertIn("!av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &framebuffer)) {", asked)
+        self.assertNotIn("av_refuse(0x0502u)", asked)
+
+    def test_a_label_names_a_framebuffer_only_when_it_says_so(self):
+        self.assertIn("if (identifier == 0x8D40u && av_gl.av_framebuffer_named != nullptr && "
+                      "!av_gl.av_framebuffer_named(av_gl.av_framebuffer_user, &name)) return av_refuse(0x0501u);",
+                      self.decoder("glObjectLabel"))
+        self.assertNotIn("av_framebuffer", self.decoder("glCullFace"))
+
+
 class ProcTableOrder(unittest.TestCase):
     def test_a_table_row_the_registry_does_not_carry_is_refused(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -225,7 +331,7 @@ class ProcTableOrder(unittest.TestCase):
                 emit.read_proc_table(text)
 
     def test_the_rgba_suffix_names_the_same_command(self):
-        self.assertEqual(emit.read_proc_table("0 glColor3b_InRGBA\n1 glEnable\n"), ["glColor3b", "glEnable"])
+        self.assertEqual(emit.read_proc_table("0 glColor3b_InRGBA\n1 glCullFace\n"), ["glColor3b", "glCullFace"])
 
 
 class ParameterTypes(unittest.TestCase):

@@ -164,6 +164,7 @@ TEST(vulkan_event_parking, destroying_the_event_drops_its_batches_without_submit
 { Armed rig;
   CHECK(rig.submit(rig.queue, rig.waiting(rig.event_handle), rig.fence()));
   CHECK(rig.destroy_event(rig.event_handle));
+  CHECK_EQ(av::fake_vulkan.events_destroyed, 1u);
   CHECK_EQ(rig.probe.parked().count(), 0u);
   CHECK_EQ(av::fake_vulkan.submits, 0u);
   CHECK(!rig.backend().lost()); }

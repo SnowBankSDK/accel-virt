@@ -80,18 +80,6 @@ extern "C" HRESULT APIENTRY avumd_d3d9_DrawIndexedPrimitive2(HANDLE device, cons
 { const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
   return call.noted("DrawIndexedPrimitive2", call.traced("DrawIndexedPrimitive2", &D3d9Device::draw_indexed_primitive2, a1, a2, a3, a4)); }
 
-extern "C" HRESULT APIENTRY avumd_d3d9_VolBlt(HANDLE device, const D3DDDIARG_VOLUMEBLT * a1)
-{ const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
-  return call.noted("VolBlt", call.traced("VolBlt", &D3d9Device::vol_blt, a1)); }
-
-extern "C" HRESULT APIENTRY avumd_d3d9_BufBlt(HANDLE device, const D3DDDIARG_BUFFERBLT * a1)
-{ const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
-  return call.noted("BufBlt", call.traced("BufBlt", &D3d9Device::buf_blt, a1)); }
-
-extern "C" HRESULT APIENTRY avumd_d3d9_TexBlt(HANDLE device, const D3DDDIARG_TEXBLT * a1)
-{ const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
-  return call.noted("TexBlt", call.traced("TexBlt", &D3d9Device::tex_blt, a1)); }
-
 extern "C" HRESULT APIENTRY avumd_d3d9_StateSet(HANDLE device, D3DDDIARG_STATESET * a1)
 { const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
   return call.noted("StateSet", call.traced("StateSet", &D3d9Device::state_set, a1)); }
@@ -164,10 +152,6 @@ extern "C" HRESULT APIENTRY avumd_d3d9_Unlock(HANDLE device, const D3DDDIARG_UNL
 { const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
   return call.noted("Unlock", call.traced("Unlock", &D3d9Device::unlock, a1)); }
 
-extern "C" HRESULT APIENTRY avumd_d3d9_CreateResource(HANDLE device, D3DDDIARG_CREATERESOURCE * a1)
-{ const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
-  return call.noted("CreateResource", call.traced("CreateResource", &D3d9Device::create_resource, a1)); }
-
 extern "C" HRESULT APIENTRY avumd_d3d9_DestroyResource(HANDLE device, HANDLE a1)
 { const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
   return call.noted("DestroyResource", call.traced("DestroyResource", &D3d9Device::destroy_resource, a1)); }
@@ -175,14 +159,6 @@ extern "C" HRESULT APIENTRY avumd_d3d9_DestroyResource(HANDLE device, HANDLE a1)
 extern "C" HRESULT APIENTRY avumd_d3d9_SetDisplayMode(HANDLE device, const D3DDDIARG_SETDISPLAYMODE * a1)
 { const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
   return call.noted("SetDisplayMode", call.traced("SetDisplayMode", &D3d9Device::set_display_mode, a1)); }
-
-extern "C" HRESULT APIENTRY avumd_d3d9_Present(HANDLE device, const D3DDDIARG_PRESENT * a1)
-{ const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
-  return call.noted("Present", call.traced("Present", &D3d9Device::present, a1)); }
-
-extern "C" HRESULT APIENTRY avumd_d3d9_Flush(HANDLE device)
-{ const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
-  return call.noted("Flush", call.traced("Flush", &D3d9Device::flush)); }
 
 extern "C" HRESULT APIENTRY avumd_d3d9_CreateVertexShaderFunc(HANDLE device, D3DDDIARG_CREATEVERTEXSHADERFUNC * a1, const UINT * a2)
 { const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
@@ -395,6 +371,18 @@ extern "C" HRESULT APIENTRY avumd_d3d9_ResolveSharedResource(HANDLE device, cons
 { const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
   return call.noted("ResolveSharedResource", call.traced("ResolveSharedResource", &D3d9Device::resolve_shared_resource, a1)); }
 
+extern "C" HRESULT APIENTRY avumd_d3d9_VolBlt1(HANDLE device, const D3DDDIARG_VOLUMEBLT1 * a1)
+{ const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
+  return call.noted("VolBlt1", call.traced("VolBlt1", &D3d9Device::vol_blt1, a1)); }
+
+extern "C" HRESULT APIENTRY avumd_d3d9_BufBlt1(HANDLE device, const D3DDDIARG_BUFFERBLT1 * a1)
+{ const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
+  return call.noted("BufBlt1", call.traced("BufBlt1", &D3d9Device::buf_blt1, a1)); }
+
+extern "C" HRESULT APIENTRY avumd_d3d9_TexBlt1(HANDLE device, const D3DDDIARG_TEXBLT1 * a1)
+{ const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
+  return call.noted("TexBlt1", call.traced("TexBlt1", &D3d9Device::tex_blt1, a1)); }
+
 extern "C" HRESULT APIENTRY avumd_d3d9_Discard(HANDLE device, const D3DDDIARG_DISCARD * a1)
 { const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
   return call.noted("Discard", call.traced("Discard", &D3d9Device::discard, a1)); }
@@ -411,6 +399,10 @@ extern "C" HRESULT APIENTRY avumd_d3d9_CheckDirectFlipSupport(HANDLE device, D3D
 { const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
   return call.noted("CheckDirectFlipSupport", call.traced("CheckDirectFlipSupport", &D3d9Device::check_direct_flip_support, a1)); }
 
+extern "C" HRESULT APIENTRY avumd_d3d9_CreateResource2(HANDLE device, D3DDDIARG_CREATERESOURCE2 * a1)
+{ const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
+  return call.noted("CreateResource2", call.traced("CreateResource2", &D3d9Device::create_resource2, a1)); }
+
 extern "C" HRESULT APIENTRY avumd_d3d9_CheckMultiPlaneOverlaySupport(HANDLE device, D3DDDIARG_CHECKMULTIPLANEOVERLAYSUPPORT * a1)
 { const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
   return call.noted("CheckMultiPlaneOverlaySupport", call.traced("CheckMultiPlaneOverlaySupport", &D3d9Device::check_multi_plane_overlay_support, a1)); }
@@ -419,9 +411,36 @@ extern "C" HRESULT APIENTRY avumd_d3d9_PresentMultiPlaneOverlay(HANDLE device, c
 { const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
   return call.noted("PresentMultiPlaneOverlay", call.traced("PresentMultiPlaneOverlay", &D3d9Device::present_multi_plane_overlay, a1)); }
 
+extern "C" HRESULT APIENTRY avumd_d3d9_Flush1(HANDLE device, UINT a1)
+{ const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
+  return call.noted("Flush1", call.traced("Flush1", &D3d9Device::flush1, a1)); }
+
+extern "C" VOID APIENTRY avumd_d3d9_CheckCounterInfo(HANDLE device, D3DDDIARG_COUNTER_INFO * a1)
+{ d3d::DeviceCall<D3d9Device>(*static_cast<D3d9Device *>(device)).traced("CheckCounterInfo", &D3d9Device::check_counter_info, a1); }
+
+extern "C" HRESULT APIENTRY avumd_d3d9_CheckCounter(HANDLE device, D3DDDIQUERYTYPE a1, D3DDDI_COUNTER_TYPE * a2, UINT * a3, LPSTR a4, UINT * a5, LPSTR a6, UINT * a7, LPSTR a8, UINT * a9)
+{ const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
+  return call.noted("CheckCounter", call.traced("CheckCounter", &D3d9Device::check_counter, a1, a2, a3, a4, a5, a6, a7, a8, a9)); }
+
+extern "C" HRESULT APIENTRY avumd_d3d9_UpdateSubresourceUP(HANDLE device, const D3DDDIARG_UPDATESUBRESOURCEUP * a1)
+{ const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
+  return call.noted("UpdateSubresourceUP", call.traced("UpdateSubresourceUP", &D3d9Device::update_subresource_up, a1)); }
+
+extern "C" HRESULT APIENTRY avumd_d3d9_Present1(HANDLE device, D3DDDIARG_PRESENT1 * a1)
+{ const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
+  return call.noted("Present1", call.traced("Present1", &D3d9Device::present1, a1)); }
+
 extern "C" HRESULT APIENTRY avumd_d3d9_CheckPresentDurationSupport(HANDLE device, D3DDDIARG_CHECKPRESENTDURATIONSUPPORT * a1)
 { const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
   return call.noted("CheckPresentDurationSupport", call.traced("CheckPresentDurationSupport", &D3d9Device::check_present_duration_support, a1)); }
+
+extern "C" HRESULT APIENTRY avumd_d3d9_SetMarker(HANDLE device)
+{ const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
+  return call.noted("SetMarker", call.traced("SetMarker", &D3d9Device::set_marker)); }
+
+extern "C" HRESULT APIENTRY avumd_d3d9_SetMarkerMode(HANDLE device, D3DDDI_MARKERTYPE a1, UINT a2)
+{ const d3d::DeviceCall<D3d9Device> call(*static_cast<D3d9Device *>(device));
+  return call.noted("SetMarkerMode", call.traced("SetMarkerMode", &D3d9Device::set_marker_mode, a1, a2)); }
 
 }  // namespace
 
@@ -444,9 +463,6 @@ void fill_device_funcs9(D3DDDI_DEVICEFUNCS &table)
     table.pfnDrawTriPatch = &avumd_d3d9_DrawTriPatch;
     table.pfnDrawPrimitive2 = &avumd_d3d9_DrawPrimitive2;
     table.pfnDrawIndexedPrimitive2 = &avumd_d3d9_DrawIndexedPrimitive2;
-    table.pfnVolBlt = &avumd_d3d9_VolBlt;
-    table.pfnBufBlt = &avumd_d3d9_BufBlt;
-    table.pfnTexBlt = &avumd_d3d9_TexBlt;
     table.pfnStateSet = &avumd_d3d9_StateSet;
     table.pfnSetPriority = &avumd_d3d9_SetPriority;
     table.pfnClear = &avumd_d3d9_Clear;
@@ -465,11 +481,8 @@ void fill_device_funcs9(D3DDDI_DEVICEFUNCS &table)
     table.pfnGetInfo = &avumd_d3d9_GetInfo;
     table.pfnLock = &avumd_d3d9_Lock;
     table.pfnUnlock = &avumd_d3d9_Unlock;
-    table.pfnCreateResource = &avumd_d3d9_CreateResource;
     table.pfnDestroyResource = &avumd_d3d9_DestroyResource;
     table.pfnSetDisplayMode = &avumd_d3d9_SetDisplayMode;
-    table.pfnPresent = &avumd_d3d9_Present;
-    table.pfnFlush = &avumd_d3d9_Flush;
     table.pfnCreateVertexShaderFunc = &avumd_d3d9_CreateVertexShaderFunc;
     table.pfnDeleteVertexShaderFunc = &avumd_d3d9_DeleteVertexShaderFunc;
     table.pfnSetVertexShaderFunc = &avumd_d3d9_SetVertexShaderFunc;
@@ -523,13 +536,24 @@ void fill_device_funcs9(D3DDDI_DEVICEFUNCS &table)
     table.pfnQueryResourceResidency = &avumd_d3d9_QueryResourceResidency;
     table.pfnOpenResource = &avumd_d3d9_OpenResource;
     table.pfnResolveSharedResource = &avumd_d3d9_ResolveSharedResource;
+    table.pfnVolBlt1 = &avumd_d3d9_VolBlt1;
+    table.pfnBufBlt1 = &avumd_d3d9_BufBlt1;
+    table.pfnTexBlt1 = &avumd_d3d9_TexBlt1;
     table.pfnDiscard = &avumd_d3d9_Discard;
     table.pfnOfferResources = &avumd_d3d9_OfferResources;
     table.pfnReclaimResources = &avumd_d3d9_ReclaimResources;
     table.pfnCheckDirectFlipSupport = &avumd_d3d9_CheckDirectFlipSupport;
+    table.pfnCreateResource2 = &avumd_d3d9_CreateResource2;
     table.pfnCheckMultiPlaneOverlaySupport = &avumd_d3d9_CheckMultiPlaneOverlaySupport;
     table.pfnPresentMultiPlaneOverlay = &avumd_d3d9_PresentMultiPlaneOverlay;
+    table.pfnFlush1 = &avumd_d3d9_Flush1;
+    table.pfnCheckCounterInfo = &avumd_d3d9_CheckCounterInfo;
+    table.pfnCheckCounter = &avumd_d3d9_CheckCounter;
+    table.pfnUpdateSubresourceUP = &avumd_d3d9_UpdateSubresourceUP;
+    table.pfnPresent1 = &avumd_d3d9_Present1;
     table.pfnCheckPresentDurationSupport = &avumd_d3d9_CheckPresentDurationSupport;
+    table.pfnSetMarker = &avumd_d3d9_SetMarker;
+    table.pfnSetMarkerMode = &avumd_d3d9_SetMarkerMode;
 }
 
 }  // namespace av::d3d9

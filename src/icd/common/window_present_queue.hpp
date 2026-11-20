@@ -13,6 +13,7 @@
 #include "icd/common/held_flusher.hpp"
 #include "icd/common/handed_frame.hpp"
 #include "icd/common/once_latch.hpp"
+#include "icd/common/present_pacing.hpp"
 #include "icd/common/service_thread.hpp"
 #include "icd/common/thread_wake.hpp"
 #include "icd/common/window_chains.hpp"
@@ -46,6 +47,8 @@ public:
     bool     start();
     void     refuse();
     uint32_t free_slot(const Source &owner, uint32_t slots, uint32_t reserved);
+    uint32_t wait_slot(const Source &owner, uint32_t slots, uint32_t reserved);
+    uint32_t paced_slot(const Source &owner, uint32_t slots, uint32_t reserved);
     uint32_t try_slot(const Source &owner, uint32_t slots, uint32_t reserved);
     uint32_t reclaim_slot(const Source &owner, uint32_t slots, uint32_t reserved);
     void     keep(HeldFlusher &owner);
@@ -178,6 +181,35 @@ uint32_t WindowPresentQueue<Source, Readiness>::free_slot(const Source &owner, u
 }
 
 template <typename Source, typename Readiness>
+uint32_t WindowPresentQueue<Source, Readiness>::wait_slot(const Source &owner, uint32_t slots, uint32_t reserved)
+{
+    AV_SCOPE("WindowPresentQueue::wait_slot");
+    for (;;) {
+        const uint32_t slot = paced_slot(owner, slots, reserved);
+        if (slot != slots) return slot;
+        const bool lost = owner.lost();
+        {
+            const ThreadLockHold held(lock_);
+            if (lost || refused_ || !thread_.running()) {
+                dropped_frames_++;
+                return slots;
+            }
+        }
+        static_cast<void>(shown_.wait(slot_milliseconds));
+    }
+}
+
+template <typename Source, typename Readiness>
+uint32_t WindowPresentQueue<Source, Readiness>::paced_slot(const Source &owner, uint32_t slots, uint32_t reserved)
+{
+    AV_SCOPE("WindowPresentQueue::paced_slot");
+    const ThreadLockHold held(lock_);
+    if (held_by(owner) != 0u) return slots;
+    reap_copied();
+    return first_free(owner, slots, reserved);
+}
+
+template <typename Source, typename Readiness>
 uint32_t WindowPresentQueue<Source, Readiness>::try_slot(const Source &owner, uint32_t slots, uint32_t reserved)
 {
     AV_SCOPE("WindowPresentQueue::try_slot");
@@ -295,6 +327,7 @@ template <typename Source, typename Readiness>
 bool WindowPresentQueue<Source, Readiness>::show_now(const Frame &frame)
 {
     AV_SCOPE("WindowPresentQueue::show_now");
+    if (frame.pacing() != nullptr) frame.pacing()->before_show();
     const ThreadLockHold held(lock_);
     return put_on_window(frame);
 }
@@ -525,6 +558,7 @@ void WindowPresentQueue<Source, Readiness>::show(uint32_t row, const Frame &fram
 {
     AV_SCOPE("WindowPresentQueue::show");
     const bool drawn = wait_for(frame.mark());
+    if (drawn && frame.pacing() != nullptr) frame.pacing()->before_show();
     const bool shown = drawn && put_on_window(frame);
     {
         const ThreadLockHold held(lock_);

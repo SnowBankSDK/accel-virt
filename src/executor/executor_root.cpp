@@ -1,6 +1,7 @@
 #include "executor/executor_root.hpp"
 
 #include "executor/context_refusals.hpp"
+#include "executor/egl_entry_gate.hpp"
 #include "executor/executor_log.hpp"
 #include "core/log/log_line.hpp"
 
@@ -23,24 +24,34 @@
 #include "proto/resources/surface_pair.hpp"
 #include "proto/resources/surface_point.hpp"
 
+#include <EGL/egl.h>
+
 namespace av {
 
 namespace {
 
 alignas(16) uint8_t decode_blocks[ExecutorRoot::sessions][ContextSession::arena_bytes];
 
+void *left_egl()
+{
+    AV_SCOPE("left_egl");
+    void *const kept = EglEntryGate::process().retire();
+    if (kept != nullptr) static_cast<void>(eglReleaseThread());
+    return kept;
+}
+
 void *run_wedged_watch(void *root)
 {
     AV_SCOPE("run_wedged_watch");
     static_cast<ExecutorRoot *>(root)->watch_wedged();
-    return nullptr;
+    return left_egl();
 }
 
 void *run_closing_watch(void *root)
 {
     AV_SCOPE("run_closing_watch");
     static_cast<ExecutorRoot *>(root)->watch_closing();
-    return nullptr;
+    return left_egl();
 }
 
 }
@@ -97,8 +108,12 @@ void ExecutorRoot::halt_watcher()
     stopping_ = true;
     wake_.broadcast();
     lock_.release();
-    if (joined) pthread_join(watcher_, nullptr);
-    for (uint32_t helper = 0u; helper < helpers; helper++) pthread_join(helpers_[helper], nullptr);
+    void *left = nullptr;
+    if (joined && pthread_join(watcher_, &left) == 0) EglEntryGate::process().joined(left);
+    for (uint32_t helper = 0u; helper < helpers; helper++) {
+        left = nullptr;
+        if (pthread_join(helpers_[helper], &left) == 0) EglEntryGate::process().joined(left);
+    }
 }
 
 Status ExecutorRoot::initialize(HostApis &apis)
@@ -134,6 +149,9 @@ uint32_t ExecutorRoot::open_domain(const uint8_t *gpu_uuid, uint32_t vram_reserv
     }
     VramLedger *const ledger = apis_->vram_ledger(gpu->index());
     if (ledger != nullptr) ledger->reserve_vram(vram_reserve_mib);
+    D3d11HostDevice *const device11 = apis_->d3d11_device(gpu->index());
+    if (device11 != nullptr && ledger != nullptr) device11->advertise_video_memory(ledger->advertised());
+    if (source != nullptr) source->use_vram_ledger(ledger);
     return domains_.open(gpu->index());
 }
 
@@ -161,6 +179,12 @@ Status ExecutorRoot::allocate_memory(uint32_t domain, uint64_t key, uint64_t siz
     HostMemorySource *const source = source_of(domain);
     if (source == nullptr) return Status::no_memory;
     return source->allocate(domain, key, size, HostMemoryRequest(request), memory);
+}
+
+Status ExecutorRoot::place_memory(ContextSession *session, uint64_t size, uint32_t request, AvHostMemory &memory)
+{
+    AV_SCOPE("ExecutorRoot::place_memory");
+    return owns(session) ? session->place_memory(size, HostMemoryRequest(request), memory) : Status::not_found;
 }
 
 Status ExecutorRoot::alias_memory(uint32_t domain, uint64_t key, uint32_t from_domain, uint64_t from_key,
@@ -455,14 +479,22 @@ bool ExecutorRoot::bind(uint32_t slot, uint32_t sub_api, const HostGpu &gpu, con
         }
         started = d3d_[slot].object().initialize(shares_[slot], sessions_[slot].object().imports(), device11,
                                                  apis_->d3d12_device(gpu.index()), apis_->surfaces(gpu.index()),
-                                                 apis_->d3d9_device(gpu.index()));
+                                                 apis_->d3d9_device(gpu.index()), apis_->memory_source(gpu.index()));
         break;
     }
     default:
         vulkan_[slot].object().use_vram(apis_->vram_ledger(gpu.index()), apis_->host_ram_ledger());
+        vulkan_[slot].object().gate_lifecycle(apis_->lifecycle_gate(gpu.index()));
         vulkan_[slot].object().initialize(gpu, apis_->memory_source(gpu.index()), sessions_[slot].object().imports());
         started = true;
         break;
+    }
+    if (started) {
+        SessionLease &lease = sessions_[slot].object().lease();
+        lease.bind(apis_->vram_ledger(gpu.index()), apis_->host_ram_ledger());
+        backend_in(slot, sub_api)->lease_from(&lease);
+        if (sub_api == AV_EXECUTOR_SUB_API_D3D) lease.open(LeaseRecord::direct3d_initial_bytes);
+        if (sub_api == AV_EXECUTOR_SUB_API_VULKAN) lease.open();
     }
     if (!started) {
         const HostRamLedger *const ram = apis_->host_ram_ledger();
@@ -480,13 +512,16 @@ void ExecutorRoot::close(ContextSession *session)
     uint64_t marked = 0u;
     uint64_t reached = 0u;
     session->gpu_progress(marked, reached);
+    const bool settled = marked == reached;
+    if (!settled) session->let_go_of_thread();
     lock_.acquire();
     closing_[slot] = true;
-    reaping_[slot] = marked == reached;
+    reaping_[slot] = settled;
     lock_.release();
-    if (marked == reached) {
+    if (settled) {
         TeardownBudget idle(clock_, 0u);
         const bool done = finish(slot, idle);
+        if (!done) session->let_go_of_thread();
         lock_.acquire();
         reaping_[slot] = false;
         lock_.release();
@@ -568,6 +603,7 @@ void ExecutorRoot::leak_slot(uint32_t slot)
 {
     AV_SCOPE("ExecutorRoot::leak_slot");
     log_.sessions().write("a session whose host device is lost never drained; its host objects are leaked and its slot reused");
+    sessions_[slot].object().leave_device();
     shares_[slot].leak();
     vulkan_[slot].forget();
     opencl_[slot].forget();
@@ -761,6 +797,19 @@ void ExecutorRoot::set_signal(ContextSession *session, void (*signal)(void *cont
     if (owns(session)) session->bind_signal(signal, context);
 }
 
+uint64_t ExecutorRoot::extend_lease(ContextSession *session, uint32_t kind, uint64_t bytes, uint64_t least)
+{
+    AV_SCOPE("ExecutorRoot::extend_lease");
+    if (!owns(session)) return 0u;
+    return session->lease().extend(kind, bytes, least);
+}
+
+void ExecutorRoot::return_lease(ContextSession *session, uint32_t kind, uint64_t bytes)
+{
+    AV_SCOPE("ExecutorRoot::return_lease");
+    if (owns(session)) session->lease().surrender(kind, bytes);
+}
+
 uint32_t ExecutorRoot::lose_device(ContextSession *session)
 {
     AV_SCOPE("ExecutorRoot::lose_device");
@@ -782,6 +831,7 @@ void ExecutorRoot::report(StateWriter &writer)
         writer.number("host_ram_refusals", host_ram->refusals());
         writer.number("host_ram_floor_bytes", host_ram->floor());
         writer.number("host_ram_tight_refusals", host_ram->tight_refusals());
+        writer.number("host_ram_credit_bytes", host_ram->credit());
     }
     gpus_.report(writer);
     domains_.report(writer);

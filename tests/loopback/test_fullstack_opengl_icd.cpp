@@ -14,6 +14,7 @@
 #include "harness/icd/opengl32_gl_entry.hpp"
 #include "harness/icd/recording_log.hpp"
 #include "harness/icd/recording_thread_lock.hpp"
+#include "harness/icd/scripted_adapter_order.hpp"
 #include "harness/icd/scripted_thread.hpp"
 #include "harness/icd/scripted_thread_slot.hpp"
 #include "harness/icd/scripted_window_chains.hpp"
@@ -87,11 +88,11 @@ class GlProcess {
 public:
     explicit GlProcess(DdiKmt &kmt)
         : lock_(trace_, 'H'), send_lock_(trace_, 'S'), present_lock_(trace_, 'P'), lines_(memory_, log_, "avgl: "),
-          slice_lock_(trace_, 'L'), opengl32_(threads_),
+          slice_lock_(trace_, 'L'), opengl32_(threads_), order_(),
           ready_(kmt),
           presents_(memory_, present_thread_, handed_, shown_, present_lock_, ready_, surface_, chains_, lines_),
           root_(memory_, kmt, lock_, send_lock_, slice_lock_, lines_, surface_, threads_, opengl32_, presents_,
-                av::glicd::gl_icd_binding)
+                av::glicd::gl_icd_binding, order_)
     {
         presents_.refuse();
         surface_.add_dc(&dc_, &window_, window_side, window_side);
@@ -116,6 +117,7 @@ private:
     av::ScriptedWindowChains chains_;
     ScriptedThreadSlot    threads_;
     FakeOpengl32          opengl32_;
+    av::ScriptedAdapterOrder order_;
     av::ScriptedThread       present_thread_;
     av::CountedWakeSignal    handed_;
     av::CountedWakeSignal    shown_;
@@ -387,6 +389,225 @@ TEST(fullstack_opengl_icd, a_legacy_context_draws_the_fixed_function_pipeline_th
   CHECK_EQ(rig.kmt().open_objects(), 0u);
   CHECK_EQ(rig.device().device().contexts(), 0u); }
 
+TEST(fullstack_opengl_icd, a_framebuffer_name_made_in_one_context_binds_an_incomplete_framebuffer_in_another_of_its_share_group)
+{ const WidestHostGpu &gpu = widest_gpu();
+  if ((gpu.sub_apis() & AV_EXECUTOR_SUB_API_OPENGL) == 0u) return;
+  const ExecutorLibraryFile &library = shared_library();
+  CHECK(library.ops() != nullptr);
+  if (library.ops() == nullptr) return;
+  FullStackRig rig(*library.ops(), gpu.uuid());
+  rig.kmt().let_process_watch();
+  CHECK_EQ(rig.started(), 0);
+  { GlProcess process(rig.kmt());
+    FakeOpengl32 &gl = process.opengl32();
+    CHECK(gl.load(GlIcdRoot::icd_version, 1u) == FakeOpengl32::Load::loaded);
+    CHECK(gl.set_pixel_format(process.dc(), 1));
+    void *const first = gl.create_context(process.dc());
+    void *const second = gl.create_context(process.dc());
+    CHECK(first != nullptr && second != nullptr);
+    CHECK(gl.share_lists(first, second));
+    using GenFramebuffers = void (APIENTRY *)(GLsizei, GLuint *);
+    using BindFramebuffer = void (APIENTRY *)(GLenum, GLuint);
+    using IsFramebuffer = GLboolean (APIENTRY *)(GLuint);
+    using FramebufferTexture2D = void (APIENTRY *)(GLenum, GLenum, GLenum, GLuint, GLint);
+    using CheckFramebufferStatus = GLenum (APIENTRY *)(GLenum);
+    CHECK(gl.make_current(process.dc(), first));
+    const auto gen = reinterpret_cast<GenFramebuffers>(gl.get_proc_address("glGenFramebuffers"));
+    const auto bind = reinterpret_cast<BindFramebuffer>(gl.get_proc_address("glBindFramebuffer"));
+    const auto is = reinterpret_cast<IsFramebuffer>(gl.get_proc_address("glIsFramebuffer"));
+    const auto attach = reinterpret_cast<FramebufferTexture2D>(gl.get_proc_address("glFramebufferTexture2D"));
+    const auto status = reinterpret_cast<CheckFramebufferStatus>(gl.get_proc_address("glCheckFramebufferStatus"));
+    GLuint texture = 0u, framebuffer = 0u;
+    gl.gl<void (APIENTRY *)(GLsizei, GLuint *)>(slot_gen_textures)(1, &texture);
+    gl.gl<void (APIENTRY *)(GLenum, GLuint)>(slot_bind_texture)(gl_texture_2d, texture);
+    gl.gl<void (APIENTRY *)(GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum, GLenum, const void *)>(
+        slot_tex_image_2d)(gl_texture_2d, 0, static_cast<GLint>(gl_rgba), side, side, 0, gl_rgba,
+                           gl_unsigned_byte, nullptr);
+    gen(1, &framebuffer);
+    bind(gl_framebuffer, framebuffer);
+    attach(gl_framebuffer, gl_color_attachment0, gl_texture_2d, texture, 0);
+    CHECK(framebuffer != 0u);
+    CHECK_EQ(status(gl_framebuffer), gl_framebuffer_complete);
+    CHECK_EQ(is(framebuffer), 1u);
+    bind(gl_framebuffer, 0u);
+    gl.gl<void (APIENTRY *)()>(slot_finish)();
+    CHECK(gl.make_current(process.dc(), second));
+    CHECK_EQ(is(framebuffer), 0u);
+    bind(gl_framebuffer, framebuffer);
+    CHECK_EQ(gl.gl<GLenum (APIENTRY *)()>(slot_get_error)(), 0u);
+    const GLenum other = status(gl_framebuffer);
+    std::fprintf(stderr, "second context: framebuffer %u is 0x%x\n", framebuffer, other);
+    CHECK(other != gl_framebuffer_complete);
+    CHECK_EQ(is(framebuffer), 1u);
+    GLuint next = 0u;
+    gen(1, &next);
+    CHECK(next != 0u && next != framebuffer);
+    bind(gl_framebuffer, 0u);
+    CHECK(gl.make_current(process.dc(), first));
+    bind(gl_framebuffer, framebuffer);
+    CHECK_EQ(status(gl_framebuffer), gl_framebuffer_complete);
+    bind(gl_framebuffer, 0u);
+    CHECK(process.root().invariants_hold());
+    CHECK(gl.make_current(nullptr, nullptr));
+    CHECK(gl.delete_context(second));
+    CHECK(gl.delete_context(first)); }
+  CHECK_EQ(rig.kmt().open_objects(), 0u);
+  CHECK_EQ(rig.device().device().contexts(), 0u); }
+
+TEST(fullstack_opengl_icd, a_coherent_persistent_write_and_a_buffer_sub_data_reach_a_copy_on_the_host_gpu)
+{ const WidestHostGpu &gpu = widest_gpu();
+  if ((gpu.sub_apis() & AV_EXECUTOR_SUB_API_OPENGL) == 0u) return;
+  const ExecutorLibraryFile &library = shared_library();
+  CHECK(library.ops() != nullptr);
+  if (library.ops() == nullptr) return;
+  FullStackRig rig(*library.ops(), gpu.uuid());
+  rig.kmt().let_process_watch();
+  CHECK_EQ(rig.started(), 0);
+  { GlProcess process(rig.kmt());
+    FakeOpengl32 &gl = process.opengl32();
+    CHECK(gl.load(GlIcdRoot::icd_version, 1u) == FakeOpengl32::Load::loaded);
+    CHECK(gl.set_pixel_format(process.dc(), 1));
+    void *const context = gl.create_context(process.dc());
+    CHECK(context != nullptr);
+    CHECK(gl.make_current(process.dc(), context));
+    using GenBuffers = void (APIENTRY *)(GLsizei, GLuint *);
+    using BindBuffer = void (APIENTRY *)(GLenum, GLuint);
+    using BufferStorage = void (APIENTRY *)(GLenum, GLsizeiptr, const void *, GLbitfield);
+    using MapBufferRange = void *(APIENTRY *)(GLenum, GLintptr, GLsizeiptr, GLbitfield);
+    using CopyBufferSubData = void (APIENTRY *)(GLenum, GLenum, GLintptr, GLintptr, GLsizeiptr);
+    using BufferSubData = void (APIENTRY *)(GLenum, GLintptr, GLsizeiptr, const void *);
+    using GetBufferSubData = void (APIENTRY *)(GLenum, GLintptr, GLsizeiptr, void *);
+    const auto gen = reinterpret_cast<GenBuffers>(gl.get_proc_address("glGenBuffers"));
+    const auto bind = reinterpret_cast<BindBuffer>(gl.get_proc_address("glBindBuffer"));
+    const auto storage = reinterpret_cast<BufferStorage>(gl.get_proc_address("glBufferStorage"));
+    const auto map = reinterpret_cast<MapBufferRange>(gl.get_proc_address("glMapBufferRange"));
+    const auto copy = reinterpret_cast<CopyBufferSubData>(gl.get_proc_address("glCopyBufferSubData"));
+    const auto write = reinterpret_cast<BufferSubData>(gl.get_proc_address("glBufferSubData"));
+    const auto read = reinterpret_cast<GetBufferSubData>(gl.get_proc_address("glGetBufferSubData"));
+    constexpr GLenum copy_read = 0x8F36u, copy_write = 0x8F37u;
+    constexpr GLbitfield map_write = 0x0002u, map_read = 0x0001u, persistent = 0x0040u, coherent = 0x0080u,
+                         dynamic = 0x0100u;
+    constexpr GLsizeiptr length = 4096;
+    GLuint buffers[2] = {};
+    gen(2, buffers);
+    bind(copy_read, buffers[0]);
+    storage(copy_read, length, nullptr, dynamic | map_read | map_write | persistent | coherent);
+    bind(copy_write, buffers[1]);
+    storage(copy_write, length, nullptr, 0u);
+    auto *const mapped = static_cast<std::uint8_t *>(map(copy_read, 0, length, map_write | persistent | coherent));
+    CHECK(mapped != nullptr);
+    if (mapped == nullptr) return;
+    for (GLsizeiptr at = 0; at < length; at++) mapped[at] = static_cast<std::uint8_t>(at * 13 + 5);
+    copy(copy_read, copy_write, 0, 0, length);
+    static std::uint8_t back[length];
+    std::memset(back, 0, sizeof back);
+    read(copy_write, 0, length, back);
+    std::uint32_t wrong = 0u;
+    for (GLsizeiptr at = 0; at < length; at++) wrong += back[at] != static_cast<std::uint8_t>(at * 13 + 5) ? 1u : 0u;
+    CHECK_EQ(wrong, 0u);
+    const std::uint8_t written[8] = {0xA1u, 0xA2u, 0xA3u, 0xA4u, 0xA5u, 0xA6u, 0xA7u, 0xA8u};
+    write(copy_read, 64, sizeof written, written);
+    copy(copy_read, copy_write, 0, 0, length);
+    read(copy_write, 0, length, back);
+    CHECK(std::memcmp(back + 64, written, sizeof written) == 0);
+    CHECK_EQ(back[63], static_cast<std::uint8_t>(63 * 13 + 5));
+    CHECK_EQ(back[72], static_cast<std::uint8_t>(72 * 13 + 5));
+    CHECK_EQ(gl.gl<GLenum (APIENTRY *)()>(slot_get_error)(), 0u);
+    char dump[8192] = {};
+    av::StateWriter writer(dump, sizeof dump);
+    process.root().report(writer);
+    const char *const sliced = std::strstr(writer.dump(), "sliced_buffers");
+    CHECK(sliced != nullptr);
+    if (sliced != nullptr && std::strncmp(sliced, "sliced_buffers/0 granted=true ", 30u) == 0)
+        CHECK(std::strstr(sliced, " held=1 ") != nullptr);
+    CHECK(process.root().invariants_hold());
+    CHECK(gl.make_current(nullptr, nullptr));
+    CHECK(gl.delete_context(context)); }
+  CHECK_EQ(rig.kmt().open_objects(), 0u);
+  CHECK_EQ(rig.device().device().contexts(), 0u); }
+
+TEST(fullstack_opengl_icd, buffer_sub_data_past_the_staging_ring_and_a_non_coherent_write_after_a_barrier_reach_the_host_gpu)
+{ const WidestHostGpu &gpu = widest_gpu();
+  if ((gpu.sub_apis() & AV_EXECUTOR_SUB_API_OPENGL) == 0u) return;
+  const ExecutorLibraryFile &library = shared_library();
+  CHECK(library.ops() != nullptr);
+  if (library.ops() == nullptr) return;
+  FullStackRig rig(*library.ops(), gpu.uuid());
+  rig.kmt().let_process_watch();
+  CHECK_EQ(rig.started(), 0);
+  { GlProcess process(rig.kmt());
+    FakeOpengl32 &gl = process.opengl32();
+    CHECK(gl.load(GlIcdRoot::icd_version, 1u) == FakeOpengl32::Load::loaded);
+    CHECK(gl.set_pixel_format(process.dc(), 1));
+    void *const context = gl.create_context(process.dc());
+    CHECK(context != nullptr);
+    CHECK(gl.make_current(process.dc(), context));
+    using GenBuffers = void (APIENTRY *)(GLsizei, GLuint *);
+    using BindBuffer = void (APIENTRY *)(GLenum, GLuint);
+    using BufferStorage = void (APIENTRY *)(GLenum, GLsizeiptr, const void *, GLbitfield);
+    using MapBufferRange = void *(APIENTRY *)(GLenum, GLintptr, GLsizeiptr, GLbitfield);
+    using CopyBufferSubData = void (APIENTRY *)(GLenum, GLenum, GLintptr, GLintptr, GLsizeiptr);
+    using BufferSubData = void (APIENTRY *)(GLenum, GLintptr, GLsizeiptr, const void *);
+    using GetBufferSubData = void (APIENTRY *)(GLenum, GLintptr, GLsizeiptr, void *);
+    using MemoryBarrier = void (APIENTRY *)(GLbitfield);
+    const auto gen = reinterpret_cast<GenBuffers>(gl.get_proc_address("glGenBuffers"));
+    const auto bind = reinterpret_cast<BindBuffer>(gl.get_proc_address("glBindBuffer"));
+    const auto storage = reinterpret_cast<BufferStorage>(gl.get_proc_address("glBufferStorage"));
+    const auto map = reinterpret_cast<MapBufferRange>(gl.get_proc_address("glMapBufferRange"));
+    const auto copy = reinterpret_cast<CopyBufferSubData>(gl.get_proc_address("glCopyBufferSubData"));
+    const auto write = reinterpret_cast<BufferSubData>(gl.get_proc_address("glBufferSubData"));
+    const auto read = reinterpret_cast<GetBufferSubData>(gl.get_proc_address("glGetBufferSubData"));
+    const auto barrier = reinterpret_cast<MemoryBarrier>(gl.get_proc_address("glMemoryBarrier"));
+    CHECK(barrier != nullptr);
+    if (barrier == nullptr) return;
+    constexpr GLenum copy_read = 0x8F36u, copy_write = 0x8F37u;
+    constexpr GLbitfield map_write = 0x0002u, map_read = 0x0001u, persistent = 0x0040u, dynamic = 0x0100u;
+    constexpr GLbitfield client_mapped_buffer_barrier = 0x4000u;
+    constexpr GLsizeiptr length = 1 << 20;
+    constexpr GLsizeiptr piece = 48 * 1024;
+    GLuint buffers[2] = {};
+    gen(2, buffers);
+    bind(copy_read, buffers[0]);
+    storage(copy_read, length, nullptr, dynamic | map_read | map_write | persistent);
+    bind(copy_write, buffers[1]);
+    storage(copy_write, length, nullptr, dynamic);
+    static std::uint8_t source[piece];
+    static std::uint8_t back[length];
+    static std::uint8_t expected[length];
+    std::memset(expected, 0, sizeof expected);
+    for (std::uint32_t round = 0u; round < 160u; round++) {
+        for (GLsizeiptr at = 0; at < piece; at++) source[at] = static_cast<std::uint8_t>(round * 7u + static_cast<std::uint32_t>(at));
+        const GLintptr offset = static_cast<GLintptr>((round * 37u) % 20u) * piece;
+        write(copy_read, offset, piece, source);
+        std::memcpy(expected + offset, source, piece);
+    }
+    copy(copy_read, copy_write, 0, 0, length);
+    read(copy_write, 0, length, back);
+    std::uint32_t wrong = 0u;
+    for (GLsizeiptr at = 0; at < length; at++) wrong += back[at] != expected[at] ? 1u : 0u;
+    CHECK_EQ(wrong, 0u);
+    auto *const mapped = static_cast<std::uint8_t *>(map(copy_read, 0, length, map_write | persistent));
+    CHECK(mapped != nullptr);
+    if (mapped == nullptr) return;
+    for (GLsizeiptr at = 0; at < 4096; at++) mapped[at] = static_cast<std::uint8_t>(at * 11 + 3);
+    barrier(client_mapped_buffer_barrier);
+    copy(copy_read, copy_write, 0, 0, 4096);
+    read(copy_write, 0, 4096, back);
+    wrong = 0u;
+    for (GLsizeiptr at = 0; at < 4096; at++) wrong += back[at] != static_cast<std::uint8_t>(at * 11 + 3) ? 1u : 0u;
+    CHECK_EQ(wrong, 0u);
+    CHECK_EQ(gl.gl<GLenum (APIENTRY *)()>(slot_get_error)(), 0u);
+    char dump[8192] = {};
+    av::StateWriter writer(dump, sizeof dump);
+    process.root().report(writer);
+    const char *const sliced = std::strstr(writer.dump(), "sliced_buffers");
+    CHECK(sliced != nullptr);
+    CHECK(process.root().invariants_hold());
+    CHECK(gl.make_current(nullptr, nullptr));
+    CHECK(gl.delete_context(context)); }
+  CHECK_EQ(rig.kmt().open_objects(), 0u);
+  CHECK_EQ(rig.device().device().contexts(), 0u); }
+
 TEST(fullstack_opengl_icd, the_gl_probe_passes_every_step_on_the_host_gpu)
 { const WidestHostGpu &gpu = widest_gpu();
   if ((gpu.sub_apis() & AV_EXECUTOR_SUB_API_OPENGL) == 0u) return;
@@ -416,5 +637,154 @@ TEST(fullstack_opengl_icd, the_gl_probe_passes_every_step_on_the_host_gpu)
     CHECK(process.root().invariants_hold());
     for (std::uint32_t index = 0u; index < process.log().lines(); index++)
         std::fprintf(stderr, "%s\n", process.log().line(index)); }
+  CHECK_EQ(rig.kmt().open_objects(), 0u);
+  CHECK_EQ(rig.device().device().contexts(), 0u); }
+
+namespace {
+
+class ConditionalRenderReplay {
+public:
+    explicit ConditionalRenderReplay(FakeOpengl32 &gl) : gl_(gl) {}
+
+    template <typename Function>
+    Function proc(const char *name) const
+    {
+        static constexpr struct { const char *name; std::uint32_t slot; } slots[] = {
+            {"glTexImage2D", 183u}, {"glBindTexture", 307u}, {"glGenTextures", 328u}, {"glBegin", 7u},
+            {"glColor3f", 13u}, {"glVertex3f", 136u}, {"glEnd", 43u}, {"glClearColor", 206u}, {"glClear", 203u},
+            {"glEnable", 215u}, {"glDisable", 214u}, {"glDepthFunc", 245u}, {"glColorMask", 210u},
+            {"glDepthMask", 211u}, {"glFinish", 216u}, {"glReadPixels", 256u}, {"glGetError", 261u},
+        };
+        for (const auto &row : slots)
+            if (std::strcmp(row.name, name) == 0) return gl_.gl<Function>(row.slot);
+        return reinterpret_cast<Function>(gl_.get_proc_address(name));
+    }
+
+    bool prepare()
+    {
+        using GenTextures = void (APIENTRY *)(GLsizei, GLuint *);
+        using Bind = void (APIENTRY *)(GLenum, GLuint);
+        using TexImage = void (APIENTRY *)(GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum, GLenum, const void *);
+        using Attach = void (APIENTRY *)(GLenum, GLenum, GLenum, GLuint, GLint);
+        using Storage = void (APIENTRY *)(GLenum, GLenum, GLsizei, GLsizei);
+        using AttachRenderbuffer = void (APIENTRY *)(GLenum, GLenum, GLenum, GLuint);
+        GLuint texture = 0u, framebuffer = 0u, depth = 0u;
+        proc<GenTextures>("glGenTextures")(1, &texture);
+        proc<Bind>("glBindTexture")(gl_texture_2d, texture);
+        proc<TexImage>("glTexImage2D")(gl_texture_2d, 0, static_cast<GLint>(gl_rgba), side, side, 0, gl_rgba,
+                                       gl_unsigned_byte, nullptr);
+        proc<GenTextures>("glGenFramebuffers")(1, &framebuffer);
+        proc<Bind>("glBindFramebuffer")(gl_framebuffer, framebuffer);
+        proc<Attach>("glFramebufferTexture2D")(gl_framebuffer, gl_color_attachment0, gl_texture_2d, texture, 0);
+        proc<GenTextures>("glGenRenderbuffers")(1, &depth);
+        proc<Bind>("glBindRenderbuffer")(0x8D41u, depth);
+        proc<Storage>("glRenderbufferStorage")(0x8D41u, 0x81A6u, side, side);
+        proc<AttachRenderbuffer>("glFramebufferRenderbuffer")(gl_framebuffer, 0x8D00u, 0x8D41u, depth);
+        gl_.gl<void (APIENTRY *)(GLint, GLint, GLsizei, GLsizei)>(305u)(0, 0, side, side);
+        return proc<GLenum (APIENTRY *)(GLenum)>("glCheckFramebufferStatus")(gl_framebuffer) == gl_framebuffer_complete;
+    }
+
+    void quad(GLfloat x0, GLfloat y0, GLfloat x1, GLfloat y1, GLfloat z, GLfloat r, GLfloat g, GLfloat b) const
+    {
+        proc<void (APIENTRY *)(GLenum)>("glBegin")(0x0007u);
+        proc<void (APIENTRY *)(GLfloat, GLfloat, GLfloat)>("glColor3f")(r, g, b);
+        const auto vertex = proc<void (APIENTRY *)(GLfloat, GLfloat, GLfloat)>("glVertex3f");
+        vertex(x0, y0, z);
+        vertex(x1, y0, z);
+        vertex(x1, y1, z);
+        vertex(x0, y1, z);
+        proc<void (APIENTRY *)()>("glEnd")();
+    }
+
+    bool run(GLenum type, GLenum mode, bool inverted_expected, std::uint8_t (&left)[4], std::uint8_t (&right)[4]) const
+    {
+        const auto enable = proc<void (APIENTRY *)(GLenum)>("glEnable");
+        const auto disable = proc<void (APIENTRY *)(GLenum)>("glDisable");
+        proc<void (APIENTRY *)(GLfloat, GLfloat, GLfloat, GLfloat)>("glClearColor")(0.0f, 0.0f, 0.0f, 1.0f);
+        proc<void (APIENTRY *)(GLbitfield)>("glClear")(0x4100u);
+        enable(0x0B71u);
+        proc<void (APIENTRY *)(GLenum)>("glDepthFunc")(0x0201u);
+        quad(-1.0f, -1.0f, 1.0f, 1.0f, 0.0f, 0.3f, 0.3f, 0.3f);
+        GLuint queries[2] = {};
+        proc<void (APIENTRY *)(GLsizei, GLuint *)>("glGenQueries")(2, queries);
+        const auto color_mask = proc<void (APIENTRY *)(GLboolean, GLboolean, GLboolean, GLboolean)>("glColorMask");
+        const auto depth_mask = proc<void (APIENTRY *)(GLboolean)>("glDepthMask");
+        const auto begin = proc<void (APIENTRY *)(GLenum, GLuint)>("glBeginQuery");
+        const auto end = proc<void (APIENTRY *)(GLenum)>("glEndQuery");
+        color_mask(0, 0, 0, 0);
+        depth_mask(0);
+        begin(type, queries[0]);
+        quad(-0.5f, -0.5f, 0.5f, 0.5f, -0.5f, 1.0f, 1.0f, 1.0f);
+        end(type);
+        begin(type, queries[1]);
+        quad(-0.5f, -0.5f, 0.5f, 0.5f, 0.5f, 1.0f, 1.0f, 1.0f);
+        end(type);
+        color_mask(1, 1, 1, 1);
+        depth_mask(1);
+        disable(0x0B71u);
+        proc<void (APIENTRY *)()>("glFinish")();
+        const auto begin_conditional = proc<void (APIENTRY *)(GLuint, GLenum)>("glBeginConditionalRender");
+        const auto end_conditional = proc<void (APIENTRY *)()>("glEndConditionalRender");
+        begin_conditional(queries[0], mode);
+        quad(-0.9f, -0.5f, -0.1f, 0.5f, 0.0f, 1.0f, 0.0f, 0.0f);
+        end_conditional();
+        begin_conditional(queries[1], mode);
+        quad(0.1f, -0.5f, 0.9f, 0.5f, 0.0f, 0.0f, 1.0f, 0.0f);
+        end_conditional();
+        proc<void (APIENTRY *)()>("glFinish")();
+        const auto read = proc<void (APIENTRY *)(GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void *)>("glReadPixels");
+        read(side / 4, side / 2, 1, 1, gl_rgba, gl_unsigned_byte, left);
+        read(side * 3 / 4, side / 2, 1, 1, gl_rgba, gl_unsigned_byte, right);
+        static_cast<void>(inverted_expected);
+        return proc<GLenum (APIENTRY *)()>("glGetError")() == 0u;
+    }
+
+private:
+    FakeOpengl32 &gl_;
+};
+
+}
+
+TEST(fullstack_opengl_icd, conditional_render_draws_what_the_query_result_and_the_mode_say_on_the_host_gpu)
+{ const WidestHostGpu &gpu = widest_gpu();
+  if ((gpu.sub_apis() & AV_EXECUTOR_SUB_API_OPENGL) == 0u) return;
+  const ExecutorLibraryFile &library = shared_library();
+  CHECK(library.ops() != nullptr);
+  if (library.ops() == nullptr) return;
+  FullStackRig rig(*library.ops(), gpu.uuid());
+  rig.kmt().let_process_watch();
+  CHECK_EQ(rig.started(), 0);
+  { GlProcess process(rig.kmt());
+    FakeOpengl32 &gl = process.opengl32();
+    CHECK(gl.load(GlIcdRoot::icd_version, 1u) == FakeOpengl32::Load::loaded);
+    CHECK(gl.set_pixel_format(process.dc(), 1));
+    void *const context = gl.create_context(process.dc());
+    CHECK(context != nullptr);
+    CHECK(gl.make_current(process.dc(), context));
+    ConditionalRenderReplay replay(gl);
+    CHECK(replay.prepare());
+    constexpr GLenum samples_passed = 0x8914u, any_samples_passed = 0x8C2Fu;
+    constexpr GLenum modes[] = {0x8E13u, 0x8E14u, 0x8E15u, 0x8E16u, 0x8E17u, 0x8E18u, 0x8E19u, 0x8E1Au};
+    std::uint32_t wrong = 0u;
+    for (const GLenum type : {samples_passed, any_samples_passed}) {
+      for (const GLenum mode : modes) {
+        const bool inverted = mode >= 0x8E17u;
+        std::uint8_t left[4] = {}, right[4] = {};
+        CHECK(replay.run(type, mode, inverted, left, right));
+        const bool left_drawn = left[0] == 255u && left[1] == 0u;
+        const bool right_drawn = right[1] == 255u && right[0] == 0u;
+        const bool left_expected = !inverted;
+        const bool right_expected = inverted;
+        if (left_drawn != left_expected || right_drawn != right_expected) {
+          wrong++;
+          std::fprintf(stderr, "conditional render type 0x%x mode 0x%x: left %02x%02x%02x right %02x%02x%02x\n",
+                       static_cast<unsigned>(type), static_cast<unsigned>(mode), left[0], left[1], left[2],
+                       right[0], right[1], right[2]);
+        }
+      }
+    }
+    CHECK_EQ(wrong, 0u);
+    CHECK(gl.make_current(nullptr, nullptr));
+    CHECK(gl.delete_context(context)); }
   CHECK_EQ(rig.kmt().open_objects(), 0u);
   CHECK_EQ(rig.device().device().contexts(), 0u); }

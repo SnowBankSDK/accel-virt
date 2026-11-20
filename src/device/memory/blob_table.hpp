@@ -13,6 +13,7 @@ namespace av {
 
 class BlobWindow;
 class ControlRequest;
+class HeldRequests;
 class Host;
 struct BlobTableProbe;
 
@@ -32,6 +33,8 @@ public:
     [[nodiscard]] Status view(uint32_t id, const uint8_t *&base);
     [[nodiscard]] Status release(uint32_t id);
     [[nodiscard]] Status retire(uint32_t id);
+    void                 answer_when_left(uint32_t id, HeldRequests &held, uint32_t ticket);
+    void                 writer_left(uint32_t id);
     void                 release_all();
     bool                 contains(uint32_t id);
     [[nodiscard]] Status size(uint32_t id, uint64_t &size);
@@ -44,10 +47,13 @@ private:
     struct Entry {
         BlobResource *blob_;
         bool          retiring_;
+        HeldRequests *held_;
+        uint32_t      ticket_;
     };
 
     Entry *entry_of(uint32_t id);
     void   sweep_retired();
+    void   answer(Entry &entry);
 
     Host                        &host_;
     void                        *lock_;

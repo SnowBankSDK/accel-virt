@@ -12,7 +12,7 @@ constexpr uint32_t sample_count_steps = 6u;
 
 }
 
-D3d11Capabilities::D3d11Capabilities() : caps_{}, formats_()
+D3d11Capabilities::D3d11Capabilities() : caps_{}, formats_(), video_memory_(0u)
 {
     AV_SCOPE("D3d11Capabilities::D3d11Capabilities");
 }
@@ -24,7 +24,14 @@ void D3d11Capabilities::measure(ID3D11Device5 &device, uint32_t feature_level)
     caps_.feature_level = feature_level;
     measure_options(device);
     measure_formats(device);
-    measure_buffer_limit(device);
+    caps_.max_buffer_mebibytes = D3d11BufferLimit(video_memory_).mebibytes();
+}
+
+void D3d11Capabilities::advertise_video_memory(uint64_t bytes)
+{
+    AV_SCOPE("D3d11Capabilities::advertise_video_memory");
+    video_memory_ = bytes;
+    caps_.max_buffer_mebibytes = D3d11BufferLimit(video_memory_).mebibytes();
 }
 
 void D3d11Capabilities::measure_options(ID3D11Device5 &device)
@@ -73,7 +80,7 @@ void D3d11Capabilities::measure_options(ID3D11Device5 &device)
         caps_.typed_uav_load_additional_formats = static_cast<uint32_t>(options2.TypedUAVLoadAdditionalFormats);
         caps_.rovs = static_cast<uint32_t>(options2.ROVsSupported);
         caps_.conservative_rasterization_tier = static_cast<uint32_t>(options2.ConservativeRasterizationTier);
-        caps_.tiled_resources_tier = 0u;
+        caps_.tiled_resources_tier = static_cast<uint32_t>(options2.TiledResourcesTier);
         caps_.map_on_default_textures = 0u;
         caps_.standard_swizzle = 0u;
         caps_.unified_memory_architecture = 0u;
@@ -83,22 +90,6 @@ void D3d11Capabilities::measure_options(ID3D11Device5 &device)
         caps_.vp_and_rt_array_index_from_any_shader = static_cast<uint32_t>(options3.VPAndRTArrayIndexFromAnyShaderFeedingRasterizer);
     caps_.extended_nv12_shared_texture = 0u;
     caps_.shared_resource_tier = 0u;
-}
-
-void D3d11Capabilities::measure_buffer_limit(ID3D11Device5 &device)
-{
-    AV_SCOPE("D3d11Capabilities::measure_buffer_limit");
-    uint64_t       video_memory = 0u;
-    IDXGIDevice   *dxgi = nullptr;
-    IDXGIAdapter  *adapter = nullptr;
-    if (SUCCEEDED(device.QueryInterface(__uuidof(IDXGIDevice), reinterpret_cast<void **>(&dxgi)))) {
-        DXGI_ADAPTER_DESC described = {};
-        if (SUCCEEDED(dxgi->GetAdapter(&adapter)) && SUCCEEDED(adapter->GetDesc(&described)))
-            video_memory = described.DedicatedVideoMemory;
-        if (adapter != nullptr) adapter->Release();
-        dxgi->Release();
-    }
-    caps_.max_buffer_mebibytes = D3d11BufferLimit(video_memory).mebibytes();
 }
 
 void D3d11Capabilities::measure_formats(ID3D11Device5 &device)

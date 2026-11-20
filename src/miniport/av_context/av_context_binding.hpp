@@ -35,10 +35,12 @@ public:
 
     [[nodiscard]] Status set_up(VirtioGpuDevice &device, const CapsetInfo &capset, const ContextPages &pages);
     [[nodiscard]] Status tear_down(VirtioGpuDevice &device);
+    [[nodiscard]] Status finish_tear_down(VirtioGpuDevice &device);
     void                 abandon();
     [[nodiscard]] Status submit(const SubmissionDescriptor &submission);
     void                 kick();
-    void                 fail();
+    void                 kick_if_behind();
+    void                 fail(FaultCode reason);
     uint64_t             next_begin() const;
     void                 user_mode_submits(uint64_t *progress);
     void                 driver_submits();

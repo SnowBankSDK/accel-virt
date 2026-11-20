@@ -38,6 +38,7 @@ namespace av {
 
 class DriverLog;
 class OwnedFd;
+class SharedImageShape;
 class VulkanBuffer;
 
 class D3dRuntime;
@@ -64,6 +65,7 @@ public:
     [[nodiscard]] bool admit(WakeSignal &wake);
     void               dismiss(WakeSignal &wake);
     bool               lost();
+    bool               refused_memory() const;
     [[nodiscard]] bool renew(uint32_t wait_ms);
     [[nodiscard]] bool lose();
 
@@ -102,6 +104,7 @@ public:
     ID3D11Texture2D   *make_rows(const D3D11_TEXTURE2D_DESC1 &desc);
     ID3D11Texture2D   *make_tiled(const D3D11_TEXTURE2D_DESC1 &desc);
     [[nodiscard]] bool export_memory(ID3D11Texture2D *texture, OwnedFd &descriptor);
+    [[nodiscard]] bool carry_image(ID3D11Texture2D *texture, OwnedFd &descriptor, SharedImageShape &shape);
     bool               slices() const;
     [[nodiscard]] bool import_to_draw(OwnedFd &descriptor, uint64_t bytes, VulkanBuffer &buffer) override;
     [[nodiscard]] bool bind_storage(ID3D11Buffer *buffer, const VulkanBuffer &storage, uint64_t offset,
@@ -112,6 +115,7 @@ public:
     ID3D11Device5        *device() const;
     ID3D11DeviceContext4 *context() const;
     const D3d11Capabilities &capabilities() const;
+    void                  advertise_video_memory(uint64_t bytes);
     void                  report(StateWriter &writer) const;
 
 private:

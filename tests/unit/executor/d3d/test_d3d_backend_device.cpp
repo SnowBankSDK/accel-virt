@@ -2,9 +2,13 @@
 #include "fixtures/d3d/triangle_ps.hpp"
 #include "fixtures/d3d/triangle_vs.hpp"
 #include "core/support/object_storage.hpp"
+#include "executor/d3d/d3d11_tiles.hpp"
 #include "executor/d3d/d3d_backend.hpp"
 #include "executor/host_memory_source.hpp"
 #include "executor/shim/d3d11_host_device.hpp"
+#include "executor/shim/d3d_runtime.hpp"
+#include "executor/av_lifecycle_gates.h"
+#include "executor/host_lifecycle_gates.hpp"
 #include "executor/shim/d3d_headers.hpp"
 #include "executor/sharing/d3d_shares.hpp"
 #include "executor/sharing/host_shares.hpp"
@@ -12,6 +16,8 @@
 #include "executor/sharing/session_shares.hpp"
 #include "executor/shim/loader_host_apis.hpp"
 #include "harness/executor/d3d_loopback.hpp"
+#include "harness/executor/lease_rig.hpp"
+#include "proto/d3d/resource_footprint.hpp"
 #include "executor/shim/host_heap.hpp"
 #include "harness/framework/test_registry.hpp"
 #include "harness/platform/mock_platform.hpp"
@@ -20,6 +26,8 @@
 #include "proto/resources/surface_point.hpp"
 
 #include <atomic>
+#include <bit>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -81,6 +89,25 @@ av::D3d11HostDevice *host_device(av::LoaderHostApis &apis)
     apis.open();
     for (std::uint32_t index = 0u; index < apis.gpu_count(); index++)
         if (apis.d3d11_device(index) != nullptr) return apis.d3d11_device(index);
+    std::fprintf(stderr, "no GPU here runs DXVK: nothing judged\n");
+    return nullptr;
+}
+
+av::D3d11HostDevice *chosen_device(av::LoaderHostApis &apis, std::uint32_t &index)
+{
+    if (std::getenv("AV_D3D_PATH") == nullptr) setenv("AV_D3D_PATH", AV_FIXTURE_DIR "/../../build-d3d/lib", 1);
+    apis.open();
+    const char *const wanted = std::getenv("AV_TEST_HOST_GPU");
+    for (index = 0u; index < apis.gpu_count(); index++) {
+        if (wanted != nullptr) {
+            std::uint8_t candidate[16] = {};
+            apis.gpu_uuid(index, candidate);
+            char text[33] = {};
+            for (std::uint32_t at = 0u; at < 16u; at++) std::snprintf(text + 2u * at, 3u, "%02x", candidate[at]);
+            if (std::strcmp(text, wanted) != 0) continue;
+        }
+        if (apis.d3d11_device(index) != nullptr && apis.vram_ledger(index) != nullptr) return apis.d3d11_device(index);
+    }
     std::fprintf(stderr, "no GPU here runs DXVK: nothing judged\n");
     return nullptr;
 }
@@ -214,6 +241,23 @@ TEST(d3d_backend_device, a_triangle_drawn_from_ddi_shaders_reads_back_where_it_w
     CHECK_EQ(pixel(pixels, size - 4u, size / 2u), 0xff0000ffu);
     CHECK_EQ(wire.refused(), 0u);
 
+    static std::uint8_t pieces[size * size * 4u];
+    constexpr std::uint64_t first_piece = size * 4u * 3u + 5u;
+    std::uint64_t first_read = 0u, second_read = 0u;
+    CHECK(av_d3d_ReadSubresourceRange(wire, 1u, 0u, 0u, &hresult, &row_pitch, &depth_pitch, pieces, first_piece, &first_read));
+    CHECK_EQ(hresult, 0u);
+    CHECK_EQ(first_read, first_piece);
+    CHECK(av_d3d_ReadSubresourceRange(wire, 1u, 0u, first_piece, &hresult, &row_pitch, &depth_pitch, pieces + first_piece,
+                                      sizeof(pieces), &second_read));
+    CHECK_EQ(hresult, 0u);
+    CHECK_EQ(second_read, sizeof(pieces) - first_piece);
+    CHECK(std::memcmp(pieces, pixels, sizeof(pieces)) == 0);
+    CHECK(av_d3d_ReadSubresourceRange(wire, 1u, 0u, sizeof(pieces) + 1u, &hresult, &row_pitch, &depth_pitch, pieces, 16u,
+                                      &second_read));
+    CHECK_EQ(hresult, static_cast<std::uint32_t>(0x80070057u));
+    CHECK_EQ(second_read, std::uint64_t{0});
+    CHECK_EQ(wire.refused(), 0u);
+
     std::uint32_t removed = 1u;
     CHECK(av_d3d_Finish11(wire, &removed));
     CHECK_EQ(removed, 0u);
@@ -223,6 +267,170 @@ TEST(d3d_backend_device, a_triangle_drawn_from_ddi_shaders_reads_back_where_it_w
     CHECK_EQ(removed, driver_internal_error);
     CHECK_EQ(wire.refused(), 0u);
     CHECK(backend.invariants_hold());
+    backend.shut_down();
+}
+
+TEST(d3d_backend_device, a_tile_mapped_and_filled_reads_back_through_a_copy_to_a_buffer)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice *const device = host_device(apis);
+    if (device == nullptr) return;
+    HeldBackend     held(first_backend, rig.log);
+    av::D3dBackend &backend = held.backend();
+    av::SessionShares unshared;
+    CHECK(backend.initialize(unshared, rig.imports, device));
+    av::D3dLoopback wire(backend, rig.imports);
+    std::uint32_t hresult = 1u, level = 0u;
+    CHECK(av_d3d_CreateDevice11(wire, 1u, 0u, 0u, &hresult, &level));
+    Caps11 caps = {};
+    static FormatCaps formats[256];
+    std::uint64_t answered = 0u;
+    CHECK(av_d3d_QueryCaps11(wire, &caps, formats, sizeof(formats), &answered));
+    if (caps.tiled_resources_tier == 0u) {
+        std::fprintf(stderr, "this GPU has no sparse binding under DXVK: nothing judged\n");
+        backend.shut_down();
+        return;
+    }
+    constexpr std::uint32_t tile_bytes = av::D3d11Tiles::tile_bytes;
+    constexpr std::uint32_t pool_bit = 0x20000u;
+    constexpr std::uint32_t tiled_bit = 0x40000u;
+    constexpr std::uint32_t format_r8g8b8a8 = 28u;
+    constexpr std::uint32_t linear_to_tiled = 0x2u;
+    constexpr std::uint32_t tiled_to_linear = 0x4u;
+    ResourceDesc pool = {};
+    pool.dimension = 1u;
+    pool.width = 2u * tile_bytes;
+    pool.misc_flags = pool_bit;
+    CHECK(av_d3d_CreateResource(wire, 1u, pool, 0u, 0u, 0u));
+    ResourceDesc tiled = {};
+    tiled.dimension = 3u;
+    tiled.width = 128u;
+    tiled.height = 128u;
+    tiled.depth_or_array = 1u;
+    tiled.mip_levels = 1u;
+    tiled.format = format_r8g8b8a8;
+    tiled.sample_count = 1u;
+    tiled.misc_flags = tiled_bit;
+    CHECK(av_d3d_CreateResource(wire, 2u, tiled, 0u, 0u, 0u));
+    ResourceDesc linear = {};
+    linear.dimension = 1u;
+    linear.width = tile_bytes;
+    CHECK(av_d3d_CreateResource(wire, 3u, linear, 0u, 0u, 0u));
+    CHECK_EQ(wire.refused(), 0u);
+
+    std::uint32_t tiles = 0u, packed_mips = 7u, packed_tiles = 7u;
+    CHECK(av_d3d_ResourceTiling11(wire, 2u, &tiles, &packed_mips, &packed_tiles));
+    CHECK_EQ(tiles, 1u);
+    CHECK_EQ(packed_mips, 0u);
+    CHECK_EQ(packed_tiles, 0u);
+
+    const TileRegion region = {{0u, 0u, 0u, 0u}, {1u, 0u, 0u, 0u, 0u}};
+    const TileRange  range = {0u, 1u, 1u};
+    CHECK(av_d3d_UpdateTileMappings11(wire, 2u, 1u, &region, 1u, 1u, &range, 0u));
+    static std::uint8_t pattern[tile_bytes];
+    for (std::uint32_t index = 0u; index < tile_bytes; index++) pattern[index] = static_cast<std::uint8_t>(index * 7u + 3u);
+    CHECK(av_d3d_UpdateTiles11(wire, 2u, region.start, region.size, 0u, pattern, sizeof(pattern)));
+    CHECK(av_d3d_CopyTiles11(wire, 2u, region.start, region.size, 3u, 0u, tiled_to_linear));
+    ResourceDesc half = {};
+    half.dimension = 1u;
+    half.width = tile_bytes / 2u;
+    CHECK(av_d3d_CreateResource(wire, 4u, half, 0u, 0u, 0u));
+    static std::uint8_t back[tile_bytes / 2u];
+    for (std::uint32_t part = 0u; part < 2u; part++) {
+        const Box piece = {part * tile_bytes / 2u, 0u, 0u, (part + 1u) * tile_bytes / 2u, 1u, 1u};
+        CHECK(av_d3d_CopySubresourceRegion(wire, 4u, 0u, 0u, 0u, 0u, 3u, 0u, 1u, piece, 0u));
+        std::uint32_t row_pitch = 0u, depth_pitch = 0u;
+        std::uint64_t read = 0u;
+        CHECK(av_d3d_ReadSubresource(wire, 4u, 0u, &hresult, &row_pitch, &depth_pitch, back, sizeof(back), &read));
+        CHECK_EQ(hresult, 0u);
+        CHECK_EQ(read, static_cast<std::uint64_t>(tile_bytes / 2u));
+        CHECK(std::memcmp(pattern + part * tile_bytes / 2u, back, sizeof(back)) == 0);
+    }
+    CHECK_EQ(wire.refused(), 0u);
+
+    const TileCoordinate whole_start = {0u, 0u, 0u, 0u};
+    CHECK(av_d3d_CopyTileMappings11(wire, 2u, whole_start, 2u, whole_start, region.size, 0u));
+    CHECK(av_d3d_ResizeTilePool11(wire, 1u, tile_bytes));
+    CHECK(av_d3d_TiledResourceBarrier11(wire, 2u, 3u));
+    CHECK(av_d3d_CopyTiles11(wire, 2u, region.start, region.size, 3u, 0u, linear_to_tiled));
+    CHECK_EQ(wire.refused(), 0u);
+
+    const TileRegion empty = {{0u, 0u, 0u, 0u}, {0u, 0u, 0u, 0u, 0u}};
+    CHECK(av_d3d_UpdateTileMappings11(wire, 2u, 1u, &empty, 1u, 1u, &range, 0u));
+    std::uint32_t removed = 1u;
+    CHECK(av_d3d_Finish11(wire, &removed));
+    CHECK_EQ(removed, driver_internal_error);
+    CHECK(backend.invariants_hold());
+    backend.shut_down();
+}
+
+TEST(d3d_backend_device, a_pipeline_statistics_query_counts_the_vertices_and_primitives_of_the_draw_it_brackets)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice *const device = host_device(apis);
+    if (device == nullptr) return;
+    HeldBackend     held(first_backend, rig.log);
+    av::D3dBackend &backend = held.backend();
+    av::SessionShares unshared;
+    CHECK(backend.initialize(unshared, rig.imports, device));
+    av::D3dLoopback wire(backend, rig.imports);
+    std::uint32_t hresult = 1u, level = 0u;
+    CHECK(av_d3d_CreateDevice11(wire, 1u, 0u, 0u, &hresult, &level));
+    make_triangle(wire);
+    bind_triangle(wire);
+    constexpr std::uint32_t query_pipeline_statistics = 4u;
+    CHECK(av_d3d_CreateQuery(wire, 50u, query_pipeline_statistics, 0u));
+    CHECK(av_d3d_BeginQuery(wire, 50u));
+    CHECK(av_d3d_Draw(wire, 3u, 0u));
+    CHECK(av_d3d_EndQuery(wire, 50u));
+    std::uint64_t counts[16] = {};
+    std::uint32_t ready = 0u;
+    std::uint64_t answered = 0u;
+    for (int attempt = 0; attempt < 200 && ready == 0u; attempt++)
+        CHECK(av_d3d_GetQueryData(wire, 50u, 0u, &ready, counts, sizeof(counts), &answered));
+    CHECK_EQ(ready, 1u);
+    CHECK_EQ(answered, 88u);
+    CHECK_EQ(counts[0], 3u);
+    CHECK_EQ(counts[1], 1u);
+    CHECK_EQ(counts[2], 3u);
+    std::uint32_t removed = 1u;
+    CHECK(av_d3d_Finish11(wire, &removed));
+    CHECK_EQ(removed, 0u);
+    backend.shut_down();
+}
+
+TEST(d3d_backend_device, a_pipeline_statistics_query_counts_every_draw_it_brackets_instanced_ones_too)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice *const device = host_device(apis);
+    if (device == nullptr) return;
+    HeldBackend     held(first_backend, rig.log);
+    av::D3dBackend &backend = held.backend();
+    av::SessionShares unshared;
+    CHECK(backend.initialize(unshared, rig.imports, device));
+    av::D3dLoopback wire(backend, rig.imports);
+    std::uint32_t hresult = 1u, level = 0u;
+    CHECK(av_d3d_CreateDevice11(wire, 1u, 0u, 0u, &hresult, &level));
+    make_triangle(wire);
+    bind_triangle(wire);
+    constexpr std::uint32_t query_pipeline_statistics = 4u;
+    CHECK(av_d3d_CreateQuery(wire, 50u, query_pipeline_statistics, 0u));
+    CHECK(av_d3d_BeginQuery(wire, 50u));
+    CHECK(av_d3d_Draw(wire, 3u, 0u));
+    CHECK(av_d3d_DrawInstanced(wire, 3u, 2u, 0u, 0u));
+    CHECK(av_d3d_EndQuery(wire, 50u));
+    std::uint64_t counts[16] = {};
+    std::uint32_t ready = 0u;
+    std::uint64_t answered = 0u;
+    for (int attempt = 0; attempt < 200 && ready == 0u; attempt++)
+        CHECK(av_d3d_GetQueryData(wire, 50u, 0u, &ready, counts, sizeof(counts), &answered));
+    CHECK_EQ(ready, 1u);
+    CHECK_EQ(counts[0], 9u);
+    CHECK_EQ(counts[1], 3u);
+    CHECK_EQ(counts[2], 9u);
     backend.shut_down();
 }
 
@@ -357,7 +565,7 @@ TEST(d3d_backend_device, a_stream_output_with_no_shader_is_a_pass_through_geomet
     CHECK(av_d3d_CreateDevice11(wire, 1u, 0u, 0u, &hresult, &level));
     constexpr std::uint32_t position = 1u;
     constexpr std::uint32_t float_type = 3u;
-    av::d3d::PassthroughGeometryShader shader;
+    av::d3d::PassthroughGeometryShader shader(av::d3d::PassthroughPrimitive::point);
     CHECK(shader.add(0u, 0xFu, position));
     CHECK(shader.add(1u, 0xFu, 0u));
     const std::uint32_t *const tokens = shader.tokens();
@@ -373,7 +581,9 @@ TEST(d3d_backend_device, a_stream_output_with_no_shader_is_a_pass_through_geomet
     CHECK_EQ(wire.refused(), 0u);
 }
 
-TEST(d3d_backend_device, a_stream_output_with_no_shader_streams_what_the_vertex_shader_wrote)
+namespace {
+
+void stream_vertices_as(av::d3d::PassthroughPrimitive primitive, std::uint32_t topology, bool append = false, bool draw_auto = false)
 {
     av::ExecutorLogRig rig;
     av::LoaderHostApis apis(rig.log);
@@ -387,7 +597,7 @@ TEST(d3d_backend_device, a_stream_output_with_no_shader_streams_what_the_vertex_
     std::uint32_t hresult = 1u, level = 0u;
     CHECK(av_d3d_CreateDevice11(wire, 1u, 0u, 0u, &hresult, &level));
     make_triangle(wire);
-    av::d3d::PassthroughGeometryShader shader;
+    av::d3d::PassthroughGeometryShader shader(primitive);
     for (std::uint32_t index = 0u; index < triangle_vs::outputs_count; index++)
         CHECK(shader.add(triangle_vs::outputs[index].register_index, triangle_vs::outputs[index].mask,
                          triangle_vs::outputs[index].system_value));
@@ -400,16 +610,32 @@ TEST(d3d_backend_device, a_stream_output_with_no_shader_streams_what_the_vertex_
                               no_rasterized_stream, tokens, shader.bytes()));
     ResourceDesc buffer = {};
     buffer.dimension = 1u;
-    buffer.width = 3u * stride;
-    buffer.bind_flags = 0x10u;
+    const std::uint32_t passes = append ? 2u : 1u;
+    buffer.width = passes * 3u * stride;
+    buffer.bind_flags = draw_auto ? 0x11u : 0x10u;
     CHECK(av_d3d_CreateResource(wire, out, buffer, 0u, 0u, 0u));
     bind_triangle(wire);
-    CHECK(av_d3d_SetTopology(wire, 1u));
+    CHECK(av_d3d_SetTopology(wire, topology));
     CHECK(av_d3d_SetShader(wire, stage_geometry, gs));
     const StreamOutTarget target = {out, 0u};
     CHECK(av_d3d_SetStreamOutTargets(wire, 1u, &target));
     CHECK(av_d3d_Draw(wire, 3u, 0u));
-    static float streamed_out[3u * 8u];
+    if (append) {
+        const StreamOutTarget appended = {out, 0xFFFFFFFFu};
+        CHECK(av_d3d_SetStreamOutTargets(wire, 1u, &appended));
+        CHECK(av_d3d_Draw(wire, 3u, 0u));
+    }
+    if (draw_auto) {
+        CHECK(av_d3d_SetStreamOutTargets(wire, 0u, nullptr));
+        CHECK(av_d3d_SetShader(wire, stage_geometry, 0u));
+        const VertexBufferBinding from_stream = {out, stride, 0u};
+        CHECK(av_d3d_SetVertexBuffers(wire, 0u, 1u, &from_stream));
+        CHECK(av_d3d_DrawAuto(wire));
+        std::uint32_t removed_by_draw_auto = 1u;
+        CHECK(av_d3d_Finish11(wire, &removed_by_draw_auto));
+        CHECK_EQ(removed_by_draw_auto, 0u);
+    }
+    static float streamed_out[2u * 3u * 8u];
     std::uint32_t row_pitch = 0u, depth_pitch = 0u;
     std::uint64_t read = 0u;
     CHECK(av_d3d_ReadSubresource(wire, out, 0u, &hresult, &row_pitch, &depth_pitch, streamed_out, sizeof streamed_out,
@@ -419,12 +645,286 @@ TEST(d3d_backend_device, a_stream_output_with_no_shader_streams_what_the_vertex_
                                      -1.0f, 1.0f,  0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f,
                                      0.0f,  1.0f,  0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f};
     std::uint32_t wrong = 0u;
-    for (std::uint32_t index = 0u; index < 3u * 8u; index++) {
-        if (streamed_out[index] != expected[index]) {
-            if (wrong < 8u) std::fprintf(stderr, "float %u: %f, not %f\n", index, streamed_out[index], expected[index]);
+    for (std::uint32_t index = 0u; index < passes * 3u * 8u; index++) {
+        if (streamed_out[index] != expected[index % (3u * 8u)]) {
+            if (wrong < 8u) std::fprintf(stderr, "float %u: %f, not %f\n", index, streamed_out[index], expected[index % (3u * 8u)]);
             wrong++;
         }
     }
+    CHECK_EQ(wrong, 0u);
+    CHECK_EQ(wire.refused(), 0u);
+}
+
+}
+
+TEST(d3d_backend_device, a_stream_output_with_no_shader_streams_what_the_vertex_shader_wrote)
+{ stream_vertices_as(av::d3d::PassthroughPrimitive::point, 1u); }
+
+TEST(d3d_backend_device, a_stream_output_of_a_triangle_list_streams_every_vertex_through_the_triangle_variant)
+{ stream_vertices_as(av::d3d::PassthroughPrimitive::triangle, 4u); }
+
+TEST(d3d_backend_device, a_second_draw_with_the_append_offset_streams_after_the_first)
+{ stream_vertices_as(av::d3d::PassthroughPrimitive::triangle, 4u, true); }
+
+TEST(d3d_backend_device, a_draw_auto_over_what_the_stream_output_wrote_keeps_the_device)
+{ stream_vertices_as(av::d3d::PassthroughPrimitive::triangle, 4u, false, true); }
+
+TEST(d3d_backend_device, a_stream_output_of_a_triangle_strip_streams_every_vertex_through_the_triangle_variant)
+{ stream_vertices_as(av::d3d::PassthroughPrimitive::triangle, 5u); }
+
+
+namespace {
+
+constexpr std::uint32_t four_stream_tokens[] = {0x00020050u, 0x000000c8u, 0x0100086au, 0x05000061u, 0x002010f2u, 0x00000001u, 0x00000000u, 0x00000001u, 0x0400005fu, 0x00201072u, 0x00000001u, 0x00000001u, 0x02000068u, 0x00000001u, 0x0100085du, 0x0300008fu, 0x00110000u, 0x00000000u, 0x0100085cu, 0x04000067u, 0x001020f2u, 0x00000000u, 0x00000001u, 0x03000065u, 0x00102072u, 0x00000001u, 0x0300008fu, 0x00110000u, 0x00000001u, 0x0100085cu, 0x04000067u, 0x001020f2u, 0x00000000u, 0x00000001u, 0x03000065u, 0x00102072u, 0x00000001u, 0x0300008fu, 0x00110000u, 0x00000002u, 0x0100085cu, 0x04000067u, 0x001020f2u, 0x00000000u, 0x00000001u, 0x03000065u, 0x00102072u, 0x00000001u, 0x0300008fu, 0x00110000u, 0x00000003u, 0x0100085cu, 0x04000067u, 0x001020f2u, 0x00000000u, 0x00000001u, 0x03000065u, 0x00102072u, 0x00000001u, 0x0200005eu, 0x0000000cu, 0x06000036u, 0x00102032u, 0x00000000u, 0x00201046u, 0x00000000u, 0x00000000u, 0x08000036u, 0x001020c2u, 0x00000000u, 0x00004002u, 0x00000000u, 0x00000000u, 0x00000000u, 0x3f800000u, 0x06000036u, 0x00102072u, 0x00000001u, 0x00201246u, 0x00000000u, 0x00000001u, 0x03000075u, 0x00110000u, 0x00000000u, 0x0b000038u, 0x00100032u, 0x00000000u, 0x00004002u, 0x3f000000u, 0x3f000000u, 0x00000000u, 0x00000000u, 0x00201046u, 0x00000000u, 0x00000000u, 0x05000036u, 0x00102032u, 0x00000000u, 0x00100046u, 0x00000000u, 0x08000036u, 0x001020c2u, 0x00000000u, 0x00004002u, 0x00000000u, 0x00000000u, 0x00000000u, 0x3f800000u, 0x06000036u, 0x00102072u, 0x00000001u, 0x00201496u, 0x00000000u, 0x00000001u, 0x03000075u, 0x00110000u, 0x00000001u, 0x10000032u, 0x00100032u, 0x00000000u, 0x00201046u, 0x00000000u, 0x00000000u, 0x00004002u, 0x3e800000u, 0x3e800000u, 0x00000000u, 0x00000000u, 0x00004002u, 0x3f000000u, 0xbf000000u, 0x00000000u, 0x00000000u, 0x05000036u, 0x00102032u, 0x00000000u, 0x00100046u, 0x00000000u, 0x08000036u, 0x001020c2u, 0x00000000u, 0x00004002u, 0x00000000u, 0x00000000u, 0x00000000u, 0x3f800000u, 0x06000036u, 0x00102072u, 0x00000001u, 0x00201926u, 0x00000000u, 0x00000001u, 0x03000075u, 0x00110000u, 0x00000002u, 0x0b000038u, 0x00100032u, 0x00000000u, 0x00004002u, 0x3f8ccccdu, 0x3f8ccccdu, 0x00000000u, 0x00000000u, 0x00201046u, 0x00000000u, 0x00000000u, 0x05000036u, 0x00102032u, 0x00000000u, 0x00100046u, 0x00000000u, 0x08000036u, 0x001020c2u, 0x00000000u, 0x00004002u, 0x00000000u, 0x00000000u, 0x00000000u, 0x3f800000u, 0x0c000000u, 0x00100072u, 0x00000000u, 0x00004002u, 0x3f800000u, 0x3f800000u, 0x3f800000u, 0x00000000u, 0x80201246u, 0x00000041u, 0x00000000u, 0x00000001u, 0x05000036u, 0x00102072u, 0x00000001u, 0x00100246u, 0x00000000u, 0x03000075u, 0x00110000u, 0x00000003u, 0x0100003eu};
+
+}
+
+TEST(d3d_backend_device, a_geometry_shader_streams_each_of_its_four_streams_to_its_own_buffer)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice *const device = host_device(apis);
+    if (device == nullptr) return;
+    HeldBackend     held(first_backend, rig.log);
+    av::D3dBackend &backend = held.backend();
+    av::SessionShares unshared;
+    CHECK(backend.initialize(unshared, rig.imports, device));
+    av::D3dLoopback wire(backend, rig.imports);
+    std::uint32_t hresult = 1u, level = 0u;
+    CHECK(av_d3d_CreateDevice11(wire, 1u, 0u, 0u, &hresult, &level));
+    make_triangle(wire);
+    SignatureEntry outputs[8] = {};
+    StreamOutEntry streamed[8] = {};
+    for (std::uint32_t stream = 0u; stream < 4u; stream++) {
+        outputs[stream * 2u] = SignatureEntry{1u, 0u, 15u, 3u, 0u, stream};
+        outputs[stream * 2u + 1u] = SignatureEntry{0u, 1u, 7u, 3u, 0u, stream};
+        streamed[stream * 2u] = StreamOutEntry{stream, stream, 0u, 0xFu};
+        streamed[stream * 2u + 1u] = StreamOutEntry{stream, stream, 1u, 0x7u};
+    }
+    const std::uint32_t strides[4] = {28u, 28u, 28u, 28u};
+    constexpr std::uint32_t stage_geometry = 3u, gs = 50u, out = 60u, no_rasterized_stream = 0xFFFFFFFFu;
+    CHECK(av_d3d_CreateShader(wire, gs, stage_geometry, triangle_vs::outputs_count, triangle_vs::outputs, 8u, outputs, 0u,
+                              nullptr, 8u, streamed, 4u, strides, no_rasterized_stream, four_stream_tokens,
+                              sizeof four_stream_tokens));
+    CHECK_EQ(wire.refused(), 0u);
+    ResourceDesc buffer = {};
+    buffer.dimension = 1u;
+    buffer.width = 3u * 28u;
+    buffer.bind_flags = 0x10u;
+    for (std::uint32_t stream = 0u; stream < 4u; stream++) CHECK(av_d3d_CreateResource(wire, out + stream, buffer, 0u, 0u, 0u));
+    bind_triangle(wire);
+    CHECK(av_d3d_SetTopology(wire, 1u));
+    CHECK(av_d3d_SetShader(wire, stage_geometry, gs));
+    const StreamOutTarget targets[4] = {{out, 0u}, {out + 1u, 0u}, {out + 2u, 0u}, {out + 3u, 0u}};
+    CHECK(av_d3d_SetStreamOutTargets(wire, 4u, targets));
+    CHECK(av_d3d_Draw(wire, 3u, 0u));
+    CHECK(av_d3d_SetStreamOutTargets(wire, 0u, nullptr));
+    for (std::uint32_t stream = 0u; stream < 4u; stream++) {
+        static float streamed_out[3u * 7u];
+        std::uint32_t row_pitch = 0u, depth_pitch = 0u;
+        std::uint64_t read = 0u;
+        CHECK(av_d3d_ReadSubresource(wire, out + stream, 0u, &hresult, &row_pitch, &depth_pitch, streamed_out,
+                                     sizeof streamed_out, &read));
+        CHECK_EQ(hresult, 0u);
+        float sum = 0.0f;
+        for (const float value : streamed_out) sum += value < 0.0f ? -value : value;
+        std::fprintf(stderr, "stream %u: sum %f first %f %f %f %f\n", stream, sum, streamed_out[0], streamed_out[1], streamed_out[2], streamed_out[3]);
+        CHECK(sum > 0.0f);
+    }
+    CHECK_EQ(wire.refused(), 0u);
+}
+
+TEST(d3d_backend_device, a_draw_auto_of_each_stream_of_a_four_stream_output_draws_the_vertices_its_stream_wrote)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice *const device = host_device(apis);
+    if (device == nullptr) return;
+    HeldBackend     held(first_backend, rig.log);
+    av::D3dBackend &backend = held.backend();
+    av::SessionShares unshared;
+    CHECK(backend.initialize(unshared, rig.imports, device));
+    av::D3dLoopback wire(backend, rig.imports);
+    std::uint32_t hresult = 1u, level = 0u;
+    CHECK(av_d3d_CreateDevice11(wire, 1u, 0u, 0u, &hresult, &level));
+    make_triangle(wire);
+    SignatureEntry outputs[8] = {};
+    StreamOutEntry streamed[8] = {};
+    for (std::uint32_t stream = 0u; stream < 4u; stream++) {
+        outputs[stream * 2u] = SignatureEntry{1u, 0u, 15u, 3u, 0u, stream};
+        outputs[stream * 2u + 1u] = SignatureEntry{0u, 1u, 7u, 3u, 0u, stream};
+        streamed[stream * 2u] = StreamOutEntry{stream, stream, 0u, 0xFu};
+        streamed[stream * 2u + 1u] = StreamOutEntry{stream, stream, 1u, 0x7u};
+    }
+    const std::uint32_t strides[4] = {28u, 28u, 28u, 28u};
+    constexpr std::uint32_t stage_geometry = 3u, gs = 50u, out = 60u, points = 70u, layout = 71u, statistics = 72u;
+    constexpr std::uint32_t point_count = 24u, stride = 28u, rasterized_stream = 2u, format_r32g32b32 = 6u;
+    CHECK(av_d3d_CreateShader(wire, gs, stage_geometry, triangle_vs::outputs_count, triangle_vs::outputs, 8u, outputs, 0u,
+                              nullptr, 8u, streamed, 4u, strides, rasterized_stream, four_stream_tokens,
+                              sizeof four_stream_tokens));
+    Vertex ring[point_count] = {};
+    for (std::uint32_t index = 0u; index < point_count; index++) {
+        const float radius = 0.8f * (0.4f + static_cast<float>(index) * 0.025f);
+        const float angle = static_cast<float>(index) * 0.9f;
+        ring[index] = Vertex{radius * std::cos(angle), radius * std::sin(angle), static_cast<float>(index) / 24.0f, 0.5f, 1.0f, 1.0f};
+    }
+    ResourceDesc buffer = {};
+    buffer.dimension = 1u;
+    buffer.width = sizeof ring;
+    buffer.bind_flags = bind_vertex;
+    CHECK(av_d3d_CreateResource(wire, points, buffer, 0u, 0u, 0u));
+    CHECK(av_d3d_UpdateSubresource(wire, points, 0u, 0u, Box{}, 0u, 0u, 0u, ring, sizeof ring));
+    buffer.width = 2048u;
+    buffer.bind_flags = 0x10u | bind_vertex;
+    for (std::uint32_t stream = 0u; stream < 4u; stream++) CHECK(av_d3d_CreateResource(wire, out + stream, buffer, 0u, 0u, 0u));
+    const InputElement streamed_layout[2] = {{0u, 0u, format_r32g32, 0u, 0u, 0u}, {0u, 16u, format_r32g32b32, 0u, 0u, 1u}};
+    CHECK(av_d3d_CreateInputLayout(wire, layout, 2u, streamed_layout));
+    constexpr std::uint32_t query_pipeline_statistics = 4u;
+    CHECK(av_d3d_CreateQuery(wire, statistics, query_pipeline_statistics, 0u));
+    CHECK_EQ(wire.refused(), 0u);
+
+    bind_triangle(wire);
+    const VertexBufferBinding from_points = {points, sizeof(Vertex), 0u};
+    CHECK(av_d3d_SetVertexBuffers(wire, 0u, 1u, &from_points));
+    CHECK(av_d3d_SetTopology(wire, 1u));
+    CHECK(av_d3d_SetShader(wire, stage_geometry, gs));
+    const StreamOutTarget targets[4] = {{out, 0u}, {out + 1u, 0u}, {out + 2u, 0u}, {out + 3u, 0u}};
+    CHECK(av_d3d_SetStreamOutTargets(wire, 4u, targets));
+    CHECK(av_d3d_Draw(wire, point_count, 0u));
+    CHECK(av_d3d_SetStreamOutTargets(wire, 0u, nullptr));
+    CHECK(av_d3d_SetShader(wire, stage_geometry, 0u));
+    static std::uint8_t pixels[size * size * 4u];
+    std::uint32_t row_pitch = 0u, depth_pitch = 0u;
+    std::uint64_t read = 0u;
+    CHECK(av_d3d_ReadSubresource(wire, 1u, 0u, &hresult, &row_pitch, &depth_pitch, pixels, sizeof(pixels), &read));
+    CHECK_EQ(hresult, 0u);
+    std::uint32_t drawn = 0u;
+    for (std::uint32_t y = 0u; y < size; y++)
+        for (std::uint32_t x = 0u; x < size; x++) drawn += pixel(pixels, x, y) != 0xff0000ffu ? 1u : 0u;
+    std::fprintf(stderr, "the stream output draw drew %u pixels, the centre is %08x\n", drawn,
+                 pixel(pixels, size / 2u - 1u, size / 2u - 1u));
+    CHECK(drawn >= point_count / 2u);
+    CHECK_EQ(pixel(pixels, size / 2u - 1u, size / 2u - 1u), 0xff0000ffu);
+    CHECK(av_d3d_SetInputLayout(wire, layout));
+    for (std::uint32_t stream = 0u; stream < 4u; stream++) {
+        const VertexBufferBinding from_stream = {out + stream, stride, 0u};
+        CHECK(av_d3d_SetVertexBuffers(wire, 0u, 1u, &from_stream));
+        CHECK(av_d3d_BeginQuery(wire, statistics));
+        CHECK(av_d3d_DrawAuto(wire));
+        CHECK(av_d3d_EndQuery(wire, statistics));
+        std::uint64_t counts[16] = {};
+        std::uint32_t ready = 0u;
+        std::uint64_t answered = 0u;
+        for (int attempt = 0; attempt < 200 && ready == 0u; attempt++)
+            CHECK(av_d3d_GetQueryData(wire, statistics, 0u, &ready, counts, sizeof(counts), &answered));
+        CHECK_EQ(ready, 1u);
+        std::fprintf(stderr, "draw auto of stream %u: %llu vertices\n", stream, static_cast<unsigned long long>(counts[0]));
+        CHECK_EQ(counts[0], static_cast<std::uint64_t>(point_count));
+    }
+    CHECK(av_d3d_ReadSubresource(wire, 1u, 0u, &hresult, &row_pitch, &depth_pitch, pixels, sizeof(pixels), &read));
+    CHECK_EQ(hresult, 0u);
+    std::fprintf(stderr, "after the draws auto the centre is %08x\n", pixel(pixels, size / 2u - 1u, size / 2u - 1u));
+    CHECK_EQ(pixel(pixels, size / 2u - 1u, size / 2u - 1u), 0xff0000ffu);
+    std::uint32_t removed = 1u;
+    CHECK(av_d3d_Finish11(wire, &removed));
+    CHECK_EQ(removed, 0u);
+    CHECK_EQ(wire.refused(), 0u);
+    backend.shut_down();
+}
+
+
+namespace {
+
+constexpr std::uint32_t rov_tokens[] = {0x00000050u, 0x0000004au, 0x0100086au, 0x0402189cu, 0x0011e000u, 0x00000001u, 0x00005555u, 0x04002064u, 0x00101032u, 0x00000000u, 0x00000001u, 0x03001062u, 0x00101012u, 0x00000001u, 0x03000065u, 0x001020f2u, 0x00000000u, 0x02000068u, 0x00000002u, 0x0500001cu, 0x001000f2u, 0x00000000u, 0x00101546u, 0x00000000u, 0x890000a3u, 0x800000c2u, 0x00155543u, 0x00100012u, 0x00000001u, 0x00100fc6u, 0x00000000u, 0x0011ee46u, 0x00000001u, 0x09000032u, 0x00100022u, 0x00000001u, 0x0010100au, 0x00000001u, 0x00004001u, 0x3f333333u, 0x00004001u, 0x3e99999au, 0x07000038u, 0x00100022u, 0x00000001u, 0x0010001au, 0x00000001u, 0x00004001u, 0x3eb33333u, 0x09000032u, 0x00100012u, 0x00000001u, 0x0010000au, 0x00000001u, 0x00004001u, 0x3f000000u, 0x0010001au, 0x00000001u, 0x070000a4u, 0x0011e0f2u, 0x00000001u, 0x00100e46u, 0x00000000u, 0x00100006u, 0x00000001u, 0x08000036u, 0x001020f2u, 0x00000000u, 0x00004002u, 0x00000000u, 0x00000000u, 0x00000000u, 0x3f800000u, 0x0100003eu};
+
+}
+
+TEST(d3d_backend_device, a_rasterizer_ordered_view_blends_overlapping_triangles_in_draw_order)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice *const device = host_device(apis);
+    if (device == nullptr) return;
+    HeldBackend     held(first_backend, rig.log);
+    av::D3dBackend &backend = held.backend();
+    av::SessionShares unshared;
+    CHECK(backend.initialize(unshared, rig.imports, device));
+    av::D3dLoopback wire(backend, rig.imports);
+    std::uint32_t hresult = 1u, level = 0u;
+    CHECK(av_d3d_CreateDevice11(wire, 1u, 0u, 0u, &hresult, &level));
+    make_triangle(wire);
+    constexpr std::uint32_t layers = 6u, format_r32_float = 41u, bind_unordered = 0x80u, uav_texture2d = 4u;
+    ResourceDesc texture = {};
+    texture.dimension = 3u;
+    texture.width = size;
+    texture.height = size;
+    texture.depth_or_array = 1u;
+    texture.mip_levels = 1u;
+    texture.format = format_r32_float;
+    texture.sample_count = 1u;
+    texture.bind_flags = bind_unordered;
+    CHECK(av_d3d_CreateResource(wire, 20u, texture, 0u, 0u, 0u));
+    ViewDesc uav = {};
+    uav.resource = 20u;
+    uav.format = format_r32_float;
+    uav.dimension = uav_texture2d;
+    CHECK(av_d3d_CreateUnorderedAccessView(wire, 21u, uav));
+    const SignatureEntry rov_inputs[2] = {{1u, 0u, 15u, 3u, 0u, 0u}, {0u, 1u, 15u, 3u, 0u, 0u}};
+    const SignatureEntry rov_outputs[1] = {{0u, 0u, 15u, 3u, 0u, 0u}};
+    CHECK(av_d3d_CreateShader(wire, 22u, 4u, 2u, rov_inputs, 1u, rov_outputs, 0u, nullptr, 0u, nullptr, 0u, nullptr,
+                              0xffffffffu, rov_tokens, sizeof rov_tokens));
+    Vertex vertices[3u * layers] = {};
+    for (std::uint32_t layer = 0u; layer < layers; layer++) {
+        const float radius = 0.9f - 0.08f * float(layer);
+        for (std::uint32_t corner = 0u; corner < 3u; corner++) {
+            const float angle = float(layer) * 0.7f - float(corner) * 2.0943951f;
+            vertices[layer * 3u + corner] = Vertex{radius * std::cos(angle), radius * std::sin(angle), float(layer) * 0.19f, 0.0f, 0.0f, 1.0f};
+        }
+    }
+    ResourceDesc buffer = {};
+    buffer.dimension = 1u;
+    buffer.width = sizeof vertices;
+    buffer.bind_flags = bind_vertex;
+    CHECK(av_d3d_CreateResource(wire, 23u, buffer, 0u, 0u, 0u));
+    CHECK(av_d3d_UpdateSubresource(wire, 23u, 0u, 0u, Box{}, 0u, 0u, 0u, vertices, sizeof vertices));
+    const std::uint32_t targets[1] = {2u};
+    const UavBinding uavs[1] = {{21u, 0xFFFFFFFFu}};
+    CHECK(av_d3d_SetRenderTargets(wire, 1u, targets, 0u, 1u, 1u, uavs));
+    const Viewport viewport = {0.0f, 0.0f, float(size), float(size), 0.0f, 1.0f};
+    CHECK(av_d3d_SetViewports(wire, 1u, &viewport));
+    CHECK(av_d3d_SetInputLayout(wire, 7u));
+    const VertexBufferBinding binding = {23u, sizeof(Vertex), 0u};
+    CHECK(av_d3d_SetVertexBuffers(wire, 0u, 1u, &binding));
+    CHECK(av_d3d_SetTopology(wire, topology_triangles));
+    CHECK(av_d3d_SetShader(wire, 0u, 5u));
+    CHECK(av_d3d_SetShader(wire, 4u, 22u));
+    CHECK(av_d3d_Draw(wire, 3u * layers, 0u));
+    static float result[size * size];
+    std::uint32_t row_pitch = 0u, depth_pitch = 0u;
+    std::uint64_t read = 0u;
+    CHECK(av_d3d_ReadSubresource(wire, 20u, 0u, &hresult, &row_pitch, &depth_pitch, result, sizeof result, &read));
+    CHECK_EQ(hresult, 0u);
+    std::uint32_t wrong = 0u, judged = 0u;
+    for (std::uint32_t y = 0u; y < size; y++)
+        for (std::uint32_t x = 0u; x < size; x++) {
+            const float px = (float(x) + 0.5f) / float(size) * 2.0f - 1.0f, py = 1.0f - (float(y) + 0.5f) / float(size) * 2.0f;
+            float expected = 0.0f;
+            bool near_edge = false;
+            for (std::uint32_t layer = 0u; layer < layers; layer++) {
+                float d[3];
+                for (std::uint32_t corner = 0u; corner < 3u; corner++) {
+                    const Vertex &a = vertices[layer * 3u + corner], &b = vertices[layer * 3u + (corner + 1u) % 3u];
+                    d[corner] = (b.x - a.x) * (py - a.y) - (b.y - a.y) * (px - a.x);
+                }
+                for (const float value : d) near_edge = near_edge || std::fabs(value) < 0.05f;
+                const bool inside = (d[0] > 0 && d[1] > 0 && d[2] > 0) || (d[0] < 0 && d[1] < 0 && d[2] < 0);
+                if (inside) expected = expected * 0.5f + 0.35f * (0.3f + 0.7f * float(layer) * 0.19f);
+            }
+            if (near_edge) continue;
+            judged++;
+            if (std::fabs(result[y * size + x] - expected) > 1e-4f) wrong++;
+        }
+    std::fprintf(stderr, "rov: %u of %u judged pixels wrong\n", wrong, judged);
     CHECK_EQ(wrong, 0u);
     CHECK_EQ(wire.refused(), 0u);
 }
@@ -750,4 +1250,548 @@ TEST(d3d_backend_device, what_the_host_has_no_memory_for_is_out_of_memory_to_the
         CHECK(backend.invariants_hold());
         backend.shut_down();
     }
+}
+
+TEST(d3d_backend_device, a_resource_the_host_cannot_create_is_destroyed_without_removing_the_device)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice *const device = host_device(apis);
+    if (device == nullptr) return;
+    HeldBackend     held(first_backend, rig.log);
+    av::D3dBackend &backend = held.backend();
+    av::SessionShares unshared;
+    CHECK(backend.initialize(unshared, rig.imports, device));
+    av::D3dLoopback wire(backend, rig.imports, nullptr, 0u);
+    std::uint32_t hresult = 0u, level = 0u, removed = 0u;
+    CHECK(av_d3d_CreateDevice11(wire, 1u, 0u, 0u, &hresult, &level));
+    ResourceDesc target = {};
+    target.dimension = 3u;
+    target.width = size;
+    target.height = size;
+    target.depth_or_array = 1u;
+    target.mip_levels = 1u;
+    target.format = format_b8g8r8a8;
+    target.sample_count = 3u;
+    target.bind_flags = bind_render_target;
+    CHECK(av_d3d_CreateResource(wire, 10u, target, 0u, 0u, 0u));
+    CHECK(av_d3d_DestroyObject(wire, 10u));
+    CHECK(av_d3d_Finish11(wire, &removed));
+    CHECK_EQ(removed, 0u);
+    CHECK_EQ(wire.refused(), 0u);
+    CHECK(av_d3d_DestroyObject(wire, 10u));
+    CHECK(av_d3d_Finish11(wire, &removed));
+    CHECK_EQ(removed, driver_internal_error);
+    CHECK_EQ(wire.refused(), 0u);
+    CHECK(backend.invariants_hold());
+    backend.shut_down();
+}
+
+TEST(d3d_backend_device, every_outstanding_resource_the_host_cannot_create_is_destroyed_without_removing_the_device)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice *const device = host_device(apis);
+    if (device == nullptr) return;
+    HeldBackend     held(first_backend, rig.log);
+    av::D3dBackend &backend = held.backend();
+    av::SessionShares unshared;
+    CHECK(backend.initialize(unshared, rig.imports, device));
+    av::D3dLoopback wire(backend, rig.imports, nullptr, 0u);
+    std::uint32_t hresult = 0u, level = 0u, removed = 0u;
+    CHECK(av_d3d_CreateDevice11(wire, 1u, 0u, 0u, &hresult, &level));
+    ResourceDesc target = {};
+    target.dimension = 3u;
+    target.width = size;
+    target.height = size;
+    target.depth_or_array = 1u;
+    target.mip_levels = 1u;
+    target.format = format_b8g8r8a8;
+    target.sample_count = 3u;
+    target.bind_flags = bind_render_target;
+    constexpr std::uint32_t outstanding = 320u;
+    for (std::uint32_t id = 10u; id < 10u + outstanding; id++) CHECK(av_d3d_CreateResource(wire, id, target, 0u, 0u, 0u));
+    for (std::uint32_t id = 10u; id < 10u + outstanding; id++) CHECK(av_d3d_DestroyObject(wire, id));
+    CHECK(av_d3d_Finish11(wire, &removed));
+    CHECK_EQ(removed, 0u);
+    CHECK_EQ(wire.refused(), 0u);
+    CHECK(backend.invariants_hold());
+    backend.shut_down();
+}
+
+TEST(d3d_backend_device, a_staging_allocation_the_host_refuses_faults_its_session_and_not_the_device_others_share)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice *const device = host_device(apis);
+    if (device == nullptr) return;
+    constexpr std::uint32_t out_of_memory = 0x8007000Eu;
+    av::HostRamLedger *const host = apis.host_ram_ledger();
+    const std::uint64_t kept = host->budget();
+    {
+        HeldBackend     greedy(first_backend, rig.log);
+        HeldBackend     bystander(second_backend, rig.log);
+        av::SessionShares unshared_a, unshared_b;
+        CHECK(greedy.backend().initialize(unshared_a, rig.imports, device));
+        CHECK(bystander.backend().initialize(unshared_b, rig.imports, device));
+        av::D3dLoopback greedy_wire(greedy.backend(), rig.imports);
+        av::D3dLoopback bystander_wire(bystander.backend(), rig.imports);
+        std::uint32_t hresult = 1u, level = 0u, removed = 1u;
+        CHECK(av_d3d_CreateDevice11(greedy_wire, 1u, 0u, 0u, &hresult, &level));
+        CHECK(av_d3d_CreateDevice11(bystander_wire, 1u, 0u, 0u, &hresult, &level));
+        ResourceDesc buffer = {};
+        buffer.dimension = 1u;
+        buffer.width = 1u << 20u;
+        buffer.bind_flags = bind_vertex;
+        CHECK(av_d3d_CreateResource(greedy_wire, 100u, buffer, 0u, 0u, 0u));
+        host->budget(4096u);
+        static std::uint8_t bytes[4096u];
+        const Box head = {0u, 0u, 0u, sizeof(bytes), 1u, 1u};
+        CHECK(av_d3d_UpdateSubresource(greedy_wire, 100u, 0u, 1u, head, 0u, 0u, 0u, bytes, sizeof(bytes)));
+        CHECK(av_d3d_Finish11(greedy_wire, &removed));
+        host->budget(kept);
+        CHECK_EQ(removed, out_of_memory);
+        CHECK(av_d3d_Finish11(bystander_wire, &removed));
+        CHECK_EQ(removed, 0u);
+        make_triangle(bystander_wire);
+        CHECK_EQ(bystander_wire.refused(), 0u);
+        bind_triangle(bystander_wire);
+        CHECK(av_d3d_Draw(bystander_wire, 3u, 0u));
+        CHECK(av_d3d_Finish11(bystander_wire, &removed));
+        CHECK_EQ(removed, 0u);
+        greedy.backend().shut_down();
+        bystander.backend().shut_down();
+    }
+}
+
+namespace {
+
+constexpr std::uint32_t query_occlusion_predicate = 5u;
+constexpr std::uint32_t format_r32_uint = 42u;
+constexpr std::uint32_t format_d32_float = 40u;
+constexpr std::uint32_t bind_depth_stencil = 0x40u;
+constexpr std::uint32_t bind_unordered_access = 0x80u;
+constexpr std::uint32_t dsv_texture2d = 3u;
+constexpr std::uint32_t uav_texture2d = 4u;
+constexpr std::uint32_t clear_depth = 0x1u;
+constexpr std::uint32_t predicate_query = 50u;
+
+ResourceDesc texture_desc(std::uint32_t format, std::uint32_t bind_flags, std::uint32_t samples = 1u)
+{
+    ResourceDesc desc = {};
+    desc.dimension = 3u;
+    desc.width = size;
+    desc.height = size;
+    desc.depth_or_array = 1u;
+    desc.mip_levels = 1u;
+    desc.format = format;
+    desc.sample_count = samples;
+    desc.bind_flags = bind_flags;
+    return desc;
+}
+
+ViewDesc view_desc(std::uint32_t resource, std::uint32_t format, std::uint32_t dimension)
+{
+    ViewDesc desc = {};
+    desc.resource = resource;
+    desc.format = format;
+    desc.dimension = dimension;
+    return desc;
+}
+
+std::uint32_t first_texel(av::D3dLoopback &wire, std::uint32_t resource)
+{
+    static std::uint8_t texels[size * size * 4u];
+    std::uint32_t hresult = 1u, row_pitch = 0u, depth_pitch = 0u;
+    std::uint64_t read = 0u;
+    CHECK(av_d3d_ReadSubresource(wire, resource, 0u, &hresult, &row_pitch, &depth_pitch, texels, sizeof(texels), &read));
+    CHECK_EQ(hresult, 0u);
+    std::uint32_t value = 0u;
+    std::memcpy(&value, texels + (size / 2u) * row_pitch + (size / 2u) * 4u, sizeof(value));
+    return value;
+}
+
+void check_predicated_operations(bool drawn, std::uint32_t predicate_value)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice *const device = host_device(apis);
+    if (device == nullptr) return;
+    HeldBackend     held(first_backend, rig.log);
+    av::D3dBackend &backend = held.backend();
+    av::SessionShares unshared;
+    CHECK(backend.initialize(unshared, rig.imports, device));
+    av::D3dLoopback wire(backend, rig.imports);
+    std::uint32_t hresult = 1u, level = 0u;
+    CHECK(av_d3d_CreateDevice11(wire, 1u, 0u, 0u, &hresult, &level));
+    make_triangle(wire);
+    bind_triangle(wire);
+
+    constexpr std::uint32_t cleared = 20u, copy_dst = 22u, copy_src = 24u, depth = 26u, storage = 28u, multisampled = 30u,
+                            resolve_dst = 32u;
+    CHECK(av_d3d_CreateResource(wire, cleared, texture_desc(format_b8g8r8a8, bind_render_target), 0u, 0u, 0u));
+    CHECK(av_d3d_CreateRenderTargetView(wire, 21u, view_desc(cleared, format_b8g8r8a8, rtv_texture2d)));
+    CHECK(av_d3d_CreateResource(wire, copy_dst, texture_desc(format_b8g8r8a8, bind_render_target), 0u, 0u, 0u));
+    CHECK(av_d3d_CreateRenderTargetView(wire, 23u, view_desc(copy_dst, format_b8g8r8a8, rtv_texture2d)));
+    CHECK(av_d3d_CreateResource(wire, copy_src, texture_desc(format_b8g8r8a8, bind_render_target), 0u, 0u, 0u));
+    CHECK(av_d3d_CreateRenderTargetView(wire, 25u, view_desc(copy_src, format_b8g8r8a8, rtv_texture2d)));
+    CHECK(av_d3d_CreateResource(wire, depth, texture_desc(format_d32_float, bind_depth_stencil), 0u, 0u, 0u));
+    CHECK(av_d3d_CreateDepthStencilView(wire, 27u, view_desc(depth, format_d32_float, dsv_texture2d)));
+    CHECK(av_d3d_CreateResource(wire, storage, texture_desc(format_r32_uint, bind_unordered_access), 0u, 0u, 0u));
+    CHECK(av_d3d_CreateUnorderedAccessView(wire, 29u, view_desc(storage, format_r32_uint, uav_texture2d)));
+    CHECK(av_d3d_CreateResource(wire, multisampled, texture_desc(format_b8g8r8a8, bind_render_target, 4u), 0u, 0u, 0u));
+    CHECK(av_d3d_CreateRenderTargetView(wire, 31u, view_desc(multisampled, format_b8g8r8a8, 6u)));
+    CHECK(av_d3d_CreateResource(wire, resolve_dst, texture_desc(format_b8g8r8a8, bind_render_target), 0u, 0u, 0u));
+    CHECK(av_d3d_CreateRenderTargetView(wire, 33u, view_desc(resolve_dst, format_b8g8r8a8, rtv_texture2d)));
+    CHECK_EQ(wire.refused(), 0u);
+
+    const Float4 red = {{1.0f, 0.0f, 0.0f, 1.0f}}, green = {{0.0f, 1.0f, 0.0f, 1.0f}}, blue = {{0.0f, 0.0f, 1.0f, 1.0f}},
+                 yellow = {{1.0f, 1.0f, 0.0f, 1.0f}};
+    CHECK(av_d3d_ClearRenderTargetView(wire, 21u, red));
+    CHECK(av_d3d_ClearRenderTargetView(wire, 23u, blue));
+    CHECK(av_d3d_ClearRenderTargetView(wire, 25u, yellow));
+    CHECK(av_d3d_ClearDepthStencilView(wire, 27u, clear_depth, 0.25f, 0u));
+    CHECK(av_d3d_ClearUnorderedAccessViewUint(wire, 29u, Uint4{{7u, 7u, 7u, 7u}}));
+    CHECK(av_d3d_ClearRenderTargetView(wire, 31u, red));
+    CHECK(av_d3d_ClearRenderTargetView(wire, 33u, blue));
+
+    CHECK(av_d3d_CreateQuery(wire, predicate_query, query_occlusion_predicate, 0u));
+    const Viewport away = {float(size) * 4.0f, 0.0f, float(size), float(size), 0.0f, 1.0f};
+    const Viewport onto = {0.0f, 0.0f, float(size), float(size), 0.0f, 1.0f};
+    CHECK(av_d3d_SetViewports(wire, 1u, drawn ? &onto : &away));
+    CHECK(av_d3d_BeginQuery(wire, predicate_query));
+    CHECK(av_d3d_Draw(wire, 3u, 0u));
+    CHECK(av_d3d_EndQuery(wire, predicate_query));
+
+    const bool performed = drawn != (predicate_value != 0u);
+    CHECK(av_d3d_SetPredication(wire, predicate_query, predicate_value));
+    CHECK(av_d3d_ClearRenderTargetView(wire, 21u, green));
+    CHECK(av_d3d_CopySubresourceRegion(wire, copy_dst, 0u, 0u, 0u, 0u, copy_src, 0u, 0u, Box{}, 0u));
+    CHECK(av_d3d_ClearDepthStencilView(wire, 27u, clear_depth, 0.75f, 0u));
+    CHECK(av_d3d_ClearUnorderedAccessViewUint(wire, 29u, Uint4{{9u, 9u, 9u, 9u}}));
+    CHECK(av_d3d_ResolveSubresource(wire, resolve_dst, 0u, multisampled, 0u, format_b8g8r8a8));
+    CHECK(av_d3d_SetPredication(wire, 0u, 0u));
+
+    CHECK_EQ(first_texel(wire, cleared), performed ? 0xff00ff00u : 0xffff0000u);
+    CHECK_EQ(first_texel(wire, copy_dst), performed ? 0xffffff00u : 0xff0000ffu);
+    CHECK_EQ(first_texel(wire, depth), std::bit_cast<std::uint32_t>(performed ? 0.75f : 0.25f));
+    CHECK_EQ(first_texel(wire, storage), performed ? 9u : 7u);
+    CHECK_EQ(first_texel(wire, resolve_dst), performed ? 0xffff0000u : 0xff0000ffu);
+    CHECK_EQ(wire.refused(), 0u);
+
+    std::uint32_t removed = 1u;
+    CHECK(av_d3d_Finish11(wire, &removed));
+    CHECK_EQ(removed, 0u);
+    backend.shut_down();
+}
+
+}
+
+TEST(d3d_backend_device, predicated_clears_copies_and_resolves_are_skipped_when_the_predicate_equals_the_value)
+{
+    check_predicated_operations(false, 0u);
+    check_predicated_operations(true, 1u);
+}
+
+TEST(d3d_backend_device, predicated_clears_copies_and_resolves_run_when_the_predicate_differs_from_the_value)
+{
+    check_predicated_operations(false, 1u);
+    check_predicated_operations(true, 0u);
+}
+
+namespace {
+
+struct CountedGate {
+    std::uint8_t               uuid[16] = {};
+    std::atomic<std::uint32_t> held{0u};
+    std::atomic<std::uint32_t> entries{0u};
+    std::atomic<std::uint32_t> unbalanced{0u};
+    std::atomic<bool>          refuses{false};
+    std::atomic<std::uint32_t> admitted{0u};
+    std::atomic<std::uint32_t> returned{0u};
+    std::atomic<std::uint32_t> ungated{0u};
+    std::atomic<bool>          full{false};
+};
+
+void *counted_gate_of(void *self, const std::uint8_t *uuid)
+{
+    CountedGate &gate = *static_cast<CountedGate *>(self);
+    return std::memcmp(uuid, gate.uuid, sizeof gate.uuid) == 0 ? &gate : nullptr;
+}
+
+int counted_enter(void *self)
+{
+    CountedGate &gate = *static_cast<CountedGate *>(self);
+    if (gate.refuses.load()) return 0;
+    if (gate.held.fetch_add(1u) != 0u) gate.unbalanced++;
+    return 1;
+}
+
+void counted_leave(void *self)
+{
+    CountedGate &gate = *static_cast<CountedGate *>(self);
+    if (gate.held.fetch_sub(1u) != 1u) gate.unbalanced++;
+    gate.entries++;
+}
+
+int  counted_share(void *) { return 1; }
+void counted_unshare(void *) {}
+
+int counted_admit_device(void *self, VkPhysicalDevice_T *, const VkDeviceCreateInfo *create, std::uint32_t *slots)
+{
+    CountedGate &gate = *static_cast<CountedGate *>(self);
+    if (gate.held.load() != 1u) gate.ungated++;
+    if (gate.full.load()) return 0;
+    *slots = create->queueCreateInfoCount;
+    gate.admitted += *slots;
+    return 1;
+}
+
+void counted_return_device(void *self, std::uint32_t slots)
+{
+    CountedGate &gate = *static_cast<CountedGate *>(self);
+    if (gate.held.load() != 1u) gate.ungated++;
+    gate.returned += slots;
+}
+
+}
+
+TEST(d3d_backend_device, every_host_d3d_runtime_creates_and_destroys_its_vulkan_devices_inside_the_lifecycle_gate_of_their_gpu)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    if (host_device(apis) == nullptr) return;
+    std::uint32_t index = 0u;
+    while (apis.d3d11_device(index) == nullptr) index++;
+    av::D3dRuntime runtime;
+    CHECK(runtime.open());
+    CountedGate counted;
+    apis.gpu_uuid(index, counted.uuid);
+    const AvLifecycleGates table = {sizeof(AvLifecycleGates), &counted, counted_gate_of, counted_enter,
+                                    counted_leave, counted_share, counted_unshare, counted_admit_device,
+                                    counted_return_device};
+    CHECK_EQ(runtime.give_lifecycle_gates(table), 3u);
+    IDXGIAdapter1 *const adapter = runtime.adapter_for(counted.uuid);
+    CHECK(adapter != nullptr);
+    ID3D11Device        *device = nullptr;
+    ID3D11DeviceContext *context = nullptr;
+    std::uint32_t        level = 0u;
+    CHECK(adapter != nullptr && SUCCEEDED(runtime.create_device11(adapter, device, context, level)));
+    CHECK_EQ(counted.entries.load(), 1u);
+    const std::uint32_t held11 = counted.admitted.load();
+    CHECK(held11 >= 1u);
+    CHECK_EQ(counted.returned.load(), 0u);
+    if (context != nullptr) context->Release();
+    if (device != nullptr) device->Release();
+    const std::uint32_t after11 = counted.entries.load();
+    CHECK_EQ(after11, 2u);
+    CHECK_EQ(counted.returned.load(), held11);
+    void *device12 = nullptr;
+    if (SUCCEEDED(runtime.create_device12(counted.uuid, device12)) && device12 != nullptr) {
+        CHECK_EQ(counted.entries.load(), after11 + 1u);
+        CHECK(counted.admitted.load() > held11);
+        CHECK_EQ(counted.returned.load(), held11);
+        static_cast<IUnknown *>(device12)->Release();
+        CHECK_EQ(counted.entries.load(), after11 + 2u);
+        CHECK_EQ(counted.returned.load(), counted.admitted.load());
+    }
+    const std::uint32_t before_full = counted.entries.load();
+    const std::uint32_t admitted_before_full = counted.admitted.load();
+    counted.full = true;
+    ID3D11Device        *unadmitted = nullptr;
+    ID3D11DeviceContext *unadmitted_context = nullptr;
+    CHECK(adapter != nullptr && FAILED(runtime.create_device11(adapter, unadmitted, unadmitted_context, level)));
+    CHECK(unadmitted == nullptr);
+    void *unadmitted12 = nullptr;
+    CHECK(FAILED(runtime.create_device12(counted.uuid, unadmitted12)) || unadmitted12 == nullptr);
+    counted.full = false;
+    CHECK(counted.entries.load() > before_full);
+    CHECK_EQ(counted.admitted.load(), admitted_before_full);
+    CHECK_EQ(counted.returned.load(), admitted_before_full);
+    CHECK_EQ(counted.ungated.load(), 0u);
+    const std::uint32_t before_refusal = counted.entries.load();
+    counted.refuses = true;
+    ID3D11Device        *refused = nullptr;
+    ID3D11DeviceContext *refused_context = nullptr;
+    CHECK(adapter != nullptr && FAILED(runtime.create_device11(adapter, refused, refused_context, level)));
+    CHECK(refused == nullptr);
+    counted.refuses = false;
+    CHECK_EQ(counted.entries.load(), before_refusal);
+    if (adapter != nullptr) adapter->Release();
+    CHECK_EQ(counted.held.load(), 0u);
+    CHECK_EQ(counted.unbalanced.load(), 0u);
+    static av::HostLifecycleGates none;
+    CHECK_EQ(runtime.give_lifecycle_gates(none.abi()), 3u);
+}
+
+TEST(d3d_backend_device, creates_past_the_leased_room_are_refused_up_front_and_the_device_keeps_drawing_its_earlier_objects)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    std::uint32_t      index = 0u;
+    av::D3d11HostDevice *const device = chosen_device(apis, index);
+    if (device == nullptr) return;
+    HeldBackend     held(first_backend, rig.log);
+    av::D3dBackend &backend = held.backend();
+    av::SessionShares unshared;
+    CHECK(backend.initialize(unshared, rig.imports, device));
+    av::D3dLoopback wire(backend, rig.imports);
+    std::uint32_t hresult = 1u, level = 0u;
+    CHECK(av_d3d_CreateDevice11(wire, 1u, 0u, 0u, &hresult, &level));
+    make_triangle(wire);
+    std::uint32_t removed = 1u;
+    CHECK(av_d3d_Finish11(wire, &removed));
+
+    constexpr std::uint64_t room = std::uint64_t{160} << 20u;
+    av::LeaseRig lease(apis.vram_ledger(index), apis.host_ram_ledger(), room);
+    backend.lease_from(&lease.host());
+    ResourceDesc texture = {};
+    texture.dimension = 3u;
+    texture.width = 1024u;
+    texture.height = 1024u;
+    texture.depth_or_array = 1u;
+    texture.mip_levels = 1u;
+    texture.format = format_b8g8r8a8;
+    texture.sample_count = 1u;
+    texture.bind_flags = bind_render_target;
+    const std::uint64_t each = av::ResourceFootprint(texture).leased(0u);
+    CHECK_EQ(each, std::uint64_t{4} << 20u);
+    const std::uint64_t before = lease.in_use();
+    constexpr std::uint32_t first = 100u;
+    std::uint32_t made = 0u, refused = 0u;
+    while (refused < 4u && made < 256u) {
+        if (!lease.admit(each)) {
+            refused++;
+            continue;
+        }
+        CHECK(av_d3d_CreateResource(wire, first + made, texture, 0u, 0u, 0u));
+        made++;
+    }
+    CHECK(refused == 4u);
+    CHECK(made >= 8u);
+    CHECK(av_d3d_Finish11(wire, &removed));
+    CHECK_EQ(removed, 0u);
+    const std::uint64_t used = lease.in_use() - before;
+    std::fprintf(stderr, "d3d11 lease: %u textures, %llu bytes estimated, %llu bytes the host runtime took\n", made,
+                 static_cast<unsigned long long>(each * made), static_cast<unsigned long long>(used));
+
+    static std::uint8_t pixels[size * size * 4u];
+    std::uint32_t row_pitch = 0u, depth_pitch = 0u;
+    std::uint64_t read = 0u;
+    hresult = 1u;
+    CHECK(av_d3d_ReadSubresourceRange(wire, first + made - 1u, 0u, 0u, &hresult, &row_pitch, &depth_pitch, pixels, 16u,
+                                      &read));
+    CHECK_EQ(hresult, 0u);
+    bind_triangle(wire);
+    CHECK(av_d3d_Draw(wire, 3u, 0u));
+    hresult = 1u;
+    CHECK(av_d3d_ReadSubresource(wire, 1u, 0u, &hresult, &row_pitch, &depth_pitch, pixels, sizeof(pixels), &read));
+    CHECK_EQ(hresult, 0u);
+    CHECK_EQ(pixel(pixels, size - 4u, size / 2u), 0xff0000ffu);
+    CHECK_EQ(pixel(pixels, 4u, size / 2u) & 0xff00ffffu, 0xff000000u);
+
+    const std::uint32_t freed = made / 2u;
+    for (std::uint32_t at = 0u; at < freed; at++) {
+        CHECK(av_d3d_DestroyObject(wire, first + at));
+        lease.credit(each);
+    }
+    for (std::uint32_t at = 0u; at < freed; at++) {
+        CHECK(lease.admit(each));
+        CHECK(av_d3d_CreateResource(wire, first + made + at, texture, 0u, 0u, 0u));
+    }
+    hresult = 1u;
+    CHECK(av_d3d_ReadSubresourceRange(wire, first + made + freed - 1u, 0u, 0u, &hresult, &row_pitch, &depth_pitch, pixels,
+                                      16u, &read));
+    CHECK_EQ(hresult, 0u);
+    CHECK(av_d3d_Finish11(wire, &removed));
+    CHECK_EQ(removed, 0u);
+    CHECK_EQ(wire.refused(), 0u);
+    CHECK_EQ(lease.guest().left(av::LeaseRecord::Kind::device), lease.host().idle(av::LeaseRecord::Kind::device));
+    CHECK(backend.invariants_hold());
+    backend.shut_down();
+}
+
+TEST(d3d_backend_device, a_texture_or_view_the_host_refuses_to_make_never_removes_the_device_however_it_is_used)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice *const device = host_device(apis);
+    if (device == nullptr) return;
+    HeldBackend     held(first_backend, rig.log);
+    av::D3dBackend &backend = held.backend();
+    av::SessionShares unshared;
+    CHECK(backend.initialize(unshared, rig.imports, device));
+    av::D3dLoopback wire(backend, rig.imports);
+
+    std::uint32_t hresult = 1u, level = 0u;
+    CHECK(av_d3d_CreateDevice11(wire, 1u, 0u, 0u, &hresult, &level));
+    CHECK_EQ(hresult, 0u);
+    make_triangle(wire);
+    bind_triangle(wire);
+
+    constexpr std::uint32_t refused_texture = 60u, refused_view = 61u, refused_target = 62u, good_texture = 63u,
+                            view_of_good = 64u;
+    constexpr std::uint32_t bind_shader_resource = 0x8u, stage_pixel = 4u, srv_texture2d = 4u, rgba8 = 28u,
+                            depth32 = 40u;
+    ResourceDesc texture = {};
+    texture.dimension = 3u;
+    texture.width = size;
+    texture.height = size;
+    texture.depth_or_array = 1u;
+    texture.mip_levels = 1u;
+    texture.format = rgba8;
+    texture.sample_count = 3u;
+    texture.bind_flags = bind_shader_resource;
+    CHECK(av_d3d_CreateResource(wire, refused_texture, texture, 0u, 0u, 0u));
+    texture.sample_count = 1u;
+    CHECK(av_d3d_CreateResource(wire, good_texture, texture, 0u, 0u, 0u));
+
+    ViewDesc sampled = {};
+    sampled.resource = refused_texture;
+    sampled.format = rgba8;
+    sampled.dimension = srv_texture2d;
+    sampled.args[1] = 1u;
+    CHECK(av_d3d_CreateShaderResourceView(wire, refused_view, sampled));
+    ViewDesc target = sampled;
+    CHECK(av_d3d_CreateRenderTargetView(wire, refused_target, target));
+    ViewDesc mismatched = sampled;
+    mismatched.resource = good_texture;
+    mismatched.format = depth32;
+    CHECK(av_d3d_CreateShaderResourceView(wire, view_of_good, mismatched));
+
+    static std::uint8_t texels[size * size * 4u];
+    const Box           whole = {};
+    CHECK(av_d3d_UpdateSubresource(wire, refused_texture, 0u, 0u, whole, size * 4u, size * size * 4u, 0u, texels,
+                                   sizeof texels));
+    CHECK(av_d3d_CopyResource(wire, good_texture, refused_texture));
+    CHECK(av_d3d_CopyResource(wire, refused_texture, good_texture));
+    const std::uint32_t views[2] = {refused_view, view_of_good};
+    CHECK(av_d3d_SetShaderResources(wire, stage_pixel, 0u, 2u, views));
+    CHECK(av_d3d_ClearRenderTargetView(wire, refused_target, Float4{{1.0f, 0.0f, 0.0f, 1.0f}}));
+    CHECK(av_d3d_Draw(wire, 3u, 0u));
+
+    std::uint32_t row_pitch = 0u, depth_pitch = 0u;
+    std::uint64_t read = 1u;
+    hresult = 0u;
+    CHECK(av_d3d_ReadSubresource(wire, refused_texture, 0u, &hresult, &row_pitch, &depth_pitch, texels, sizeof texels,
+                                 &read));
+    CHECK(hresult != 0u);
+    CHECK_EQ(read, std::uint64_t{0});
+
+    CHECK(av_d3d_DestroyObject(wire, view_of_good));
+    CHECK(av_d3d_DestroyObject(wire, refused_target));
+    CHECK(av_d3d_DestroyObject(wire, refused_view));
+    CHECK(av_d3d_DestroyObject(wire, refused_texture));
+
+    hresult = 1u;
+    CHECK(av_d3d_Finish11(wire, &hresult));
+    CHECK_EQ(hresult, 0u);
+    CHECK_EQ(wire.refused(), 0u);
+
+    static std::uint8_t pixels[size * size * 4u];
+    CHECK(av_d3d_ReadSubresource(wire, 1u, 0u, &hresult, &row_pitch, &depth_pitch, pixels, sizeof(pixels), &read));
+    CHECK_EQ(hresult, 0u);
+    CHECK_EQ(read, static_cast<std::uint64_t>(sizeof(pixels)));
+
+    backend.shut_down();
 }

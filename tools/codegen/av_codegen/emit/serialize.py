@@ -747,6 +747,107 @@ def _emit_pnext_codec(reg: Registry) -> list[str]:
 
 
 BESPOKE_STRUCT_BODIES: dict[str, tuple[list[str], list[str]]] = {
+    "VkAccelerationStructureBuildGeometryInfoKHR": (
+        [
+            "    buf.write_pod(v.sType);",
+            "    serialize_pnext_chain(buf, handles, v.pNext);",
+            "    buf.write_pod(v.type);",
+            "    buf.write_pod(v.flags);",
+            "    buf.write_pod(v.mode);",
+            "    serialize_VkAccelerationStructureKHR(buf, handles, v.srcAccelerationStructure);",
+            "    serialize_VkAccelerationStructureKHR(buf, handles, v.dstAccelerationStructure);",
+            "    buf.write_pod(v.geometryCount);",
+            "    const uint8_t present = (v.pGeometries != nullptr || v.ppGeometries != nullptr) ? 1 : 0;",
+            "    buf.write_pod(present);",
+            "    if (present) {",
+            "        for (uint32_t i = 0; i < v.geometryCount; ++i) {",
+            "            serialize_VkAccelerationStructureGeometryKHR(buf, handles, "
+            "v.pGeometries != nullptr ? v.pGeometries[i] : *v.ppGeometries[i]);",
+            "        }",
+            "    }",
+            "    serialize_VkDeviceOrHostAddressKHR(buf, v.scratchData);",
+        ],
+        [
+            "    constexpr uint32_t most_geometries = 1u << 16;",
+            "    if (!r.read_pod(out->sType)) { return false; }",
+            "    out->sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;",
+            "    if (!deserialize_pnext_chain(r, handles, reinterpret_cast<VkBaseOutStructure*>(out), arena)) { return false; }",
+            "    if (!r.read_pod(out->type)) { return false; }",
+            "    if (!r.read_pod(out->flags)) { return false; }",
+            "    if (!r.read_pod(out->mode)) { return false; }",
+            "    if (!deserialize_VkAccelerationStructureKHR(r, handles, out->srcAccelerationStructure)) { return false; }",
+            "    if (!deserialize_VkAccelerationStructureKHR(r, handles, out->dstAccelerationStructure)) { return false; }",
+            "    if (!r.read_pod(out->geometryCount)) { return false; }",
+            "    uint8_t present = 0;",
+            "    if (!r.read_pod(present)) { return false; }",
+            "    if (out->geometryCount > most_geometries) { return false; }",
+            "    if (out->geometryCount != 0 && !present) { return false; }",
+            "    if (out->type != VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR && "
+            "out->type != VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR && "
+            "out->type != VK_ACCELERATION_STRUCTURE_TYPE_GENERIC_KHR) { return false; }",
+            "    if (present && out->geometryCount != 0) {",
+            "        auto* arr = arena.allocate<VkAccelerationStructureGeometryKHR>(out->geometryCount);",
+            "        if (arr == nullptr) { return false; }",
+            "        for (uint32_t i = 0; i < out->geometryCount; ++i) {",
+            "            if (!deserialize_VkAccelerationStructureGeometryKHR(r, handles, &arr[i], arena)) { return false; }",
+            "            const bool instances = arr[i].geometryType == VK_GEOMETRY_TYPE_INSTANCES_KHR;",
+            "            if (out->type == VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR && !instances) { return false; }",
+            "            if (out->type == VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR && instances) { return false; }",
+            "        }",
+            "        if (out->type == VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR && out->geometryCount != 1) { return false; }",
+            "        out->pGeometries = arr;",
+            "    }",
+            "    return deserialize_VkDeviceOrHostAddressKHR(r, &out->scratchData, arena);",
+        ],
+    ),
+    "VkAccelerationStructureGeometryKHR": (
+        [
+            "    buf.write_pod(v.sType);",
+            "    serialize_pnext_chain(buf, handles, v.pNext);",
+            "    buf.write_pod(v.geometryType);",
+            "    switch (v.geometryType) {",
+            "    case VK_GEOMETRY_TYPE_TRIANGLES_KHR:",
+            "        serialize_VkAccelerationStructureGeometryTrianglesDataKHR(buf, handles, v.geometry.triangles);",
+            "        break;",
+            "    case VK_GEOMETRY_TYPE_AABBS_KHR:",
+            "        serialize_VkAccelerationStructureGeometryAabbsDataKHR(buf, handles, v.geometry.aabbs);",
+            "        break;",
+            "    case VK_GEOMETRY_TYPE_INSTANCES_KHR:",
+            "        serialize_VkAccelerationStructureGeometryInstancesDataKHR(buf, handles, v.geometry.instances);",
+            "        break;",
+            "    default:",
+            "        break;",
+            "    }",
+            "    buf.write_pod(v.flags);",
+        ],
+        [
+            "    if (!r.read_pod(out->sType)) { return false; }",
+            "    out->sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;",
+            "    if (!deserialize_pnext_chain(r, handles, "
+            "reinterpret_cast<VkBaseOutStructure*>(out), arena)) { return false; }",
+            "    if (!r.read_pod(out->geometryType)) { return false; }",
+            "    switch (out->geometryType) {",
+            "    case VK_GEOMETRY_TYPE_TRIANGLES_KHR:",
+            "        if (!deserialize_VkAccelerationStructureGeometryTrianglesDataKHR("
+            "r, handles, &out->geometry.triangles, arena)) { return false; }",
+            "        out->geometry.triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;",
+            "        break;",
+            "    case VK_GEOMETRY_TYPE_AABBS_KHR:",
+            "        if (!deserialize_VkAccelerationStructureGeometryAabbsDataKHR("
+            "r, handles, &out->geometry.aabbs, arena)) { return false; }",
+            "        out->geometry.aabbs.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_AABBS_DATA_KHR;",
+            "        break;",
+            "    case VK_GEOMETRY_TYPE_INSTANCES_KHR:",
+            "        if (!deserialize_VkAccelerationStructureGeometryInstancesDataKHR("
+            "r, handles, &out->geometry.instances, arena)) { return false; }",
+            "        out->geometry.instances.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;",
+            "        break;",
+            "    default:",
+            "        return false;",
+            "    }",
+            "    return r.read_pod(out->flags);",
+        ],
+    ),
     "VkCopyMemoryToImageInfo": (
         [
             "    buf.write_pod(v.sType);",
@@ -756,8 +857,13 @@ BESPOKE_STRUCT_BODIES: dict[str, tuple[list[str], list[str]]] = {
             "    buf.write_pod(v.dstImageLayout);",
             "    buf.write_pod(v.regionCount);",
             "    for (uint32_t i = 0; i < v.regionCount; ++i) {",
-            "        serialize_VkMemoryToImageCopy(buf, handles, v.pRegions[i]);",
-            "        buf.write_varint(0);",
+            "        const VkMemoryToImageCopy& region = v.pRegions[i];",
+            "        serialize_VkMemoryToImageCopy(buf, handles, region);",
+            "        uint64_t n = 0;",
+            "        if (!handles.image_copy_bytes(v.dstImage, region.imageSubresource, region.imageExtent, "
+            "region.memoryRowLength, region.memoryImageHeight, n) || region.pHostPointer == nullptr) { n = 0; }",
+            "        buf.write_varint(n);",
+            "        if (n != 0) { buf.write(region.pHostPointer, static_cast<size_t>(n)); }",
             "    }",
         ],
         [
@@ -773,13 +879,159 @@ BESPOKE_STRUCT_BODIES: dict[str, tuple[list[str], list[str]]] = {
             "        if (!deserialize_VkMemoryToImageCopy(r, handles, &regions[i], arena)) { return false; }",
             "        uint64_t n = 0;",
             "        if (!r.read_varint(n)) { return false; }",
-            "        if (n == 0) { regions[i].pHostPointer = nullptr; continue; }",
+            "        uint64_t expected = 0;",
+            "        if (!handles.image_copy_bytes(out->dstImage, regions[i].imageSubresource, "
+            "regions[i].imageExtent, regions[i].memoryRowLength, regions[i].memoryImageHeight, expected) "
+            "|| n != expected) { return false; }",
+            "        regions[i].pHostPointer = nullptr;",
+            "        if (n == 0) { continue; }",
             "        char* blob = arena.allocate_chars(static_cast<size_t>(n));",
+            "        if (blob == nullptr) { return false; }",
             "        if (!r.read(blob, static_cast<size_t>(n))) { return false; }",
             "        regions[i].pHostPointer = blob;",
             "    }",
             "    out->pRegions = regions;",
             "    return true;",
+        ],
+    ),
+    "VkCopyImageToMemoryInfo": (
+        [
+            "    buf.write_pod(v.sType);",
+            "    serialize_pnext_chain(buf, handles, v.pNext);",
+            "    buf.write_pod(v.flags);",
+            "    serialize_VkImage(buf, handles, v.srcImage);",
+            "    buf.write_pod(v.srcImageLayout);",
+            "    buf.write_pod(v.regionCount);",
+            "    for (uint32_t i = 0; i < v.regionCount; ++i) {",
+            "        serialize_VkImageToMemoryCopy(buf, handles, v.pRegions[i]);",
+            "    }",
+        ],
+        [
+            "    if (!r.read_pod(out->sType)) { return false; }",
+            "    if (!deserialize_pnext_chain(r, handles, "
+            "reinterpret_cast<VkBaseOutStructure*>(out), arena)) { return false; }",
+            "    if (!r.read_pod(out->flags)) { return false; }",
+            "    if (!deserialize_VkImage(r, handles, out->srcImage)) { return false; }",
+            "    if (!r.read_pod(out->srcImageLayout)) { return false; }",
+            "    if (!r.read_pod(out->regionCount)) { return false; }",
+            "    auto* regions = arena.allocate<VkImageToMemoryCopy>(out->regionCount);",
+            "    for (uint32_t i = 0; i < out->regionCount; ++i) {",
+            "        if (!deserialize_VkImageToMemoryCopy(r, handles, &regions[i], arena)) { return false; }",
+            "        uint64_t n = 0;",
+            "        if (!handles.image_copy_bytes(out->srcImage, regions[i].imageSubresource, "
+            "regions[i].imageExtent, regions[i].memoryRowLength, regions[i].memoryImageHeight, n)) "
+            "{ return false; }",
+            "        regions[i].pHostPointer = nullptr;",
+            "        if (n == 0) { continue; }",
+            "        char* blob = arena.allocate_chars(static_cast<size_t>(n));",
+            "        if (blob == nullptr) { return false; }",
+            "        __builtin_memset(blob, 0, static_cast<size_t>(n));",
+            "        regions[i].pHostPointer = blob;",
+            "    }",
+            "    out->pRegions = regions;",
+            "    return true;",
+        ],
+    ),
+    "VkIndirectCommandsLayoutTokenEXT": (
+        [
+            "    buf.write_pod(v.sType);",
+            "    serialize_pnext_chain(buf, handles, v.pNext);",
+            "    buf.write_pod(v.type);",
+            "    buf.write_pod(v.offset);",
+            "    switch (v.type) {",
+            "    case VK_INDIRECT_COMMANDS_TOKEN_TYPE_PUSH_CONSTANT_EXT:",
+            "    case VK_INDIRECT_COMMANDS_TOKEN_TYPE_SEQUENCE_INDEX_EXT:",
+            "        buf.write_pod(*v.data.pPushConstant);",
+            "        break;",
+            "    case VK_INDIRECT_COMMANDS_TOKEN_TYPE_VERTEX_BUFFER_EXT:",
+            "        buf.write_pod(*v.data.pVertexBuffer);",
+            "        break;",
+            "    case VK_INDIRECT_COMMANDS_TOKEN_TYPE_INDEX_BUFFER_EXT:",
+            "        buf.write_pod(*v.data.pIndexBuffer);",
+            "        break;",
+            "    case VK_INDIRECT_COMMANDS_TOKEN_TYPE_EXECUTION_SET_EXT:",
+            "        buf.write_pod(*v.data.pExecutionSet);",
+            "        break;",
+            "    default:",
+            "        break;",
+            "    }",
+        ],
+        [
+            "    if (!r.read_pod(out->sType)) { return false; }",
+            "    if (!deserialize_pnext_chain(r, handles, "
+            "reinterpret_cast<VkBaseOutStructure*>(out), arena)) { return false; }",
+            "    if (!r.read_pod(out->type)) { return false; }",
+            "    if (!r.read_pod(out->offset)) { return false; }",
+            "    out->data = VkIndirectCommandsTokenDataEXT{};",
+            "    switch (out->type) {",
+            "    case VK_INDIRECT_COMMANDS_TOKEN_TYPE_PUSH_CONSTANT_EXT:",
+            "    case VK_INDIRECT_COMMANDS_TOKEN_TYPE_SEQUENCE_INDEX_EXT: {",
+            "        auto* token = arena.allocate<VkIndirectCommandsPushConstantTokenEXT>(1);",
+            "        if (token == nullptr || !r.read_pod(*token)) { return false; }",
+            "        out->data.pPushConstant = token;",
+            "        return true;",
+            "    }",
+            "    case VK_INDIRECT_COMMANDS_TOKEN_TYPE_VERTEX_BUFFER_EXT: {",
+            "        auto* token = arena.allocate<VkIndirectCommandsVertexBufferTokenEXT>(1);",
+            "        if (token == nullptr || !r.read_pod(*token)) { return false; }",
+            "        out->data.pVertexBuffer = token;",
+            "        return true;",
+            "    }",
+            "    case VK_INDIRECT_COMMANDS_TOKEN_TYPE_INDEX_BUFFER_EXT: {",
+            "        auto* token = arena.allocate<VkIndirectCommandsIndexBufferTokenEXT>(1);",
+            "        if (token == nullptr || !r.read_pod(*token)) { return false; }",
+            "        out->data.pIndexBuffer = token;",
+            "        return true;",
+            "    }",
+            "    case VK_INDIRECT_COMMANDS_TOKEN_TYPE_EXECUTION_SET_EXT: {",
+            "        auto* token = arena.allocate<VkIndirectCommandsExecutionSetTokenEXT>(1);",
+            "        if (token == nullptr || !r.read_pod(*token)) { return false; }",
+            "        out->data.pExecutionSet = token;",
+            "        return true;",
+            "    }",
+            "    default:",
+            "        return true;",
+            "    }",
+        ],
+    ),
+    "VkIndirectExecutionSetCreateInfoEXT": (
+        [
+            "    buf.write_pod(v.sType);",
+            "    serialize_pnext_chain(buf, handles, v.pNext);",
+            "    buf.write_pod(v.type);",
+            "    switch (v.type) {",
+            "    case VK_INDIRECT_EXECUTION_SET_INFO_TYPE_PIPELINES_EXT:",
+            "        serialize_VkIndirectExecutionSetPipelineInfoEXT(buf, handles, *v.info.pPipelineInfo);",
+            "        break;",
+            "    case VK_INDIRECT_EXECUTION_SET_INFO_TYPE_SHADER_OBJECTS_EXT:",
+            "        serialize_VkIndirectExecutionSetShaderInfoEXT(buf, handles, *v.info.pShaderInfo);",
+            "        break;",
+            "    default:",
+            "        break;",
+            "    }",
+        ],
+        [
+            "    if (!r.read_pod(out->sType)) { return false; }",
+            "    if (!deserialize_pnext_chain(r, handles, "
+            "reinterpret_cast<VkBaseOutStructure*>(out), arena)) { return false; }",
+            "    if (!r.read_pod(out->type)) { return false; }",
+            "    out->info = VkIndirectExecutionSetInfoEXT{};",
+            "    switch (out->type) {",
+            "    case VK_INDIRECT_EXECUTION_SET_INFO_TYPE_PIPELINES_EXT: {",
+            "        auto* info = arena.allocate<VkIndirectExecutionSetPipelineInfoEXT>(1);",
+            "        if (info == nullptr || !deserialize_VkIndirectExecutionSetPipelineInfoEXT(r, handles, info, arena)) { return false; }",
+            "        out->info.pPipelineInfo = info;",
+            "        return true;",
+            "    }",
+            "    case VK_INDIRECT_EXECUTION_SET_INFO_TYPE_SHADER_OBJECTS_EXT: {",
+            "        auto* info = arena.allocate<VkIndirectExecutionSetShaderInfoEXT>(1);",
+            "        if (info == nullptr || !deserialize_VkIndirectExecutionSetShaderInfoEXT(r, handles, info, arena)) { return false; }",
+            "        out->info.pShaderInfo = info;",
+            "        return true;",
+            "    }",
+            "    default:",
+            "        return true;",
+            "    }",
         ],
     ),
     "VkDescriptorGetInfoEXT": (
@@ -858,6 +1110,17 @@ BESPOKE_STRUCT_BODIES: dict[str, tuple[list[str], list[str]]] = {
 }
 
 
+DISCRIMINATED_UNIONS = frozenset({"VkAccelerationStructureGeometryDataKHR", "VkDescriptorDataEXT",
+                                  "VkIndirectCommandsTokenDataEXT", "VkIndirectExecutionSetInfoEXT"})
+
+
+def _chain_bearing_union(reg: Registry, s: Struct) -> bool:
+    return s.is_union and any(
+        m.type.base in reg.structs and reg.structs[m.type.base].members
+        and reg.structs[m.type.base].members[0].name == "sType"
+        for m in s.members)
+
+
 def _is_address_union(s: Struct) -> bool:
    return s.is_union and {m.name for m in s.members} == {"deviceAddress", "hostAddress"}
 
@@ -893,6 +1156,11 @@ def _emit_struct_helpers(reg: Registry, s: Struct, outputs: set[str]) -> list[st
             "}",
             "",
         ]
+    if s.name in DISCRIMINATED_UNIONS:
+        return []
+    if _chain_bearing_union(reg, s):
+        raise SystemExit(f"union {s.name} holds structures with sType and pNext: "
+                         "it needs a discriminated serializer (DISCRIMINATED_UNIONS)")
     if _is_address_union(s):
         return [
             _serializer_head(reg, s.name),
@@ -982,6 +1250,13 @@ def _translation_declarations(reg: Registry) -> list[str]:
         "    // with, and nothing in the call carries it: each side answers from its",
         "    // own table of templates, 0 for one it never made (feature 047).",
         "    [[nodiscard]] virtual uint64_t template_bytes(VkDescriptorUpdateTemplate made) const = 0;",
+        "    [[nodiscard]] virtual bool image_copy_bytes(VkImage image, const VkImageSubresourceLayers& layers,",
+        "                                                VkExtent3D extent, uint32_t row_length,",
+        "                                                uint32_t image_height, uint64_t& bytes) const {",
+        "        (void)image; (void)layers; (void)extent; (void)row_length; (void)image_height;",
+        "        bytes = 0;",
+        "        return false;",
+        "    }",
         "",
         "protected:",
         "    HandleTranslation() = default;",
@@ -1162,6 +1437,8 @@ def emit(reg: Registry, out_dir: Path) -> None:
             "::av::WireArena&);"
         )
         for n in reg.struct_order:
+            if n in DISCRIMINATED_UNIONS:
+                continue
             carried = n in carriers(reg)
             header.append(
                 f"inline void serialize_{n}(::av::WireWriter&, "

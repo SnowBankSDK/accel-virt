@@ -67,6 +67,13 @@ void ContextBinding::unbind()
     bound_ = false;
 }
 
+bool ContextBinding::pins(uint32_t resource) const
+{
+    AV_SCOPE("ContextBinding::pins");
+    return bound_ && resource != 0u &&
+           (resource == ring_resource_ || resource == fence_resource_ || resource == reply_resource_);
+}
+
 bool ContextBinding::bound() const
 {
     AV_SCOPE("ContextBinding::bound");

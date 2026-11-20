@@ -1,6 +1,7 @@
 #include "core/support/object_storage.hpp"
 #include "executor/imported_blob.hpp"
 #include "executor/d3d/d3d12_session.hpp"
+#include "executor/d3d/leased_objects.hpp"
 #include "executor/d3d/d3d_object_table.hpp"
 #include "executor/eventfd_wake.hpp"
 #include "executor/import_table.hpp"
@@ -46,6 +47,7 @@ av::ObjectStorage<D3d12Session> session_storage;
 av::HostHeap                    session_heap;
 av::WatchedBlocks               blocks(session_heap);
 av::D3dObjectTable              objects(blocks);
+av::LeasedObjects               leased(blocks);
 av::WakeSignal tenant;
 av::EventfdWake fence_wake;
 av::RecordingLog session_sink;
@@ -58,7 +60,7 @@ public:
     {
         CHECK_STATUS(guest_.bind(0u, guest, sizeof guest), av::Status::ok);
         objects.release_all();
-        CHECK_STATUS(session_storage.construct(guest_, objects, tenant, fence_wake, blocks, session_lines),
+        CHECK_STATUS(session_storage.construct(guest_, objects, leased, tenant, fence_wake, blocks, session_lines),
                      av::Status::ok);
         session_storage.object().initialize(imports_, nullptr);
     }
@@ -115,6 +117,13 @@ TEST(d3d12_session_on_QueryHeapSlices12, a_session_with_no_device_offers_no_heap
   CHECK_EQ(supported, static_cast<std::uint32_t>(av::HeapSliceSupport::none));
   CHECK(fresh.session().invariants_hold()); }
 
+TEST(d3d12_session_on_QueryHeapPlacement12, a_session_with_no_device_places_no_heap)
+{ FreshSession fresh;
+  std::uint32_t placed = 7u;
+  CHECK(fresh.session().on_QueryHeapPlacement12(placed));
+  CHECK_EQ(placed, 0u);
+  CHECK(fresh.session().invariants_hold()); }
+
 TEST(d3d12_session_on_Finish12, answers_the_removed_reason_and_nothing_else_without_a_device)
 { FreshSession fresh;
   std::uint32_t hresult = 5u;
@@ -164,15 +173,16 @@ TEST(d3d12_session, makes_nothing_without_a_device)
   buffer.sample_count = 1u;
   const ClearValue none = {};
   std::uint32_t answered = 7u;
-  CHECK(!session.on_CreateHeap12(1u, upload, 0u, 4096u, 0u, 0u, 0u, answered));
-  CHECK(!session.on_CreateHeap12(1u, device_local, 0u, 4096u, 0u, 0u, 0u, answered));
+  std::uint64_t claimed = 0u;
+  CHECK(!session.on_CreateHeap12(1u, upload, 0u, 4096u, 0u, 0u, 0u, answered, claimed));
+  CHECK(!session.on_CreateHeap12(1u, device_local, 0u, 4096u, 0u, 0u, 0u, answered, claimed));
   alignas(4096) static std::uint8_t heap_memory[4096];
   av::LocalImport heap(heap_memory, sizeof heap_memory, 2u);
   constexpr std::uint64_t heap_handle = 0x7001u;
   av::ImportedBlob *taken = nullptr;
   CHECK_STATUS(fresh.imports().take(2u, heap.memory(), taken), av::Status::ok);
   CHECK_STATUS(fresh.imports().name(*taken, heap_handle), av::Status::ok);
-  CHECK(!session.on_CreateHeap12(1u, upload, 0u, 4096u, 0u, heap_handle, 0u, answered));
+  CHECK(!session.on_CreateHeap12(1u, upload, 0u, 4096u, 0u, heap_handle, 0u, answered, claimed));
   CHECK(objects.find(1u, av::D3dObjectKind::heap12) == nullptr);
   CHECK(fresh.imports().invariants_hold());
   CHECK(fresh.imports().forget(2u) == &heap.memory());
@@ -192,8 +202,8 @@ TEST(d3d12_session, makes_nothing_without_a_device)
   CHECK(!session.on_CreateQueryHeap12(10u, 0u, 4u));
   const GraphicsState state = {};
   const std::uint8_t *const nothing = nullptr;
-  CHECK(!session.on_CreateGraphicsPipeline12(11u, 5u, state, 0u, nullptr, 0u, nullptr, nothing, 0u, nothing, 0u,
-                                            nothing, 0u, nothing, 0u, nothing, 0u));
+  CHECK(!session.on_CreateGraphicsPipeline12(11u, 5u, state, 0u, nullptr, 0u, nullptr, 0u, nullptr, 0u, nullptr, 0xFFFFFFFFu, nothing, 0u, nothing, 0u,
+                                            nothing, 0u, nothing, 0u, nothing, 0u, nothing, 0u, nothing, 0u));
   CHECK(!session.on_CreateComputePipeline12(12u, 5u, nothing, 0u));
   const IndirectArgument draw = {};
   CHECK(!session.on_CreateCommandSignature12(13u, 0u, 16u, 1u, &draw));
@@ -221,6 +231,12 @@ TEST(d3d12_session, every_queue_and_list_command_naming_nothing_is_refused)
   CHECK(!session.on_CloseCommandList12(nobody));
   CHECK(!session.on_ExecuteCommandLists12(nobody, 1u, lists));
   CHECK(!session.on_ShareResource12(nobody, 0x5eedu));
+  CHECK(session.on_ShareObject12(nobody, 0x5eedu));
+  CHECK(!session.on_ShareObject12(nobody, 0u));
+  { std::uint32_t kind = 9u, dimension = 0u, height = 0u, depth = 0u, mips = 0u, format = 0u, samples = 0u, flags = 0u;
+    std::uint64_t width = 0u, size = 0u;
+    CHECK(session.on_OpenObject12(nobody, 0x5eedu, 0u, kind, dimension, height, depth, mips, format, samples, flags, width, size));
+    CHECK_EQ(kind, 0u); }
   CHECK(!session.on_PresentResource12(nobody, nobody, 1u));
   const TileRegion region = {TileCoordinate{}, TileSize{1u, 0u, 0u, 0u, 0u}};
   const TileRange range = {0u, 0u, 1u};
@@ -258,11 +274,19 @@ TEST(d3d12_session, every_recording_command_on_a_list_it_never_made_is_refused)
   CHECK(!session.on_SetRenderTargets12(list, 1u, &ref, 0u, ref));
   CHECK(!session.on_SetBlendFactor12(list, color));
   CHECK(!session.on_SetStencilRef12(list, 1u));
+  CHECK(!session.on_SetFrontAndBackStencilRef12(list, 1u, 2u));
   CHECK(!session.on_ClearRenderTargetView12(list, ref, color, 0u, nullptr));
   CHECK(!session.on_ClearDepthStencilView12(list, ref, 1u, 1.0f, 0u, 0u, nullptr));
   CHECK(!session.on_DrawInstanced12(list, 3u, 1u, 0u, 0u));
   CHECK(!session.on_DrawIndexedInstanced12(list, 3u, 1u, 0u, 0, 0u));
   CHECK(!session.on_Dispatch12(list, 1u, 1u, 1u));
+  CHECK(!session.on_DispatchMesh12(list, 1u, 1u, 1u));
+  CHECK(!session.on_DispatchMesh12(list, 65536u, 1u, 1u));
+  CHECK(!session.on_DispatchMesh12(list, 65535u, 65535u, 2u));
+  const av::d3d12proto::LayoutBarrier global = {};
+  CHECK(!session.on_Barrier12(list, 1u, &global));
+  CHECK(!session.on_SetShadingRate12(list, 0u, 0u, 0u));
+  CHECK(!session.on_SetShadingRateImage12(list, 0u));
   CHECK(!session.on_CopyBufferRegion12(list, 1u, 0u, 2u, 0u, 16u));
   CHECK(!session.on_CopyTextureRegion12(list, location, 0u, 0u, 0u, location, 0u, box));
   CHECK(!session.on_CopyResource12(list, 1u, 2u));

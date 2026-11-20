@@ -65,6 +65,9 @@ fields = ["u32 filter", "u32 address_u", "u32 address_v", "u32 address_w", "f32 
 fields = ["u32 set", "u32 system_value", "u32 register_index", "u32 mask", "u32 component_type",
           "u32 min_precision", "u32 stream", "u32 reserved"]
 
+[structs.StreamOutDeclaration]
+fields = ["u32 stream", "u32 output_slot", "u32 register_index", "u32 mask"]
+
 [structs.InputElement]
 fields = ["u32 input_slot", "u32 aligned_byte_offset", "u32 format", "u32 classification", "u32 step_rate",
           "u32 input_register"]
@@ -76,21 +79,31 @@ fields = ["u32 blend_enable", "u32 logic_op_enable", "u32 src_blend", "u32 dest_
 
 [structs.RasterizerDesc]
 fields = ["u32 fill_mode", "u32 cull_mode", "u32 front_counter_clockwise", "i32 depth_bias",
-          "f32 depth_bias_clamp", "f32 slope_scaled_depth_bias", "u32 depth_clip", "u32 multisample",
-          "u32 antialiased_line", "u32 forced_sample_count", "u32 conservative", "u32 reserved"]
+          "f32 depth_bias_clamp", "f32 slope_scaled_depth_bias", "u32 depth_clip", "u32 line_mode",
+          "u32 forced_sample_count", "u32 conservative"]
 
 [structs.StencilOp]
 fields = ["u32 fail", "u32 depth_fail", "u32 pass", "u32 func"]
 
 [structs.DepthStencilDesc]
 fields = ["u32 depth_enable", "u32 depth_write_mask", "u32 depth_func", "u32 stencil_enable",
-          "u32 stencil_read_mask", "u32 stencil_write_mask", "StencilOp front", "StencilOp back"]
+          "u32 stencil_read_mask", "u32 stencil_write_mask", "StencilOp front", "StencilOp back",
+          "u32 depth_bounds_enable", "u32 back_read_mask", "u32 back_write_mask", "u32 reserved"]
+
+[structs.ViewInstanceLocation]
+fields = ["u32 viewport_index", "u32 render_target_index"]
 
 [structs.GraphicsState]
 fields = ["u32 alpha_to_coverage", "u32 independent_blend", "RenderTargetBlend targets[8]",
           "u32 sample_mask", "RasterizerDesc rasterizer", "DepthStencilDesc depth_stencil",
           "u32 strip_cut", "u32 topology_type", "u32 render_targets", "u32 rtv_formats[8]",
-          "u32 dsv_format", "u32 sample_count", "u32 sample_quality", "u32 flags"]
+          "u32 dsv_format", "u32 sample_count", "u32 sample_quality", "u32 flags",
+          "u32 view_instance_count", "u32 view_instancing_flags", "ViewInstanceLocation view_instances[4]"]
+
+[structs.LayoutBarrier]
+fields = ["u32 type", "u32 flags", "u32 sync_before", "u32 sync_after", "u32 access_before", "u32 access_after",
+          "u32 layout_before", "u32 layout_after", "u32 resource", "u32 first_mip", "u32 mip_count", "u32 first_slice",
+          "u32 slice_count", "u32 first_plane", "u32 plane_count", "u32 reserved"]
 
 [structs.Barrier]
 fields = ["u32 type", "u32 flags", "u32 resource", "u32 subresource", "u32 before", "u32 after",
@@ -118,13 +131,44 @@ fields = ["TileCoordinate start", "TileSize size"]
 [structs.TileRange]
 fields = ["u32 flags", "u32 heap_offset", "u32 tiles"]
 
+[structs.StateSubobject]
+fields = ["u32 type", "u32 object", "u32 first", "u32 count", "u32 a", "u32 b", "u32 c", "u32 d"]
+
+[structs.StateExport]
+fields = ["u32 name", "u32 rename", "u32 flags", "u32 reserved"]
+
+[structs.StateAssociation]
+fields = ["u32 subobject", "u32 name"]
+
+[structs.RaytracingGeometry]
+fields = ["u32 type", "u32 flags", "u32 index_format", "u32 vertex_format", "u32 index_count", "u32 vertex_count",
+          "u64 transform", "u64 index_buffer", "u64 start", "u64 stride", "u64 count"]
+
+[structs.RaytracingPostbuild]
+fields = ["u64 destination", "u32 type", "u32 reserved"]
+
+[structs.RayTable]
+fields = ["u64 start", "u64 size", "u64 stride"]
+
+[structs.ShaderIdentifier]
+fields = ["u32 value[8]"]
+
 [structs.Caps12]
-fields = ["u32 feature_level", "u32 shader_model", "u32 resource_binding_tier", "u32 tiled_resources_tier",
+fields = ["u32 layout", "u32 feature_level", "u32 shader_model", "u32 resource_binding_tier", "u32 tiled_resources_tier",
           "u32 resource_heap_tier", "u32 conservative_rasterization_tier", "u32 typed_uav_load_additional_formats",
           "u32 rovs", "u32 max_gpu_va_bits_per_resource", "u32 max_gpu_va_bits_per_process",
           "u32 descriptor_sizes[4]",
           "u32 double_ops", "u32 int64_ops", "u32 wave_ops", "u32 wave_lane_min", "u32 wave_lane_max",
-          "u32 total_lanes", "u32 output_merger_logic_op"]
+          "u32 total_lanes", "u32 output_merger_logic_op",
+          "u32 min_precision", "u32 ps_stencil_ref", "u32 native_16bit_ops", "u32 atomic_int64_typed",
+          "u32 atomic_int64_group_shared", "u32 barycentrics", "u32 vp_rt_array_without_gs",
+          "u32 advanced_texture_ops", "u32 writeable_msaa_textures", "u32 sample_cmp_gradient_bias",
+          "u32 extended_command_info",
+          "u32 depth_bounds", "u32 view_instancing_tier", "u32 mesh_shader_tier",
+          "u32 vrs_tier", "u32 vrs_additional_rates", "u32 vrs_tile_size", "u32 vrs_per_primitive_viewport",
+          "u32 vrs_sum_combiner", "u32 enhanced_barriers", "u32 relaxed_format_casting", "u32 write_immediate_queues",
+          "u32 copy_queue_timestamps", "u32 atomic_int64_heap",
+          "u32 programmable_sample_positions_tier", "u32 render_pass_tier", "u32 raytracing_tier"]
 
 [[command]]
 name = "OpenDevice12"
@@ -168,6 +212,16 @@ params = []
 reply = ["u32 supported"]
 
 [[command]]
+name = "QueryHeapPlacement12"
+id = 0x1006
+doc = """Whether the host makes a CPU-visible heap's memory itself: 1 when its GPU driver refuses to import the host
+memory the guest opened, so CreateHeap12 of an upload or readback heap with no `memory` makes a heap of native memory
+and answers the handle `placed` that a placed host memory request of the guest takes the mapping by, 0 when the guest
+opens the memory first and CreateHeap12 names it."""
+params = []
+reply = ["u32 placed"]
+
+[[command]]
 name = "CreateHeap12"
 id = 0x1100
 doc = """A heap of `size` bytes. A heap of a CPU-visible type (upload, readback, or custom with a CPU page)
@@ -176,10 +230,12 @@ IMPORT_BLOB answered as `memory`; the window lies inside that memory, and `offse
 It can hold only buffers (docs/host-memory.md). The host keeps the memory's imported heap until the guest has
 released the memory, every heap and resource in it is destroyed and the GPU is done with it. Any other heap is the
 host GPU's own and memory and offset are ignored. The host keeps only the heap flags that name how
-the heap may be used: a guest never reads memory it did not write. hresult is
+the heap may be used: a guest never reads memory it did not write. A heap of a CPU-visible type with `memory` 0,
+asked of a host that answered QueryHeapPlacement12 with 1, is made of native host memory instead and `placed` names
+it, the handle of the placed host memory request that maps it; `placed` is 0 for every other heap. hresult is
 S_OK, or the host's own answer when it made no heap - E_OUTOFMEMORY when it has no memory for one."""
 params = ["u32 heap", "HeapProperties properties", "u32 flags", "u64 size", "u64 alignment", "u64 memory", "u64 offset"]
-reply = ["u32 hresult"]
+reply = ["u32 hresult", "u64 placed"]
 
 [[command]]
 name = "CreateCommittedResource12"
@@ -214,6 +270,34 @@ doc = """`resource` - a committed 2D texture made with D3D12_HEAP_FLAG_SHARED, a
 the host GPU's Direct3D 11 device under `key`, the identity the miniport minted over its kernel allocation,
 which the compositor opens it by. The same memory on both devices: nothing is copied."""
 params = ["u32 resource", "u64 key"]
+
+[[command]]
+name = "ShareObject12"
+id = 0x1109
+doc = """`object`, a heap or a committed resource that is not a swap chain texture, is shown to the Direct3D 12
+sessions of the host adapter under `key`, the identity the miniport minted over its kernel allocation, which
+another process opens it by. The same host object in every session: nothing is copied."""
+params = ["u32 object", "u64 key"]
+
+[[command]]
+name = "OpenObject12"
+id = 0x110a
+doc = """The heap or resource another session shared under `key` becomes `object` in this one. `kind` is 1 for a
+resource, 2 for a heap and 0 when no session shared `key`; a resource answers its description and is placed at
+`address` in the guest's space, a heap its size."""
+params = ["u32 object", "u64 key", "u64 address"]
+reply = ["u32 kind", "u32 dimension", "u32 height", "u32 depth_or_array", "u32 mip_levels", "u32 format",
+         "u32 sample_count", "u32 flags", "u64 width", "u64 size"]
+
+[[command]]
+name = "AdoptLentImage12"
+id = 0x110b
+doc = """`resource`, a 2D texture of one mip, one layer and one sample laid out in rows of `row_pitch` bytes, is made over
+`memory`, the pages the guest lent across adapters (a lent allocation named the way CreateResource names one): the
+host GPU's image over the same pages, which the other adapter's device reads and writes as well. Nothing is
+copied. `hresult` is 0, or E_OUTOFMEMORY when the host's device takes no image over those pages."""
+params = ["u32 resource", "u64 memory", "ResourceDesc desc", "u32 row_pitch"]
+reply = ["u32 hresult"]
 
 [[command]]
 name = "CreatePlacedResource12"
@@ -300,8 +384,7 @@ id = 0x1303
 doc = """What ExecuteIndirect12 reads each command from: byte_stride bytes a command, laid out as the
 arguments say. root is the root signature the arguments that set root parameters name, 0 for none. An argument
 that carries a GPU address - a vertex or index buffer view, a constant buffer, shader resource or unordered access
-view buffer - is refused: the GPU would read the guest's address from the argument buffer, which the host cannot
-translate."""
+view buffer - holds the guest's address, which the host translates on the GPU before ExecuteIndirect12 runs."""
 params = ["u32 signature", "u32 root", "u32 byte_stride", "u32 argument_count",
           "IndirectArgument arguments[argument_count] max 16"]
 
@@ -310,11 +393,15 @@ name = "CreateGraphicsPipeline12"
 id = 0x1301
 doc = """A graphics pipeline state. Each stage's code is what the DDI gave the driver - a DXBC or DXIL
 container, a DXIL program, or a DXBC token stream - and empty for a stage the pipeline does not have; the
-signatures are every stage's, as registers. The input layout names vertex shader input registers."""
+signatures are every stage's, as registers. The input layout names vertex shader input registers. The
+geometry shader's stream output declaration, if it has one, is stream_out with its buffer strides and the stream
+that is rasterized (0xFFFFFFFF for none)."""
 params = ["u32 pipeline", "u32 root", "GraphicsState state", "u32 element_count",
           "InputElement elements[element_count] max 32", "u32 signature_count",
-          "SignatureEntry signatures[signature_count] max 1024", "bytes vs", "bytes hs", "bytes ds", "bytes gs",
-          "bytes ps"]
+          "SignatureEntry signatures[signature_count] max 1024", "u32 stream_out_count",
+          "StreamOutDeclaration stream_out[stream_out_count] max 128", "u32 stride_count",
+          "u32 strides[stride_count] max 4", "u32 rasterized_stream", "bytes vs", "bytes hs", "bytes ds", "bytes gs",
+          "bytes ps", "bytes ms", "bytes as"]
 
 [[command]]
 name = "CreateComputePipeline12"
@@ -495,6 +582,32 @@ id = 0x1514
 params = ["u32 list", "u32 x", "u32 y", "u32 z"]
 
 [[command]]
+name = "DispatchMesh12"
+id = 0x152c
+doc = "Runs the mesh pipeline set on `list` over x by y by z groups; the host refuses counts past its dispatch limit."
+params = ["u32 list", "u32 x", "u32 y", "u32 z"]
+
+[[command]]
+name = "SetShadingRate12"
+id = 0x152d
+doc = """The base shading rate (D3D12_SHADING_RATE) and the two combiners (D3D12_SHADING_RATE_COMBINER) that merge it
+with the pipeline's per-primitive rate and then the shading rate image's for the draws after."""
+params = ["u32 list", "u32 base_rate", "u32 combiner0", "u32 combiner1"]
+
+[[command]]
+name = "SetShadingRateImage12"
+id = 0x152e
+doc = "The R8_UINT texture whose texels give the rate of each tile for the draws after; 0 unbinds it."
+params = ["u32 list", "u32 image"]
+
+[[command]]
+name = "Barrier12"
+id = 0x152f
+doc = """Enhanced barriers: type 0 global, 1 texture (the layouts and subresource range of `resource`, flag 1 discards),
+2 buffer. Texture barriers apply only to a resource that no legacy transition has named, and the other way round."""
+params = ["u32 list", "u32 count", "LayoutBarrier barriers[count] max 128"]
+
+[[command]]
 name = "CopyBufferRegion12"
 id = 0x1515
 params = ["u32 list", "u32 destination", "u64 destination_offset", "u32 source", "u64 source_offset",
@@ -605,6 +718,12 @@ doc = "The depth range a pixel's stored depth must lie in for the draws after; b
 params = ["u32 list", "f32 minimum", "f32 maximum"]
 
 [[command]]
+name = "SetFrontAndBackStencilRef12"
+id = 0x1530
+doc = "The stencil reference of front-facing and of back-facing triangles for the draws after."
+params = ["u32 list", "u32 front", "u32 back"]
+
+[[command]]
 name = "SetPredication12"
 id = 0x1527
 doc = """Draws and dispatches after are skipped by the 64-bit value at `offset` in `buffer`: zero skips when op is
@@ -638,3 +757,78 @@ id = 0x152b
 doc = """Plays the closed bundle `bundle` inside the recording `list`; the list keeps alive what the bundle recorded.
 A bundle cannot play a bundle."""
 params = ["u32 list", "u32 bundle"]
+
+[[command]]
+name = "CreateStateObject12"
+id = 0x1600
+doc = """A raytracing state object. type is D3D12_STATE_OBJECT_TYPE; parent is the state object it grows from, 0 for
+none. Each subobject names what it holds: a root signature or collection by id, a library by its `a` byte offset and
+`b` byte size in `libraries` and its exports by the range `first` and `count` of `exports`, a hit group by the byte
+offsets in `names` of its export and its shaders (0xFFFFFFFF for none). names is UTF-16, each string ending in a zero
+unit; an association ties a subobject to the export it names. hresult is S_OK, or the host's own answer when it
+made no state object."""
+params = ["u32 object", "u32 parent", "u32 type", "u32 subobject_count", "StateSubobject subobjects[subobject_count] max 1024",
+          "u32 export_count", "StateExport exports[export_count] max 16384", "u32 association_count",
+          "StateAssociation associations[association_count] max 16384", "bytes names", "bytes libraries"]
+reply = ["u32 hresult"]
+
+[[command]]
+name = "StateObjectIdentifier12"
+id = 0x1601
+doc = "The 32 bytes the host's GetShaderIdentifier answers for the export `name` (UTF-16); found is 0 when there is none."
+params = ["u32 object", "bytes name"]
+reply = ["u32 found", "ShaderIdentifier identifier"]
+
+[[command]]
+name = "StateObjectStackSize12"
+id = 0x1602
+doc = "The host's GetShaderStackSize of the export `name` (UTF-16), or GetPipelineStackSize when name is empty; 0xFFFFFFFF when it has none."
+params = ["u32 object", "bytes name"]
+reply = ["u32 size"]
+
+[[command]]
+name = "SetPipelineStackSize12"
+id = 0x1603
+params = ["u32 object", "u32 bytes"]
+
+[[command]]
+name = "AccelerationStructurePrebuild12"
+id = 0x1604
+doc = """The host's sizes for an acceleration structure of this shape. Addresses are not read: only whether each is set
+matters."""
+params = ["u32 type", "u32 flags", "u32 num_descs", "u32 layout", "u32 geometry_count",
+          "RaytracingGeometry geometries[geometry_count] max 8192"]
+reply = ["u32 hresult", "u64 result_bytes", "u64 scratch_bytes", "u64 update_scratch_bytes"]
+
+[[command]]
+name = "BuildAccelerationStructure12"
+id = 0x1610
+doc = """Builds an acceleration structure of `destination` from geometries or from `instances`, with `scratch`. Every
+address is a guest address and must lie in one buffer; the host refuses an unmapped one and one whose room is
+smaller than the sizes its own prebuild info gives. postbuilds are written once the build is done."""
+params = ["u32 list", "u32 type", "u32 flags", "u32 num_descs", "u32 layout", "u64 destination", "u64 source",
+          "u64 scratch", "u64 instances", "u32 geometry_count", "RaytracingGeometry geometries[geometry_count] max 8192",
+          "u32 postbuild_count", "RaytracingPostbuild postbuilds[postbuild_count] max 8"]
+
+[[command]]
+name = "EmitAccelerationStructurePostbuild12"
+id = 0x1611
+doc = "Writes the postbuild information `type` of each of `sources` in turn at `destination`."
+params = ["u32 list", "u32 type", "u64 destination", "u32 source_count", "u64 sources[source_count] max 4096"]
+
+[[command]]
+name = "CopyAccelerationStructure12"
+id = 0x1612
+params = ["u32 list", "u64 destination", "u64 source", "u32 mode"]
+
+[[command]]
+name = "SetStateObject12"
+id = 0x1613
+params = ["u32 list", "u32 object"]
+
+[[command]]
+name = "DispatchRays12"
+id = 0x1614
+doc = "Traces width by height by depth rays with the state object set on `list`; the tables are guest addresses."
+params = ["u32 list", "RayTable raygen", "RayTable miss", "RayTable hit", "RayTable callable", "u32 width",
+          "u32 height", "u32 depth"]

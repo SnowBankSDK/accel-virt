@@ -145,6 +145,36 @@ def _emit_case(reg: Registry, cmd: Command) -> list[str]:  # noqa: PLR0915
         if classify.is_count_array_pair(cmd.params, i):
             count = cmd.params[i]
             arr = cmd.params[i + 1]
+            if classify.is_size_blob(count, arr):
+                decl_lines.append("    uint8_t array_present = 0;")
+                decl_lines.append(f"    size_t {count.name}_local = 0;")
+                decl_lines.append(f"    size_t {count.name}_capacity = 0;")
+                decl_lines.append(f"    char* {arr.name}_storage = nullptr;")
+                decode_lines.append("    if (!r.read_pod(array_present)) return false;")
+                decode_lines.append("    if (array_present) {")
+                decode_lines.append("        uint64_t av_wide = 0;")
+                decode_lines.append("        if (!r.read_pod(av_wide)) return false;")
+                decode_lines.append("        constexpr uint64_t av_most_blob = uint64_t{64} << 20;")
+                decode_lines.append("        if (av_wide > av_most_blob) av_wide = av_most_blob;")
+                decode_lines.append(f"        {count.name}_local = static_cast<size_t>(av_wide);")
+                decode_lines.append(f"        {count.name}_capacity = {count.name}_local;")
+                decode_lines.append("        struct alignas(16) av_block16 { unsigned char bytes[16]; };")
+                decode_lines.append(f"        auto* av_blocks = arena.allocate<av_block16>(({count.name}_local + 15u) / 16u + 1u);")
+                decode_lines.append("        if (av_blocks == nullptr) return false;")
+                decode_lines.append(f"        {arr.name}_storage = reinterpret_cast<char*>(av_blocks);")
+                decode_lines.append("    }")
+                call_args.append(f"&{count.name}_local")
+                call_args.append(f"array_present ? static_cast<void*>({arr.name}_storage) : nullptr")
+                sent = f"{count.name}_sent"
+                listed = f"{count.name}_local" if failed is None else f"{failed} ? 0u : {count.name}_local"
+                out_after_call.append(f"    uint64_t {sent} = {listed};")
+                out_after_call.append(f"    if (array_present && {sent} > {count.name}_capacity) {{")
+                out_after_call.append(f"        {sent} = {count.name}_capacity;")
+                out_after_call.append("    }")
+                out_after_call.append(f"    reply.write_pod({sent});")
+                out_after_call.append(f"    if (array_present && {sent} != 0) {{ reply.write({arr.name}_storage, static_cast<size_t>({sent})); }}")
+                i += 2
+                continue
             decl_lines.append("    uint8_t array_present = 0;")
             decl_lines.append(f"    uint32_t {count.name}_local = 0;")
             decl_lines.extend(_storage_decls(f"{arr.name}_storage", arr.type.base))
@@ -214,6 +244,17 @@ def _emit_case(reg: Registry, cmd: Command) -> list[str]:  # noqa: PLR0915
             else:
                 decode_lines.append(f"    if (!r.read_pod({p.name})) return false;")
             call_args.append(p.name)
+        elif kind == "in_stride":
+            array = classify.stride_array(cmd.params, p)
+            decl_lines.append(f"    {p.type.cpp()} {p.name} = sizeof({array.type.base});")
+            call_args.append(p.name)
+        elif kind == "in_pod_ptr":
+            decl_lines.append(f"    {p.type.base} {p.name}_value{{}};")
+            decl_lines.append(f"    uint8_t {p.name}_present = 0;")
+            decode_lines.append(f"    if (!r.read_pod({p.name}_present)) return false;")
+            decode_lines.append(f"    if ({p.name}_present > 1) return false;")
+            decode_lines.append(f"    if ({p.name}_present != 0 && !r.read_pod({p.name}_value)) return false;")
+            call_args.append(f"{p.name}_present != 0 ? &{p.name}_value : nullptr")
         elif kind == "in_string":
             decl_lines.append(f"    const char* {p.name} = nullptr;")
             decode_lines.append("    {")
@@ -236,6 +277,18 @@ def _emit_case(reg: Registry, cmd: Command) -> list[str]:  # noqa: PLR0915
                 f"    if (!{serialize.deserialize_call(reg, p.type.base, 'r', f'&{p.name}_local', 'arena', 's')}) return false;"
             )
             call_args.append(f"&{p.name}_local")
+            if cmd.name.startswith("vkCopyImageToMemory"):
+                out_after_call += [
+                    "    if (static_cast<int32_t>(result) >= 0) {",
+                    f"        for (uint32_t av_c = 0; av_c < {p.name}_local.regionCount; ++av_c) {{",
+                    "            uint64_t av_n = 0;",
+                    f"            const VkImageToMemoryCopy& av_r = {p.name}_local.pRegions[av_c];",
+                    f"            if (!s.image_copy_bytes({p.name}_local.srcImage, av_r.imageSubresource, av_r.imageExtent,",
+                    "                    av_r.memoryRowLength, av_r.memoryImageHeight, av_n)) { return false; }",
+                    "            if (av_n != 0) { reply.write(av_r.pHostPointer, static_cast<size_t>(av_n)); }",
+                    "        }",
+                    "    }",
+                ]
         elif kind in ("in_handle_array", "in_struct_array", "in_pod_array"):
             elem = p.type.base
             srv_len = classify.server_len_expr(cmd.params, p.len_expr)

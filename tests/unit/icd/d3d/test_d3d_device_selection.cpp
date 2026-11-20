@@ -5,6 +5,7 @@
 #include "harness/guest/mock_kmt.hpp"
 #include "icd/d3d/d3d_command_stream.hpp"
 #include "icd/d3d/d3d_device_selection.hpp"
+#include "proto/submission/command_header.hpp"
 #include "proto/context/sub_api.hpp"
 #include "proto/generated/d3d/d3d_dispatch_client.h"
 #include "proto/generated/d3d/d3d_protocol_ids.h"
@@ -93,3 +94,16 @@ TEST(d3d_device_selection, an_answered_call_and_the_arenas_are_the_streams)
   CHECK_EQ(fixture.kmt().command_id(1u), static_cast<std::uint32_t>(kCmd_Finish11));
   CHECK(&fixture.a().blobs() == &fixture.transport().blobs());
   CHECK(&fixture.a().decode_arena() == &fixture.transport().decode_arena()); }
+
+
+TEST(d3d_device_selection, a_selection_is_marked_for_the_host_to_restore_and_nothing_else_is)
+{ Fixture fixture;
+  CHECK(av_d3d_Draw(fixture.a(), 3u, 0u));
+  CHECK(av_d3d_Draw(fixture.b(), 5u, 0u));
+  CHECK_STATUS(fixture.stream().flush(), Status::ok);
+  CHECK_EQ(fixture.kmt().commands(), 4u);
+  for (std::uint32_t index = 0u; index < 4u; index++) {
+      av::CommandHeader header;
+      CHECK_STATUS(header.decode(fixture.kmt().command_bytes(index), av::CommandHeader::encoded_size), Status::ok);
+      CHECK_EQ(header.restores(), fixture.kmt().command_id(index) == static_cast<std::uint32_t>(kCmd_SelectDevice11));
+  } }

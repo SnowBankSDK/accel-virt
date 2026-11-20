@@ -98,7 +98,7 @@ TEST(vulkan_submit_timing, is_enabled_only_where_the_environment_asks)
   VulkanSubmitTiming on(lines);
   CHECK(on.enabled());
   unsetenv("AV_VK_SUBMIT_TIMING");
-  on.forget(VK_NULL_HANDLE); }
+  on.forget(VK_NULL_HANDLE, true); }
 
 TEST(vulkan_submit_timing_queue_made, a_disabled_timing_takes_no_queue_and_passes_submissions_through)
 { HostQueue host;
@@ -110,7 +110,7 @@ TEST(vulkan_submit_timing_queue_made, a_disabled_timing_takes_no_queue_and_passe
   timing.queue_made(host.physical(), host.device(), host.family(), host.queue());
   CHECK_EQ(sink.lines(), 0u);
   CHECK(host.submit_and_wait(timing, 1u));
-  timing.forget(host.device()); }
+  timing.forget(host.device(), true); }
 
 TEST(vulkan_submit_timing_queue_made, an_enabled_timing_takes_the_first_queue_it_is_told_of_only)
 { HostQueue host;
@@ -128,8 +128,8 @@ TEST(vulkan_submit_timing_queue_made, an_enabled_timing_takes_the_first_queue_it
   CHECK_EQ(sink.lines(), 1u);
   CHECK(std::strcmp(sink.line(0u), expected) == 0);
   for (std::uint32_t round = 0u; round < 70u; round++) CHECK(host.submit_and_wait(timing, round % 3u));
-  timing.forget(VK_NULL_HANDLE);
+  timing.forget(VK_NULL_HANDLE, true);
   CHECK(host.submit_and_wait(timing, 1u));
-  timing.forget(host.device());
-  timing.forget(host.device());
+  timing.forget(host.device(), true);
+  timing.forget(host.device(), true);
   CHECK(host.submit_and_wait(timing, 1u)); }

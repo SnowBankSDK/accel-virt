@@ -14,6 +14,7 @@ const char* command_name(uint32_t id) {
         case kCmd_Finish12: return "Finish12";
         case kCmd_QueryCaps12: return "QueryCaps12";
         case kCmd_QueryHeapSlices12: return "QueryHeapSlices12";
+        case kCmd_QueryHeapPlacement12: return "QueryHeapPlacement12";
         case kCmd_CreateHeap12: return "CreateHeap12";
         case kCmd_CreateCommittedResource12: return "CreateCommittedResource12";
         case kCmd_CreatePlacedResource12: return "CreatePlacedResource12";
@@ -23,6 +24,9 @@ const char* command_name(uint32_t id) {
         case kCmd_ResourceTiling12: return "ResourceTiling12";
         case kCmd_CreateHeapAsync12: return "CreateHeapAsync12";
         case kCmd_CreateCommittedResourceAsync12: return "CreateCommittedResourceAsync12";
+        case kCmd_ShareObject12: return "ShareObject12";
+        case kCmd_OpenObject12: return "OpenObject12";
+        case kCmd_AdoptLentImage12: return "AdoptLentImage12";
         case kCmd_CreateDescriptorHeap12: return "CreateDescriptorHeap12";
         case kCmd_CreateShaderResourceView12: return "CreateShaderResourceView12";
         case kCmd_CreateUnorderedAccessView12: return "CreateUnorderedAccessView12";
@@ -89,6 +93,21 @@ const char* command_name(uint32_t id) {
         case kCmd_ClearUnorderedAccessViewUint12: return "ClearUnorderedAccessViewUint12";
         case kCmd_ClearUnorderedAccessViewFloat12: return "ClearUnorderedAccessViewFloat12";
         case kCmd_ExecuteBundle12: return "ExecuteBundle12";
+        case kCmd_DispatchMesh12: return "DispatchMesh12";
+        case kCmd_SetShadingRate12: return "SetShadingRate12";
+        case kCmd_SetShadingRateImage12: return "SetShadingRateImage12";
+        case kCmd_Barrier12: return "Barrier12";
+        case kCmd_SetFrontAndBackStencilRef12: return "SetFrontAndBackStencilRef12";
+        case kCmd_CreateStateObject12: return "CreateStateObject12";
+        case kCmd_StateObjectIdentifier12: return "StateObjectIdentifier12";
+        case kCmd_StateObjectStackSize12: return "StateObjectStackSize12";
+        case kCmd_SetPipelineStackSize12: return "SetPipelineStackSize12";
+        case kCmd_AccelerationStructurePrebuild12: return "AccelerationStructurePrebuild12";
+        case kCmd_BuildAccelerationStructure12: return "BuildAccelerationStructure12";
+        case kCmd_EmitAccelerationStructurePostbuild12: return "EmitAccelerationStructurePostbuild12";
+        case kCmd_CopyAccelerationStructure12: return "CopyAccelerationStructure12";
+        case kCmd_SetStateObject12: return "SetStateObject12";
+        case kCmd_DispatchRays12: return "DispatchRays12";
         default: return nullptr;
     }
 }

@@ -68,7 +68,7 @@ public:
         static_cast<void>(interrupts_.initialize());
         static_cast<void>(interrupts_.connect());
     }
-    ~Fixture() { worker_.stop(); }
+    ~Fixture() { worker_.stop(); worker_.join(); }
 
     MockHost      &host() { return host_; }
     ContextSignal &signal() { return signal_; }
@@ -184,6 +184,7 @@ TEST(context_signal, a_raise_from_another_thread_wakes_the_worker_and_interrupts
   CHECK(fixture.progressed(2u));
   CHECK(fixture.interrupted(2u));
   fixture.worker().stop();
+  fixture.worker().join();
   CHECK_EQ(fixture.signal().delivered(), 2u);
   CHECK_EQ(fixture.host().unclaimed_violations(), 0u);
   CHECK(fixture.signal().invariants_hold()); }
@@ -202,6 +203,7 @@ TEST(context_signal, a_raise_a_stopped_worker_never_saw_is_delivered_when_it_nex
   CHECK(fixture.progressed(1u));
   CHECK(fixture.interrupted(1u));
   fixture.worker().stop();
+  fixture.worker().join();
   CHECK_EQ(fixture.signal().delivered(), 1u);
   CHECK_EQ(fixture.signal().raised(), 1u); }
 

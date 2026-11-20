@@ -219,6 +219,9 @@ public:
     void          hand_back_a_short_record();
     void          carry_at_the_next_share(const std::uint8_t *bytes, std::uint32_t size);
     void          set_blank_period(std::uint64_t ticks);
+    void          blank_on_boundaries();
+    void          advance(std::uint64_t ticks);
+    std::uint64_t clock() const;
     void          set_refresh_millihz(std::uint32_t millihz);
     void          spend_on_wait(std::uint64_t ticks);
     void          time_out_while_consuming(std::uint32_t count);
@@ -262,6 +265,7 @@ public:
     std::uint8_t       *ring_named(std::uint32_t name);
     std::uint8_t       *window_base() const;
     void                accept_wake_events();
+    void                accept_tail_publishing();
     std::uint64_t       wake_event() const;
     std::uint32_t       wake_events() const;
     const std::uint8_t *last_escape() const;
@@ -397,6 +401,7 @@ private:
     std::uint32_t escape_answer_size_;
     bool          escape_scripted_;
     bool          accepts_wakes_ = false;
+    bool          accepts_tails_ = false;
     std::uint64_t wake_event_ = 0u;
     std::uint32_t wake_events_ = 0u;
     AdapterEscapes *adapter_escapes_;
@@ -445,6 +450,7 @@ private:
     std::uint64_t clock_step_;
     ClockReader  *clock_reader_;
     std::uint64_t blank_period_;
+    bool          blank_boundaries_ = false;
     std::uint32_t refresh_millihz_ = 0u;
     std::uint32_t slip_nth_;
     std::uint64_t slip_ticks_;

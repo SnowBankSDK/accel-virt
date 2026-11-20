@@ -11,6 +11,7 @@
 #include "icd/common/staged_mapping.hpp"
 #include "icd/common/written_runs.hpp"
 #include "icd/d3d/command_recording.hpp"
+#include "icd/d3d/completion_watermark.hpp"
 #include "icd/d3d/context_slices.hpp"
 #include "icd/d3d/d3d_command_stream.hpp"
 #include "icd/d3d/d3d_device_channel.hpp"
@@ -22,7 +23,7 @@
 #include "um/d3d/d3d11_ddi.hpp"
 #include "um/d3d/present_order.hpp"
 #include "um/d3d/allocation_lender.hpp"
-#include "um/d3d/packet_release.hpp"
+#include "um/d3d/kernel_lane.hpp"
 #include "um/d3d/kernel_device.hpp"
 #include "um/d3d/d3d11_records.hpp"
 #include "um/d3d/watched_shadows.hpp"
@@ -56,6 +57,7 @@ public:
 
     HRESULT initialize(uint32_t adapter, const D3D10DDIARG_CREATEDEVICE &create);
     HRESULT initialize_deferred(D3d11Device &parent, const D3D11DDIARG_CREATEDEFERREDCONTEXT &create);
+    const D3d11HostCaps &caps() const;
     void    retire();
     void    lock_calls();
     void    unlock_calls();
@@ -105,6 +107,7 @@ private:
     void            still_drawing();
     bool            staging_pending(ResourceRecord &resource);
     void            note_gpu_write(D3D10DDI_HRESOURCE handle);
+    const ResourceRecord &tiling(ResourceRecord &resource);
     bool            context_local(void *handle, const void *immediate, size_t bytes) const;
     SIZE_T          context_handle_bytes(uint32_t type) const;
     bool            removed_on_host();
@@ -134,11 +137,13 @@ private:
     void upload(const ResourceRecord &resource, uint32_t subresource, const D3D10_DDI_BOX *box, const void *data,
                 uint32_t row_pitch, uint32_t depth_pitch, uint32_t copy_flags);
     void publish_shared(const ResourceRecord &resource);
+    void account(ResourceRecord &resource, D3D10DDI_HRTRESOURCE runtime);
     size_t piece_bytes() const;
     [[nodiscard]] bool upload_piece_of(uint32_t resource, uint32_t subresource, const d3dproto::Box &box,
                                        const void *data, size_t bytes, uint32_t row_pitch, uint32_t depth_pitch,
                                        uint32_t copy_flags);
     bool   read_back(const ResourceRecord &resource, uint32_t subresource, uint8_t *out, size_t capacity);
+    bool   read_piece_of(const ResourceRecord &resource, uint32_t subresource, uint8_t *out, size_t capacity);
     void   map(D3D10DDI_HRESOURCE handle, UINT subresource, D3D10_DDI_MAP type, UINT flags,
                D3D10DDI_MAPPED_SUBRESOURCE *mapped);
     void   unmap(D3D10DDI_HRESOURCE handle, UINT subresource);
@@ -168,16 +173,21 @@ private:
     HRESULT present_to_kernel(ResourceRecord &source, ResourceRecord *destination, void *dxgi_context,
                               uint32_t point);
     HRESULT follow_host();
+    void    engage();
     void    log_present(const char *what, uint32_t value, const ResourceRecord &source);
 
     void set_shader(uint32_t stage, D3D10DDI_HSHADER shader);
+    void bind_geometry_shader();
+    void rebind_geometry_variant();
+    void forget_pipeline_mirrors();
+    uint32_t passthrough_variant_id() const;
     void set_constant_buffers(uint32_t stage, UINT start, UINT count, const D3D10DDI_HRESOURCE *buffers,
                               const UINT *first, const UINT *counts);
     void set_shader_resources(uint32_t stage, UINT start, UINT count, const D3D10DDI_HSHADERRESOURCEVIEW *views);
     void set_samplers(uint32_t stage, UINT start, UINT count, const D3D10DDI_HSAMPLER *samplers);
     void stream_vertex_output(const D3D11DDIARG_CREATEGEOMETRYSHADERWITHSTREAMOUTPUT &args, D3D10DDI_HSHADER shader,
                               const D3D11_1DDIARG_STAGE_IO_SIGNATURES &signatures);
-    void create_shader(uint32_t stage, const UINT *code, D3D10DDI_HSHADER shader,
+    bool create_shader(uint32_t stage, const UINT *code, ObjectRecord &record_of,
                        const D3D11_1DDIARG_SIGNATURE_ENTRY2 *inputs, UINT input_count,
                        const D3D11_1DDIARG_SIGNATURE_ENTRY2 *outputs, UINT output_count,
                        const D3D11_1DDIARG_SIGNATURE_ENTRY2 *patch, UINT patch_count,
@@ -206,6 +216,7 @@ private:
     static constexpr size_t recording_bytes = 4u << 20u;
     static constexpr size_t most_recording_bytes = 256u << 20u;
     D3d11Device                          *parent_;
+    d3d::CompletionWatermark              watermark_;
     SrwLock                               recording_lock_;
     WindowsCallingThread                  caller_;
     SrwLock                               call_mutex_;
@@ -214,7 +225,7 @@ private:
     ObjectStorage<d3d::CommandRecording>  recorded_;
     HANDLE    context_;
     ObjectStorage<d3d::PresentOrder> present_order_;
-    ObjectStorage<d3d::PacketRelease> packets_;
+    ObjectStorage<d3d::KernelLane> lane_;
     uint32_t  feature_level_;
     GrowableArray<ResourceRecord *> guest_surfaces_;
     icd::OnceLatch  guest_lock_refused_;
@@ -225,6 +236,11 @@ private:
     icd::OnceLatch  follow_refused_;
     icd::OnceLatch  token_refused_;
     uint32_t        frame_;
+    StreamPassthroughRecord geometry_binding_;
+    bool            geometry_passthrough_;
+    uint32_t        geometry_sent_;
+    uint32_t        topology_;
+    bool            query_short_noted_;
     d3d::D3dCallTrace &trace_;
     const d3d::SharedRowsRequest &rows_;
     uint32_t        context_number_;

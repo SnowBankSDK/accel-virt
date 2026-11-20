@@ -1252,6 +1252,33 @@ void MockHost::respond(void *request, const std::uint8_t *bytes, std::size_t siz
         record(HostViolation::second_response, "MockHost::respond");
 }
 
+void *MockHost::keep_request(void *request)
+{
+    require_main_loop("MockHost::keep_request");
+    if (fail_now(fail_keep_)) return nullptr;
+    kept_.fetch_add(1u);
+    return request;
+}
+
+void MockHost::release_request(void *kept, bool answered)
+{
+    require_main_loop("MockHost::release_request");
+    if (kept == nullptr || kept_.load() == 0u) {
+        record(HostViolation::unknown_handle, "MockHost::release_request");
+        return;
+    }
+    kept_.fetch_sub(1u);
+    if (answered) return;
+    dropped_.fetch_add(1u);
+    if (!forward_requests_) static_cast<MockRequest *>(kept)->drop();
+}
+
+std::uint32_t MockHost::kept_requests() const { return kept_.load(); }
+
+std::uint32_t MockHost::dropped_requests() const { return dropped_.load(); }
+
+void MockHost::fail_keep_at(std::uint32_t nth) { fail_keep_ = nth; }
+
 bool MockHost::resource_exists(std::uint32_t id)
 {
     StateLock lock(state_);

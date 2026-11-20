@@ -7,6 +7,8 @@
 #include "icd/opengl/buffer_mapping.hpp"
 #include "icd/opengl/sliced_buffers.hpp"
 
+#include "core/support/keyed_slots.hpp"
+
 #include <stdint.h>
 
 namespace av {
@@ -46,7 +48,11 @@ public:
     uint32_t mark(uint32_t buffer, int64_t offset, int64_t length);
     void    *pointer_of(uint32_t buffer) const;
     bool     map_state(uint32_t buffer, uint32_t pname, int64_t &value) const;
+    void     keep_flags(uint32_t buffer, uint32_t flags);
+    void     refresh_persistent(ClientTransport &wire);
+    bool     refuses_subdata(uint32_t buffer) const;
     void     flush_persistent(ClientTransport &wire);
+    void     order_persistent(ClientTransport &wire);
     void     forget(int32_t count, const uint32_t *buffers);
     void     release();
     uint32_t held() const;
@@ -63,10 +69,12 @@ private:
 
     BufferShadows                     &shadows_;
     SlicedBuffers                     &slices_;
+    KeyedSlots<uint32_t, uint32_t>     kept_flags_;
     DriverLog                         &log_;
     BufferMapTransfer                  transfer_;
     icd::OpenMappings<BufferMapping>   mappings_;
     uint32_t                           persistent_writers_;
+    uint32_t                           seen_writers_;
     icd::OnceLatch                 logged_;
 
     friend struct MappedBuffersProbe;

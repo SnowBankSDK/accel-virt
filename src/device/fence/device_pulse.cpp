@@ -8,7 +8,7 @@
 namespace av {
 
 DevicePulse::DevicePulse(Host &host)
-    : host_(host), lock_(nullptr), wake_(nullptr), thread_(nullptr), stopping_(false), dormant_(false), completions_(0u), carried_{}
+    : host_(host), lock_(nullptr), wake_(nullptr), thread_(nullptr), stopping_(false), dormant_(false), completions_(0u), refused_attaches_(0u), carried_{}
 {
     AV_SCOPE("DevicePulse::DevicePulse");
 }
@@ -92,6 +92,12 @@ uint64_t DevicePulse::completions() const
     return __atomic_load_n(&completions_, __ATOMIC_RELAXED);
 }
 
+uint64_t DevicePulse::refused_attaches() const
+{
+    AV_SCOPE("DevicePulse::refused_attaches");
+    return __atomic_load_n(&refused_attaches_, __ATOMIC_RELAXED);
+}
+
 uint32_t DevicePulse::carried() const
 {
     AV_SCOPE("DevicePulse::carried");
@@ -105,9 +111,34 @@ void DevicePulse::run()
     AV_SCOPE("DevicePulse::run");
     bool working = false;
     while (tick(working)) {
-        if (working) static_cast<void>(host_.wait_event_until(wake_, host_.monotonic_nanoseconds() + period_ns));
-        else if (rest()) host_.wait_event(wake_);
+        if (working) {
+            const uint64_t beat = host_.monotonic_nanoseconds() + period_ns;
+            const uint64_t due = next_attach_due();
+            static_cast<void>(host_.wait_event_until(wake_, due != 0u && due < beat ? due : beat));
+        } else if (rest()) {
+            wait_until(next_attach_due());
+        }
     }
+}
+
+void DevicePulse::wait_until(uint64_t due)
+{
+    AV_SCOPE("DevicePulse::wait_until");
+    if (due == 0u) host_.wait_event(wake_);
+    else static_cast<void>(host_.wait_event_until(wake_, due));
+}
+
+uint64_t DevicePulse::next_attach_due()
+{
+    AV_SCOPE("DevicePulse::next_attach_due");
+    host_.lock_mutex(lock_);
+    uint64_t earliest = 0u;
+    for (const FenceReporter *slot : carried_) {
+        const uint64_t due = slot != nullptr ? slot->attach_due() : 0u;
+        if (due != 0u && (earliest == 0u || due < earliest)) earliest = due;
+    }
+    host_.unlock_mutex(lock_);
+    return earliest;
 }
 
 bool DevicePulse::tick(bool &working)
@@ -119,6 +150,12 @@ bool DevicePulse::tick(bool &working)
     if (going && working)
         for (FenceReporter *slot : carried_)
             if (slot != nullptr) slot->beat();
+    uint64_t now = 0u;
+    for (FenceReporter *slot : carried_) {
+        if (!going || slot == nullptr || slot->attach_due() == 0u) continue;
+        if (now == 0u) now = host_.monotonic_nanoseconds();
+        if (slot->refuse_late_attach(now)) __atomic_add_fetch(&refused_attaches_, 1u, __ATOMIC_RELAXED);
+    }
     host_.unlock_mutex(lock_);
     return going;
 }

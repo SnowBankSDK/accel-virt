@@ -47,6 +47,23 @@ ID3D9VkInteropDevice : public IUnknown {
 };
 __CRT_UUID_DECL(ID3D9VkInteropDevice, 0x2eaa4b89, 0x0107, 0x4bdb, 0x87, 0xf7, 0x0f, 0x54, 0x1c, 0x49, 0x3c, 0xe0);
 
+struct D3D9VkExtImageDesc {
+    D3DRESOURCETYPE     Type;
+    UINT                Width;
+    UINT                Height;
+    UINT                Depth;
+    UINT                MipLevels;
+    DWORD               Usage;
+    D3DFORMAT           Format;
+    D3DPOOL             Pool;
+    D3DMULTISAMPLE_TYPE MultiSample;
+    DWORD               MultiSampleQuality;
+    bool                Discard;
+    bool                IsAttachmentOnly;
+    bool                IsLockable;
+    VkImageUsageFlags   ImageUsage;
+};
+
 MIDL_INTERFACE("9c3a6f27-5b81-4e0d-a7d2-1f48c6b0e395")
 ID3D9VkInteropDevice1 : public ID3D9VkInteropDevice {
     virtual HRESULT STDMETHODCALLTYPE BindBufferStorage(IDirect3DResource9 *resource, VkBuffer storage,
@@ -57,6 +74,8 @@ ID3D9VkInteropDevice1 : public ID3D9VkInteropDevice {
     virtual HRESULT STDMETHODCALLTYPE MarkSubmission(void (*callback)(void *, uint64_t), void *context,
                                                      uint64_t value) = 0;
     virtual void STDMETHODCALLTYPE WaitForIdle() = 0;
+    virtual HRESULT STDMETHODCALLTYPE CreateImageOver(const D3D9VkExtImageDesc *desc, VkImage image,
+                                                      IDirect3DResource9 **result) = 0;
 };
 __CRT_UUID_DECL(ID3D9VkInteropDevice1, 0x9c3a6f27, 0x5b81, 0x4e0d, 0xa7, 0xd2, 0x1f, 0x48, 0xc6, 0xb0, 0xe3, 0x95);
 
@@ -88,8 +107,24 @@ MIDL_INTERFACE("11ea7a1a-0f6a-49bf-b612-3e30f8e201dd")
 ID3D12DeviceExt : public IUnknown {
     virtual HRESULT STDMETHODCALLTYPE GetVulkanHandles(VkInstance *instance, VkPhysicalDevice *physical_device,
                                                        VkDevice *device) = 0;
+    virtual BOOL STDMETHODCALLTYPE    GetExtensionSupport(UINT extension) = 0;
+    virtual HRESULT STDMETHODCALLTYPE CreateCubinComputeShaderWithName(const void *data, UINT32 size, UINT32 x,
+                                                                       UINT32 y, UINT32 z, const char *name,
+                                                                       void **handle) = 0;
+    virtual HRESULT STDMETHODCALLTYPE DestroyCubinComputeShader(void *handle) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetCudaTextureObject(D3D12_CPU_DESCRIPTOR_HANDLE view,
+                                                           D3D12_CPU_DESCRIPTOR_HANDLE sampler, UINT32 *object) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetCudaSurfaceObject(D3D12_CPU_DESCRIPTOR_HANDLE view, UINT32 *object) = 0;
+    virtual HRESULT STDMETHODCALLTYPE CaptureUAVInfo(void *info) = 0;
 };
 __CRT_UUID_DECL(ID3D12DeviceExt, 0x11ea7a1a, 0x0f6a, 0x49bf, 0xb6, 0x12, 0x3e, 0x30, 0xf8, 0xe2, 0x01, 0xdd);
+
+MIDL_INTERFACE("099a73fd-2199-4f45-bf48-0eb86f6fdb65")
+ID3D12DeviceExt1 : public ID3D12DeviceExt {
+    virtual HRESULT STDMETHODCALLTYPE CreateResourceFromBorrowedHandle(const void *desc1, UINT64 image,
+                                                                       ID3D12Resource **resource) = 0;
+};
+__CRT_UUID_DECL(ID3D12DeviceExt1, 0x099a73fd, 0x2199, 0x4f45, 0xbf, 0x48, 0x0e, 0xb8, 0x6f, 0x6f, 0xdb, 0x65);
 
 constexpr GUID clsid_d3d12_device_factory = {0x114863bf, 0xc386, 0x4aee, {0xb3, 0x9d, 0x8f, 0x0b, 0xbb, 0x06, 0x29, 0x55}};
 

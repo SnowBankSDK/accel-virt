@@ -17,6 +17,7 @@ TEST(release_record, places_its_fields_and_reads_back_as_written)
   const ByteLayout layout(bytes, sizeof bytes);
   CHECK(layout.at(0u, 4u) == 0x00525641u);
   CHECK(layout.at(4u, 4u) == 0x11223344u);
+  CHECK_EQ(ReleaseRecord::encoded_size, 8u + SubmissionDescriptor::encoded_size);
   ReleaseRecord read;
   CHECK_STATUS(read.decode(bytes, sizeof bytes), Status::ok);
   CHECK_EQ(read.ring(), 0x11223344u);
@@ -46,6 +47,7 @@ TEST(release_record, anything_else_is_malformed_and_leaves_the_reader_unchanged)
   for (std::size_t i = 16u; i < 24u; i++) other[i] = 0u;
   CHECK_STATUS(read.decode(other, sizeof other), Status::malformed);
   CHECK_EQ(read.ring(), 3u);
+  CHECK(read.batch().fence_id() == 2u);
   CHECK_STATUS(ReleaseRecord(5u, SubmissionDescriptor(1u, 0u, 8u)).encode(other, ReleaseRecord::encoded_size - 1u),
                Status::too_large); }
 

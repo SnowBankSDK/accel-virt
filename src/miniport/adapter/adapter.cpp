@@ -108,6 +108,7 @@
 #include "proto/virtio_gpu/av_request_writer.hpp"
 #include "core/support/scope_exit.hpp"
 #include "proto/escape/release_record.hpp"
+#include "miniport/scheduling/stamped_line.hpp"
 #include "miniport/memory/point_view.hpp"
 #include "miniport/vidpn/cofunc_modality.hpp"
 #include "miniport/vidpn/path_transformation.hpp"
@@ -216,6 +217,7 @@ void Adapter::remember_device()
     const Status   read = exchange.read(capset);
     if (read == Status::ok) {
         identity_.remember(capset);
+        capabilities_.offer(capset);
         start_presents();
         host_visible_.offer(capset);
         memory_.offer_local(capset);
@@ -341,6 +343,7 @@ int32_t Adapter::start_device(void *start_info, const DxgkrnlInterfaceRecord *dx
         uint32_t luid[2] = {};
         __builtin_memcpy(luid, static_cast<const uint8_t *>(start_info) + start_info_luid_offset, sizeof(luid));
         luid_ = static_cast<uint64_t>(luid[1]) << 32u | luid[0];
+        av_contexts_.adapter_is(luid_);
     }
     if (dxgkrnl_interface == nullptr || sources == nullptr || children == nullptr)
         return NtStatus(Status::invalid_parameter).value();
@@ -443,13 +446,20 @@ void Adapter::dpc_routine()
     void        *overdue_owners[8] = {};
     uint32_t     named = 0u;
     const uint32_t overdue = node_.release_overdue(now, overdue_owners, 8u, &named);
-    if (overdue != 0u && budget_.allows()) platform_.log("avgpu: a held packet passed its deadline and was let go");
-    bool lost_context = false;
-    for (uint32_t index = 0u; index < named; index++)
-        lost_context = av_contexts_.fault_if_held(overdue_owners[index]) || lost_context;
-    if (lost_context) av_contexts_.serve(node_, hw_submissions_);
-    if (node_.complete(notification_) != Status::ok && budget_.allows())
-        platform_.log("avgpu: a completion was refused in the DPC");
+    if (overdue != 0u && budget_.allows())
+        StampedLine(platform_, luid_, "avgpu: a packet whose batch the host had not finished passed its deadline and was let go")
+            .number("packets", overdue)
+            .number("owners", named)
+            .address("owner", overdue_owners[0])
+            .number("bound", av_contexts_.holds(overdue_owners[0]) ? 1u : 0u)
+            .write();
+    uint32_t returned = 0u;
+    if (node_.complete(notification_, &returned) != Status::ok && budget_.allows())
+        StampedLine(platform_, luid_, "avgpu: a completion was refused in the DPC").write();
+    if (returned != 0u && budget_.allows())
+        StampedLine(platform_, luid_, "avgpu: packets still held went back to the scheduler that asked to preempt")
+            .number("packets", returned)
+            .write();
     if (hw_submissions_.complete(notification_) != Status::ok && budget_.allows())
         platform_.log("avgpu: a progress fence signal was refused in the DPC");
     constexpr uint32_t refreshes_per_present = 2u;
@@ -880,7 +890,14 @@ int32_t Adapter::destroy_allocation(const DxgkargDestroyAllocationRecord *reques
         for (uint32_t index = 0u; index < request->NumAllocations; index++) {
             sources_.forget_primary(request->pAllocationList[index]);
             void *const user = av_contexts_.user_of(allocations_.find(request->pAllocationList[index]));
-            if (user != nullptr) static_cast<void>(av_contexts_.unbind(user, answering_device()));
+            if (user == nullptr) continue;
+            const uint32_t doorbell = av_contexts_.doorbell_of(user);
+            const Status   unbound = unbind_av(user);
+            StampedLine(platform_, luid_, "avgpu: av context unbound with the allocation it uses")
+                .number("doorbell", doorbell)
+                .address("context", user)
+                .code("status", static_cast<uint32_t>(NtStatus(unbound).value()))
+                .write();
         }
     scanout_.wait_for_refresh();
     const Status destroyed = allocations_.destroy(*request);
@@ -1016,6 +1033,15 @@ VirtioGpuDevice *Adapter::answering_device()
     return device_.constructed() && present_ ? &device_.object() : nullptr;
 }
 
+Status Adapter::unbind_av(void *context)
+{
+    AV_SCOPE("Adapter::unbind_av");
+    const Status status = av_contexts_.unbind(context, answering_device());
+    av_contexts_.serve(node_, hw_submissions_);
+    static_cast<void>(dxgkrnl_.queue_dpc());
+    return status;
+}
+
 int32_t Adapter::destroy_context(void *context)
 {
     AV_SCOPE("Adapter::destroy_context");
@@ -1023,7 +1049,12 @@ int32_t Adapter::destroy_context(void *context)
     if (hw_queues_.serves(context)) return NtStatus(Status::invalid_parameter).value();
     const Context *const found = contexts_.find(context);
     if (found != nullptr && found->is_av() && av_contexts_.holds(context)) {
-        log_status("avgpu: av context destroyed", NtStatus(av_contexts_.unbind(context, answering_device())).value());
+        const uint32_t doorbell = av_contexts_.doorbell_of(context);
+        const Status   unbound = unbind_av(context);
+        StampedLine(platform_, luid_, "avgpu: av context destroyed")
+            .number("doorbell", doorbell)
+            .code("status", static_cast<uint32_t>(NtStatus(unbound).value()))
+            .write();
     }
     return NtStatus(contexts_.destroy(context)).value();
 }
@@ -1359,7 +1390,22 @@ Status Adapter::follow_commit(uint32_t source)
 {
     AV_SCOPE("Adapter::follow_commit");
     const DisplayMode *mode = sources_.committed_mode(source);
-    return mode != nullptr ? scanout_.configure(source, *mode) : scanout_.disable(source);
+    if (mode == nullptr) return scanout_.disable(source);
+    const Status configured = scanout_.configure(source, *mode);
+    if (configured == Status::ok) retime_display(source, *mode);
+    return configured;
+}
+
+void Adapter::retime_display(uint32_t source, const DisplayMode &mode)
+{
+    AV_SCOPE("Adapter::retime_display");
+    platform_.require_irql_at_most(Irql::passive, "Adapter::retime_display");
+    if (!device_.constructed()) return;
+    uint8_t         request[AvRequestWriter::max_request_size] = {};
+    AvRequestWriter writer(request, sizeof request);
+    if (writer.display_timing(source, mode.refresh_millihz()) != Status::ok) return;
+    if (device_.object().send_control(request, writer.length()) == Status::ok)
+        platform_.store_atomic(scanout_period_, mode.period());
 }
 
 int32_t Adapter::update_active_vidpn_present_path(const D3dkmdtVidPnPresentPathRecord *path)
@@ -2092,10 +2138,17 @@ int32_t Adapter::submit_command_virtual(const DxgkargSubmitCommandVirtualRecord 
     if (status == Status::ok) {
         const bool done = presented ? presents_.object().completed() >= awaited
                                     : av_contexts_.completed_already(owner, awaited);
+        if (done && !presented) node_.finish(owner, awaited);
         if (awaited == 0u || done) static_cast<void>(dxgkrnl_.queue_dpc());
         return NtStatus(Status::ok).value();
     }
-    log_status("avgpu: SubmitCommandVirtual refused", NtStatus(status).value());
+    if (budget_.allows())
+        StampedLine(platform_, luid_, "avgpu: SubmitCommandVirtual refused")
+            .code("status", static_cast<uint32_t>(NtStatus(status).value()))
+            .number("fence", request->SubmissionFenceId)
+            .address("context", request->hContext)
+            .address("owner", owner)
+            .write();
     return NtStatus(Status::invalid_parameter).value();
 }
 
@@ -2116,10 +2169,8 @@ Status Adapter::submit_follow(const Context &context, const FollowRecord &follow
     Context *const followed = contexts_.followed(context, follow.ring());
     if (followed == nullptr) return Status::invalid_parameter;
     owner = followed;
-    awaited = follow.fence();
-    const Status queued = node_.submit(fence, followed, awaited);
-    if (queued == Status::ok) av_contexts_.kick(followed);
-    return queued;
+    awaited = av_contexts_.follow(followed, follow.fence());
+    return node_.submit(fence, followed, awaited);
 }
 
 Status Adapter::submit_release(const Context &context, const ReleaseRecord &release, uint32_t fence, void *&owner,
@@ -2129,10 +2180,8 @@ Status Adapter::submit_release(const Context &context, const ReleaseRecord &rele
     Context *const released = contexts_.followed(context, release.ring());
     if (released == nullptr) return Status::invalid_parameter;
     owner = released;
-    uint64_t     batch_fence = 0u;
-    const Status published = av_contexts_.release_batch(released, release.batch(), batch_fence);
+    const Status published = av_contexts_.release_batch(released, release, awaited);
     if (published != Status::ok) return published;
-    awaited = batch_fence;
     return node_.submit(fence, released, awaited);
 }
 

@@ -32,6 +32,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <EGL/egl.h>
+
 using av::ContextSession;
 using av::ExecutorRoot;
 using av::RootUnderTest;
@@ -1104,6 +1106,34 @@ TEST(executor_root_concurrency, opengl_contexts_opened_at_once_never_share_a_mem
       pthread_barrier_destroy(&closing_gate);
   } }
 
+TEST(executor_root_concurrency, a_session_closed_with_unfinished_gpu_work_is_not_current_on_the_closing_thread_any_more)
+{ av::SoftwareGl software;
+  if (!software.usable()) {
+      std::fprintf(stderr, "no llvmpipe EGL device: software GL test skipped\n");
+      return;
+  }
+  MockHostApis apis;
+  apis.add_gpu(software.uuid(), AV_EXECUTOR_SUB_API_OPENGL);
+  apis.give_gl(software.display());
+  RootUnderTest held;
+  ExecutorRoot &root = *held;
+  CHECK_STATUS(root.initialize(apis), Status::ok);
+  ExecutorRootProbe probe(root);
+  ContextSession *const session = held.open(AV_EXECUTOR_SUB_API_OPENGL, software.uuid());
+  CHECK(session != nullptr);
+  if (session == nullptr) return;
+  std::size_t answer = 0u;
+  CHECK_EQ(session->execute(av::glproto::kCmd_glFlush, nullptr, 0u, nullptr, 0u, answer), std::uint32_t{AV_EXECUTED});
+  session->end_batch();
+  std::uint64_t marked = 0u, reached = 0u;
+  session->gpu_progress(marked, reached);
+  CHECK(marked != reached);
+  CHECK(eglGetCurrentContext() != EGL_NO_CONTEXT);
+  root.close(session);
+  CHECK(eglGetCurrentContext() == EGL_NO_CONTEXT);
+  probe.settle();
+  CHECK_EQ(root.live(), 0u); }
+
 namespace {
 
 constexpr std::uint32_t wedged_slots = 8u;
@@ -1301,6 +1331,7 @@ TEST(executor_root_concurrency, a_session_whose_device_is_lost_and_never_drains_
   CHECK_EQ(root.live(), 0u);
   CHECK_EQ(backend.shut_downs(), 0u);
   CHECK_EQ(backend.finished_drains(), 0u);
+  CHECK_EQ(backend.left_devices(), 1u);
   CHECK(root.invariants_hold()); }
 
 TEST(executor_root_concurrency, a_lost_session_is_not_let_go_before_the_grace_is_over)

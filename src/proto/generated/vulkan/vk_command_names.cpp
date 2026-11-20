@@ -216,6 +216,7 @@ const char* cmd_id_to_string(uint32_t cmd_id) noexcept {
         case 0x000100D2u: return "vkGetPhysicalDeviceExternalSemaphoreProperties";
         case 0x000100D3u: return "vkGetPhysicalDevicePresentRectanglesKHR";
         case 0x000100D4u: return "vkGetPhysicalDeviceToolProperties";
+        case 0x000100D5u: return "vkGetPipelineCacheData";
         case 0x000100D6u: return "vkGetPrivateData";
         case 0x000100D7u: return "vkGetQueryPoolResults";
         case 0x000100D8u: return "vkGetRenderAreaGranularity";
@@ -296,6 +297,8 @@ const char* cmd_id_to_string(uint32_t cmd_id) noexcept {
         case 0x00010125u: return "vkCmdSetRasterizerDiscardEnableEXT";
         case 0x00010126u: return "vkCmdSetVertexInputEXT";
         case 0x00010127u: return "vkBuildAccelerationStructuresKHR";
+        case 0x00010128u: return "vkCmdBindDescriptorBufferEmbeddedSamplersEXT";
+        case 0x00010129u: return "vkCmdBindDescriptorBuffersEXT";
         case 0x0001012Au: return "vkCmdBindShadersEXT";
         case 0x0001012Bu: return "vkCmdBindVertexBuffers2EXT";
         case 0x0001012Cu: return "vkCmdBuildAccelerationStructuresIndirectKHR";
@@ -329,6 +332,7 @@ const char* cmd_id_to_string(uint32_t cmd_id) noexcept {
         case 0x00010148u: return "vkCmdSetDepthCompareOpEXT";
         case 0x00010149u: return "vkCmdSetDepthTestEnableEXT";
         case 0x0001014Au: return "vkCmdSetDepthWriteEnableEXT";
+        case 0x0001014Bu: return "vkCmdSetDescriptorBufferOffsetsEXT";
         case 0x0001014Cu: return "vkCmdSetExtraPrimitiveOverestimationSizeEXT";
         case 0x0001014Du: return "vkCmdSetFragmentShadingRateKHR";
         case 0x0001014Eu: return "vkCmdSetFrontFaceEXT";
@@ -374,12 +378,16 @@ const char* cmd_id_to_string(uint32_t cmd_id) noexcept {
         case 0x00010176u: return "vkGetAccelerationStructureDeviceAddressKHR";
         case 0x00010179u: return "vkGetDeferredOperationMaxConcurrencyKHR";
         case 0x0001017Au: return "vkGetDeferredOperationResultKHR";
+        case 0x0001017Bu: return "vkGetDescriptorEXT";
+        case 0x0001017Cu: return "vkGetDescriptorSetLayoutBindingOffsetEXT";
+        case 0x0001017Du: return "vkGetDescriptorSetLayoutSizeEXT";
         case 0x0001017Eu: return "vkGetDeviceAccelerationStructureCompatibilityKHR";
         case 0x00010180u: return "vkGetImageSubresourceLayout2EXT";
         case 0x00010182u: return "vkGetPhysicalDeviceFragmentShadingRatesKHR";
         case 0x00010183u: return "vkGetRayTracingCaptureReplayShaderGroupHandlesKHR";
         case 0x00010184u: return "vkGetRayTracingShaderGroupHandlesKHR";
         case 0x00010185u: return "vkGetRayTracingShaderGroupStackSizeKHR";
+        case 0x00010187u: return "vkGetShaderBinaryDataEXT";
         case 0x00010188u: return "vkTransitionImageLayoutEXT";
         case 0x00010189u: return "vkWriteAccelerationStructuresPropertiesKHR";
         case 0x0001018Au: return "vkGetCalibratedTimestampsEXT";
@@ -391,6 +399,7 @@ const char* cmd_id_to_string(uint32_t cmd_id) noexcept {
         case 0x00010190u: return "vkDestroyPipelineBinaryKHR";
         case 0x00010191u: return "vkGetDeviceImageSubresourceLayoutKHR";
         case 0x00010192u: return "vkGetImageSubresourceLayout2KHR";
+        case 0x00010193u: return "vkGetPipelineBinaryDataKHR";
         case 0x00010194u: return "vkGetPipelineKeyKHR";
         case 0x00010195u: return "vkGetRenderingAreaGranularityKHR";
         case 0x00010196u: return "vkReleaseCapturedPipelineDataKHR";
@@ -411,6 +420,7 @@ const char* cmd_id_to_string(uint32_t cmd_id) noexcept {
         case 0x000101A8u: return "vkCmdBindDescriptorBufferEmbeddedSamplers2EXT";
         case 0x000101A9u: return "vkCmdBindDescriptorSets2KHR";
         case 0x000101AAu: return "vkCmdDrawMultiEXT";
+        case 0x000101ABu: return "vkCmdDrawMultiIndexedEXT";
         case 0x000101ACu: return "vkCmdPushConstants2KHR";
         case 0x000101ADu: return "vkCmdPushDescriptorSet2KHR";
         case 0x000101AEu: return "vkCmdPushDescriptorSetWithTemplate2KHR";
@@ -426,6 +436,15 @@ const char* cmd_id_to_string(uint32_t cmd_id) noexcept {
         case 0x000101B9u: return "vkGetPhysicalDeviceMultisamplePropertiesEXT";
         case 0x000101BAu: return "vkGetShaderModuleCreateInfoIdentifierEXT";
         case 0x000101BBu: return "vkGetShaderModuleIdentifierEXT";
+        case 0x000101BCu: return "vkCmdExecuteGeneratedCommandsEXT";
+        case 0x000101BDu: return "vkCmdPreprocessGeneratedCommandsEXT";
+        case 0x000101BEu: return "vkCreateIndirectCommandsLayoutEXT";
+        case 0x000101BFu: return "vkCreateIndirectExecutionSetEXT";
+        case 0x000101C0u: return "vkDestroyIndirectCommandsLayoutEXT";
+        case 0x000101C1u: return "vkDestroyIndirectExecutionSetEXT";
+        case 0x000101C2u: return "vkGetGeneratedCommandsMemoryRequirementsEXT";
+        case 0x000101C3u: return "vkUpdateIndirectExecutionSetPipelineEXT";
+        case 0x000101C4u: return "vkUpdateIndirectExecutionSetShaderEXT";
         default: return "unknown";
     }
 }
@@ -629,6 +648,7 @@ bool knows_command(uint32_t cmd_id) noexcept {
         case 0x000100D2u:
         case 0x000100D3u:
         case 0x000100D4u:
+        case 0x000100D5u:
         case 0x000100D6u:
         case 0x000100D7u:
         case 0x000100D8u:
@@ -709,6 +729,8 @@ bool knows_command(uint32_t cmd_id) noexcept {
         case 0x00010125u:
         case 0x00010126u:
         case 0x00010127u:
+        case 0x00010128u:
+        case 0x00010129u:
         case 0x0001012Au:
         case 0x0001012Bu:
         case 0x0001012Cu:
@@ -742,6 +764,7 @@ bool knows_command(uint32_t cmd_id) noexcept {
         case 0x00010148u:
         case 0x00010149u:
         case 0x0001014Au:
+        case 0x0001014Bu:
         case 0x0001014Cu:
         case 0x0001014Du:
         case 0x0001014Eu:
@@ -787,12 +810,16 @@ bool knows_command(uint32_t cmd_id) noexcept {
         case 0x00010176u:
         case 0x00010179u:
         case 0x0001017Au:
+        case 0x0001017Bu:
+        case 0x0001017Cu:
+        case 0x0001017Du:
         case 0x0001017Eu:
         case 0x00010180u:
         case 0x00010182u:
         case 0x00010183u:
         case 0x00010184u:
         case 0x00010185u:
+        case 0x00010187u:
         case 0x00010188u:
         case 0x00010189u:
         case 0x0001018Au:
@@ -804,6 +831,7 @@ bool knows_command(uint32_t cmd_id) noexcept {
         case 0x00010190u:
         case 0x00010191u:
         case 0x00010192u:
+        case 0x00010193u:
         case 0x00010194u:
         case 0x00010195u:
         case 0x00010196u:
@@ -824,6 +852,7 @@ bool knows_command(uint32_t cmd_id) noexcept {
         case 0x000101A8u:
         case 0x000101A9u:
         case 0x000101AAu:
+        case 0x000101ABu:
         case 0x000101ACu:
         case 0x000101ADu:
         case 0x000101AEu:
@@ -839,6 +868,15 @@ bool knows_command(uint32_t cmd_id) noexcept {
         case 0x000101B9u:
         case 0x000101BAu:
         case 0x000101BBu:
+        case 0x000101BCu:
+        case 0x000101BDu:
+        case 0x000101BEu:
+        case 0x000101BFu:
+        case 0x000101C0u:
+        case 0x000101C1u:
+        case 0x000101C2u:
+        case 0x000101C3u:
+        case 0x000101C4u:
             return true;
         default: return false;
     }
@@ -956,6 +994,8 @@ uint32_t command_queues(uint32_t cmd_id) noexcept {
         case 0x00010124u: return 0x1u;
         case 0x00010125u: return 0x1u;
         case 0x00010126u: return 0x1u;
+        case 0x00010128u: return 0x3u;
+        case 0x00010129u: return 0x3u;
         case 0x0001012Au: return 0x3u;
         case 0x0001012Bu: return 0x1u;
         case 0x0001012Cu: return 0x2u;
@@ -989,6 +1029,7 @@ uint32_t command_queues(uint32_t cmd_id) noexcept {
         case 0x00010148u: return 0x1u;
         case 0x00010149u: return 0x1u;
         case 0x0001014Au: return 0x1u;
+        case 0x0001014Bu: return 0x3u;
         case 0x0001014Cu: return 0x1u;
         case 0x0001014Du: return 0x1u;
         case 0x0001014Eu: return 0x1u;
@@ -1028,6 +1069,7 @@ uint32_t command_queues(uint32_t cmd_id) noexcept {
         case 0x000101A8u: return 0x3u;
         case 0x000101A9u: return 0x3u;
         case 0x000101AAu: return 0x1u;
+        case 0x000101ABu: return 0x1u;
         case 0x000101ACu: return 0x3u;
         case 0x000101ADu: return 0x3u;
         case 0x000101AEu: return 0x3u;
@@ -1037,6 +1079,8 @@ uint32_t command_queues(uint32_t cmd_id) noexcept {
         case 0x000101B2u: return 0x2u;
         case 0x000101B3u: return 0x7u;
         case 0x000101B4u: return 0x7u;
+        case 0x000101BCu: return 0x3u;
+        case 0x000101BDu: return 0x3u;
         default: return 0u;
     }
 }

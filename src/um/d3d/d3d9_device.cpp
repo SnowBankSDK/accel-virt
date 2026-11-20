@@ -11,6 +11,7 @@
 #include "proto/generated/d3d9/d3d9_dispatch_client.h"
 #include "um/d3d/d3d9_host_caps.hpp"
 #include "proto/d3d/buffer_slice_support.hpp"
+#include "proto/d3d/resource_footprint.hpp"
 #include "um/d3d/d3d_session.hpp"
 
 #include <string.h>
@@ -23,6 +24,7 @@ using Kind = d3d::D3d9StateEntry::Kind;
 namespace {
 
 constexpr uint32_t stage_vertex = 0u;
+constexpr HRESULT  out_of_video_memory = static_cast<HRESULT>(0x8876017cu);
 constexpr uint32_t stage_pixel = 1u;
 constexpr uint32_t components = 4u;
 constexpr UINT stateset_begin = 0u;
@@ -52,12 +54,13 @@ uint32_t query_bytes(D3DDDIQUERYTYPE type)
 D3d9Device::D3d9Device(d3d::D3dSession &session, BlockSource &memory, KeyedLog &log, const D3d9HostCaps &caps,
                        d3d::UmdAdapter &adapter, d3d::D3dCallTrace &trace)
     : session_(session), memory_(memory), lines_(log), refused_(lines_), loss_(lines_), caps_(caps), adapter_(adapter), caller_(), call_mutex_(), lock_(call_mutex_, caller_), channel_(),
-      present_order_(), packets_(), resources_(memory), queries_(memory), blocks_(memory), recording_(nullptr), batch_(), shadow_(),
+      present_order_(), lane_(), lender_(session), resources_(memory), queries_(memory), blocks_(memory), recording_(nullptr), batch_(), shadow_(),
       callbacks_{}, kernel_(), clock_(), allocations_(kernel_, lines_, clock_), context_(nullptr), viewport_{}, z_range_{0.0f, 1.0f}, scissor_{},
       scissor_set_(false), streams_{}, bound_{}, indices_(nullptr), index_stride_(0u), user_indices_(nullptr),
       user_index_bytes_(0u), bound_indices_(0u), vertex_ring_{}, index16_ring_{}, index32_ring_{},
       readback_(nullptr), readback_bytes_(0u), trace_(trace), context_number_(trace.number_context()),
-      call_began_(0u), busy_(0u), calls_(0u), draws_{}, rebased_(0u), null_shaders_(0u), written_(0u), slices_()
+      call_began_(0u), busy_(0u), calls_(0u), draws_{}, rebased_(0u), null_shaders_(0u), written_(0u), slices_(),
+      device_leased_(0u)
 {
     AV_SCOPE("D3d9Device::D3d9Device");
 }
@@ -73,15 +76,20 @@ D3d9Device::~D3d9Device()
     const bool joined = channel_.constructed();
     if (joined) {
         const Ring *const rings[] = {&vertex_ring_, &index16_ring_, &index32_ring_};
-        for (const Ring *ring : rings)
-            if (ring->id != 0u) static_cast<void>(d3d9proto::av_d3d9_Destroy9(wire(), ring->id));
+        for (const Ring *ring : rings) {
+            if (ring->id == 0u) continue;
+            static_cast<void>(d3d9proto::av_d3d9_Destroy9(wire(), ring->id));
+            uint64_t leased = ResourceFootprint(ring->bytes, 0u).bytes();
+            give_lease(leased);
+        }
         static_cast<void>(channel_.object().close9());
+        give_lease(device_leased_);
         static_cast<void>(channel_.object().flush());
         channel_.destroy();
     }
     if (readback_ != nullptr) memory_.release(readback_);
-    if (packets_.constructed()) packets_.destroy();
     if (present_order_.constructed()) present_order_.destroy();
+    if (lane_.constructed()) lane_.destroy();
     if (joined) session_.leave();
     kernel_.destroy_context(context_);
 }
@@ -94,22 +102,27 @@ HRESULT D3d9Device::initialize(uint32_t kmt_adapter, const D3DDDIARG_CREATEDEVIC
     if (create.pCallbacks == nullptr || create.pDeviceFuncs == nullptr) return E_INVALIDARG;
     callbacks_ = *create.pCallbacks;
     kernel_.bind(&callbacks_, create.hDevice);
+    lender_.bind(&callbacks_, create.hDevice);
     const HRESULT context = allocations_.make_context(context_);
     if (FAILED(context)) return context;
     const HRESULT joined = session_.join(kmt_adapter);
     if (FAILED(joined)) return joined;
-    static_cast<void>(present_order_.construct(kernel_.callbacks(), kernel_.runtime(), context_, session_.transport(), lines_));
-    static_cast<void>(packets_.construct(kernel_.callbacks(), kernel_.runtime(), session_.transport(), session_.lock(), lines_, context_));
+    static_cast<void>(lane_.construct(kernel_.callbacks(), kernel_.runtime(), context_, session_, lines_));
+    static_cast<void>(present_order_.construct(kernel_.callbacks(), kernel_.runtime(), context_, session_.transport(), lines_,
+                                               lane_.object()));
     static_cast<void>(channel_.construct(session_.stream(), session_.lock(), session_.next_id()));
     uint32_t hresult = 1u;
-    if (!channel_.object().open9(hresult) || hresult != 0u) {
-        lines_.write("the host made no Direct3D 9 device");
+    const bool leased = lease(ResourceFootprint::direct3d9_device_bytes);
+    if (leased) device_leased_ = ResourceFootprint::direct3d9_device_bytes;
+    if (!leased || !channel_.object().open9(hresult) || hresult != 0u) {
+        lines_.write(leased ? "the host made no Direct3D 9 device" : "a Direct3D 9 device is past what the host can lease");
+        give_lease(device_leased_);
         channel_.destroy();
-        packets_.destroy();
         present_order_.destroy();
+        lane_.destroy();
         const bool exhausted = session_.exhausted();
         session_.leave();
-        return d3d::SessionRefusal(exhausted).for_d3d();
+        return leased ? d3d::SessionRefusal(exhausted).for_d3d() : out_of_video_memory;
     }
     uint32_t sliced = 0u;
     const bool asked = d3d9proto::av_d3d9_QueryDeviceSlices9(wire(), &sliced);
@@ -124,6 +137,12 @@ d3d::UmdAdapter &D3d9Device::adapter() const
 {
     AV_SCOPE("D3d9Device::adapter");
     return adapter_;
+}
+
+const D3d9HostCaps &D3d9Device::caps() const
+{
+    AV_SCOPE("D3d9Device::caps");
+    return caps_;
 }
 
 void D3d9Device::lock_calls()
@@ -269,8 +288,9 @@ HRESULT D3d9Device::set_texture(UINT stage, HANDLE texture)
 {
     AV_SCOPE("D3d9Device::set_texture");
     if (recorded(D3d9StateEntry(Kind::texture, stage, texture, 0u, 0u))) return S_OK;
-    const D3d9Resource *const bound = resource(texture);
-    const uint32_t            id = bound != nullptr && bound->kind != D3d9Resource::Kind::system ? bound->id : 0u;
+    D3d9Resource *const bound = resource(texture);
+    if (bound != nullptr && bound->opened) static_cast<void>(adopt_opened(*bound));
+    const uint32_t id = bound != nullptr && bound->kind != D3d9Resource::Kind::system ? bound->id : 0u;
     return d3d9proto::av_d3d9_SetTexture9(wire(), stage, id) ? S_OK : lost(__func__);
 }
 
@@ -480,8 +500,9 @@ HRESULT D3d9Device::set_render_target(const D3DDDIARG_SETRENDERTARGET *args)
     AV_SCOPE("D3d9Device::set_render_target");
     if (args->RenderTargetIndex >= render_targets) return E_INVALIDARG;
     uint32_t                  id = 0u, subresource = 0u;
-    const D3d9Resource *const target = resource(args->hRenderTarget);
-    if (target != nullptr && refuses_opened(*target, "a Direct3D 9 render target that is an opened surface"))
+    D3d9Resource *const target = resource(args->hRenderTarget);
+    if (target != nullptr && !(target->opened && adopt_opened(*target)) &&
+        refuses_opened(*target, "a Direct3D 9 render target that is an opened surface"))
         return E_NOTIMPL;
     if (target != nullptr && !surface_of(*target, args->SubResourceIndex, id, subresource)) return E_INVALIDARG;
     trace("target", args->RenderTargetIndex, id, target != nullptr ? target->subresources[args->SubResourceIndex].width : 0u,
@@ -1016,6 +1037,52 @@ HRESULT D3d9Device::check_present_duration_support(D3DDDIARG_CHECKPRESENTDURATIO
     AV_SCOPE("D3d9Device::check_present_duration_support");
     args->ClosestSmallerDuration = 0u;
     args->ClosestLargerDuration = 0u;
+    return S_OK;
+}
+
+HRESULT D3d9Device::update_subresource_up(const D3DDDIARG_UPDATESUBRESOURCEUP *args)
+{
+    AV_SCOPE("D3d9Device::update_subresource_up");
+    D3d9Resource *const target = resource(args->hResource);
+    if (target == nullptr || args->SubResourceIndex >= target->count || args->pSysMemUP == nullptr ||
+        target->kind == D3d9Resource::Kind::system)
+        return E_INVALIDARG;
+    if (refuses_opened(*target, "a Direct3D 9 UpdateSubresourceUP of an opened surface")) return E_NOTIMPL;
+    const D3d9Subresource &level = target->subresources[args->SubResourceIndex];
+    const D3DDDIBOX        whole = {0u, 0u, level.width, level.height, 0u, level.depth};
+    const D3DDDIBOX       &box = args->Flags.BoxValid ? args->DstBox : whole;
+    const auto *const      data = static_cast<const uint8_t *>(args->pSysMemUP);
+    if (target->kind == D3d9Resource::Kind::vertex_buffer || target->kind == D3d9Resource::Kind::index_buffer) {
+        if (box.Right <= box.Left || box.Right > level.width) return E_INVALIDARG;
+        if (level.shadow != nullptr) memcpy(level.shadow + box.Left, data, box.Right - box.Left);
+        return write_buffer(target->id, box.Left, data, box.Right - box.Left, 0u);
+    }
+    if (!send_states()) return lost(__func__);
+    return write_texture(*target, args->SubResourceIndex, box, data, args->RowPitch, args->DepthPitch, 0u);
+}
+
+VOID D3d9Device::check_counter_info(D3DDDIARG_COUNTER_INFO *info)
+{
+    AV_SCOPE("D3d9Device::check_counter_info");
+    *info = D3DDDIARG_COUNTER_INFO{};
+}
+
+HRESULT D3d9Device::check_counter(D3DDDIQUERYTYPE, D3DDDI_COUNTER_TYPE *, UINT *, LPSTR, UINT *, LPSTR, UINT *, LPSTR,
+                                  UINT *)
+{
+    AV_SCOPE("D3d9Device::check_counter");
+    return E_INVALIDARG;
+}
+
+HRESULT D3d9Device::set_marker()
+{
+    AV_SCOPE("D3d9Device::set_marker");
+    return S_OK;
+}
+
+HRESULT D3d9Device::set_marker_mode(D3DDDI_MARKERTYPE, UINT)
+{
+    AV_SCOPE("D3d9Device::set_marker_mode");
     return S_OK;
 }
 

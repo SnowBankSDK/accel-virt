@@ -27,9 +27,9 @@ void GuestRing::write_batch(std::uint64_t fence, std::uint32_t length)
     tail_ += batch.span();
 }
 
-void GuestRing::write_batch(std::uint64_t fence, const std::uint8_t *payload, std::uint32_t length)
+void GuestRing::write_batch(std::uint64_t fence, const std::uint8_t *payload, std::uint32_t length, std::uint64_t after)
 {
-    const BatchHeader batch(length, fence);
+    const BatchHeader batch(length, fence, 0u, after);
     std::uint8_t      header[BatchHeader::encoded_size] = {};
     static_cast<void>(batch.encode(header, sizeof header));
     for (std::uint64_t i = 0u; i < batch.span(); i++) {

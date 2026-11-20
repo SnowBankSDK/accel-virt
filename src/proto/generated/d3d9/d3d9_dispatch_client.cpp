@@ -326,6 +326,58 @@ bool av_d3d9_PresentPoint9(::av::ClientTransport& t, uint32_t surface, uint32_t 
     return t.send_async(kCmd_PresentPoint9, b) == ::av::TransportResult::ok;
 }
 
+bool av_d3d9_CopyToLent9(::av::ClientTransport& t, uint32_t surface, uint32_t subresource, const Rect& source_rect, uint64_t memory, uint32_t pitch, uint32_t x, uint32_t y) {
+    AV_SCOPE("av_d3d9_CopyToLent9");
+    ::av::WireWriter b = t.request_writer();
+    b.write_pod<uint32_t>(surface);
+    b.write_pod<uint32_t>(subresource);
+    b.write_pod(source_rect);
+    b.write_pod<uint64_t>(memory);
+    b.write_pod<uint32_t>(pitch);
+    b.write_pod<uint32_t>(x);
+    b.write_pod<uint32_t>(y);
+    return t.send_async(kCmd_CopyToLent9, b) == ::av::TransportResult::ok;
+}
+
+bool av_d3d9_CreateLentSurface9(::av::ClientTransport& t, uint32_t surface, uint32_t kind, uint32_t width, uint32_t height, uint32_t format, uint64_t memory, uint32_t pitch) {
+    AV_SCOPE("av_d3d9_CreateLentSurface9");
+    ::av::WireWriter b = t.request_writer();
+    b.write_pod<uint32_t>(surface);
+    b.write_pod<uint32_t>(kind);
+    b.write_pod<uint32_t>(width);
+    b.write_pod<uint32_t>(height);
+    b.write_pod<uint32_t>(format);
+    b.write_pod<uint64_t>(memory);
+    b.write_pod<uint32_t>(pitch);
+    return t.send_async(kCmd_CreateLentSurface9, b) == ::av::TransportResult::ok;
+}
+
+bool av_d3d9_CreateSharedSurface9(::av::ClientTransport& t, uint32_t surface, uint32_t kind, uint32_t width, uint32_t height, uint32_t format, uint64_t key) {
+    AV_SCOPE("av_d3d9_CreateSharedSurface9");
+    ::av::WireWriter b = t.request_writer();
+    b.write_pod<uint32_t>(surface);
+    b.write_pod<uint32_t>(kind);
+    b.write_pod<uint32_t>(width);
+    b.write_pod<uint32_t>(height);
+    b.write_pod<uint32_t>(format);
+    b.write_pod<uint64_t>(key);
+    return t.send_async(kCmd_CreateSharedSurface9, b) == ::av::TransportResult::ok;
+}
+
+bool av_d3d9_OpenSharedSurface9(::av::ClientTransport& t, uint32_t surface, uint64_t key, uint32_t* hresult) {
+    AV_SCOPE("av_d3d9_OpenSharedSurface9");
+    ::av::WireWriter b = t.request_writer();
+    b.write_pod<uint32_t>(surface);
+    b.write_pod<uint64_t>(key);
+    const ::av::SyncCallScope call{t};
+    ::av::WireReader r{nullptr, 0u};
+    if (t.send_sync(kCmd_OpenSharedSurface9, b, r) != ::av::TransportResult::ok) return false;
+    { uint32_t value{};
+      if (!r.read_pod(value)) return false;
+      if (hresult != nullptr) *hresult = value; }
+    return r.remaining() == 0u;
+}
+
 bool av_d3d9_CreateVertexShader9(::av::ClientTransport& t, uint32_t shader, const void* code, uint64_t code_size) {
     AV_SCOPE("av_d3d9_CreateVertexShader9");
     const uint64_t blob_sizes[] = {code_size > inline_bytes ? code_size : 0u};

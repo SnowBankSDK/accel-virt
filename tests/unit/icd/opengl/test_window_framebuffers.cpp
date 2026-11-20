@@ -340,6 +340,92 @@ TEST(window_framebuffers, a_window_resized_while_another_context_was_current_is_
   CHECK_EQ(rig.argument(made + 10u, 1u), 300u);
   CHECK(rig.framebuffers.invariants_hold()); }
 
+TEST(window_framebuffers, a_single_buffered_windows_front_buffer_is_read_from_the_host_image)
+{ Rig rig;
+  CHECK_STATUS(rig.current_on(0, 100u, single), Status::ok);
+  std::uint8_t pixels[64] = {};
+  rig.context_rig.host().gl_bytes(nullptr, 0u);
+  CHECK(rig.framebuffers.present(rig.wire(), rig.state, &rig.dcs[0], &rig.windows[0], rig.surface, nullptr, 0u));
+  CHECK(!rig.framebuffers.read_front(0, 0, 1, 1, 0x80E1u, 0x1401u, pixels));
+  CHECK_EQ(rig.framebuffers.buffer_for(Windows::gl_front, false), Windows::gl_color_attachment0);
+  rig.framebuffers.reading(Windows::gl_front_left);
+  CHECK(!rig.framebuffers.read_front(0, 0, 1, 1, 0x80E1u, 0x1401u, pixels));
+  CHECK_EQ(rig.framebuffers.buffer_for(Windows::gl_front_left, false), Windows::gl_color_attachment0);
+  CHECK_EQ(rig.framebuffers.name_of(0u), 100u);
+  CHECK(rig.framebuffers.invariants_hold()); }
+
+TEST(window_framebuffers, a_front_shown_after_some_calls_is_drawn_again_only_after_more_a_move_or_a_resize)
+{ Rig rig;
+  rig.framebuffers.front_shown(5u);
+  CHECK(rig.framebuffers.front_drawn(5u));
+  CHECK_STATUS(rig.current_on(0, 100u, single), Status::ok);
+  CHECK(rig.framebuffers.front_drawn(5u));
+  rig.framebuffers.front_shown(5u);
+  CHECK(!rig.framebuffers.front_drawn(5u));
+  CHECK(rig.framebuffers.front_drawn(6u));
+  CHECK_STATUS(rig.current_on(1, 200u, single), Status::ok);
+  CHECK(rig.framebuffers.front_drawn(5u));
+  rig.framebuffers.front_shown(7u);
+  rig.surface.resize(&rig.windows[1], 16u, 8u);
+  rig.context_rig.host().gl_window(1u, 1u, 300u);
+  rig.framebuffers.follow(rig.wire(), &rig.windows[1], single, rig.surface);
+  CHECK(rig.framebuffers.front_drawn(7u));
+  rig.framebuffers.front_shown(8u);
+  rig.surface.close_window(&rig.windows[1]);
+  rig.framebuffers.drop_gone(rig.wire(), rig.surface);
+  CHECK(rig.framebuffers.front_drawn(8u));
+  CHECK(rig.framebuffers.invariants_hold()); }
+
+TEST(window_framebuffers, a_read_of_a_multisampled_window_resolves_it_first)
+{ Rig rig;
+  CHECK(!rig.framebuffers.resolved_read(rig.wire(), 1u));
+  CHECK_STATUS(rig.current_on(0, 100u), Status::ok);
+  std::uint32_t before = rig.commands();
+  CHECK(!rig.framebuffers.resolved_read(rig.wire(), 1u));
+  CHECK_EQ(rig.commands(), before);
+  const PixelFormat multisampled(24u, 8u, true, false, 4u);
+  rig.context_rig.host().gl_window(2u, 2u, 200u);
+  CHECK_STATUS(rig.framebuffers.make_current_on(rig.wire(), &rig.windows[1], multisampled, rig.surface),
+               Status::ok);
+  before = rig.commands();
+  CHECK(rig.framebuffers.resolved_read(rig.wire(), 1u));
+  CHECK_EQ(rig.commands() - before, 2u);
+  CHECK_EQ(rig.id(before), ids::kCmd_glBlitNamedFramebuffer);
+  CHECK_EQ(rig.argument(before, 0u), 200u);
+  CHECK_EQ(rig.argument(before, 1u), 201u);
+  CHECK_EQ(rig.id(before + 1u), ids::kCmd_glBindFramebuffer);
+  CHECK_EQ(rig.argument(before + 1u, 0u), Windows::gl_read_framebuffer);
+  CHECK_EQ(rig.argument(before + 1u, 1u), 201u);
+  rig.framebuffers.resolved_read_done(rig.wire());
+  CHECK_EQ(rig.commands() - before, 3u);
+  CHECK_EQ(rig.argument(before + 2u, 0u), Windows::gl_read_framebuffer);
+  CHECK_EQ(rig.argument(before + 2u, 1u), 200u);
+  rig.framebuffers.resolved_through(4u);
+  before = rig.commands();
+  CHECK(rig.framebuffers.resolved_read(rig.wire(), 4u));
+  CHECK_EQ(rig.commands() - before, 1u);
+  CHECK_EQ(rig.id(before), ids::kCmd_glBindFramebuffer);
+  CHECK_EQ(rig.argument(before, 1u), 201u);
+  rig.framebuffers.resolved_read_done(rig.wire());
+  before = rig.commands();
+  CHECK(rig.framebuffers.resolved_read(rig.wire(), 5u));
+  CHECK_EQ(rig.commands() - before, 2u);
+  CHECK_EQ(rig.id(before), ids::kCmd_glBlitNamedFramebuffer);
+  rig.framebuffers.resolved_read_done(rig.wire());
+  rig.framebuffers.resolved_through(6u);
+  rig.context_rig.host().gl_bytes(nullptr, 0u);
+  CHECK(rig.framebuffers.present(rig.wire(), rig.state, &rig.dcs[1], &rig.windows[1], rig.surface, nullptr, 0u));
+  before = rig.commands();
+  CHECK(rig.framebuffers.resolved_read(rig.wire(), 6u));
+  CHECK_EQ(rig.commands() - before, 2u);
+  CHECK_EQ(rig.id(before), ids::kCmd_glBlitNamedFramebuffer);
+  rig.framebuffers.resolved_read_done(rig.wire());
+  rig.framebuffers.bound(Windows::gl_read_framebuffer, 7u);
+  before = rig.commands();
+  CHECK(!rig.framebuffers.resolved_read(rig.wire(), 8u));
+  CHECK_EQ(rig.commands(), before);
+  CHECK(rig.framebuffers.invariants_hold()); }
+
 TEST(window_framebuffers, a_read_of_the_windows_front_buffer_is_answered_without_the_host)
 { Rig rig;
   CHECK_STATUS(rig.current_on(0, 100u), Status::ok);

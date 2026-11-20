@@ -6,6 +6,7 @@
 #include "executor/shim/d3d12_capabilities.hpp"
 #include "executor/shim/d3d12_dispatch_limit.hpp"
 #include "executor/shim/d3d12_frame_pool.hpp"
+#include "executor/shim/d3d12_image_imports.hpp"
 #include "executor/shim/host_heap.hpp"
 #include "proto/context/device_uuid.hpp"
 
@@ -14,7 +15,9 @@
 struct ID3D12CommandQueue;
 struct ID3D12Device;
 struct ID3D12Fence;
+struct ID3D12GraphicsCommandList;
 struct ID3D12Heap;
+struct D3D12_HEAP_DESC;
 struct ID3D12Resource;
 struct ID3D12RootSignature;
 
@@ -22,6 +25,7 @@ namespace av {
 
 class DriverLog;
 class OwnedFd;
+class SharedImageShape;
 class D3d11HostDevice;
 class D3dRuntime;
 class WakeSignal;
@@ -52,8 +56,13 @@ public:
     const D3d12Capabilities &capabilities() const;
     const D3d12DispatchLimit &dispatch_limit() const;
     ID3D12Heap                *import_dmabuf_heap(void *address, int fd, uint64_t size) const;
+    ID3D12Heap                *create_exported_heap(const D3D12_HEAP_DESC &desc, OwnedFd &descriptor) const;
+    bool                       exports_heaps() const;
     ID3D12RootSignature       *root_signature(const void *desc) const;
     [[nodiscard]] bool         export_image(ID3D12Resource *resource, Vkd3dImageExport &image) const;
+    ID3D12Resource            *adopt_image(OwnedFd &descriptor, const SharedImageShape &shape);
+    bool                       translates_indirect_addresses() const;
+    void                       set_indirect_va_table(ID3D12GraphicsCommandList *list, uint64_t table) const;
     [[nodiscard]] bool         export_fence(ID3D12Fence *fence, OwnedFd &descriptor) const;
     StagedFrame               *stage_frame(ID3D12CommandQueue *queue, ID3D12Resource *source);
 
@@ -63,6 +72,7 @@ private:
     bool               removed() override;
     [[nodiscard]] bool remake() override;
 
+    DriverLog         &lines_;
     const D3dRuntime  *runtime_;
     DeviceUuid         uuid_;
     HostHeap           tenant_heap_;
@@ -72,6 +82,7 @@ private:
     D3d12Capabilities  capabilities_;
     D3d12DispatchLimit dispatch_limit_;
     D3d12FramePool     frames_;
+    D3d12ImageImports  imports_;
 
     friend struct D3d12HostDeviceProbe;
 };

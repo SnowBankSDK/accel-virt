@@ -1,5 +1,7 @@
 #include "device/isolation/renderer_context_plane.hpp"
 
+#include "device/memory/host_blob_errand.hpp"
+
 #include "core/support/text_buffer.hpp"
 #include "core/trace/function_scope.hpp"
 #include "core/trace/state_writer.hpp"
@@ -12,6 +14,7 @@
 #include "proto/renderer/context_message.hpp"
 #include "proto/renderer/export_image_message.hpp"
 #include "proto/renderer/allocate_memory_message.hpp"
+#include "proto/resources/host_memory_request.hpp"
 #include "proto/renderer/allocated_memory_message.hpp"
 #include "proto/renderer/free_memory_message.hpp"
 #include "proto/renderer/interrupt_lines_message.hpp"
@@ -128,11 +131,26 @@ uint32_t RendererContextPlane::sub_apis() const
     return ready_.sub_apis();
 }
 
+Status RendererContextPlane::hand_memory(HostBlobErrand &errand, ServiceThread &)
+{
+    AV_SCOPE("RendererContextPlane::hand_memory");
+    errand.run_here();
+    return Status::ok;
+}
+
+Status RendererContextPlane::hand_off(Errand &errand, ServiceThread &)
+{
+    AV_SCOPE("RendererContextPlane::hand_off");
+    errand.run_here();
+    return Status::ok;
+}
+
 Status RendererContextPlane::allocate_memory(uint32_t context, uint64_t key, uint64_t size, uint32_t request,
                                              AvHostMemory &memory)
 {
     AV_SCOPE("RendererContextPlane::allocate_memory");
     host_.require_main_loop("RendererContextPlane::allocate_memory");
+    if (HostMemoryRequest(request).places()) return Status::not_supported;
     if (!alive_) return Status::no_memory;
     uint8_t body[AllocateMemoryMessage::encoded_size] = {};
     if (AllocateMemoryMessage(context, request, key, size).encode(body, sizeof body) != Status::ok)
@@ -263,6 +281,18 @@ Status RendererContextPlane::bind(uint32_t id, const ContextSetup &setup, const 
     return outcome;
 }
 
+bool RendererContextPlane::retiring_pins(uint32_t)
+{
+    AV_SCOPE("RendererContextPlane::retiring_pins");
+    return false;
+}
+
+bool RendererContextPlane::awaits_retiring_writer(uint32_t)
+{
+    AV_SCOPE("RendererContextPlane::awaits_retiring_writer");
+    return false;
+}
+
 bool RendererContextPlane::holds_doorbell(uint32_t index)
 {
     AV_SCOPE("RendererContextPlane::holds_doorbell");
@@ -286,6 +316,12 @@ uint32_t RendererContextPlane::live() const
     for (const ObjectStorage<RemoteContext> &slot : slots_)
         if (slot.constructed()) count++;
     return count;
+}
+
+uint32_t RendererContextPlane::reaping() const
+{
+    AV_SCOPE("RendererContextPlane::reaping");
+    return 0u;
 }
 
 void RendererContextPlane::blob_created(uint32_t id)

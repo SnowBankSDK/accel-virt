@@ -52,7 +52,11 @@ public:
     ~KmtTransport();
 
     [[nodiscard]] Status initialize(const GlContextOptions &options = GlContextOptions());
+    [[nodiscard]] Status initialize_lane(KmtTransport &session, ReleaseRoute &route);
     void                 teardown();
+    bool                 lane() const;
+    uint64_t             published_end() const;
+    [[nodiscard]] TransportResult flush_quietly();
     bool                 established() const;
     bool                 faulted() const;
     bool                 host_faulted() const;
@@ -66,10 +70,6 @@ public:
     bool                 ready_for_batch() const;
     void                 hold(PublishGate &gate);
     void                 forget(const PublishGate &gate);
-    [[nodiscard]] Status release_by(ReleaseRoute &route);
-    void                 release_directly(const ReleaseRoute &route);
-    bool                 releases_by_packet() const;
-    bool                 routed_by(const ReleaseRoute &route) const;
     void                 hold_in(uint8_t *block, size_t capacity);
     [[nodiscard]] TransportResult flush();
     size_t                        held() const;
@@ -78,6 +78,7 @@ public:
     [[nodiscard]] Status wake_on_raise(uint64_t handle);
     uint64_t             submissions_through_kernel() const;
     uint64_t             submissions() const;
+    uint64_t             calls_sent() const;
     void                 give_back_doorbell();
     uint32_t             context() const;
     uint32_t             ring() const;
@@ -88,6 +89,7 @@ public:
     WireWriter      request_writer() override;
     WireWriter      request_writer_with_room(const uint64_t *sizes, uint32_t count) override;
     TransportResult send_async(uint32_t command_id, WireWriter &writer) override;
+    TransportResult send_restoring(uint32_t command_id, WireWriter &writer);
     TransportResult send_sync(uint32_t command_id, WireWriter &writer, WireReader &reply) override;
     void            end_call() override;
     [[nodiscard]] bool make_room_for_blobs(const uint64_t *sizes, uint32_t count) override;
@@ -121,6 +123,7 @@ private:
     static constexpr uint64_t gpu_spin_us = 20000u;
 
     bool                 record_carries(const GlContextOptions &options) const;
+    [[nodiscard]] Status open(const GlContextOptions &options, bool lane);
     [[nodiscard]] Status setup_allocation(uint32_t index, AllocationKind kind, uint64_t bytes, bool map_gpu,
                                           uint64_t &address);
     [[nodiscard]] Status adopt_views();
@@ -141,6 +144,7 @@ private:
                                                   uint32_t trailer_length, uint64_t &next, uint64_t &begin,
                                                   uint64_t &end);
     [[nodiscard]] TransportResult submit_written(uint64_t begin, uint64_t end, uint64_t &fence);
+    uint64_t                      session_after() const;
     uint32_t                      stats_trailer(const uint8_t *batch, uint32_t length, uint64_t now, uint8_t *into);
     void                          note_wait(uint64_t began, ChannelCounter waits, ChannelCounter wait_us);
     [[nodiscard]] TransportResult hold(uint32_t command_id, const WireWriter &writer, uint8_t flags);
@@ -184,9 +188,11 @@ private:
     bool             faulted_;
     static constexpr uint32_t most_gates = 4u;
     PublishGate     *held_[most_gates];
-    const ReleaseRoute *route_;
-    const ReleaseRoute *standby_;
+    KmtTransport    *session_;
+    ReleaseRoute    *lane_route_;
+    bool             quiet_;
     uint32_t         gates_busy_;
+
 
     void             lock_gates();
     void             unlock_gates();
@@ -201,6 +207,7 @@ private:
     uint64_t         room_wait_ticks_;
     uint64_t         window_began_;
     bool             windowed_;
+    uint64_t         calls_sent_;
     SpillBlock       spill_;
     SpillBlock       answer_;
     ChannelStats     stats_;

@@ -49,6 +49,14 @@ Status AvContextBinding::tear_down(VirtioGpuDevice &device)
     return context_.release();
 }
 
+Status AvContextBinding::finish_tear_down(VirtioGpuDevice &device)
+{
+    AV_SCOPE("AvContextBinding::finish_tear_down");
+    if (context_.state() != GuestContext::State::tearing_down) return context_.release();
+    run_sequence(device);
+    return context_.release();
+}
+
 void AvContextBinding::abandon()
 {
     AV_SCOPE("AvContextBinding::abandon");
@@ -62,10 +70,16 @@ Status AvContextBinding::submit(const SubmissionDescriptor &submission)
     return context_.submit(submission);
 }
 
-void AvContextBinding::fail()
+void AvContextBinding::kick_if_behind()
+{
+    AV_SCOPE("AvContextBinding::kick_if_behind");
+    context_.kick_if_behind();
+}
+
+void AvContextBinding::fail(FaultCode reason)
 {
     AV_SCOPE("AvContextBinding::fail");
-    context_.fail();
+    context_.fail(reason);
 }
 
 uint64_t AvContextBinding::next_begin() const
@@ -113,8 +127,11 @@ void AvContextBinding::run_sequence(VirtioGpuDevice &device)
         if (next != Status::ok) break;
         uint32_t     written = 0u;
         const Status asked = device.ask_control(request_, length, answer_, sizeof answer_, written);
-        if (asked != Status::ok) break;
-        static_cast<void>(context_.accept(answer_, written));
+        if (asked != Status::ok) {
+            context_.unanswered(asked == Status::not_found);
+            break;
+        }
+        if (context_.accept(answer_, written) != Status::ok) break;
     }
 }
 

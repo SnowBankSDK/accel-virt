@@ -32,6 +32,8 @@ public:
     [[nodiscard]] Status allocate_memory(uint32_t context, uint64_t key, uint64_t size, uint32_t request,
                                          AvHostMemory &memory) override;
     void                 free_memory(uint64_t key) override;
+    [[nodiscard]] Status hand_memory(HostBlobErrand &errand, ServiceThread &service) override;
+    [[nodiscard]] Status hand_off(Errand &errand, ServiceThread &service) override;
     [[nodiscard]] Status alias_memory(uint64_t key, const ContextPlane &lender, uint64_t lender_key,
                                       AvHostMemory &memory) override;
     uint32_t             memory_domain() const override;
@@ -42,8 +44,11 @@ public:
     bool                 holds(uint32_t id) override;
     [[nodiscard]] Status bind(uint32_t id, const ContextSetup &setup, const CapsetInfo &capset) override;
     bool                 holds_doorbell(uint32_t index) override;
+    bool                 retiring_pins(uint32_t resource) override;
+    bool                 awaits_retiring_writer(uint32_t resource) override;
     bool                 can_share(uint32_t asking, uint32_t share) override;
     uint32_t             live() const override;
+    uint32_t             reaping() const override;
 
     void blob_created(uint32_t id) override;
     void blob_released(uint32_t id) override;

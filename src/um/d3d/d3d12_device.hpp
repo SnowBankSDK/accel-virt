@@ -1,6 +1,7 @@
 #ifndef AV_UM_D3D12_DEVICE_HPP
 #define AV_UM_D3D12_DEVICE_HPP
 
+#include "core/support/object_pool.hpp"
 #include "core/support/object_storage.hpp"
 #include "core/trace/function_scope.hpp"
 #include "icd/common/loss_latch.hpp"
@@ -12,6 +13,7 @@
 #include "proto/generated/d3d12/d3d12_wire_types.h"
 #include "um/d3d/allocation_lender.hpp"
 #include "um/d3d/batch_follower.hpp"
+#include "um/d3d/context_order.hpp"
 #include "um/d3d/d3d_call_trace.hpp"
 #include "um/d3d/d3d12_clock_origin.hpp"
 #include "um/d3d/d3d12_ddi.hpp"
@@ -25,10 +27,12 @@
 namespace av {
 class BlockSource;
 class KeyedLog;
+class SurfaceLayout;
 }
 
 namespace av::d3d {
 class D3dSession;
+class KernelHeap;
 }
 
 namespace av::d3d12 {
@@ -46,6 +50,7 @@ public:
     D3d12Device &operator=(const D3d12Device &) = delete;
 
     HRESULT initialize(uint32_t adapter, const D3D12DDIARG_CREATEDEVICE_0109 &create);
+    const D3d12HostCaps &caps() const;
 
     void unsupported(const char *slot);
     HRESULT answered(const char *slot, HRESULT hresult);
@@ -55,6 +60,9 @@ public:
 #include "um/d3d/generated/d3d12_device_ddi.inc"
 
     d3d::D3dDeviceChannel    &wire();
+    d3d::D3dDeviceChannel    &queue_wire(const QueueRecord &queue);
+    void                      reset_list(ListRecord &list, uint32_t pool, uint32_t type);
+    BlockSource              &memory();
     d3d12proto::DescriptorRef descriptor(D3D12DDI_CPU_DESCRIPTOR_HANDLE handle) const;
     d3d12proto::DescriptorRef descriptor(D3D12DDI_GPU_DESCRIPTOR_HANDLE handle) const;
     uint32_t                  id_of(const void *block) const;
@@ -78,13 +86,18 @@ private:
                               const D3D12DDI_CLEAR_VALUES *clear, D3D12DDI_HRESOURCE handle);
     HRESULT                  make_heap(const D3D12DDIARG_CREATEHEAP_0001 &args, HeapRecord &heap, bool committed);
     HRESULT                  heap_memory(const D3D12DDIARG_CREATEHEAP_0001 &args, HeapRecord &heap);
+    HRESULT                  place_heap(const D3D12DDIARG_CREATEHEAP_0001 &args, HeapRecord &heap);
     HRESULT                  send_heap(const HeapRecord &heap, uint64_t alignment);
     HRESULT                  charge_heap(HeapRecord &heap);
     void                     uncharge_heap(HeapRecord &heap);
     void                     release_heap_memory(HeapRecord &heap);
     void                     trim_memory();
+    HRESULT                  open_host_object(const D3D12DDIARG_OPENHEAP_0003 &args, uint64_t key, uint64_t bytes,
+                                              HeapRecord &heap, ResourceRecord *resource, D3D12DDI_HRTRESOURCE runtime);
     HRESULT                  open_existing(const D3D12DDIARG_OPENHEAP_0003 &args, HeapRecord &heap,
                                            ResourceRecord &resource);
+    HRESULT                  adopt_lent_image(const SurfaceLayout &surface, uint32_t format, uint64_t memory,
+                                              HeapRecord &heap, ResourceRecord &resource);
     HRESULT                  make_resource(const D3D12DDIARG_CREATERESOURCE_0109 &args, const D3D12DDI_CLEAR_VALUES *clear,
                                            HeapRecord &heap, uint64_t offset, ResourceRecord &resource);
     void                     record_resource(const d3d12proto::ResourceDesc &desc, ResourceRecord &resource);
@@ -97,20 +110,28 @@ private:
     const ResourceRecord    &tiling(ResourceRecord &resource);
 
     void give_back(const ResourceRecord &resource);
+    HRESULT                  allocate_heap(HeapRecord &heap, D3D12DDI_HRTRESOURCE runtime, ResourceRecord *resource);
+    void                     give_back_heap(HeapRecord &heap);
+    HRESULT                  kernel_heap(HeapRecord &heap, D3D12DDI_HRTRESOURCE runtime, ResourceRecord *resource);
     HRESULT                  show(ResourceRecord &resource, D3D12DDI_HRTRESOURCE runtime,
                                   const D3D12DDIARG_CREATERESOURCE_0109 &args);
 
-    SIZE_T  shader_bytes(const D3D12DDIARG_CREATE_SHADER_0026 &args, bool tessellation) const;
-    void    make_shader(uint32_t stage, const D3D12DDIARG_CREATE_SHADER_0026 &args, bool tessellation,
+    SIZE_T  shader_bytes(const D3D12DDIARG_CREATE_SHADER_0026 &args, ShaderIo io) const;
+    void    make_shader(uint32_t stage, const D3D12DDIARG_CREATE_SHADER_0026 &args, ShaderIo io,
                         D3D12DDI_HSHADER handle);
     uint32_t copy_signature(const D3D12DDIARG_SIGNATURE_ENTRY_0012 *entries, UINT count, uint32_t set,
                             d3d12proto::SignatureEntry *out) const;
     void    graphics_state(const D3D12DDIARG_CREATE_PIPELINE_STATE_0099 &args, d3d12proto::GraphicsState &state) const;
 
+    HRESULT                  make_state_object(uint32_t type, UINT count, const D3D12DDI_STATE_SUBOBJECT_0054 *subobjects,
+                                               uint32_t parent, D3D12DDI_HSTATEOBJECT_0054 handle);
+    StateIdentifier         *state_identifier(StateObjectRecord &record, LPCWSTR name);
+
     const ResourceRecord &viewed(D3D12DDI_HRESOURCE handle) const;
     bool texture_view(uint32_t kind, const ResourceRecord &resource, D3D12DDI_RESOURCE_DIMENSION dimension,
                       const void *members, d3d12proto::ViewDesc &view) const;
 
+    BlockSource                          &memory_;
     d3d::D3dSession                      &session_;
     KeyedLog                        &lines_;
     icd::RefusedCalls                refused_;
@@ -123,6 +144,7 @@ private:
     D3d12ClockOrigin                      clock_origin_;
     HeapMemories                          memories_;
     ObjectStorage<d3d::BatchFollower>     follower_;
+    ObjectPool<d3d::ContextOrder>         orders_;
     ObjectStorage<D3d12Residency>         residency_;
     ObjectStorage<d3d::D3dDeviceChannel>  channel_;
     d3d::D3d12AddressSpace                addresses_;
@@ -133,6 +155,7 @@ private:
     d3d::PipelineLibraryBlob              library_blob_;
     d3d::D3dCallTrace                    &trace_;
     uint32_t                              context_number_;
+    bool                                  placed_heaps_;
 };
 
 template <typename... Arguments>

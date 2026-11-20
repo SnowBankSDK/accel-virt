@@ -1,4 +1,5 @@
 #include "core/support/status.hpp"
+#include "device/context/device_context_table.hpp"
 #include "device/gpu/device_capset.hpp"
 #include "harness/framework/test_registry.hpp"
 #include "harness/host/host_violation.hpp"
@@ -46,7 +47,7 @@ TEST(device_capset_describe, offers_vulkan_every_ring_order_and_the_bound_gpu)
   CHECK(info.offers(SubApi::vulkan));
   CHECK(!info.offers(SubApi::opengl));
   CHECK(!info.offers(SubApi::opencl));
-  CHECK_EQ(info.max_contexts(), 64u);
+  CHECK_EQ(info.max_contexts(), av::DeviceContextTable::max_contexts);
   CHECK(info.accepts_ring_order(12u) && info.accepts_ring_order(24u));
   CHECK(!info.accepts_ring_order(11u) && !info.accepts_ring_order(25u));
   CHECK(!info.has_feature(CapsetInfo::feature_host_visible_memory));
@@ -203,6 +204,20 @@ TEST(device_capset_host_ram, a_host_whose_meminfo_cannot_be_read_or_parsed_decla
   broken.describe(0u, static_cast<std::uint32_t>(SubApi::vulkan), decided(garbled));
   CHECK_EQ(broken.info().gpu().shared_memory(), 0u); }
 
+TEST(device_capset_host_ram, an_integrated_gpu_advertises_no_more_local_memory_than_the_host_ram_it_takes)
+{ MockHost host;
+  host.add_gpu(GpuIdentity(0x8086u, 0x9a49u, GpuIdentity::integrated_gpu, first, 12ull << 30, 0u, "iris"));
+  host.add_gpu(GpuIdentity(0x10deu, 0x2482u, GpuIdentity::discrete_gpu, second, 12ull << 30, 0u, "card"));
+  meminfo(host, "MemTotal:       16777216 kB\n");
+  host.set_guest_memory_bytes(8ull << 30);
+  DeviceCapset integrated(host);
+  integrated.describe(0u, static_cast<std::uint32_t>(SubApi::vulkan), decided(host));
+  CHECK_EQ(integrated.info().gpu().local_memory(), integrated.info().gpu().shared_memory());
+  CHECK_EQ(integrated.info().gpu().local_memory(), 4ull << 30);
+  DeviceCapset discrete(host);
+  discrete.describe(1u, static_cast<std::uint32_t>(SubApi::vulkan), decided(host));
+  CHECK(discrete.info().gpu().local_memory() > (4ull << 30)); }
+
 TEST(device_capset_host_ram, a_guest_as_large_as_the_host_still_leaves_the_least_budget)
 { MockHost host;
   host.add_gpu(first);
@@ -228,3 +243,31 @@ TEST(device_capset_host_ram, the_executor_is_told_the_floor_host_memory_may_not_
   explicit_floor.reserve_host_ram(2048u);
   explicit_floor.describe(0u, static_cast<std::uint32_t>(SubApi::vulkan), decided(asked));
   CHECK_EQ(explicit_floor.info().host_ram_floor(), 2ull << 30); }
+
+TEST(device_capset_announce_hybrid, a_role_sets_its_own_feature_and_off_sets_none)
+{ MockHost host;
+  host.add_gpu(first);
+  DeviceCapset capset(host);
+  capset.announce_hybrid(DeviceCapset::hybrid_discrete);
+  capset.describe(0u, static_cast<std::uint32_t>(SubApi::vulkan), decided(host));
+  CHECK(!capset.info().has_feature(CapsetInfo::feature_hybrid_discrete));
+  capset.announce_hybrid(DeviceCapset::hybrid_off);
+  CHECK(!capset.info().has_feature(CapsetInfo::feature_hybrid_discrete));
+  CHECK(!capset.info().has_feature(CapsetInfo::feature_hybrid_integrated));
+  capset.announce_hybrid(DeviceCapset::hybrid_discrete);
+  CHECK(capset.info().has_feature(CapsetInfo::feature_hybrid_discrete));
+  CHECK(!capset.info().has_feature(CapsetInfo::feature_hybrid_integrated));
+  std::uint8_t bytes[CapsetInfo::encoded_size] = {};
+  CHECK_STATUS(capset.info().encode(bytes, sizeof bytes), Status::ok);
+  CapsetInfo decoded;
+  CHECK_STATUS(decoded.decode(bytes, sizeof bytes), Status::ok);
+  CHECK(decoded.has_feature(CapsetInfo::feature_hybrid_discrete)); }
+
+TEST(device_capset_announce_hybrid, the_integrated_role_sets_the_integrated_feature)
+{ MockHost host;
+  host.add_gpu(first);
+  DeviceCapset capset(host);
+  capset.describe(0u, static_cast<std::uint32_t>(SubApi::vulkan), decided(host));
+  capset.announce_hybrid(DeviceCapset::hybrid_integrated);
+  CHECK(capset.info().has_feature(CapsetInfo::feature_hybrid_integrated));
+  CHECK(!capset.info().has_feature(CapsetInfo::feature_hybrid_discrete)); }

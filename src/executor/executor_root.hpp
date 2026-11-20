@@ -60,6 +60,7 @@ public:
     void     close_domain(uint32_t domain);
     [[nodiscard]] Status allocate_memory(uint32_t domain, uint64_t key, uint64_t size, uint32_t request,
                                          AvHostMemory &memory);
+    [[nodiscard]] Status place_memory(ContextSession *session, uint64_t size, uint32_t request, AvHostMemory &memory);
     void                 free_memory(uint32_t domain, uint64_t key);
     [[nodiscard]] Status alias_memory(uint32_t domain, uint64_t key, uint32_t from_domain, uint64_t from_key,
                                       AvHostMemory &memory);
@@ -82,6 +83,8 @@ public:
     uint64_t        imported_handle(ContextSession *session, uint64_t blob_id);
     void            set_signal(ContextSession *session, void (*signal)(void *context), void *context);
     uint32_t        lose_device(ContextSession *session);
+    uint64_t        extend_lease(ContextSession *session, uint32_t kind, uint64_t bytes, uint64_t least);
+    void            return_lease(ContextSession *session, uint32_t kind, uint64_t bytes);
     uint32_t share_object(ContextSession *session, uint64_t object_id, uint32_t kind, uint64_t size,
                           uint64_t wire_handle);
     uint32_t open_object(ContextSession *session, uint64_t object_id, uint32_t kind, uint64_t size, uint64_t into,

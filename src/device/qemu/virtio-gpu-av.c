@@ -192,6 +192,16 @@ static void virtio_gpu_av_realize(DeviceState *qdev, Error **errp)
         error_setg(errp, "%s", error);
         return;
     }
+    if (r->hybrid && r->hybrid[0] && strcmp(r->hybrid, "off") != 0) {
+        if (strcmp(r->hybrid, "integrated") == 0) {
+            av_device_set_hybrid(r->core, 1);
+        } else if (strcmp(r->hybrid, "discrete") == 0) {
+            av_device_set_hybrid(r->core, 2);
+        } else {
+            error_setg(errp, "virtio-gpu-av: hybrid '%s' is not off, integrated or discrete", r->hybrid);
+            return;
+        }
+    }
     if (r->export_socket && r->export_socket[0] && !virtio_gpu_av_export_listen(r, errp)) {
         return;
     }
@@ -215,6 +225,8 @@ static void virtio_gpu_av_realize(DeviceState *qdev, Error **errp)
     }
     if (!r->display) {
         b->enabled_output_bitmask = 0;
+    } else if (b->conf.max_outputs > 1) {
+        b->enabled_output_bitmask = (1u << b->conf.max_outputs) - 1u;
     }
     for (uint32_t i = 0; i < AV_DEVICE_INTERRUPT_LINES; i++) {
         r->fence_queues[i] = virtio_add_queue(VIRTIO_DEVICE(qdev), 2, virtio_gpu_av_fence_kick);
@@ -273,7 +285,6 @@ static void virtio_gpu_av_scanout_image(VirtIOGPU *g, VirtIOGPUAv *r, struct vir
     struct virtio_gpu_av_scanout_image request;
     struct virtio_gpu_simple_resource *resource;
     enum virtio_gpu_ctrl_type answer = VIRTIO_GPU_RESP_OK_NODATA;
-    AvExportedImage exported;
     uint32_t head;
 
     if (iov_to_buf(cmd->elem.out_sg, cmd->elem.out_num, 0, &request, sizeof(request)) != sizeof(request)) {
@@ -286,8 +297,7 @@ static void virtio_gpu_av_scanout_image(VirtIOGPU *g, VirtIOGPUAv *r, struct vir
             head = virtio_gpu_av_head_of(g, le32_to_cpu(request.resource_id));
             if (r->host.display_takes_dmabuf(r->host.opaque, head) &&
                 !av_device_post_frame(r->core, head, le32_to_cpu(request.frame), le64_to_cpu(request.key)) &&
-                !(av_device_export_head(r->core, head, le64_to_cpu(request.key), &exported) &&
-                  virtio_gpu_av_show_image(r, head, &exported))) {
+                !av_device_show_frame(r->core, head, le64_to_cpu(request.key))) {
                 answer = VIRTIO_GPU_RESP_ERR_UNSPEC;
             }
         }
@@ -405,6 +415,7 @@ static const Property virtio_gpu_av_properties[] = {
     DEFINE_PROP_STRING("record-kinds", VirtIOGPUAv, record_kinds),
     DEFINE_PROP_BOOL("record-wrap", VirtIOGPUAv, record_wrap, false),
     DEFINE_PROP_BOOL("display", VirtIOGPUAv, display, true),
+    DEFINE_PROP_STRING("hybrid", VirtIOGPUAv, hybrid),
     DEFINE_PROP_STRING("export-socket", VirtIOGPUAv, export_socket),
 };
 

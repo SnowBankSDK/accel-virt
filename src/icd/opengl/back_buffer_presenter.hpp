@@ -27,6 +27,7 @@ class StateWriter;
 }
 
 namespace av::icd {
+class HostChannel;
 class PresentPacing;
 class WindowSurface;
 template <typename Source, typename Readiness>
@@ -72,10 +73,15 @@ public:
     uint32_t width() const;
     uint32_t height() const;
     bool     double_buffered() const;
+    uint32_t resolved(ClientTransport &wire);
+    uint32_t resolve_framebuffer() const;
     bool     present(ClientTransport &wire, const ClientArrayState &state, void *dc, icd::WindowSurface &surface,
                      GlPresentQueue *loop, uint64_t luid);
     void     hand_over(const BatchMark &mark);
+    bool     lost() const;
     void     hold_over(const BatchMark &mark, icd::PresentPacing &pacing);
+    void     paced_by(icd::PresentPacing &pacing);
+    void     watched_by(icd::HostChannel &channel);
     void     show_held_now();
     uint32_t flush_held() override;
     void     done(const GlFrame &frame, bool drawn);
@@ -98,6 +104,8 @@ private:
     void                 set_pack(ClientTransport &wire, const ClientArrayState &state, bool plain);
     void                 read_back(ClientTransport &wire);
     bool                 draw_chained(ClientTransport &wire, GlPresentQueue &loop, uint64_t luid);
+    uint32_t             slot_to_fill(GlPresentQueue &loop, uint32_t slots, uint32_t reserved, bool newest_wins);
+    bool                 paced() const;
     void                 copy_chained(ClientTransport &wire, GlPresentQueue &loop);
     void                 begin_rotation(ClientTransport &wire, GlPresentQueue &loop);
     void                 rotate_chained(ClientTransport &wire, GlPresentQueue &loop);
@@ -129,10 +137,12 @@ private:
     GlPresentQueue  *loop_;
     icd::ArenaRegion room_;
     uint32_t         pending_;
+    bool             undrawn_;
     bool             pending_chained_;
     bool             held_;
     BatchMark        held_mark_;
     icd::PresentPacing *pacing_;
+    icd::HostChannel *channel_;
     ChainedFrames    chained_;
     bool             chain_refused_;
     uint32_t         current_;

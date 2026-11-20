@@ -40,6 +40,7 @@ namespace {
 
 constexpr std::size_t origin[3] = {0u, 0u, 0u};
 constexpr std::size_t region[3] = {4u, 2u, 1u};
+constexpr std::size_t apart[3] = {8u, 4u, 0u};
 
 cl_mem foreign_memory(ClIcdRig &rig)
 {
@@ -98,7 +99,7 @@ TEST(cl_icd_root_enqueue, image_and_buffer_copies_fills_and_migrations_without_a
            CL_SUCCESS);
   CHECK_EQ(rig.root().enqueue_fill_image(run.queue(), image, colour, origin, region, nullptr), CL_SUCCESS);
   CHECK_EQ(rig.root().enqueue_migrate(run.queue(), 1u, moved, 0u, nullptr), CL_SUCCESS);
-  CHECK_EQ(rig.root().enqueue_copy_image(run.queue(), image, image, origin, origin, region, nullptr), CL_SUCCESS);
+  CHECK_EQ(rig.root().enqueue_copy_image(run.queue(), image, image, origin, apart, region, nullptr), CL_SUCCESS);
   CHECK_EQ(rig.kmt().commands(), sent);
   CHECK(ClIcdRootProbe::context(rig.root(), run.context())->flush() == av::TransportResult::ok);
   CHECK(rig.kmt().commands() > sent);
@@ -111,7 +112,7 @@ TEST(cl_icd_root_enqueue, image_and_buffer_copies_fills_and_migrations_without_a
            CL_SUCCESS);
   CHECK_EQ(rig.root().enqueue_fill_image(run.queue(), image, colour, origin, region, nullptr, waits), CL_SUCCESS);
   CHECK_EQ(rig.root().enqueue_migrate(run.queue(), 1u, moved, 0u, nullptr, waits), CL_SUCCESS);
-  CHECK_EQ(rig.root().enqueue_copy_image(run.queue(), image, image, origin, origin, region, nullptr, waits),
+  CHECK_EQ(rig.root().enqueue_copy_image(run.queue(), image, image, origin, apart, region, nullptr, waits),
            CL_SUCCESS);
   CHECK_EQ(rig.kmt().commands(), sent);
   CHECK(ClIcdRootProbe::context(rig.root(), run.context())->flush() == av::TransportResult::ok);
@@ -201,7 +202,7 @@ TEST(cl_icd_root_enqueue, a_lost_context_refuses_every_copy_map_pipe_and_shared_
            CL_OUT_OF_RESOURCES);
   CHECK_EQ(rig.root().enqueue_fill_image(run.queue(), image, colour, origin, region, nullptr), CL_OUT_OF_RESOURCES);
   CHECK_EQ(rig.root().enqueue_migrate(run.queue(), 1u, moved, 0u, nullptr), CL_OUT_OF_RESOURCES);
-  CHECK_EQ(rig.root().enqueue_copy_image(run.queue(), image, image, origin, origin, region, nullptr),
+  CHECK_EQ(rig.root().enqueue_copy_image(run.queue(), image, image, origin, apart, region, nullptr),
            CL_OUT_OF_RESOURCES);
 
   cl_int error = CL_SUCCESS;
@@ -309,7 +310,7 @@ TEST(cl_icd_root_enqueue, shared_memory_calls_the_api_would_refuse_send_nothing)
 namespace {
 
 alignas(4096) std::uint8_t lent_block[av::clicd::ClIcdRoot::lent_minimum];
-std::uint8_t               own_block[64];
+std::uint8_t               own_block[256];
 
 constexpr std::uint64_t host_over_own = 0x6D00u;
 constexpr std::uint64_t host_over_lent = 0x6E00u;
@@ -333,7 +334,9 @@ TEST(cl_icd_root_enqueue, a_sub_buffer_over_the_applications_memory_or_memory_le
   CHECK(lent != nullptr);
   if (own == nullptr || lent == nullptr) return;
 
-  const cl_buffer_region inside_own = {16u, 32u};
+  const cl_buffer_region inside_own = {128u, 32u};
+  const cl_uint align_bits = 1024u;
+  rig.host().cl_info(CL_SUCCESS, reinterpret_cast<const char *>(&align_bits), sizeof align_bits);
   rig.host().cl_handle(host_sub, CL_SUCCESS);
   const cl_mem sub_of_own = rig.root().create_sub_buffer(own, CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION,
                                                          &inside_own, &error);
@@ -343,7 +346,7 @@ TEST(cl_icd_root_enqueue, a_sub_buffer_over_the_applications_memory_or_memory_le
   if (sub_of_own != nullptr) {
       CHECK_EQ(rig.root().mem_object_info(sub_of_own, CL_MEM_HOST_PTR, sizeof host_pointer, &host_pointer, nullptr),
                CL_SUCCESS);
-      CHECK(host_pointer == own_block + 16);
+      CHECK(host_pointer == own_block + 128);
   }
 
   const cl_buffer_region inside_lent = {4096u, 4096u};
@@ -507,7 +510,7 @@ TEST(cl_icd_root_enqueue, a_host_that_refuses_an_enqueue_that_asks_for_an_event_
   rig.host().cl_enqueued(CL_INVALID_OPERATION, 0u);
   CHECK_EQ(rig.root().enqueue_migrate(run.queue(), 1u, moved, 0u, &event), CL_INVALID_OPERATION);
   rig.host().cl_enqueued(CL_INVALID_OPERATION, 0u);
-  CHECK_EQ(rig.root().enqueue_copy_image(run.queue(), image, image, origin, origin, region, &event),
+  CHECK_EQ(rig.root().enqueue_copy_image(run.queue(), image, image, origin, apart, region, &event),
            CL_INVALID_OPERATION);
   CHECK(event == nullptr);
   CHECK_EQ(rig.kmt().queued_answers(), 0u);
@@ -837,3 +840,75 @@ TEST(cl_icd_root_enqueue, a_copy_into_or_out_of_a_buffer_that_is_no_buffer_asks_
   CHECK_EQ(rig.root().enqueue_copy_buffer_to_image(run.queue(), not_memory, image, 0u, origin, region, nullptr),
            CL_INVALID_MEM_OBJECT);
   CHECK_EQ(rig.kmt().commands(), sent); }
+
+namespace {
+
+std::uint32_t count_commands(const av::MockKmt &kmt, std::uint32_t from, std::uint32_t command)
+{
+    std::uint32_t counted = 0u;
+    for (std::uint32_t index = from; index < kmt.commands(); ++index)
+        if (kmt.command_id(index) == command) ++counted;
+    return counted;
+}
+
+std::uint32_t position_of(const av::MockKmt &kmt, std::uint32_t from, std::uint32_t command)
+{
+    for (std::uint32_t index = from; index < kmt.commands(); ++index)
+        if (kmt.command_id(index) == command) return index;
+    return ~std::uint32_t{0};
+}
+
+}
+
+TEST(cl_icd_root_enqueue, a_queue_whose_command_waited_on_a_user_event_that_failed_gets_a_new_host_queue_before_its_next_command)
+{ ClIcdRig     rig;
+  ClRunningRig run(rig);
+  CHECK(run.made());
+  if (!run.made()) return;
+  const cl_event gate = run.gate();
+  rig.host().cl_enqueued(CL_SUCCESS, ClRunningRig::host_event);
+  cl_event victim = nullptr;
+  CHECK_EQ(rig.root().enqueue_marker(run.queue(), 1u, &gate, &victim), CL_SUCCESS);
+
+  const std::uint32_t before_failing = rig.kmt().commands();
+  rig.host().cl_result(CL_SUCCESS);
+  CHECK_EQ(rig.root().set_user_event_status(gate, -5), CL_SUCCESS);
+  CHECK_EQ(count_commands(rig.kmt(), before_failing, av::clproto::kCmd_clCreateCommandQueueWithProperties), 0u);
+
+  const std::uint32_t before_next = rig.kmt().commands();
+  const cl_int        complete = CL_COMPLETE;
+  rig.host().cl_enqueued(CL_SUCCESS, ClRunningRig::host_event + 1u);
+  rig.host().cl_result(CL_SUCCESS);
+  rig.host().cl_info(CL_SUCCESS, reinterpret_cast<const char *>(&complete), sizeof complete);
+  rig.host().cl_result(CL_SUCCESS);
+  rig.host().cl_handle(ClRunningRig::host_queue + 1u, CL_SUCCESS);
+  rig.host().cl_result(CL_SUCCESS);
+  rig.host().cl_enqueued(CL_SUCCESS, ClRunningRig::host_event + 2u);
+  cl_event next = nullptr;
+  CHECK_EQ(rig.root().enqueue_marker(run.queue(), 0u, nullptr, &next), CL_SUCCESS);
+  CHECK(ClIcdRootProbe::context(rig.root(), run.context())->flush() == av::TransportResult::ok);
+  CHECK_EQ(count_commands(rig.kmt(), before_next, av::clproto::kCmd_clCreateCommandQueueWithProperties), 1u);
+  CHECK_EQ(count_commands(rig.kmt(), before_next, av::clproto::kCmd_clReleaseCommandQueue), 1u);
+  CHECK(position_of(rig.kmt(), before_next, av::clproto::kCmd_clCreateCommandQueueWithProperties) <
+        position_of(rig.kmt(), before_next, av::clproto::kCmd_clReleaseCommandQueue));
+  CHECK_EQ(rig.kmt().queued_answers(), 0u);
+
+  const std::uint32_t before_again = rig.kmt().commands();
+  rig.host().cl_enqueued(CL_SUCCESS, ClRunningRig::host_event + 3u);
+  CHECK_EQ(rig.root().enqueue_marker(run.queue(), 0u, nullptr, nullptr), CL_SUCCESS);
+  CHECK_EQ(count_commands(rig.kmt(), before_again, av::clproto::kCmd_clCreateCommandQueueWithProperties), 0u);
+  CHECK(rig.root().invariants_hold()); }
+
+TEST(cl_icd_root_enqueue, a_queue_that_never_waited_on_a_user_event_keeps_its_host_queue_when_one_fails)
+{ ClIcdRig     rig;
+  ClRunningRig run(rig);
+  CHECK(run.made());
+  if (!run.made()) return;
+  const std::uint32_t before = rig.kmt().commands();
+  rig.host().cl_result(CL_SUCCESS);
+  CHECK_EQ(rig.root().set_user_event_status(run.gate(), -5), CL_SUCCESS);
+  rig.host().cl_enqueued(CL_SUCCESS, ClRunningRig::host_event);
+  CHECK_EQ(rig.root().enqueue_marker(run.queue(), 0u, nullptr, nullptr), CL_SUCCESS);
+  CHECK_EQ(count_commands(rig.kmt(), before, av::clproto::kCmd_clCreateCommandQueueWithProperties), 0u);
+  CHECK_EQ(count_commands(rig.kmt(), before, av::clproto::kCmd_clReleaseCommandQueue), 0u);
+  CHECK(rig.root().invariants_hold()); }

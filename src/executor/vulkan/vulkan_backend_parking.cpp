@@ -92,6 +92,20 @@ Status VulkanBackend::gather(const VkSubmitInfo2 *submits, uint32_t count, Vulka
     return gathered;
 }
 
+Status VulkanBackend::gather(const VkBindSparseInfo *binds, uint32_t count, VulkanSubmitSet &set) const
+{
+    AV_SCOPE("VulkanBackend::gather");
+    Status gathered = Status::ok;
+    for (uint32_t at = 0u; at < count && gathered == Status::ok; at++) {
+        const VkBindSparseInfo &bind = binds[at];
+        for (uint32_t index = 0u; index < bind.waitSemaphoreCount && gathered == Status::ok; index++)
+            gathered = set.add_wait(number(bind.pWaitSemaphores[index]));
+        for (uint32_t index = 0u; index < bind.signalSemaphoreCount && gathered == Status::ok; index++)
+            gathered = set.add_signal(number(bind.pSignalSemaphores[index]));
+    }
+    return gathered;
+}
+
 bool VulkanBackend::events_unset(uint64_t device, const VulkanSubmitSet &set)
 {
     AV_SCOPE("VulkanBackend::events_unset");
@@ -115,7 +129,7 @@ VulkanBackend::Hold VulkanBackend::hold_back(VkQueue queue, uint64_t device, uin
         lost_ = true;
         return Hold::refused;
     }
-    guard_.held(mark, device, submits, count);
+    if constexpr (!__is_same(Submit, VkBindSparseInfo)) guard_.held(mark, device, submits, count);
     return Hold::parked;
 }
 
@@ -163,6 +177,7 @@ VkResult VulkanBackend::on_vkQueueSubmit(VkQueue queue, uint32_t submitCount, co
     }
     guard_.submitted(mark, device, number(queue), pSubmits, submitCount, sent.value_);
     note_fence(fence, sent.semaphore_, sent.value_);
+    pace_window(mark, device);
     return result;
 }
 
@@ -192,6 +207,7 @@ VkResult VulkanBackend::on_vkQueueSubmit2(VkQueue queue, uint32_t submitCount, c
     }
     guard_.submitted(mark, device, number(queue), pSubmits, submitCount, sent.value_);
     note_fence(fence, sent.semaphore_, sent.value_);
+    pace_window(mark, device);
     return result;
 }
 
@@ -220,6 +236,36 @@ VkResult VulkanBackend::on_vkQueueSubmit2KHR(VkQueue queue, uint32_t submitCount
         return result;
     }
     guard_.submitted(mark, device, number(queue), pSubmits, submitCount, sent.value_);
+    note_fence(fence, sent.semaphore_, sent.value_);
+    pace_window(mark, device);
+    return result;
+}
+
+VkResult VulkanBackend::on_vkQueueBindSparse(VkQueue queue, uint32_t bindInfoCount, const VkBindSparseInfo *pBindInfo,
+                                             VkFence fence)
+{
+    AV_SCOPE("VulkanBackend::on_vkQueueBindSparse");
+    const uint64_t device = handles_.parent_of(number(queue));
+    const uint64_t mark = guard_.reserve(device);
+    if (mark == 0u) return VK_ERROR_OUT_OF_HOST_MEMORY;
+    const Hold hold = hold_back(queue, device, mark, pBindInfo, bindInfoCount);
+    if (hold != Hold::proceed) {
+        if (hold == Hold::parked) return VK_SUCCESS;
+        guard_.cancel(mark);
+        return VK_ERROR_DEVICE_LOST;
+    }
+    Stamp<VkBindSparseInfo> sent;
+    if (!stamp(queue, device, pBindInfo, bindInfoCount, sent)) {
+        guard_.cancel(mark);
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+    const VkResult result = RealVulkanDispatch::on_vkQueueBindSparse(queue, sent.count_, sent.sent_, fence);
+    last_submit_ = result;
+    if (result != VK_SUCCESS) {
+        guard_.cancel(mark);
+        return result;
+    }
+    guard_.sparse_bound(mark, number(queue), sent.value_);
     note_fence(fence, sent.semaphore_, sent.value_);
     return result;
 }
@@ -306,6 +352,66 @@ void VulkanBackend::forget_waits_under(uint64_t pool)
     AV_SCOPE("VulkanBackend::forget_waits_under");
     if (!host_waits_.any()) return;
     handles_.for_each_child(pool, [this](uint64_t child) { host_waits_.forget_buffer(child); });
+}
+
+void VulkanBackend::pace_window(uint64_t mark, uint64_t device)
+{
+    AV_SCOPE("VulkanBackend::pace_window");
+    if (!work_window_.full()) return;
+    const uint64_t before = work_window_.roll(mark);
+    if (before != 0u) static_cast<void>(guard_.quiesce_marks(&before, 1u, device));
+}
+
+void VulkanBackend::on_vkCmdCopyBuffer(VkCommandBuffer commandBuffer, VkBuffer srcBuffer, VkBuffer dstBuffer,
+                                       uint32_t regionCount, const VkBufferCopy *pRegions)
+{
+    AV_SCOPE("VulkanBackend::on_vkCmdCopyBuffer");
+    for (uint32_t region = 0u; region < regionCount && pRegions != nullptr; region++) work_window_.add(pRegions[region].size);
+    RealVulkanDispatch::on_vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, regionCount, pRegions);
+}
+
+void VulkanBackend::on_vkCmdFillBuffer(VkCommandBuffer commandBuffer, VkBuffer dstBuffer, VkDeviceSize dstOffset,
+                                       VkDeviceSize size, uint32_t data)
+{
+    AV_SCOPE("VulkanBackend::on_vkCmdFillBuffer");
+    work_window_.add(size == VK_WHOLE_SIZE ? GpuWorkWindow::window_bytes : size);
+    RealVulkanDispatch::on_vkCmdFillBuffer(commandBuffer, dstBuffer, dstOffset, size, data);
+}
+
+void VulkanBackend::on_vkCmdCopyImage(VkCommandBuffer commandBuffer, VkImage srcImage, VkImageLayout srcImageLayout,
+                                      VkImage dstImage, VkImageLayout dstImageLayout, uint32_t regionCount,
+                                      const VkImageCopy *pRegions)
+{
+    AV_SCOPE("VulkanBackend::on_vkCmdCopyImage");
+    for (uint32_t region = 0u; region < regionCount && pRegions != nullptr; region++)
+        work_window_.add(uint64_t{pRegions[region].extent.width} * pRegions[region].extent.height *
+                         pRegions[region].extent.depth * 4u);
+    RealVulkanDispatch::on_vkCmdCopyImage(commandBuffer, srcImage, srcImageLayout, dstImage, dstImageLayout,
+                                          regionCount, pRegions);
+}
+
+void VulkanBackend::on_vkCmdCopyBufferToImage(VkCommandBuffer commandBuffer, VkBuffer srcBuffer, VkImage dstImage,
+                                              VkImageLayout dstImageLayout, uint32_t regionCount,
+                                              const VkBufferImageCopy *pRegions)
+{
+    AV_SCOPE("VulkanBackend::on_vkCmdCopyBufferToImage");
+    for (uint32_t region = 0u; region < regionCount && pRegions != nullptr; region++)
+        work_window_.add(uint64_t{pRegions[region].imageExtent.width} * pRegions[region].imageExtent.height *
+                         pRegions[region].imageExtent.depth * 4u);
+    RealVulkanDispatch::on_vkCmdCopyBufferToImage(commandBuffer, srcBuffer, dstImage, dstImageLayout, regionCount,
+                                                  pRegions);
+}
+
+void VulkanBackend::on_vkCmdCopyImageToBuffer(VkCommandBuffer commandBuffer, VkImage srcImage,
+                                              VkImageLayout srcImageLayout, VkBuffer dstBuffer, uint32_t regionCount,
+                                              const VkBufferImageCopy *pRegions)
+{
+    AV_SCOPE("VulkanBackend::on_vkCmdCopyImageToBuffer");
+    for (uint32_t region = 0u; region < regionCount && pRegions != nullptr; region++)
+        work_window_.add(uint64_t{pRegions[region].imageExtent.width} * pRegions[region].imageExtent.height *
+                         pRegions[region].imageExtent.depth * 4u);
+    RealVulkanDispatch::on_vkCmdCopyImageToBuffer(commandBuffer, srcImage, srcImageLayout, dstBuffer, regionCount,
+                                                  pRegions);
 }
 
 }

@@ -109,6 +109,18 @@ void opened_by_opencl(std::uint32_t dxgi)
     shared.sample_count = 1u;
     shared.bind_flags = bind_shader_resource | bind_render_target;
     shared.misc_flags = misc_shared;
+    for (std::uint32_t earlier = 0u; earlier < 40u; earlier++) {
+        ResourceDesc other = shared;
+        other.width = 32u;
+        other.height = 32u;
+        other.mip_levels = 6u;
+        other.depth_or_array = 3u;
+        other.misc_flags = 0u;
+        other.format = 28u;
+        other.bind_flags = bind_shader_resource;
+        CHECK(av_d3d_CreateResource(wire, 500u + earlier, other, 0u, 0u, 0u));
+        CHECK(av_d3d_DestroyObject(wire, 500u + earlier));
+    }
     CHECK(av_d3d_CreateResource(wire, 1u, shared, key, 0u, 0u));
     static std::uint8_t pattern[size * size * 4u];
     for (std::uint32_t at = 0u; at < size * size; at++) {
@@ -120,6 +132,12 @@ void opened_by_opencl(std::uint32_t dxgi)
     const Box whole = {0u, 0u, 0u, size, size, 1u};
     CHECK(av_d3d_UpdateSubresource(wire, 1u, 0u, 1u, whole, size * 4u, 0u, 0u, pattern, sizeof pattern));
     CHECK(av_d3d_Finish11(wire, &hresult));
+    static std::uint8_t acquired[size * size * 4u];
+    std::uint32_t       acquired_pitch = 0u, acquired_depth = 0u;
+    std::uint64_t       acquired_bytes = 0u;
+    CHECK(av_d3d_ReadSubresource(wire, 1u, 0u, &hresult, &acquired_pitch, &acquired_depth, acquired, sizeof acquired,
+                                 &acquired_bytes));
+    CHECK_EQ(hresult, 0u);
     std::uint32_t handle_kind = 0u;
     av::OwnedFd   descriptor;
     CHECK(direct3d.export_object(AV_SHARED_MEMORY, 1u, handle_kind, descriptor));

@@ -120,6 +120,20 @@ TEST(allocation_report_to, tells_vidmm_the_size_segment_and_cpu_visibility)
   CHECK_EQ(info.Flags2, 0u);
   CHECK(info.pPrivateDriverData == &platform); }
 
+TEST(allocation_report_to, a_host_heap_has_no_process_view_and_keeps_its_segment)
+{ MockPlatform platform;
+  const AllocationDescriptor heap(AllocationKind::host_heap, true, SurfaceLayout(), 0x4000u, ScanoutTarget(), 5u);
+  Segments segments(platform); Allocation allocation(platform, segments.segments(), heap, 0x4000u);
+  const AllocationDescriptor shadow_like(AllocationKind::shadow, false, SurfaceLayout(1u, 1u, 21u, 4u), 4u, ScanoutTarget());
+  Allocation reference(platform, segments.segments(), shadow_like, 0x1000u);
+  DxgkAllocationInfoRecord info = {};
+  DxgkAllocationInfoRecord other = {};
+  allocation.report_to(info);
+  reference.report_to(other);
+  CHECK_EQ(info.Flags & 1u, 0u);
+  CHECK_EQ(info.PreferredSegment, other.PreferredSegment);
+  CHECK_EQ(info.SupportedWriteSegmentSet, other.SupportedWriteSegmentSet); }
+
 TEST(allocation_report_to, a_gpu_only_allocation_is_not_cpu_visible)
 { MockPlatform platform;
   const AllocationDescriptor texture(AllocationKind::shadow, false, SurfaceLayout(1u, 1u, 21u, 4u), 4u, ScanoutTarget());
@@ -404,6 +418,30 @@ TEST(allocation_report_to, a_client_buffer_follows_vidmm_s_system_memory_past_th
   name.report_to(name_info);
   CHECK_EQ(name_info.PreferredSegment, 3u);
   CHECK_EQ(name_info.SupportedReadSegmentSet, 0x4u); }
+
+TEST(allocation_report_to, a_host_heap_is_accounted_in_vidmm_s_system_memory_at_its_real_size_and_holds_no_pages)
+{ MockPlatform platform;
+  Segments segments(platform);
+  segments.offer_local(std::uint64_t{16} << 30u);
+  const std::uint64_t bytes = std::uint64_t{4} << 30u;
+  const AllocationDescriptor heap(AllocationKind::host_heap, false, SurfaceLayout(), bytes, ScanoutTarget(), 5u);
+  Allocation allocation(platform, segments.segments(), heap, bytes);
+  DxgkAllocationInfoRecord info = {};
+  allocation.report_to(info);
+  CHECK(info.Size == bytes);
+  CHECK_EQ(info.PreferredSegment, 3u);
+  CHECK_EQ(info.SupportedReadSegmentSet, 0x4u);
+  CHECK_EQ(info.SupportedWriteSegmentSet, 0x4u);
+  CHECK_EQ(info.Flags, 0u);
+  CHECK_EQ(allocation.pages().count(), 0u);
+  CHECK_EQ(allocation.host_key(), 5u);
+  CHECK(allocation.invariants_hold());
+  const AllocationDescriptor upload(AllocationKind::host_heap, true, SurfaceLayout(), 0x10000u, ScanoutTarget());
+  Allocation visible(platform, segments.segments(), upload, 0x10000u);
+  DxgkAllocationInfoRecord seen = {};
+  visible.report_to(seen);
+  CHECK_EQ(seen.PreferredSegment, 3u);
+  CHECK_EQ(seen.Flags, 0u); }
 
 TEST(allocation_report_to, a_context_s_name_is_not_pinned_in_the_aperture)
 { MockPlatform platform;

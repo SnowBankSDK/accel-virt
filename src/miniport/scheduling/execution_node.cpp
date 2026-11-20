@@ -12,7 +12,7 @@ namespace av {
 ExecutionNode::ExecutionNode(Platform &platform)
     : platform_(platform), lock_(platform, LockRank::execution_node), pending_{}, head_(0u), count_(0u),
       last_submitted_(0u), last_completed_(0u), preemption_fence_(0u), preemption_requested_(false),
-      stopped_(false), progress_time_(0u), owners_{}, awaited_{}, queued_at_{}
+      stopped_(false), progress_time_(0u), owners_{}, awaited_{}, queued_at_{}, preempted_(0u)
       {
           AV_SCOPE("ExecutionNode::ExecutionNode");
       }
@@ -28,7 +28,7 @@ Status ExecutionNode::submit(uint32_t fence, void *owner, uint64_t awaited)
 {
     AV_SCOPE("ExecutionNode::submit");
     platform_.require_irql_at_most(Irql::dispatch, "ExecutionNode::submit");
-    return owner == nullptr || awaited == 0u ? Status::invalid_parameter : queue(fence, owner, awaited);
+    return owner == nullptr ? Status::invalid_parameter : queue(fence, awaited != 0u ? owner : nullptr, awaited);
 }
 
 Status ExecutionNode::queue(uint32_t fence, void *owner, uint64_t awaited)
@@ -38,12 +38,13 @@ Status ExecutionNode::queue(uint32_t fence, void *owner, uint64_t awaited)
     InvariantScope<ExecutionNode> guard(platform_, *this, "submit");
     if (stopped_) return Status::invalid_state;
     if (fence <= last_submitted_ || count_ == capacity) return Status::invalid_parameter;
-    if (count_ == 0u) progress_time_ = platform_.interrupt_time();
+    const uint64_t now = platform_.interrupt_time();
+    if (count_ == 0u) progress_time_ = now;
     const uint32_t tail = (head_ + count_) % capacity;
     pending_[tail] = fence;
     owners_[tail] = owner;
     awaited_[tail] = awaited;
-    queued_at_[tail] = platform_.interrupt_time();
+    queued_at_[tail] = now;
     count_++;
     last_submitted_ = fence;
     return Status::ok;
@@ -72,7 +73,7 @@ uint32_t ExecutionNode::release_overdue(uint64_t now, void **owners, uint32_t ro
     uint32_t listed = 0u;
     for (uint32_t index = 0u; index < count_; index++) {
         const uint32_t slot = (head_ + index) % capacity;
-        if (awaited_[slot] == 0u || now < queued_at_[slot] + park_deadline) continue;
+        if (awaited_[slot] == 0u || now < queued_at_[slot] + overdue_after) continue;
         awaited_[slot] = 0u;
         released++;
         bool listed_already = false;
@@ -107,18 +108,25 @@ bool ExecutionNode::take(uint32_t &fence)
     return true;
 }
 
-bool ExecutionNode::take_preemption(uint32_t &fence, uint32_t &last_completed)
+bool ExecutionNode::take_preemption(uint32_t &fence, uint32_t &last_completed, uint32_t &returned)
 {
     AV_SCOPE("ExecutionNode::take_preemption");
     SpinLockGuard lock(lock_);
-    if (!preemption_requested_ || count_ != 0u) return false;
+    InvariantScope<ExecutionNode> guard(platform_, *this, "take_preemption");
+    if (!preemption_requested_) return false;
     preemption_requested_ = false;
+    returned = count_;
+    preempted_ += count_;
+    head_ = 0u;
+    count_ = 0u;
+    last_submitted_ = last_completed_;
+    progress_time_ = platform_.interrupt_time();
     fence = preemption_fence_;
     last_completed = last_completed_;
     return true;
 }
 
-Status ExecutionNode::complete(InterruptNotification &notification)
+Status ExecutionNode::complete(InterruptNotification &notification, uint32_t *returned)
 {
     AV_SCOPE("ExecutionNode::complete");
     platform_.require_irql_at_most(Irql::dispatch, "ExecutionNode::complete");
@@ -128,7 +136,9 @@ Status ExecutionNode::complete(InterruptNotification &notification)
         if (status != Status::ok) return status;
     }
     uint32_t last_completed = 0u;
-    if (!take_preemption(fence, last_completed)) return Status::ok;
+    uint32_t taken_back = 0u;
+    if (!take_preemption(fence, last_completed, taken_back)) return Status::ok;
+    if (returned != nullptr) *returned = taken_back;
     return notification.report_preempted(fence, last_completed);
 }
 
@@ -213,6 +223,7 @@ void ExecutionNode::report(StateWriter &writer)
         writer.number("preemption_fence", preemption_fence_);
         writer.flag("stopped", stopped_);
         writer.number("progress_time", progress_time_);
+        writer.number("preempted", preempted_);
         for (uint32_t index = 0u; index < count_; index++) {
             const uint32_t slot = (head_ + index) % capacity;
             writer.open("packet", index);

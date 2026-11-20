@@ -13,8 +13,8 @@ namespace av {
 static_assert(GuestMemoryTypes::no_type == HostMemoryRequest::memory_types);
 
 HostMemorySource::HostMemorySource(MemoryExporter &exporter, BlockSource &blocks)
-    : exporter_(exporter), memories_(blocks), aliases_(blocks), lock_(), host_(), asked_(0u), mappable_(0u),
-      visible_(0u), vulkan_(), vram_(), host_ram_(), reuse_()
+    : exporter_(exporter), memories_(blocks), aliases_(blocks), placed_(blocks), placed_sequence_(0u), lock_(), host_(), asked_(0u), mappable_(0u),
+      visible_(0u), alike_(0u), vulkan_(), vram_(), host_ram_(), device_ram_(), reuse_()
 {
     AV_SCOPE("HostMemorySource::HostMemorySource");
 }
@@ -25,6 +25,7 @@ HostMemorySource::~HostMemorySource()
     memories_.for_each([this](const SourceMemory &memory) { exporter_.free(memory.exported()); });
     memories_.destroy_all();
     static_cast<void>(host_ram_.close());
+    static_cast<void>(device_ram_.close());
 }
 
 void HostMemorySource::learn()
@@ -42,6 +43,7 @@ void HostMemorySource::learn()
         if ((flags & shared) != shared || !exporter_.exportable(type)) continue;
         mappable_ |= bit;
         if (exporter_.imports_host_visible(type)) visible_ |= bit;
+        if (exporter_.imports_alike(type)) alike_ |= bit;
     }
     if (asked_ != before) vulkan_.learn(host_, mappable_);
 }
@@ -52,6 +54,14 @@ uint32_t HostMemorySource::mappable_types()
     const ThreadLockHold held(lock_);
     learn();
     return mappable_;
+}
+
+bool HostMemorySource::imports_heaps()
+{
+    AV_SCOPE("HostMemorySource::imports_heaps");
+    const ThreadLockHold held(lock_);
+    learn();
+    return mappable_ != 0u && (mappable_ & ~alike_) == 0u;
 }
 
 bool HostMemorySource::vulkan_types(GuestMemoryTypes &answer)
@@ -112,6 +122,13 @@ uint32_t HostMemorySource::choices(HostMemoryRequest request, uint32_t (&types)[
         for (uint32_t earlier = 0u; earlier < count; earlier++) seen = seen || types[earlier] == type;
         if (!seen) types[count++] = type;
     }
+    if (request.kind() == HostMemoryRequest::Kind::vulkan) return count;
+    for (const uint32_t group : groups)
+        for (uint32_t type = 0u; type < HostMemoryRequest::memory_types && count < most_choices; type++) {
+            bool seen = (group & (1u << type)) == 0u || !system_type(type);
+            for (uint32_t earlier = 0u; earlier < count; earlier++) seen = seen || types[earlier] == type;
+            if (!seen) types[count++] = type;
+        }
     return count;
 }
 
@@ -129,14 +146,19 @@ Status HostMemorySource::allocate(uint32_t domain, uint64_t key, uint64_t size, 
     ExportedMemory exported;
     uint32_t       type = HostMemoryRequest::memory_types;
     uint64_t       charged = 0u;
+    bool           charged_device = false;
     for (uint32_t choice = 0u; choice < count && type == HostMemoryRequest::memory_types; choice++) {
         const bool system = system_type(types[choice]);
         if (system && !host_ram_.take(size)) continue;
+        if (!system && !device_ram_.take(size)) continue;
         if (exporter_.allocate(types[choice], size, exported) == Status::ok) {
             type = types[choice];
-            charged = system ? size : 0u;
+            charged = size;
+            charged_device = !system;
         } else if (system) {
             host_ram_.give(size);
+        } else {
+            device_ram_.give(size);
         }
     }
     if (type == HostMemoryRequest::memory_types) return Status::no_memory;
@@ -150,11 +172,12 @@ Status HostMemorySource::allocate(uint32_t domain, uint64_t key, uint64_t size, 
     if (!shared.hold_copy(exported.fd()) ||
         memories_.create(made, domain, key, type, caching, exported) != Status::ok) {
         exporter_.free(exported);
-        host_ram_.give(charged);
+        if (charged_device) device_ram_.give(charged);
+        else host_ram_.give(charged);
         return Status::no_memory;
     }
     made->bind(*this);
-    made->charge(charged);
+    made->charge(charged, charged_device);
     memory.fd = shared.take();
     memory.caching = caching;
     memory.size = exported.size();
@@ -218,7 +241,8 @@ void HostMemorySource::let_go(SourceMemory &memory)
     if (!memory.release()) return;
     exporter_.free(memory.exported());
     if (!system_type(memory.memory_type())) reuse_.freed(memory.memory_type(), memory.domain());
-    host_ram_.give(memory.charged());
+    if (memory.charged_device()) device_ram_.give(memory.charged());
+    else host_ram_.give(memory.charged());
     static_cast<void>(memories_.destroy(&memory));
 }
 
@@ -270,6 +294,95 @@ void HostMemorySource::free_domain(uint32_t domain)
     }
 }
 
+uint32_t HostMemorySource::placed_of(uint64_t owner) const
+{
+    AV_SCOPE("HostMemorySource::placed_of");
+    uint32_t count = 0u;
+    placed_.for_each([owner, &count](const Placed &held) { count += held.owner_ == owner ? 1u : 0u; });
+    return count;
+}
+
+void HostMemorySource::drop_oldest_placed(uint64_t owner)
+{
+    AV_SCOPE("HostMemorySource::drop_oldest_placed");
+    Placed *oldest = nullptr;
+    placed_.for_each([owner, &oldest](const Placed &held) {
+        if (held.owner_ == owner && (oldest == nullptr || held.sequence_ < oldest->sequence_))
+            oldest = const_cast<Placed *>(&held);
+    });
+    if (oldest != nullptr) static_cast<void>(placed_.destroy(oldest));
+}
+
+Status HostMemorySource::place(uint64_t owner, uint64_t handle, uint32_t type, uint64_t size, uint32_t caching, int fd)
+{
+    AV_SCOPE("HostMemorySource::place");
+    if (type >= HostMemoryRequest::memory_types) return Status::invalid_parameter;
+    return keep_placed(owner, handle, type, size, caching, fd);
+}
+
+Status HostMemorySource::place_heap(uint64_t owner, uint64_t handle, uint64_t size, uint32_t caching, int fd)
+{
+    AV_SCOPE("HostMemorySource::place_heap");
+    return keep_placed(owner, handle, heap_type, size, caching, fd);
+}
+
+Status HostMemorySource::keep_placed(uint64_t owner, uint64_t handle, uint32_t type, uint64_t size, uint32_t caching,
+                                     int fd)
+{
+    AV_SCOPE("HostMemorySource::keep_placed");
+    if (owner == 0u || handle == 0u || size == 0u || fd < 0) return Status::invalid_parameter;
+    const ThreadLockHold held(lock_);
+    while (placed_of(owner) >= most_placed_per_owner) drop_oldest_placed(owner);
+    Placed *made = nullptr;
+    if (placed_.create(made, owner, handle, type, size, caching, placed_sequence_++) != Status::ok) return Status::no_memory;
+    if (!made->fd_.hold_copy(fd)) {
+        static_cast<void>(placed_.destroy(made));
+        return Status::no_memory;
+    }
+    return Status::ok;
+}
+
+Status HostMemorySource::take_placed(uint64_t owner, uint32_t type, uint64_t size, AvHostMemory &memory)
+{
+    AV_SCOPE("HostMemorySource::take_placed");
+    const ThreadLockHold held(lock_);
+    Placed *found = nullptr;
+    placed_.for_each([owner, type, size, &found](const Placed &candidate) {
+        const uint64_t rounded = (candidate.size_ + page_bytes - 1u) / page_bytes * page_bytes;
+        if (candidate.owner_ != owner || candidate.type_ != type || rounded != size) return;
+        if (found == nullptr || candidate.sequence_ < found->sequence_) found = const_cast<Placed *>(&candidate);
+    });
+    if (found == nullptr) return Status::not_found;
+    memory.fd = found->fd_.take();
+    memory.caching = found->caching_;
+    memory.size = size;
+    static_cast<void>(placed_.destroy(found));
+    return Status::ok;
+}
+
+void HostMemorySource::drop_placed(uint64_t owner, uint64_t handle)
+{
+    AV_SCOPE("HostMemorySource::drop_placed");
+    const ThreadLockHold held(lock_);
+    Placed *found = placed_.find_if([owner, handle](const Placed &candidate) {
+        return candidate.owner_ == owner && candidate.handle_ == handle;
+    });
+    if (found != nullptr) static_cast<void>(placed_.destroy(found));
+}
+
+void HostMemorySource::drop_placed_of(uint64_t owner)
+{
+    AV_SCOPE("HostMemorySource::drop_placed_of");
+    const ThreadLockHold held(lock_);
+    while (placed_of(owner) != 0u) drop_oldest_placed(owner);
+}
+
+uint32_t HostMemorySource::placed() const
+{
+    AV_SCOPE("HostMemorySource::placed");
+    return placed_.live();
+}
+
 SourceMemory *HostMemorySource::acquire(uint32_t domain, uint64_t key)
 {
     AV_SCOPE("HostMemorySource::acquire");
@@ -301,6 +414,13 @@ void HostMemorySource::reserve_vram(uint32_t mib)
     AV_SCOPE("HostMemorySource::reserve_vram");
     const ThreadLockHold held(lock_);
     vram_ = VramPolicy(mib);
+}
+
+void HostMemorySource::use_vram_ledger(ByteLedger *ledger)
+{
+    AV_SCOPE("HostMemorySource::use_vram_ledger");
+    const ThreadLockHold held(lock_);
+    if (!device_ram_.bound_to(ledger)) device_ram_.bind(ledger);
 }
 
 void HostMemorySource::use_host_ram(ByteLedger *ledger)
@@ -336,6 +456,7 @@ void HostMemorySource::report(StateWriter &writer) const
     if (!gate.held()) return;
     writer.hex("mappable_types", mappable_);
     writer.hex("visible_types", visible_);
+    writer.hex("alike_types", alike_);
     writer.number("live", memories_.live());
     writer.number("aliases", aliases_.live());
     uint64_t bytes = 0u;

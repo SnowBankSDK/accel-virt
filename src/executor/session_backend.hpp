@@ -8,6 +8,7 @@ namespace av {
 class BlobRole;
 class ByteLedger;
 class OwnedFd;
+class SessionLease;
 class SharedImageShape;
 class SourceMemory;
 class TeardownBudget;
@@ -44,8 +45,10 @@ public:
     virtual void               release_object(uint32_t kind, uint64_t wire_handle, uint64_t detail) = 0;
 
     virtual void use_host_ram(ByteLedger *ledger, uint64_t limit) = 0;
+    virtual void lease_from(SessionLease *lease) = 0;
     virtual void shut_down() = 0;
     virtual void let_go_of_thread() = 0;
+    virtual void leave_device() = 0;
 
 protected:
     SessionBackend() = default;

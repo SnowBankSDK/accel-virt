@@ -26,6 +26,14 @@ def _signature(reg: Registry, cmd: Command, translates: bool = True) -> str:
     return f"{cmd.return_type.cpp()} av_{cmd.name}({', '.join(args)})"
 
 
+def _host_copy(cmd: Command):
+    if cmd.name.startswith("vkCopyMemoryToImage"):
+        return cmd.params[1].name, "dstImage"
+    if cmd.name.startswith("vkCopyImageToMemory"):
+        return cmd.params[1].name, "srcImage"
+    return None
+
+
 def _emit_body(reg: Registry, cmd: Command) -> list[str]:  # noqa: PLR0915
     is_void = cmd.return_type.base == "void"
     is_async = cmd.sync_mode == "async"
@@ -36,7 +44,21 @@ def _emit_body(reg: Registry, cmd: Command) -> list[str]:  # noqa: PLR0915
     else:
         on_fail = f"    return static_cast<{cmd.return_type.cpp()}>(0);"
 
-    lines: list[str] = ["::av::WireWriter payload = t.request_writer();"]
+    lines: list[str] = []
+    copy = _host_copy(cmd)
+    if copy is not None:
+        info, image = copy
+        lines += [
+            f"for (uint32_t av_c = 0; av_c < {info}->regionCount; ++av_c) {{",
+            "    uint64_t av_n = 0;",
+            f"    if (!handles.image_copy_bytes({info}->{image}, {info}->pRegions[av_c].imageSubresource,",
+            f"            {info}->pRegions[av_c].imageExtent, {info}->pRegions[av_c].memoryRowLength,",
+            f"            {info}->pRegions[av_c].memoryImageHeight, av_n)) {{",
+            "        return VK_ERROR_FORMAT_NOT_SUPPORTED;",
+            "    }",
+            "}",
+        ]
+    lines.append("::av::WireWriter payload = t.request_writer();")
 
     i = 0
     while i < len(cmd.params):
@@ -49,7 +71,10 @@ def _emit_body(reg: Registry, cmd: Command) -> list[str]:  # noqa: PLR0915
             )
             lines.append("payload.write_pod(array_present);")
             lines.append("if (array_present) {")
-            lines.append(f"    payload.write_pod<uint32_t>(*{count.name});")
+            if classify.is_size_blob(count, arr):
+                lines.append(f"    payload.write_pod<uint64_t>(*{count.name});")
+            else:
+                lines.append(f"    payload.write_pod<uint32_t>(*{count.name});")
             lines.append("}")
             i += 2
             continue
@@ -64,6 +89,11 @@ def _emit_body(reg: Registry, cmd: Command) -> list[str]:  # noqa: PLR0915
                 lines.append(f"payload.write_pod<uint64_t>({p.name});")
             else:
                 lines.append(f"payload.write_pod({p.name});")
+        elif kind == "in_stride":
+            lines.append(f"(void){p.name};")
+        elif kind == "in_pod_ptr":
+            lines.append(f"payload.write_pod<uint8_t>({p.name} != nullptr ? 1 : 0);")
+            lines.append(f"if ({p.name} != nullptr) {{ payload.write_pod(*{p.name}); }}")
         elif kind == "out_handle":
             pass
         elif kind == "in_string":
@@ -80,10 +110,17 @@ def _emit_body(reg: Registry, cmd: Command) -> list[str]:  # noqa: PLR0915
         elif kind == "in_struct_ptr":
             lines.append(f"{serialize.serialize_call(reg, p.type.base, 'payload', f'*{p.name}')};")
         elif kind in ("in_handle_array", "in_struct_array", "in_pod_array"):
+            element = f"{p.name}[av_i]"
+            if p.stride is not None:
+                element = (
+                    f"(*reinterpret_cast<const {p.type.base}*>("
+                    f"reinterpret_cast<const uint8_t*>({p.name}) + "
+                    f"static_cast<size_t>(av_i) * {p.stride}))"
+                )
             elem_line = (
-                f"    payload.write_pod({p.name}[av_i]);"
+                f"    payload.write_pod({element});"
                 if kind == "in_pod_array"
-                else f"    {serialize.serialize_call(reg, p.type.base, 'payload', f'{p.name}[av_i]')};"
+                else f"    {serialize.serialize_call(reg, p.type.base, 'payload', element)};"
             )
             nullable = bool(p.optional_levels) and p.optional_levels[0]
             pad = ""
@@ -178,6 +215,21 @@ def _emit_body(reg: Registry, cmd: Command) -> list[str]:  # noqa: PLR0915
             count = cmd.params[i]
             arr = cmd.params[i + 1]
             answered = f"{count.name}_answered"
+            if classify.is_size_blob(count, arr):
+                lines.append(f"uint64_t {answered} = 0;")
+                lines.append(f"if (!r.read_pod({answered})) {{")
+                lines.append(on_fail)
+                lines.append("}")
+                lines.append(f"if (array_present && ({answered} > *{count.name} ||")
+                lines.append(f"    ({answered} != 0 && !r.read({arr.name}, static_cast<size_t>({answered}))))) {{")
+                lines.append(on_fail)
+                lines.append("}")
+                lines.append(f"if ({answered} > static_cast<uint64_t>(~size_t{{0}})) {{")
+                lines.append(on_fail)
+                lines.append("}")
+                lines.append(f"*{count.name} = static_cast<size_t>({answered});")
+                i += 2
+                continue
             lines.append(f"uint32_t {answered} = 0;")
             lines.append(f"if (!r.read_pod({answered})) {{")
             lines.append(on_fail)
@@ -252,6 +304,23 @@ def _emit_body(reg: Registry, cmd: Command) -> list[str]:  # noqa: PLR0915
             lines.append("}")
         i += 1
 
+    if copy is not None and cmd.name.startswith("vkCopyImageToMemory"):
+        info, image = copy
+        lines += [
+            "if (result_code >= 0) {",
+            f"    for (uint32_t av_c = 0; av_c < {info}->regionCount; ++av_c) {{",
+            "        uint64_t av_n = 0;",
+            f"        if (!handles.image_copy_bytes({info}->{image}, {info}->pRegions[av_c].imageSubresource,",
+            f"                {info}->pRegions[av_c].imageExtent, {info}->pRegions[av_c].memoryRowLength,",
+            f"                {info}->pRegions[av_c].memoryImageHeight, av_n)) {{",
+            on_fail,
+            "        }",
+            f"        if (av_n != 0 && !r.read({info}->pRegions[av_c].pHostPointer, static_cast<size_t>(av_n))) {{",
+            on_fail,
+            "        }",
+            "    }",
+            "}",
+        ]
     if not is_void:
         lines.append(f"return static_cast<{cmd.return_type.cpp()}>(result_code);")
     return lines

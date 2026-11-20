@@ -1,4 +1,5 @@
 #include "executor/opengl/opengl_backend.hpp"
+#include "proto/generated/opengl/gl_protocol_ids.h"
 
 #include "executor/byte_ledger.hpp"
 
@@ -126,10 +127,10 @@ OpenGlBackend::OpenGlBackend(DriverLog &lines) : OpenGlBackend(heap_, lines)
 }
 
 OpenGlBackend::OpenGlBackend(BlockSource &blocks, DriverLog &lines)
-    : heap_(), context_(), gl_(), import_(), buffers_(), natives_(), wake_(), pack_(gl_, buffers_), fences_(blocks), progress_(gl_, natives_, wake_), pending_(gl_, errors_), vram_guard_(blocks, gl_, pending_), memories_(blocks, progress_), images_(blocks), slices_(memories_, gl_, import_, progress_, pending_, guest_, lines),
-      textures_(blocks, gl_, memories_, images_, pending_), guest_(), region_(guest_, lines), published_(guest_), errors_(),
+    : heap_(), context_(), gl_(), import_(), buffers_(), natives_(), wake_(), pack_(gl_, buffers_), fences_(blocks), pacer_(), shared_fences_(nullptr), progress_(gl_, natives_, wake_), pending_(gl_, errors_), vram_guard_(blocks, gl_, pending_), memories_(blocks, progress_), images_(blocks), slices_(memories_, gl_, import_, progress_, pending_, guest_, lines),
+      textures_(blocks, gl_, memories_, images_, pending_), framebuffers_(blocks, gl_, pending_), guest_(), region_(guest_, lines), published_(guest_), errors_(),
       resolved_(0u), ran_(0u), submitted_(0u), fenced_at_(0u), drained_at_(0u), drain_fence_(nullptr),
-      current_(false), poll_failure_logged_(false), lines_(lines)
+      current_(false), fence_owed_(false), poll_failure_logged_(false), lines_(lines)
 {
     AV_SCOPE("OpenGlBackend::OpenGlBackend");
     import_.attach(images_);
@@ -158,6 +159,7 @@ bool OpenGlBackend::initialize(const GlDisplay *display, const AvContextOptions 
         context_.close();
         return false;
     }
+    shared_fences_ = group != nullptr ? &group->fences() : nullptr;
     resolved_ = static_cast<uint32_t>(load_real_gl(gl_, resolve_through, &context_));
     install_hooks();
     gl_.av_fixed_function = granted_fixed_function();
@@ -183,6 +185,7 @@ void OpenGlBackend::install_hooks()
     gl_.av_error_user = this;
     slices_.install();
     textures_.install();
+    framebuffers_.install();
     vram_guard_.install();
 }
 
@@ -233,29 +236,47 @@ void OpenGlBackend::use_host_ram(ByteLedger *ledger, uint64_t limit)
     heap_.bind(ledger, limit);
 }
 
+void OpenGlBackend::lease_from(SessionLease *)
+{
+    AV_SCOPE("OpenGlBackend::lease_from");
+}
+
 void OpenGlBackend::shut_down()
 {
     AV_SCOPE("OpenGlBackend::shut_down");
     vram_guard_.clear();
+    deferral_.clear();
+    fence_owed_ = false;
     if (context_.make_current()) {
         if (drain_fence_ != nullptr && gl_.glDeleteSync != nullptr) gl_.glDeleteSync(static_cast<GLsync>(drain_fence_));
         if (gl_.glFinish != nullptr && drained_at_ != submitted_) gl_.glFinish();
+        client_reads_.release(gl_);
+        framebuffers_.release();
         pack_.release();
         pack_.abandon_all();
+        slices_.release();
         buffers_.give_back();
         memories_.destroy_all(import_);
         memories_.part();
         import_.give_back();
         progress_.release();
+        pacer_.stop(gl_);
         void *fence = nullptr;
-        while (fences_.take_any(fence))
+        while (fences_.take_any(fence)) {
+            if (shared_fences_ != nullptr) shared_fences_->withdraw(fence);
             if (gl_.glDeleteSync != nullptr) gl_.glDeleteSync(static_cast<GLsync>(fence));
+        }
     } else {
+        framebuffers_.forget_all();
+        slices_.forget();
         memories_.forget_all();
         memories_.part();
         progress_.forget();
         void *fence = nullptr;
-        while (fences_.take_any(fence)) fence = nullptr;
+        while (fences_.take_any(fence)) {
+            if (shared_fences_ != nullptr) shared_fences_->withdraw(fence);
+            fence = nullptr;
+        }
     }
     drain_fence_ = nullptr;
     fenced_at_ = 0u;
@@ -268,6 +289,12 @@ void OpenGlBackend::shut_down()
     gl_ = glproto::RealGl{};
     resolved_ = 0u;
     ran_ = 0u;
+}
+
+void OpenGlBackend::leave_device()
+{
+    AV_SCOPE("OpenGlBackend::leave_device");
+    heap_.bind(nullptr, UINT64_MAX);
 }
 
 void OpenGlBackend::let_go_of_thread()
@@ -293,9 +320,21 @@ bool OpenGlBackend::run(uint32_t command_id, WireReader &payload, WireWriter &re
     current_ = true;
     submitted_++;
     if (slices_.knows(command_id)) return slices_.run(command_id, payload, reply, arena);
+    const WireReader peek = payload;
+    if (command_id == glproto::kCmd_glReadPixels && client_reads_.run(gl_, peek, reply, arena)) {
+        ran_++;
+        return true;
+    }
     if (!glproto::dispatch_command(gl_, command_id, payload, reply, arena)) {
         LogLine(lines_).text(glproto::cmd_id_to_string(command_id)).text(" could not run").write();
         return false;
+    }
+    pacer_.ran(gl_, command_id, peek);
+    deferral_.ran(command_id, peek);
+    if (fence_owed_ && (!deferral_.defers() || deferral_.demands(command_id))) {
+        progress_.fence();
+        fence_owed_ = false;
+        deferral_.paid();
     }
     ran_++;
     return true;
@@ -315,6 +354,10 @@ bool OpenGlBackend::poll()
                 .number(static_cast<uint32_t>(Status::invalid_state))
                 .write();
         poll_failure_logged_ = true;
+        wake_.retry_later();
+        return true;
+    }
+    if (deferral_.defers()) {
         wake_.retry_later();
         return true;
     }
@@ -344,7 +387,14 @@ void OpenGlBackend::end_batch()
     AV_SCOPE("OpenGlBackend::end_batch");
     if (current_ && context_.make_current()) {
         publish_errors();
-        progress_.fence();
+        if (deferral_.defers()) {
+            fence_owed_ = true;
+            deferral_.owe();
+        } else {
+            progress_.fence();
+            fence_owed_ = false;
+            deferral_.paid();
+        }
         memories_.reclaim(import_);
         pack_.sweep();
     }
@@ -447,7 +497,10 @@ bool OpenGlBackend::bind_fence(uint64_t token, void *fence)
     if (!context_.make_current()) return false;
     if (fences_.crowded()) retire_passed_fence();
     const Status bound = fences_.bind(token, fence);
-    if (bound == Status::ok) return true;
+    if (bound == Status::ok) {
+        if (shared_fences_ != nullptr) shared_fences_->publish(token, fence);
+        return true;
+    }
     if (fence == nullptr) {
         LogLine(lines_).text("glFenceSync made no GLsync for token ").number(token).write();
         return false;
@@ -467,19 +520,24 @@ void OpenGlBackend::retire_passed_fence()
     if (reached != gl_already_signaled && reached != gl_condition_satisfied) return;
     void *deleted = nullptr;
     if (fences_.retire_oldest(deleted) != Status::ok) return;
+    if (shared_fences_ != nullptr) shared_fences_->withdraw(deleted);
     if (deleted != nullptr && gl_.glDeleteSync != nullptr) gl_.glDeleteSync(static_cast<GLsync>(deleted));
 }
 
 void *OpenGlBackend::fence_for(uint64_t token) const
 {
     AV_SCOPE("OpenGlBackend::fence_for");
-    return fences_.fence_for(token);
+    void *const own = fences_.fence_for(token);
+    if (own != nullptr || shared_fences_ == nullptr) return own;
+    return shared_fences_->await(token, GlSharedFences::await_nanoseconds);
 }
 
 void *OpenGlBackend::forget_fence(uint64_t token)
 {
     AV_SCOPE("OpenGlBackend::forget_fence");
-    return fences_.forget(token);
+    void *const forgotten = fences_.forget(token);
+    if (shared_fences_ != nullptr) shared_fences_->withdraw(forgotten);
+    return forgotten;
 }
 
 

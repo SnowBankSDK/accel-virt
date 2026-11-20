@@ -14,7 +14,7 @@ constexpr uint64_t drm_format_mod_linear = 0u;
 
 }
 
-SystemMemoryTwin::SystemMemoryTwin(ExportableImages &owner)
+SystemMemoryTwin::SystemMemoryTwin(ImageRetirement &owner)
     : TextureHold(owner), image_(), texture_(nullptr), width_(0u), height_(0u), format_(0u), copied_writes_(0u),
       copied_(false)
 {

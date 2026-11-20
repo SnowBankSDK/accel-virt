@@ -3368,6 +3368,40 @@ bool dispatch_command(ServerDispatch& s, uint32_t cmd_id, ::av::WireReader& r, :
         }
         return true;
     }
+    case ::av::vkproto::kCmd_vkGetPipelineCacheData: {
+        AV_SCOPE("server:vkGetPipelineCacheData");
+        VkDevice device = VK_NULL_HANDLE;
+        VkPipelineCache pipelineCache = VK_NULL_HANDLE;
+        uint8_t array_present = 0;
+        size_t pDataSize_local = 0;
+        size_t pDataSize_capacity = 0;
+        char* pData_storage = nullptr;
+        if (!deserialize_VkDevice(r, s, device)) return false;
+        if (!deserialize_VkPipelineCache(r, s, pipelineCache)) return false;
+        if (pipelineCache == VK_NULL_HANDLE) return false;
+        if (!r.read_pod(array_present)) return false;
+        if (array_present) {
+            uint64_t av_wide = 0;
+            if (!r.read_pod(av_wide)) return false;
+            constexpr uint64_t av_most_blob = uint64_t{64} << 20;
+            if (av_wide > av_most_blob) av_wide = av_most_blob;
+            pDataSize_local = static_cast<size_t>(av_wide);
+            pDataSize_capacity = pDataSize_local;
+            struct alignas(16) av_block16 { unsigned char bytes[16]; };
+            auto* av_blocks = arena.allocate<av_block16>((pDataSize_local + 15u) / 16u + 1u);
+            if (av_blocks == nullptr) return false;
+            pData_storage = reinterpret_cast<char*>(av_blocks);
+        }
+        VkResult result = s.on_vkGetPipelineCacheData(device, pipelineCache, &pDataSize_local, array_present ? static_cast<void*>(pData_storage) : nullptr);
+        reply.write_pod<int32_t>(static_cast<int32_t>(result));
+        uint64_t pDataSize_sent = static_cast<int32_t>(result) < 0 ? 0u : pDataSize_local;
+        if (array_present && pDataSize_sent > pDataSize_capacity) {
+            pDataSize_sent = pDataSize_capacity;
+        }
+        reply.write_pod(pDataSize_sent);
+        if (array_present && pDataSize_sent != 0) { reply.write(pData_storage, static_cast<size_t>(pDataSize_sent)); }
+        return true;
+    }
     case ::av::vkproto::kCmd_vkGetPrivateData: {
         AV_SCOPE("server:vkGetPrivateData");
         VkDevice device = VK_NULL_HANDLE;
@@ -4667,6 +4701,40 @@ bool dispatch_command(ServerDispatch& s, uint32_t cmd_id, ::av::WireReader& r, :
         reply.write_pod<int32_t>(static_cast<int32_t>(result));
         return true;
     }
+    case ::av::vkproto::kCmd_vkCmdBindDescriptorBufferEmbeddedSamplersEXT: {
+        AV_SCOPE("server:vkCmdBindDescriptorBufferEmbeddedSamplersEXT");
+        VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+        VkPipelineBindPoint pipelineBindPoint{};
+        VkPipelineLayout layout = VK_NULL_HANDLE;
+        uint32_t set{};
+        if (!deserialize_VkCommandBuffer(r, s, commandBuffer)) return false;
+        if (!r.read_pod(pipelineBindPoint)) return false;
+        if (!deserialize_VkPipelineLayout(r, s, layout)) return false;
+        if (layout == VK_NULL_HANDLE) return false;
+        if (!r.read_pod(set)) return false;
+        s.on_vkCmdBindDescriptorBufferEmbeddedSamplersEXT(commandBuffer, pipelineBindPoint, layout, set);
+        return true;
+    }
+    case ::av::vkproto::kCmd_vkCmdBindDescriptorBuffersEXT: {
+        AV_SCOPE("server:vkCmdBindDescriptorBuffersEXT");
+        VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+        uint32_t bufferCount{};
+        VkDescriptorBufferBindingInfoEXT* pBindingInfos_storage = nullptr;
+        size_t pBindingInfos_storage_count = 0;
+        if (!deserialize_VkCommandBuffer(r, s, commandBuffer)) return false;
+        if (!r.read_pod(bufferCount)) return false;
+        pBindingInfos_storage_count = static_cast<size_t>(bufferCount);
+        if (pBindingInfos_storage_count != 0) {
+            pBindingInfos_storage = arena.allocate<VkDescriptorBufferBindingInfoEXT>(pBindingInfos_storage_count);
+            if (pBindingInfos_storage == nullptr) return false;
+            for (size_t av_z = 0; av_z < pBindingInfos_storage_count; ++av_z) { pBindingInfos_storage[av_z] = {}; }
+        }
+        for (size_t av_i = 0; av_i < pBindingInfos_storage_count; ++av_i) {
+            if (!deserialize_VkDescriptorBufferBindingInfoEXT(r, s, &pBindingInfos_storage[av_i], arena)) return false;
+        }
+        s.on_vkCmdBindDescriptorBuffersEXT(commandBuffer, bufferCount, pBindingInfos_storage);
+        return true;
+    }
     case ::av::vkproto::kCmd_vkCmdBindShadersEXT: {
         AV_SCOPE("server:vkCmdBindShadersEXT");
         VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
@@ -5226,6 +5294,44 @@ bool dispatch_command(ServerDispatch& s, uint32_t cmd_id, ::av::WireReader& r, :
         s.on_vkCmdSetDepthWriteEnableEXT(commandBuffer, depthWriteEnable);
         return true;
     }
+    case ::av::vkproto::kCmd_vkCmdSetDescriptorBufferOffsetsEXT: {
+        AV_SCOPE("server:vkCmdSetDescriptorBufferOffsetsEXT");
+        VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+        VkPipelineBindPoint pipelineBindPoint{};
+        VkPipelineLayout layout = VK_NULL_HANDLE;
+        uint32_t firstSet{};
+        uint32_t setCount{};
+        uint32_t* pBufferIndices_storage = nullptr;
+        size_t pBufferIndices_storage_count = 0;
+        VkDeviceSize* pOffsets_storage = nullptr;
+        size_t pOffsets_storage_count = 0;
+        if (!deserialize_VkCommandBuffer(r, s, commandBuffer)) return false;
+        if (!r.read_pod(pipelineBindPoint)) return false;
+        if (!deserialize_VkPipelineLayout(r, s, layout)) return false;
+        if (layout == VK_NULL_HANDLE) return false;
+        if (!r.read_pod(firstSet)) return false;
+        if (!r.read_pod(setCount)) return false;
+        pBufferIndices_storage_count = static_cast<size_t>(setCount);
+        if (pBufferIndices_storage_count != 0) {
+            pBufferIndices_storage = arena.allocate<uint32_t>(pBufferIndices_storage_count);
+            if (pBufferIndices_storage == nullptr) return false;
+            for (size_t av_z = 0; av_z < pBufferIndices_storage_count; ++av_z) { pBufferIndices_storage[av_z] = {}; }
+        }
+        for (size_t av_i = 0; av_i < pBufferIndices_storage_count; ++av_i) {
+            if (!r.read_pod(pBufferIndices_storage[av_i])) return false;
+        }
+        pOffsets_storage_count = static_cast<size_t>(setCount);
+        if (pOffsets_storage_count != 0) {
+            pOffsets_storage = arena.allocate<VkDeviceSize>(pOffsets_storage_count);
+            if (pOffsets_storage == nullptr) return false;
+            for (size_t av_z = 0; av_z < pOffsets_storage_count; ++av_z) { pOffsets_storage[av_z] = {}; }
+        }
+        for (size_t av_i = 0; av_i < pOffsets_storage_count; ++av_i) {
+            if (!r.read_pod(pOffsets_storage[av_i])) return false;
+        }
+        s.on_vkCmdSetDescriptorBufferOffsetsEXT(commandBuffer, pipelineBindPoint, layout, firstSet, setCount, pBufferIndices_storage, pOffsets_storage);
+        return true;
+    }
     case ::av::vkproto::kCmd_vkCmdSetExtraPrimitiveOverestimationSizeEXT: {
         AV_SCOPE("server:vkCmdSetExtraPrimitiveOverestimationSizeEXT");
         VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
@@ -5609,6 +5715,15 @@ bool dispatch_command(ServerDispatch& s, uint32_t cmd_id, ::av::WireReader& r, :
         if (!deserialize_VkCopyImageToMemoryInfo(r, s, &pCopyImageToMemoryInfo_local, arena)) return false;
         VkResult result = s.on_vkCopyImageToMemoryEXT(device, &pCopyImageToMemoryInfo_local);
         reply.write_pod<int32_t>(static_cast<int32_t>(result));
+        if (static_cast<int32_t>(result) >= 0) {
+            for (uint32_t av_c = 0; av_c < pCopyImageToMemoryInfo_local.regionCount; ++av_c) {
+                uint64_t av_n = 0;
+                const VkImageToMemoryCopy& av_r = pCopyImageToMemoryInfo_local.pRegions[av_c];
+                if (!s.image_copy_bytes(pCopyImageToMemoryInfo_local.srcImage, av_r.imageSubresource, av_r.imageExtent,
+                        av_r.memoryRowLength, av_r.memoryImageHeight, av_n)) { return false; }
+                if (av_n != 0) { reply.write(av_r.pHostPointer, static_cast<size_t>(av_n)); }
+            }
+        }
         return true;
     }
     case ::av::vkproto::kCmd_vkCopyMemoryToAccelerationStructureKHR: {
@@ -5843,6 +5958,61 @@ bool dispatch_command(ServerDispatch& s, uint32_t cmd_id, ::av::WireReader& r, :
         reply.write_pod<int32_t>(static_cast<int32_t>(result));
         return true;
     }
+    case ::av::vkproto::kCmd_vkGetDescriptorEXT: {
+        AV_SCOPE("server:vkGetDescriptorEXT");
+        VkDevice device = VK_NULL_HANDLE;
+        VkDescriptorGetInfoEXT pDescriptorInfo_local{};
+        size_t dataSize{};
+        uint8_t* pDescriptor_storage = nullptr;
+        size_t pDescriptor_storage_count = 0;
+        if (!deserialize_VkDevice(r, s, device)) return false;
+        if (!deserialize_VkDescriptorGetInfoEXT(r, s, &pDescriptorInfo_local, arena)) return false;
+        {
+            uint64_t av_wide = 0;
+            if (!r.read_pod(av_wide)) return false;
+            dataSize = static_cast<size_t>(av_wide);
+        }
+        pDescriptor_storage_count = static_cast<size_t>(dataSize);
+        if (pDescriptor_storage_count != 0) {
+            pDescriptor_storage = arena.allocate<uint8_t>(pDescriptor_storage_count);
+            if (pDescriptor_storage == nullptr) return false;
+            for (size_t av_z = 0; av_z < pDescriptor_storage_count; ++av_z) { pDescriptor_storage[av_z] = {}; }
+        }
+        s.on_vkGetDescriptorEXT(device, &pDescriptorInfo_local, dataSize, pDescriptor_storage);
+        reply.write_pod<int32_t>(0);
+        if (pDescriptor_storage_count != 0) {
+            reply.write(pDescriptor_storage, pDescriptor_storage_count);
+        }
+        return true;
+    }
+    case ::av::vkproto::kCmd_vkGetDescriptorSetLayoutBindingOffsetEXT: {
+        AV_SCOPE("server:vkGetDescriptorSetLayoutBindingOffsetEXT");
+        VkDevice device = VK_NULL_HANDLE;
+        VkDescriptorSetLayout layout = VK_NULL_HANDLE;
+        uint32_t binding{};
+        VkDeviceSize pOffset_out{};
+        if (!deserialize_VkDevice(r, s, device)) return false;
+        if (!deserialize_VkDescriptorSetLayout(r, s, layout)) return false;
+        if (layout == VK_NULL_HANDLE) return false;
+        if (!r.read_pod(binding)) return false;
+        s.on_vkGetDescriptorSetLayoutBindingOffsetEXT(device, layout, binding, &pOffset_out);
+        reply.write_pod<int32_t>(0);
+        reply.write_pod(pOffset_out);
+        return true;
+    }
+    case ::av::vkproto::kCmd_vkGetDescriptorSetLayoutSizeEXT: {
+        AV_SCOPE("server:vkGetDescriptorSetLayoutSizeEXT");
+        VkDevice device = VK_NULL_HANDLE;
+        VkDescriptorSetLayout layout = VK_NULL_HANDLE;
+        VkDeviceSize pLayoutSizeInBytes_out{};
+        if (!deserialize_VkDevice(r, s, device)) return false;
+        if (!deserialize_VkDescriptorSetLayout(r, s, layout)) return false;
+        if (layout == VK_NULL_HANDLE) return false;
+        s.on_vkGetDescriptorSetLayoutSizeEXT(device, layout, &pLayoutSizeInBytes_out);
+        reply.write_pod<int32_t>(0);
+        reply.write_pod(pLayoutSizeInBytes_out);
+        return true;
+    }
     case ::av::vkproto::kCmd_vkGetDeviceAccelerationStructureCompatibilityKHR: {
         AV_SCOPE("server:vkGetDeviceAccelerationStructureCompatibilityKHR");
         VkDevice device = VK_NULL_HANDLE;
@@ -5988,6 +6158,40 @@ bool dispatch_command(ServerDispatch& s, uint32_t cmd_id, ::av::WireReader& r, :
         if (!r.read_pod(groupShader)) return false;
         VkDeviceSize result = s.on_vkGetRayTracingShaderGroupStackSizeKHR(device, pipeline, group, groupShader);
         reply.write_pod<uint64_t>(static_cast<uint64_t>(result));
+        return true;
+    }
+    case ::av::vkproto::kCmd_vkGetShaderBinaryDataEXT: {
+        AV_SCOPE("server:vkGetShaderBinaryDataEXT");
+        VkDevice device = VK_NULL_HANDLE;
+        VkShaderEXT shader = VK_NULL_HANDLE;
+        uint8_t array_present = 0;
+        size_t pDataSize_local = 0;
+        size_t pDataSize_capacity = 0;
+        char* pData_storage = nullptr;
+        if (!deserialize_VkDevice(r, s, device)) return false;
+        if (!deserialize_VkShaderEXT(r, s, shader)) return false;
+        if (shader == VK_NULL_HANDLE) return false;
+        if (!r.read_pod(array_present)) return false;
+        if (array_present) {
+            uint64_t av_wide = 0;
+            if (!r.read_pod(av_wide)) return false;
+            constexpr uint64_t av_most_blob = uint64_t{64} << 20;
+            if (av_wide > av_most_blob) av_wide = av_most_blob;
+            pDataSize_local = static_cast<size_t>(av_wide);
+            pDataSize_capacity = pDataSize_local;
+            struct alignas(16) av_block16 { unsigned char bytes[16]; };
+            auto* av_blocks = arena.allocate<av_block16>((pDataSize_local + 15u) / 16u + 1u);
+            if (av_blocks == nullptr) return false;
+            pData_storage = reinterpret_cast<char*>(av_blocks);
+        }
+        VkResult result = s.on_vkGetShaderBinaryDataEXT(device, shader, &pDataSize_local, array_present ? static_cast<void*>(pData_storage) : nullptr);
+        reply.write_pod<int32_t>(static_cast<int32_t>(result));
+        uint64_t pDataSize_sent = static_cast<int32_t>(result) < 0 ? 0u : pDataSize_local;
+        if (array_present && pDataSize_sent > pDataSize_capacity) {
+            pDataSize_sent = pDataSize_capacity;
+        }
+        reply.write_pod(pDataSize_sent);
+        if (array_present && pDataSize_sent != 0) { reply.write(pData_storage, static_cast<size_t>(pDataSize_sent)); }
         return true;
     }
     case ::av::vkproto::kCmd_vkTransitionImageLayoutEXT: {
@@ -6230,6 +6434,48 @@ bool dispatch_command(ServerDispatch& s, uint32_t cmd_id, ::av::WireReader& r, :
         s.on_vkGetImageSubresourceLayout2KHR(device, image, &pSubresource_local, &pLayout_out);
         reply.write_pod<int32_t>(0);
         serialize_VkSubresourceLayout2(reply, s, pLayout_out);
+        return true;
+    }
+    case ::av::vkproto::kCmd_vkGetPipelineBinaryDataKHR: {
+        AV_SCOPE("server:vkGetPipelineBinaryDataKHR");
+        VkDevice device = VK_NULL_HANDLE;
+        VkPipelineBinaryDataInfoKHR pInfo_local{};
+        VkPipelineBinaryKeyKHR pPipelineBinaryKey_out{};
+        uint8_t array_present = 0;
+        size_t pPipelineBinaryDataSize_local = 0;
+        size_t pPipelineBinaryDataSize_capacity = 0;
+        char* pPipelineBinaryData_storage = nullptr;
+        if (!deserialize_VkDevice(r, s, device)) return false;
+        if (!deserialize_VkPipelineBinaryDataInfoKHR(r, s, &pInfo_local, arena)) return false;
+        if (!r.read_pod(pPipelineBinaryKey_out.sType)) return false;
+        if (!deserialize_pnext_chain(r, s, reinterpret_cast<VkBaseOutStructure*>(&pPipelineBinaryKey_out), arena)) return false;
+        if (!r.read_pod(array_present)) return false;
+        if (array_present) {
+            uint64_t av_wide = 0;
+            if (!r.read_pod(av_wide)) return false;
+            constexpr uint64_t av_most_blob = uint64_t{64} << 20;
+            if (av_wide > av_most_blob) av_wide = av_most_blob;
+            pPipelineBinaryDataSize_local = static_cast<size_t>(av_wide);
+            pPipelineBinaryDataSize_capacity = pPipelineBinaryDataSize_local;
+            struct alignas(16) av_block16 { unsigned char bytes[16]; };
+            auto* av_blocks = arena.allocate<av_block16>((pPipelineBinaryDataSize_local + 15u) / 16u + 1u);
+            if (av_blocks == nullptr) return false;
+            pPipelineBinaryData_storage = reinterpret_cast<char*>(av_blocks);
+        }
+        VkResult result = s.on_vkGetPipelineBinaryDataKHR(device, &pInfo_local, &pPipelineBinaryKey_out, &pPipelineBinaryDataSize_local, array_present ? static_cast<void*>(pPipelineBinaryData_storage) : nullptr);
+        reply.write_pod<int32_t>(static_cast<int32_t>(result));
+        if (static_cast<int32_t>(result) < 0) {
+            VkPipelineBinaryKeyKHR pPipelineBinaryKey_blank{};
+            pPipelineBinaryKey_blank.sType = pPipelineBinaryKey_out.sType;
+            pPipelineBinaryKey_out = pPipelineBinaryKey_blank;
+        }
+        serialize_VkPipelineBinaryKeyKHR(reply, s, pPipelineBinaryKey_out);
+        uint64_t pPipelineBinaryDataSize_sent = static_cast<int32_t>(result) < 0 ? 0u : pPipelineBinaryDataSize_local;
+        if (array_present && pPipelineBinaryDataSize_sent > pPipelineBinaryDataSize_capacity) {
+            pPipelineBinaryDataSize_sent = pPipelineBinaryDataSize_capacity;
+        }
+        reply.write_pod(pPipelineBinaryDataSize_sent);
+        if (array_present && pPipelineBinaryDataSize_sent != 0) { reply.write(pPipelineBinaryData_storage, static_cast<size_t>(pPipelineBinaryDataSize_sent)); }
         return true;
     }
     case ::av::vkproto::kCmd_vkGetPipelineKeyKHR: {
@@ -6578,7 +6824,7 @@ bool dispatch_command(ServerDispatch& s, uint32_t cmd_id, ::av::WireReader& r, :
         size_t pVertexInfo_storage_count = 0;
         uint32_t instanceCount{};
         uint32_t firstInstance{};
-        uint32_t stride{};
+        uint32_t stride = sizeof(VkMultiDrawInfoEXT);
         if (!deserialize_VkCommandBuffer(r, s, commandBuffer)) return false;
         if (!r.read_pod(drawCount)) return false;
         pVertexInfo_storage_count = static_cast<size_t>(drawCount);
@@ -6592,8 +6838,37 @@ bool dispatch_command(ServerDispatch& s, uint32_t cmd_id, ::av::WireReader& r, :
         }
         if (!r.read_pod(instanceCount)) return false;
         if (!r.read_pod(firstInstance)) return false;
-        if (!r.read_pod(stride)) return false;
         s.on_vkCmdDrawMultiEXT(commandBuffer, drawCount, pVertexInfo_storage, instanceCount, firstInstance, stride);
+        return true;
+    }
+    case ::av::vkproto::kCmd_vkCmdDrawMultiIndexedEXT: {
+        AV_SCOPE("server:vkCmdDrawMultiIndexedEXT");
+        VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+        uint32_t drawCount{};
+        VkMultiDrawIndexedInfoEXT* pIndexInfo_storage = nullptr;
+        size_t pIndexInfo_storage_count = 0;
+        uint32_t instanceCount{};
+        uint32_t firstInstance{};
+        uint32_t stride = sizeof(VkMultiDrawIndexedInfoEXT);
+        int32_t pVertexOffset_value{};
+        uint8_t pVertexOffset_present = 0;
+        if (!deserialize_VkCommandBuffer(r, s, commandBuffer)) return false;
+        if (!r.read_pod(drawCount)) return false;
+        pIndexInfo_storage_count = static_cast<size_t>(drawCount);
+        if (pIndexInfo_storage_count != 0) {
+            pIndexInfo_storage = arena.allocate<VkMultiDrawIndexedInfoEXT>(pIndexInfo_storage_count);
+            if (pIndexInfo_storage == nullptr) return false;
+            for (size_t av_z = 0; av_z < pIndexInfo_storage_count; ++av_z) { pIndexInfo_storage[av_z] = {}; }
+        }
+        for (size_t av_i = 0; av_i < pIndexInfo_storage_count; ++av_i) {
+            if (!deserialize_VkMultiDrawIndexedInfoEXT(r, &pIndexInfo_storage[av_i], arena)) return false;
+        }
+        if (!r.read_pod(instanceCount)) return false;
+        if (!r.read_pod(firstInstance)) return false;
+        if (!r.read_pod(pVertexOffset_present)) return false;
+        if (pVertexOffset_present > 1) return false;
+        if (pVertexOffset_present != 0 && !r.read_pod(pVertexOffset_value)) return false;
+        s.on_vkCmdDrawMultiIndexedEXT(commandBuffer, drawCount, pIndexInfo_storage, instanceCount, firstInstance, stride, pVertexOffset_present != 0 ? &pVertexOffset_value : nullptr);
         return true;
     }
     case ::av::vkproto::kCmd_vkCmdPushConstants2KHR: {
@@ -6835,6 +7110,140 @@ bool dispatch_command(ServerDispatch& s, uint32_t cmd_id, ::av::WireReader& r, :
         s.on_vkGetShaderModuleIdentifierEXT(device, shaderModule, &pIdentifier_out);
         reply.write_pod<int32_t>(0);
         serialize_VkShaderModuleIdentifierEXT(reply, s, pIdentifier_out);
+        return true;
+    }
+    case ::av::vkproto::kCmd_vkCmdExecuteGeneratedCommandsEXT: {
+        AV_SCOPE("server:vkCmdExecuteGeneratedCommandsEXT");
+        VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+        VkBool32 isPreprocessed{};
+        VkGeneratedCommandsInfoEXT pGeneratedCommandsInfo_local{};
+        if (!deserialize_VkCommandBuffer(r, s, commandBuffer)) return false;
+        if (!r.read_pod(isPreprocessed)) return false;
+        if (!deserialize_VkGeneratedCommandsInfoEXT(r, s, &pGeneratedCommandsInfo_local, arena)) return false;
+        s.on_vkCmdExecuteGeneratedCommandsEXT(commandBuffer, isPreprocessed, &pGeneratedCommandsInfo_local);
+        return true;
+    }
+    case ::av::vkproto::kCmd_vkCmdPreprocessGeneratedCommandsEXT: {
+        AV_SCOPE("server:vkCmdPreprocessGeneratedCommandsEXT");
+        VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+        VkGeneratedCommandsInfoEXT pGeneratedCommandsInfo_local{};
+        VkCommandBuffer stateCommandBuffer = VK_NULL_HANDLE;
+        if (!deserialize_VkCommandBuffer(r, s, commandBuffer)) return false;
+        if (!deserialize_VkGeneratedCommandsInfoEXT(r, s, &pGeneratedCommandsInfo_local, arena)) return false;
+        if (!deserialize_VkCommandBuffer(r, s, stateCommandBuffer)) return false;
+        s.on_vkCmdPreprocessGeneratedCommandsEXT(commandBuffer, &pGeneratedCommandsInfo_local, stateCommandBuffer);
+        return true;
+    }
+    case ::av::vkproto::kCmd_vkCreateIndirectCommandsLayoutEXT: {
+        AV_SCOPE("server:vkCreateIndirectCommandsLayoutEXT");
+        VkDevice device = VK_NULL_HANDLE;
+        VkIndirectCommandsLayoutCreateInfoEXT pCreateInfo_local{};
+        VkIndirectCommandsLayoutEXT pIndirectCommandsLayout_out = VK_NULL_HANDLE;
+        if (!deserialize_VkDevice(r, s, device)) return false;
+        if (!deserialize_VkIndirectCommandsLayoutCreateInfoEXT(r, s, &pCreateInfo_local, arena)) return false;
+        VkResult result = s.room_for(static_cast<uint64_t>(1u)) ? s.on_vkCreateIndirectCommandsLayoutEXT(device, &pCreateInfo_local, nullptr, &pIndirectCommandsLayout_out) : VK_ERROR_OUT_OF_HOST_MEMORY;
+        s.made_through(as_number(device));
+        reply.write_pod<int32_t>(static_cast<int32_t>(result));
+        if (static_cast<int32_t>(result) < 0) {
+            pIndirectCommandsLayout_out = VK_NULL_HANDLE;
+        }
+        serialize_VkIndirectCommandsLayoutEXT(reply, s, pIndirectCommandsLayout_out);
+        return true;
+    }
+    case ::av::vkproto::kCmd_vkCreateIndirectExecutionSetEXT: {
+        AV_SCOPE("server:vkCreateIndirectExecutionSetEXT");
+        VkDevice device = VK_NULL_HANDLE;
+        VkIndirectExecutionSetCreateInfoEXT pCreateInfo_local{};
+        VkIndirectExecutionSetEXT pIndirectExecutionSet_out = VK_NULL_HANDLE;
+        if (!deserialize_VkDevice(r, s, device)) return false;
+        if (!deserialize_VkIndirectExecutionSetCreateInfoEXT(r, s, &pCreateInfo_local, arena)) return false;
+        VkResult result = s.room_for(static_cast<uint64_t>(1u)) ? s.on_vkCreateIndirectExecutionSetEXT(device, &pCreateInfo_local, nullptr, &pIndirectExecutionSet_out) : VK_ERROR_OUT_OF_HOST_MEMORY;
+        s.made_through(as_number(device));
+        reply.write_pod<int32_t>(static_cast<int32_t>(result));
+        if (static_cast<int32_t>(result) < 0) {
+            pIndirectExecutionSet_out = VK_NULL_HANDLE;
+        }
+        serialize_VkIndirectExecutionSetEXT(reply, s, pIndirectExecutionSet_out);
+        return true;
+    }
+    case ::av::vkproto::kCmd_vkDestroyIndirectCommandsLayoutEXT: {
+        AV_SCOPE("server:vkDestroyIndirectCommandsLayoutEXT");
+        VkDevice device = VK_NULL_HANDLE;
+        VkIndirectCommandsLayoutEXT indirectCommandsLayout = VK_NULL_HANDLE;
+        if (!deserialize_VkDevice(r, s, device)) return false;
+        if (!deserialize_VkIndirectCommandsLayoutEXT(r, s, indirectCommandsLayout)) return false;
+        s.on_vkDestroyIndirectCommandsLayoutEXT(device, indirectCommandsLayout, nullptr);
+        s.ended(as_number(indirectCommandsLayout));
+        return true;
+    }
+    case ::av::vkproto::kCmd_vkDestroyIndirectExecutionSetEXT: {
+        AV_SCOPE("server:vkDestroyIndirectExecutionSetEXT");
+        VkDevice device = VK_NULL_HANDLE;
+        VkIndirectExecutionSetEXT indirectExecutionSet = VK_NULL_HANDLE;
+        if (!deserialize_VkDevice(r, s, device)) return false;
+        if (!deserialize_VkIndirectExecutionSetEXT(r, s, indirectExecutionSet)) return false;
+        s.on_vkDestroyIndirectExecutionSetEXT(device, indirectExecutionSet, nullptr);
+        s.ended(as_number(indirectExecutionSet));
+        return true;
+    }
+    case ::av::vkproto::kCmd_vkGetGeneratedCommandsMemoryRequirementsEXT: {
+        AV_SCOPE("server:vkGetGeneratedCommandsMemoryRequirementsEXT");
+        VkDevice device = VK_NULL_HANDLE;
+        VkGeneratedCommandsMemoryRequirementsInfoEXT pInfo_local{};
+        VkMemoryRequirements2 pMemoryRequirements_out{};
+        if (!deserialize_VkDevice(r, s, device)) return false;
+        if (!deserialize_VkGeneratedCommandsMemoryRequirementsInfoEXT(r, s, &pInfo_local, arena)) return false;
+        if (!r.read_pod(pMemoryRequirements_out.sType)) return false;
+        if (!deserialize_pnext_chain(r, s, reinterpret_cast<VkBaseOutStructure*>(&pMemoryRequirements_out), arena)) return false;
+        s.on_vkGetGeneratedCommandsMemoryRequirementsEXT(device, &pInfo_local, &pMemoryRequirements_out);
+        reply.write_pod<int32_t>(0);
+        serialize_VkMemoryRequirements2(reply, s, pMemoryRequirements_out);
+        return true;
+    }
+    case ::av::vkproto::kCmd_vkUpdateIndirectExecutionSetPipelineEXT: {
+        AV_SCOPE("server:vkUpdateIndirectExecutionSetPipelineEXT");
+        VkDevice device = VK_NULL_HANDLE;
+        VkIndirectExecutionSetEXT indirectExecutionSet = VK_NULL_HANDLE;
+        uint32_t executionSetWriteCount{};
+        VkWriteIndirectExecutionSetPipelineEXT* pExecutionSetWrites_storage = nullptr;
+        size_t pExecutionSetWrites_storage_count = 0;
+        if (!deserialize_VkDevice(r, s, device)) return false;
+        if (!deserialize_VkIndirectExecutionSetEXT(r, s, indirectExecutionSet)) return false;
+        if (indirectExecutionSet == VK_NULL_HANDLE) return false;
+        if (!r.read_pod(executionSetWriteCount)) return false;
+        pExecutionSetWrites_storage_count = static_cast<size_t>(executionSetWriteCount);
+        if (pExecutionSetWrites_storage_count != 0) {
+            pExecutionSetWrites_storage = arena.allocate<VkWriteIndirectExecutionSetPipelineEXT>(pExecutionSetWrites_storage_count);
+            if (pExecutionSetWrites_storage == nullptr) return false;
+            for (size_t av_z = 0; av_z < pExecutionSetWrites_storage_count; ++av_z) { pExecutionSetWrites_storage[av_z] = {}; }
+        }
+        for (size_t av_i = 0; av_i < pExecutionSetWrites_storage_count; ++av_i) {
+            if (!deserialize_VkWriteIndirectExecutionSetPipelineEXT(r, s, &pExecutionSetWrites_storage[av_i], arena)) return false;
+        }
+        s.on_vkUpdateIndirectExecutionSetPipelineEXT(device, indirectExecutionSet, executionSetWriteCount, pExecutionSetWrites_storage);
+        return true;
+    }
+    case ::av::vkproto::kCmd_vkUpdateIndirectExecutionSetShaderEXT: {
+        AV_SCOPE("server:vkUpdateIndirectExecutionSetShaderEXT");
+        VkDevice device = VK_NULL_HANDLE;
+        VkIndirectExecutionSetEXT indirectExecutionSet = VK_NULL_HANDLE;
+        uint32_t executionSetWriteCount{};
+        VkWriteIndirectExecutionSetShaderEXT* pExecutionSetWrites_storage = nullptr;
+        size_t pExecutionSetWrites_storage_count = 0;
+        if (!deserialize_VkDevice(r, s, device)) return false;
+        if (!deserialize_VkIndirectExecutionSetEXT(r, s, indirectExecutionSet)) return false;
+        if (indirectExecutionSet == VK_NULL_HANDLE) return false;
+        if (!r.read_pod(executionSetWriteCount)) return false;
+        pExecutionSetWrites_storage_count = static_cast<size_t>(executionSetWriteCount);
+        if (pExecutionSetWrites_storage_count != 0) {
+            pExecutionSetWrites_storage = arena.allocate<VkWriteIndirectExecutionSetShaderEXT>(pExecutionSetWrites_storage_count);
+            if (pExecutionSetWrites_storage == nullptr) return false;
+            for (size_t av_z = 0; av_z < pExecutionSetWrites_storage_count; ++av_z) { pExecutionSetWrites_storage[av_z] = {}; }
+        }
+        for (size_t av_i = 0; av_i < pExecutionSetWrites_storage_count; ++av_i) {
+            if (!deserialize_VkWriteIndirectExecutionSetShaderEXT(r, s, &pExecutionSetWrites_storage[av_i], arena)) return false;
+        }
+        s.on_vkUpdateIndirectExecutionSetShaderEXT(device, indirectExecutionSet, executionSetWriteCount, pExecutionSetWrites_storage);
         return true;
     }
     default:

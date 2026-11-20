@@ -2,11 +2,11 @@
 
 #include "core/trace/function_scope.hpp"
 #include "executor/shim/d3d_headers.hpp"
-#include "executor/shim/exportable_images.hpp"
+#include "executor/shim/image_retirement.hpp"
 
 namespace av {
 
-TextureHold::TextureHold(ExportableImages &owner) : owner_(&owner), references_(0u), held_(false)
+TextureHold::TextureHold(ImageRetirement &owner) : owner_(&owner), references_(0u), held_(false)
 {
     AV_SCOPE("TextureHold::TextureHold");
 }

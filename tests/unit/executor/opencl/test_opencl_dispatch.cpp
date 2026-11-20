@@ -165,6 +165,20 @@ bool transfer_lent(ClSession &session, std::uint32_t command, std::uint64_t queu
     return session.run(command, frame, bytes);
 }
 
+void write_description(WireWriter &frame, const cl_image_desc &description, std::uint64_t buffer)
+{
+    frame.write_pod<cl_mem_object_type>(description.image_type);
+    frame.write_varint(description.image_width);
+    frame.write_varint(description.image_height);
+    frame.write_varint(description.image_depth);
+    frame.write_varint(description.image_array_size);
+    frame.write_varint(description.image_row_pitch);
+    frame.write_varint(description.image_slice_pitch);
+    frame.write_pod<cl_uint>(description.num_mip_levels);
+    frame.write_pod<cl_uint>(description.num_samples);
+    frame.write_pod<std::uint64_t>(buffer);
+}
+
 }
 
 TEST(opencl_dispatch, a_program_s_first_objects_resolve_back_as_what_they_are)
@@ -422,7 +436,6 @@ TEST(opencl_dispatch, an_image_description_naming_an_unknown_buffer_is_refused)
       cl_image_desc description = {};
       description.image_type = CL_MEM_OBJECT_IMAGE1D_BUFFER;
       description.image_width = 16u;
-      description.buffer = reinterpret_cast<cl_mem>(static_cast<std::uintptr_t>(named));
       const cl_image_format format = {CL_RGBA, CL_UNORM_INT8};
       std::uint8_t bytes[frame_bytes];
       WireWriter frame(bytes, sizeof bytes);
@@ -431,7 +444,7 @@ TEST(opencl_dispatch, an_image_description_naming_an_unknown_buffer_is_refused)
       frame.write_pod<std::uint8_t>(1u);
       frame.write(&format, sizeof format);
       frame.write_pod<std::uint8_t>(1u);
-      frame.write(&description, sizeof description);
+      write_description(frame, description, named);
       frame.write_pod<std::uint8_t>(0u);
       frame.write_pod<std::uint8_t>(0u);
       CHECK_EQ(session.run(av::clproto::kCmd_clCreateImage, frame, bytes), named == buffer);
@@ -670,7 +683,7 @@ bool create_image(ClSession &session, std::uint64_t context, const cl_image_form
     frame.write_pod<std::uint8_t>(1u);
     frame.write(&format, sizeof format);
     frame.write_pod<std::uint8_t>(description != nullptr ? 1u : 0u);
-    if (description != nullptr) frame.write(description, sizeof *description);
+    if (description != nullptr) write_description(frame, *description, 0u);
     frame.write_pod<std::uint8_t>(1u);
     frame.write_varint(crossed);
     frame.write(filler, static_cast<std::size_t>(crossed));
@@ -780,7 +793,7 @@ TEST(opencl_dispatch, the_other_image_calls_hold_their_host_bytes_to_their_exten
         frame.write_pod<std::uint8_t>(1u);
         frame.write(&rgba8, sizeof rgba8);
         frame.write_pod<std::uint8_t>(1u);
-        frame.write(&description, sizeof description);
+        write_description(frame, description, 0u);
         frame.write_pod<std::uint8_t>(1u);
         frame.write_varint(crossed);
         frame.write(filler, static_cast<std::size_t>(crossed));

@@ -83,6 +83,7 @@ d3d::Hresult D3d9Driver::build(d3d::UmdAdapter &adapter, void *create, uint32_t 
         static_cast<void>(devices_.destroy(device));
         return opened == E_OUTOFMEMORY ? d3d::SessionRefusal(true).for_d3d9() : static_cast<d3d::Hresult>(opened);
     }
+    adapters_.hold(slot);
     arguments.hDevice = device;
     fill_device_funcs9(*arguments.pDeviceFuncs);
     return d3d::hr_ok;
@@ -93,8 +94,10 @@ d3d::UmdAdapter *D3d9Driver::tear_down(void *device)
     AV_SCOPE("D3d9Driver::tear_down");
     D3d9Device *const gone = devices_.find(device);
     if (gone == nullptr) return nullptr;
-    d3d::UmdAdapter &adapter = gone->adapter();
+    d3d::UmdAdapter    &adapter = gone->adapter();
+    const D3d9HostCaps &caps = gone->caps();
     static_cast<void>(devices_.destroy(gone));
+    adapters_.release(caps);
     return &adapter;
 }
 

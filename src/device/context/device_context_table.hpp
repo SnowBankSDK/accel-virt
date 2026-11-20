@@ -3,10 +3,12 @@
 
 #include "core/support/object_storage.hpp"
 #include "core/support/status.hpp"
+#include "proto/context/context_capacity.hpp"
 #include "device/context/d3d_ordering.hpp"
 #include "device/context/device_context.hpp"
 #include "device/execution/executor_shares.hpp"
 #include "device/fence/device_pulse.hpp"
+#include "device/threading/worker_reaper.hpp"
 
 #include <stdint.h>
 
@@ -23,7 +25,8 @@ struct DeviceContextTableProbe;
 
 class DeviceContextTable {
 public:
-    static constexpr uint32_t max_contexts = 64u;
+    static constexpr uint32_t max_contexts = ContextCapacity::contexts;
+    static constexpr uint64_t teardown_budget_nanoseconds = 2000000000u;
 
     DeviceContextTable(Host &host, BlobTable &blobs, HostBlobOwners &owners, FenceInterrupts &interrupts,
                        const ExecutorLibrary &library, WireRecorder &recorder);
@@ -36,8 +39,12 @@ public:
     [[nodiscard]] Status create(uint32_t id, const char *name);
     [[nodiscard]] Status destroy(uint32_t id);
     void                 destroy_all();
+    void                 finish_reaped();
+    uint32_t             reaping() const;
     DeviceContext       *find(uint32_t id);
     bool                 holds_doorbell(uint32_t index);
+    bool                 retiring_pins(uint32_t resource);
+    bool                 awaits_retiring_writer(uint32_t resource);
     bool                 can_share(uint32_t asking, uint32_t share);
     uint32_t             live() const;
     void                 report(StateWriter &writer);
@@ -46,6 +53,10 @@ public:
 
 private:
     ObjectStorage<DeviceContext> *slot_of(uint32_t id);
+    bool                          live_at(uint32_t index) const;
+    void                          retire(uint32_t index);
+    void                          release_parted();
+    uint32_t                      retire_all();
 
     Host                        &host_;
     BlobTable                   &blobs_;
@@ -57,6 +68,8 @@ private:
     D3dOrdering                  ordering_;
     DevicePulse                  pulse_;
     ObjectStorage<DeviceContext> slots_[max_contexts];
+    bool                         retired_[max_contexts];
+    WorkerReaper                 reaper_;
 
     friend struct DeviceContextTableProbe;
 };

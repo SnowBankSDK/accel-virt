@@ -1,6 +1,8 @@
 #ifndef AV_LOADER_HOST_APIS_HPP
 #define AV_LOADER_HOST_APIS_HPP
 
+#include "executor/shim/vulkan_vram_budget.hpp"
+#include "device/shim/posix_lock.hpp"
 #include "executor/host_apis.hpp"
 #include "executor/host_gpu_set.hpp"
 #include "executor/shim/compositor_device.hpp"
@@ -14,6 +16,7 @@
 #include "executor/d3d/shared_surfaces.hpp"
 #include "executor/sharing/host_shares.hpp"
 #include "executor/shim/host_heap.hpp"
+#include "executor/host_lifecycle_gates.hpp"
 #include "executor/shim/gl_display.hpp"
 #include "executor/opencl/cl_freed_memory.hpp"
 #include "executor/shim/opencl_device.hpp"
@@ -53,6 +56,7 @@ public:
     VramLedger         *vram_ledger(uint32_t index) override;
     ClFreedMemory      *cl_freed(uint32_t index) override;
     HostRamLedger      *host_ram_ledger() override;
+    HostLifecycleGate  *lifecycle_gate(uint32_t index) override;
 
 private:
     void enumerate();
@@ -62,6 +66,7 @@ private:
     uint32_t sub_apis_[HostGpuSet::max_gpus];
     int32_t  render_minors_[HostGpuSet::max_gpus];
     OpenClDevice opencl_devices_[HostGpuSet::max_gpus];
+    HostLifecycleGates lifecycles_;
     GlDisplay    gl_displays_[HostGpuSet::max_gpus];
     D3dRuntime      d3d_runtime_;
     ObjectStorage<D3d11HostDevice> d3d11_devices_[HostGpuSet::max_gpus];
@@ -74,10 +79,13 @@ private:
     ObjectStorage<SharedSurfaces> surfaces_[HostGpuSet::max_gpus];
     ObjectStorage<HostShares>  shares_[HostGpuSet::max_gpus];
     VramLedger  ledgers_[HostGpuSet::max_gpus];
+    VulkanVramBudget budgets_[HostGpuSet::max_gpus];
     ClFreedMemory cl_freed_[HostGpuSet::max_gpus];
     ProcMemoryGauge gauge_;
     HostRamLedger host_ram_;
     VramGate    vram_gate_;
+    PosixLock   reopen_lock_;
+    uint32_t    reopened_[HostGpuSet::max_gpus];
     uint32_t count_;
     bool     opened_;
 };

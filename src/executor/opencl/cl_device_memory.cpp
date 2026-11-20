@@ -29,6 +29,13 @@ void ClDeviceMemory::bind(ByteLedger *vram, ByteLedger *host)
     host_.bind(host);
 }
 
+void ClDeviceMemory::reserve_from(SessionLease *lease)
+{
+    AV_SCOPE("ClDeviceMemory::reserve_from");
+    account_.reserve_from(lease);
+    host_.reserve_from(lease);
+}
+
 cl_int ClDeviceMemory::claim(cl_mem_flags flags, uint64_t bytes, uint64_t &claimed)
 {
     AV_SCOPE("ClDeviceMemory::claim");
@@ -50,6 +57,12 @@ bool ClDeviceMemory::keep(cl_mem memory, uint64_t claimed)
 {
     AV_SCOPE("ClDeviceMemory::keep");
     if (claimed == 0u) return true;
+    uint64_t *const stale = sizes_.find(key_of(memory));
+    if (stale != nullptr) {
+        unclaim(*stale);
+        *stale = claimed;
+        return true;
+    }
     uint32_t     slot = 0u;
     const Status kept = sizes_.insert(key_of(memory), claimed, slot);
     if (kept == Status::ok) return true;
@@ -101,10 +114,22 @@ uint64_t ClDeviceMemory::cap() const
     return account_.cap();
 }
 
+uint64_t ClDeviceMemory::advertised() const
+{
+    AV_SCOPE("ClDeviceMemory::advertised");
+    return account_.advertised();
+}
+
+bool ClDeviceMemory::bound() const
+{
+    AV_SCOPE("ClDeviceMemory::bound");
+    return account_.bound();
+}
+
 uint64_t ClDeviceMemory::free_bytes() const
 {
     AV_SCOPE("ClDeviceMemory::free_bytes");
-    return account_.free_bytes();
+    return account_.admissible();
 }
 
 uint32_t ClDeviceMemory::objects() const

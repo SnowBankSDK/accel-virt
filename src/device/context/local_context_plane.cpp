@@ -1,6 +1,9 @@
 #include "device/context/local_context_plane.hpp"
 
+#include "device/memory/host_blob_errand.hpp"
+#include "device/threading/service_thread.hpp"
 #include "proto/context/capset_info.hpp"
+#include "proto/resources/host_memory_request.hpp"
 
 #include "core/trace/function_scope.hpp"
 #include "proto/resources/surface_pair.hpp"
@@ -19,7 +22,7 @@ LocalContextPlane::~LocalContextPlane()
 {
     AV_SCOPE("LocalContextPlane::~LocalContextPlane");
     contexts_.destroy_all();
-    library_.close_domain();
+    if (contexts_.reaping() == 0u) library_.close_domain();
 }
 
 Status LocalContextPlane::accept(const AvExecutorOps *executor)
@@ -74,11 +77,27 @@ uint32_t LocalContextPlane::sub_apis() const
     return library_.sub_apis();
 }
 
-Status LocalContextPlane::allocate_memory(uint32_t, uint64_t key, uint64_t size, uint32_t request,
+Status LocalContextPlane::allocate_memory(uint32_t context, uint64_t key, uint64_t size, uint32_t request,
                                           AvHostMemory &memory)
 {
     AV_SCOPE("LocalContextPlane::allocate_memory");
+    static_cast<void>(context);
+    if (HostMemoryRequest(request).places()) return Status::not_supported;
     return library_.allocate_memory(key, size, request, memory);
+}
+
+Status LocalContextPlane::hand_memory(HostBlobErrand &errand, ServiceThread &service)
+{
+    AV_SCOPE("LocalContextPlane::hand_memory");
+    if (!errand.places()) return service.post(errand);
+    DeviceContext *const placing = contexts_.find(errand.context());
+    return placing != nullptr ? placing->hand_placement(errand) : Status::not_found;
+}
+
+Status LocalContextPlane::hand_off(Errand &errand, ServiceThread &service)
+{
+    AV_SCOPE("LocalContextPlane::hand_off");
+    return service.post(errand);
 }
 
 void LocalContextPlane::free_memory(uint64_t key)
@@ -138,6 +157,18 @@ bool LocalContextPlane::holds_doorbell(uint32_t index)
     return contexts_.holds_doorbell(index);
 }
 
+bool LocalContextPlane::retiring_pins(uint32_t resource)
+{
+    AV_SCOPE("LocalContextPlane::retiring_pins");
+    return contexts_.retiring_pins(resource);
+}
+
+bool LocalContextPlane::awaits_retiring_writer(uint32_t resource)
+{
+    AV_SCOPE("LocalContextPlane::awaits_retiring_writer");
+    return contexts_.awaits_retiring_writer(resource);
+}
+
 bool LocalContextPlane::can_share(uint32_t asking, uint32_t share)
 {
     AV_SCOPE("LocalContextPlane::can_share");
@@ -148,6 +179,12 @@ uint32_t LocalContextPlane::live() const
 {
     AV_SCOPE("LocalContextPlane::live");
     return contexts_.live();
+}
+
+uint32_t LocalContextPlane::reaping() const
+{
+    AV_SCOPE("LocalContextPlane::reaping");
+    return contexts_.reaping();
 }
 
 bool LocalContextPlane::export_image(const uint8_t *, uint64_t key, AvExportedImage &image)

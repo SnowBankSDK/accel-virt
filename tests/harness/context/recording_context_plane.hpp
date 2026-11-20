@@ -21,6 +21,10 @@ public:
     Status        allocate_memory(std::uint32_t context, std::uint64_t key, std::uint64_t size,
                                   std::uint32_t request, AvHostMemory &memory) override;
     void          free_memory(std::uint64_t key) override;
+    Status        hand_memory(HostBlobErrand &errand, ServiceThread &service) override;
+    Status        hand_off(Errand &errand, ServiceThread &service) override;
+    void          refuse_hand_off_at(std::uint32_t nth) { refuse_hand_off_ = nth; }
+    std::uint32_t hand_offs() const { return hand_offs_; }
     Status        alias_memory(std::uint64_t key, const ContextPlane &lender, std::uint64_t lender_key,
                                AvHostMemory &memory) override
     {
@@ -47,8 +51,11 @@ public:
     void          hold_context(std::uint32_t id) { held_context_ = id; }
     Status        bind(std::uint32_t, const ContextSetup &, const CapsetInfo &) override { return Status::not_supported; }
     bool          holds_doorbell(std::uint32_t) override { return false; }
+    bool          retiring_pins(std::uint32_t) override { return false; }
+    bool          awaits_retiring_writer(std::uint32_t) override { return false; }
     bool          can_share(std::uint32_t, std::uint32_t) override { return false; }
     std::uint32_t live() const override { return 0u; }
+    std::uint32_t reaping() const override { return 0u; }
     void          blob_created(std::uint32_t id) override { if (created_count_ < capacity) created_[created_count_++] = id; }
     void          blob_released(std::uint32_t id) override { if (released_count_ < capacity) released_[released_count_++] = id; }
     void          shared_released(const std::uint8_t *gpu_uuid, std::uint64_t object_id) override
@@ -252,6 +259,8 @@ private:
     bool            snapshot_mapped_ = false;
     MemoryAsked     last_memory_ = {};
     std::uint32_t   memory_allocations_ = 0u;
+    std::uint32_t   refuse_hand_off_ = 0u;
+    std::uint32_t   hand_offs_ = 0u;
     std::uint64_t   freed_[capacity] = {};
     std::uint32_t   freed_count_ = 0u;
     std::uint32_t   refuse_memory_ = 0u;

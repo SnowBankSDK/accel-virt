@@ -10,7 +10,7 @@ namespace av {
 
 BlobImports::BlobImports(Host &host, HostBlobOwners &owners, ContextExecutor &executor, WireRecorder &recorder,
                          uint32_t context)
-    : host_(host), owners_(owners), executor_(executor), recorder_(recorder), context_(context), next_blob_id_(1u),
+    : host_(host), owners_(owners), executor_(executor), recorder_(recorder), context_(context), next_blob_id_((uint64_t{context} << 32u) | 1u),
       blob_ids_(host, Pool::paged)
 {
     AV_SCOPE("BlobImports::BlobImports");

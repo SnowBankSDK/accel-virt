@@ -1,4 +1,5 @@
 #include "core/support/status.hpp"
+#include "device/abi/av_device.h"
 #include "core/trace/function_scope.hpp"
 #include "core/trace/scope_binding.hpp"
 #include "core/trace/trace_snapshot.hpp"
@@ -60,6 +61,7 @@ TEST(table_host, a_worker_runs_over_the_c_table)
   CHECK_EQ(mock.run_main_loop(), 1u);
   CHECK_EQ(ran, 11u);
   worker.stop();
+  worker.join();
   CHECK_EQ(mock.live_threads(), 0u);
   CHECK_EQ(mock.logged(), 0u); }
 
@@ -496,10 +498,10 @@ TEST(table_host_renderer, forwards_the_descriptors_and_regions_a_renderer_is_han
 
   CHECK_EQ(host.fence_interrupt_descriptor(0u), -1);
   CHECK_STATUS(host.connect_fence_interrupts(), Status::ok);
-  const int line = host.fence_interrupt_descriptor(63u);
+  const int line = host.fence_interrupt_descriptor(AV_DEVICE_DOORBELLS - 1u);
   CHECK(mock.descriptor_open(line));
   CHECK_EQ(mock.live_descriptors(), 1u);
-  CHECK_EQ(host.fence_interrupt_descriptor(66u), -1);
+  CHECK_EQ(host.fence_interrupt_descriptor(AV_DEVICE_INTERRUPT_LINES), -1);
   host.close_descriptor(line);
   CHECK(!mock.descriptor_open(line));
   CHECK_EQ(mock.live_descriptors(), 0u);

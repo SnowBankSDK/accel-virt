@@ -1,4 +1,6 @@
 #include "executor/d3d/d3d12_session.hpp"
+#include "executor/d3d/d3d12_layout_barrier.hpp"
+#include "executor/d3d/d3d12_list_cast.hpp"
 
 #include "core/log/log_line.hpp"
 #include "core/trace/function_scope.hpp"
@@ -52,6 +54,17 @@ bool D3d12Session::on_ResourceBarrier12(uint32_t id, uint32_t count, const d3d12
         made[index].Flags = static_cast<D3D12_RESOURCE_BARRIER_FLAGS>(barrier.flags);
         if (barrier.type == barrier_transition) {
             if (resource == nullptr) return false;
+            const D3D12_RESOURCE_DESC desc = resource->GetDesc();
+            d3d12proto::LayoutBarrier index_only = {};
+            index_only.resource = barrier.resource;
+            index_only.first_mip = barrier.subresource;
+            const bool buffer = desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER;
+            if (buffer ? (barrier.subresource != 0u && barrier.subresource != 0xFFFFFFFFu)
+                       : !D3d12LayoutBarrier(index_only).fits(desc.Dimension, desc.DepthOrArraySize, desc.MipLevels,
+                                                              D3d12LayoutBarrier::planes_of(static_cast<uint32_t>(desc.Format)))) {
+                LogLine(lines_).text("ResourceBarrier12 on list ").number(id).text(" names a subresource the resource does not have").write();
+                return false;
+            }
             made[index].Transition = {resource, barrier.subresource, static_cast<D3D12_RESOURCE_STATES>(barrier.before),
                                       static_cast<D3D12_RESOURCE_STATES>(barrier.after)};
         } else if (barrier.type == barrier_aliasing) {
@@ -63,6 +76,63 @@ bool D3d12Session::on_ResourceBarrier12(uint32_t id, uint32_t count, const d3d12
         }
     }
     if (count != 0u) recorded->ResourceBarrier(count, made);
+    return true;
+}
+
+bool D3d12Session::on_Barrier12(uint32_t id, uint32_t count, const d3d12proto::LayoutBarrier *barriers)
+{
+    AV_SCOPE("D3d12Session::on_Barrier12");
+    const D3d12ListCast<ID3D12GraphicsCommandList7> enhanced(list(id));
+    if (enhanced.get() == nullptr || count > most_barriers || device_->capabilities().caps().enhanced_barriers == 0u)
+        return false;
+    d3d12new::GlobalBarrier  globals[most_barriers] = {};
+    d3d12new::TextureBarrier textures[most_barriers] = {};
+    d3d12new::BufferBarrier  buffers[most_barriers] = {};
+    d3d12new::BarrierGroup   groups[most_barriers] = {};
+    uint32_t                 group_count = 0u;
+    for (uint32_t index = 0u; index < count; index++) {
+        const d3d12proto::LayoutBarrier &from = barriers[index];
+        const D3d12LayoutBarrier         checked(from);
+        ID3D12Resource *const resource =
+            from.resource == 0u ? nullptr : objects_.find_as<ID3D12Resource>(from.resource, D3dObjectKind::resource12);
+        if (!checked.holds() || (from.resource != 0u && (resource == nullptr || !retain_resource(id, from.resource)))) {
+            LogLine(lines_).text("Barrier12 on list ").number(id).text(" with a barrier that does not hold: type ")
+                .number(from.type).text(" sync ").number(from.sync_before).text("/").number(from.sync_after)
+                .text(" access ").number(from.access_before).text("/").number(from.access_after).text(" layout ")
+                .number(from.layout_before).text("/").number(from.layout_after).text(" flags ").number(from.flags)
+                .text(" planes ").number(from.plane_count).write();
+            return false;
+        }
+        const void *entry = nullptr;
+        if (from.type == 0u) {
+            globals[index] = {from.sync_before, from.sync_after, from.access_before, from.access_after};
+            entry = &globals[index];
+        } else if (from.type == 2u) {
+            if (resource->GetDesc().Dimension != D3D12_RESOURCE_DIMENSION_BUFFER) return false;
+            buffers[index] = {from.sync_before, from.sync_after, from.access_before, from.access_after, resource};
+            entry = &buffers[index];
+        } else {
+            const D3D12_RESOURCE_DESC desc = resource->GetDesc();
+            const uint32_t planes = D3d12LayoutBarrier::planes_of(static_cast<uint32_t>(desc.Format));
+            if (desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER ||
+                !checked.fits(desc.Dimension, desc.DepthOrArraySize, desc.MipLevels, planes)) {
+                LogLine(lines_).text("Barrier12 on list ").number(id).text(" names a texture it cannot move by layout").write();
+                return false;
+            }
+            textures[index] = {from.sync_before, from.sync_after, from.access_before, from.access_after, D3d12LayoutBarrier::api_layout(from.layout_before),
+                               D3d12LayoutBarrier::api_layout(from.layout_after), resource,
+                               {from.first_mip, from.mip_count, from.first_slice, from.slice_count, from.first_plane,
+                                from.plane_count},
+                               from.flags};
+            entry = &textures[index];
+        }
+        if (group_count != 0u && groups[group_count - 1u].type == from.type) {
+            groups[group_count - 1u].count++;
+        } else {
+            groups[group_count++] = {from.type, 1u, entry};
+        }
+    }
+    if (count != 0u) enhanced.get()->Barrier(group_count, groups);
     return true;
 }
 
@@ -267,7 +337,7 @@ bool D3d12Session::on_ClearRenderTargetView12(uint32_t id, const d3d12proto::Des
     AV_SCOPE("D3d12Session::on_ClearRenderTargetView12");
     ID3D12GraphicsCommandList *const recorded = list(id);
     size_t                           handle = 0u;
-    if (recorded == nullptr || !cpu_handle(view, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, handle) ||
+    if (recorded == nullptr || !cpu_handle(view, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, handle) || !written_view(view) ||
         !retain_object(id, view.heap, D3dObjectKind::descriptor_heap12) || !retain_slot(id, view))
         return false;
     D3D12_RECT made[16] = {};
@@ -285,7 +355,7 @@ bool D3d12Session::on_ClearDepthStencilView12(uint32_t id, const d3d12proto::Des
     AV_SCOPE("D3d12Session::on_ClearDepthStencilView12");
     ID3D12GraphicsCommandList *const recorded = list(id);
     size_t                           handle = 0u;
-    if (recorded == nullptr || !cpu_handle(view, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, handle) ||
+    if (recorded == nullptr || !cpu_handle(view, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, handle) || !written_view(view) ||
         !retain_object(id, view.heap, D3dObjectKind::descriptor_heap12) || !retain_slot(id, view))
         return false;
     D3D12_RECT made[16] = {};
@@ -329,6 +399,22 @@ bool D3d12Session::on_Dispatch12(uint32_t id, uint32_t x, uint32_t y, uint32_t z
     return true;
 }
 
+bool D3d12Session::on_DispatchMesh12(uint32_t id, uint32_t x, uint32_t y, uint32_t z)
+{
+    AV_SCOPE("D3d12Session::on_DispatchMesh12");
+    constexpr uint32_t most_group_count = 65535u;
+    constexpr uint64_t most_groups = 1u << 22;
+    const D3d12ListCast<ID3D12GraphicsCommandList6> mesh(list(id));
+    if (mesh.get() == nullptr || x > most_group_count || y > most_group_count || z > most_group_count ||
+        uint64_t{x} * y * z > most_groups) {
+        LogLine(lines_).text("DispatchMesh12 on list ").number(id).text(" of ").number(x).text(" x ").number(y)
+            .text(" x ").number(z).text(" groups").write();
+        return false;
+    }
+    mesh.get()->DispatchMesh(x, y, z);
+    return true;
+}
+
 bool D3d12Session::on_ExecuteIndirect12(uint32_t id, uint32_t signature, uint32_t max_count, uint32_t argument_buffer,
                                         uint64_t argument_offset, uint32_t count_buffer, uint64_t count_offset)
 {
@@ -357,8 +443,15 @@ bool D3d12Session::on_ExecuteIndirect12(uint32_t id, uint32_t signature, uint32_
     if (!retain(id, signed_by, nullptr) || !retain_resource(id, argument_buffer) ||
         (counts != nullptr && !retain_resource(id, count_buffer)))
         return false;
+    uint64_t table_address = 0u;
+    if (stride.addressed()) {
+        ID3D12Resource *const table = indirect_table_.current(*device_->device(), table_address);
+        if (table == nullptr || !retain(id, table, nullptr)) return false;
+        device_->set_indirect_va_table(recorded, table_address);
+    }
     recorded->ExecuteIndirect(signed_by, max_count, arguments, argument_offset, counts,
                               counts != nullptr ? count_offset : 0u);
+    if (stride.addressed()) device_->set_indirect_va_table(recorded, 0u);
     return true;
 }
 
@@ -378,6 +471,7 @@ bool D3d12Session::on_CopyBufferRegion12(uint32_t id, uint32_t destination, uint
         return false;
     if (!retain_resource(id, destination) || !retain_resource(id, source)) return false;
     recorded->CopyBufferRegion(to, destination_offset, from, source_offset, bytes);
+    work_window_.add(bytes);
     return true;
 }
 
@@ -402,6 +496,8 @@ bool D3d12Session::on_CopyTextureRegion12(uint32_t id, const d3d12proto::CopyLoc
     if (!copy_bounds_hold(destination, to, written) || !copy_bounds_hold(source, from, extent.read())) return false;
     if (!copy_formats_hold(destination, source, to, from)) return false;
     if (!retain_resource(id, destination.resource) || !retain_resource(id, source.resource)) return false;
+    work_window_.add(uint64_t{written.right - written.left} * (written.bottom - written.top) *
+                     (written.back - written.front) * 4u);
     const bool                      into_footprint = destination.type == copy_footprint;
     const bool                      from_footprint = source.type == copy_footprint;
     const d3d12proto::CopyLocation &placed = into_footprint ? destination : source;
@@ -526,6 +622,13 @@ bool D3d12Session::on_CopyResource12(uint32_t id, uint32_t destination, uint32_t
     }
     if (!retain_resource(id, destination) || !retain_resource(id, source)) return false;
     recorded->CopyResource(to, from);
+    {
+        const D3D12_RESOURCE_DESC whole = from->GetDesc();
+        const uint64_t texels = whole.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER
+                                    ? whole.Width
+                                    : whole.Width * whole.Height * whole.DepthOrArraySize * 4u;
+        work_window_.add(texels);
+    }
     return true;
 }
 
@@ -579,7 +682,7 @@ bool D3d12Session::on_EndQuery12(uint32_t id, uint32_t heap, uint32_t type, uint
     ID3D12GraphicsCommandList *const recorded = list(id);
     ID3D12QueryHeap *const queries = objects_.find_as<ID3D12QueryHeap>(heap, D3dObjectKind::query_heap12);
     if (recorded == nullptr || queries == nullptr || type > most_query_type || !queries_.admits(heap, type, index, 1u) ||
-        !retain(id, queries, nullptr))
+        recorded->GetType() == D3D12_COMMAND_LIST_TYPE_COPY || !retain(id, queries, nullptr))
         return false;
     recorded->EndQuery(queries, static_cast<D3D12_QUERY_TYPE>(type), index);
     return true;
@@ -594,7 +697,7 @@ bool D3d12Session::on_ResolveQueryData12(uint32_t id, uint32_t heap, uint32_t ty
     ID3D12QueryHeap *const queries = objects_.find_as<ID3D12QueryHeap>(heap, D3dObjectKind::query_heap12);
     ID3D12Resource  *const to = objects_.find_as<ID3D12Resource>(destination, D3dObjectKind::resource12);
     if (recorded == nullptr || queries == nullptr || to == nullptr || type > most_query_type ||
-        !queries_.admits(heap, type, first, count))
+        !queries_.admits(heap, type, first, count) || recorded->GetType() == D3D12_COMMAND_LIST_TYPE_COPY)
         return false;
     const D3D12_RESOURCE_DESC desc = to->GetDesc();
     if (desc.Dimension != D3D12_RESOURCE_DIMENSION_BUFFER || offset % 8u != 0u || offset > desc.Width ||

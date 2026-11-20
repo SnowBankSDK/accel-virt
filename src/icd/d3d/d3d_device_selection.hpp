@@ -13,6 +13,7 @@ class D3dDeviceSelection final : public ClientTransport {
 public:
     D3dDeviceSelection(D3dCommandStream &stream, uint32_t device);
     D3dDeviceSelection(const D3dDeviceSelection &) = delete;
+    void move_to(D3dCommandStream &stream);
     D3dDeviceSelection &operator=(const D3dDeviceSelection &) = delete;
 
     WireWriter       request_writer() override;
@@ -29,7 +30,7 @@ public:
     void note(ChannelCounter counter, uint64_t amount) override;
 
 private:
-    D3dCommandStream &stream_;
+    D3dCommandStream *stream_;
     uint32_t          device_;
 };
 

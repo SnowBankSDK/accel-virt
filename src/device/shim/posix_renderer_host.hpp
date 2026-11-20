@@ -92,6 +92,8 @@ public:
 
     size_t read_request(void *request, size_t offset, uint8_t *buffer, size_t size) override;
     void   respond(void *request, const uint8_t *bytes, size_t size) override;
+    void  *keep_request(void *request) override;
+    void   release_request(void *kept, bool answered) override;
     bool   resource_exists(uint32_t id) override;
 
     [[nodiscard]] Status create_recording(const char *path, void *&file) override;

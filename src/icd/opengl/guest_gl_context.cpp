@@ -6,6 +6,7 @@
 #include "core/platform/thread_lock.hpp"
 #include "core/support/scope_exit.hpp"
 #include "core/support/text_buffer.hpp"
+#include "core/log/log_line.hpp"
 #include "core/trace/function_scope.hpp"
 #include "core/trace/state_writer.hpp"
 #include "core/log/keyed_log.hpp"
@@ -30,6 +31,7 @@ constexpr uint32_t latest_major = 4u;
 constexpr uint32_t latest_minor = 6u;
 constexpr uint32_t latest_language_minor = 60u;
 constexpr uint32_t no_error = 0u;
+constexpr uint8_t  debug_context_flag = 1u;
 
 }
 
@@ -40,9 +42,9 @@ GuestGlContext::GuestGlContext(icd::IcdConnection &connection, BlockSource &memo
     : memory_(memory), lines_(lines), policy_(extensions),
       pixel_format_(pixel_format),
       options_(options), state_(State::created), owner_(0u), current_dc_(nullptr), been_current_(false), error_(no_error), share_target_(0u), link_(connection), loss_(lines), loss_reported_(false),
-      channel_(memory, lines, icd::ChannelShape(SubApi::opengl, ring_order, reply_bytes, staging_bytes, batch_bytes, arena_bytes), send_lock), reported_(), arrays_(memory), uniforms_(memory), queries_(), profile_(), pacing_(), frames_(), timeline_(channel_, send_lock), extensions_(memory), framebuffers_(memory, lines), shadows_(memory), staging_(), slices_(memory, channel_, timeline_, groups, groups.mint(), lines, this), mappings_(memory, shadows_, slices_, lines), externals_(handles, memory, lines), pinned_(memory, channel_),
+      channel_(memory, lines, icd::ChannelShape(SubApi::opengl, ring_order, reply_bytes, staging_bytes, batch_bytes, arena_bytes), send_lock), reported_(), arrays_(memory), vertex_(memory), uniforms_(memory), queries_(), profile_(), pacing_(), frames_(), timeline_(channel_, send_lock), extensions_(memory), framebuffers_(memory, lines), shadows_(memory), staging_(), slices_(memory, channel_, timeline_, groups, groups.mint(), lines, this), mappings_(memory, shadows_, slices_, lines), externals_(handles, memory, lines), pinned_(memory, channel_),
       strings_{},
-      debug_callback_(0u), debug_user_(0u), luid_(0u)
+      debug_((options.flags() & debug_context_flag) != 0u), delivery_(debug_), luid_(0u)
 {
     AV_SCOPE("GuestGlContext::GuestGlContext");
 }
@@ -89,6 +91,10 @@ Status GuestGlContext::make_once()
     if (!learn()) {
         if (channel_.exhausted()) {
             lines_.write("the host has no session left for the context");
+            return Status::no_memory;
+        }
+        if (channel_.faulted()) {
+            lines_.write("the context faulted before the host answered it");
             return Status::no_memory;
         }
         lines_.write("the host refused the context's options");
@@ -183,6 +189,12 @@ BatchMark GuestGlContext::mark() const
     return channel_.opened() ? channel_.transport().newest_mark() : BatchMark();
 }
 
+uint64_t GuestGlContext::calls_sent() const
+{
+    AV_SCOPE("GuestGlContext::calls_sent");
+    return channel_.opened() ? channel_.transport().calls_sent() : 0u;
+}
+
 void GuestGlContext::flush()
 {
     AV_SCOPE("GuestGlContext::flush");
@@ -230,7 +242,10 @@ ClientTransport *GuestGlContext::wire()
         loss_.lose(channel_.fault_code());
         static_cast<void>(loss_.refuses("an OpenGL call"));
     }
-    return state_ == State::made ? &channel_.transport() : nullptr;
+    if (state_ != State::made) return nullptr;
+    if (!debug_.synchronous()) return &channel_.transport();
+    delivery_.bind(channel_.transport());
+    return &delivery_;
 }
 
 void GuestGlContext::send_forgets()
@@ -249,6 +264,12 @@ ClientArrayState &GuestGlContext::arrays()
 {
     AV_SCOPE("GuestGlContext::arrays");
     return arrays_;
+}
+
+ClientVertexState &GuestGlContext::vertex()
+{
+    AV_SCOPE("GuestGlContext::vertex");
+    return vertex_;
 }
 
 PinnedBuffers &GuestGlContext::pinned()
@@ -298,6 +319,15 @@ void GuestGlContext::read_sliced(uint32_t buffer, intptr_t offset, intptr_t size
     if (error != SlicedBuffers::gl_no_error) record(error);
 }
 
+void GuestGlContext::write_sliced(uint32_t buffer, intptr_t offset, intptr_t size, const void *data)
+{
+    AV_SCOPE("GuestGlContext::write_sliced");
+    ClientTransport *const transport = wire();
+    if (transport == nullptr) return;
+    const uint32_t error = slices_.write(*transport, buffer, offset, size, data);
+    if (error != SlicedBuffers::gl_no_error) record(error);
+}
+
 PixelStagingBuffer &GuestGlContext::staging()
 {
     AV_SCOPE("GuestGlContext::staging");
@@ -314,6 +344,12 @@ uint32_t GuestGlContext::slice_group() const
 {
     AV_SCOPE("GuestGlContext::slice_group");
     return slices_.group();
+}
+
+uint32_t GuestGlContext::group_root() const
+{
+    AV_SCOPE("GuestGlContext::group_root");
+    return slices_.group_root();
 }
 
 uint32_t GuestGlContext::slices_owned() const
@@ -382,7 +418,7 @@ bool GuestGlContext::take_host_error(uint32_t &error)
     const uint64_t word = channel_.host_errors();
     if (!reported_.readable(word)) return false;
     error = reported_.take(word);
-    return true;
+    return error != no_error;
 }
 
 const char *GuestGlContext::string(uint32_t name) const
@@ -392,6 +428,18 @@ const char *GuestGlContext::string(uint32_t name) const
     for (uint32_t row = 0u; row < strings; row++)
         if (string_names[row] == name) return strings_[row];
     return nullptr;
+}
+
+const icd::HostChannel &GuestGlContext::channel() const
+{
+    AV_SCOPE("GuestGlContext::channel");
+    return channel_;
+}
+
+icd::HostChannel &GuestGlContext::channel()
+{
+    AV_SCOPE("GuestGlContext::channel");
+    return channel_;
 }
 
 icd::PresentPacing &GuestGlContext::pacing()
@@ -412,22 +460,16 @@ void GuestGlContext::asking(GrantedProfile::Rung rung)
     profile_.granted(rung);
 }
 
-void GuestGlContext::set_debug_callback(uint64_t callback, uint64_t user)
+GlDebugMessages &GuestGlContext::debug()
 {
-    AV_SCOPE("GuestGlContext::set_debug_callback");
-    debug_callback_ = callback;
-    debug_user_ = user;
+    AV_SCOPE("GuestGlContext::debug");
+    return debug_;
 }
 
-uint64_t GuestGlContext::debug_callback() const
+void GuestGlContext::deliver_debug()
 {
-    AV_SCOPE("GuestGlContext::debug_callback");
-    return debug_callback_;
-}
-uint64_t GuestGlContext::debug_user() const
-{
-    AV_SCOPE("GuestGlContext::debug_user");
-    return debug_user_;
+    AV_SCOPE("GuestGlContext::deliver_debug");
+    if (state_ == State::made && debug_.listening()) debug_.deliver(channel_.transport());
 }
 
 bool GuestGlContext::robust() const
@@ -481,7 +523,7 @@ bool GuestGlContext::invariants_hold() const
     if (!held && staging_.name() != 0u) return false;
     for (uint32_t row = 0u; row < strings; row++)
         if (strings_[row][string_bytes - 1u] != '\0') return false;
-    return arrays_.invariants_hold() && uniforms_.invariants_hold() && queries_.invariants_hold() &&
+    return arrays_.invariants_hold() && vertex_.invariants_hold() && uniforms_.invariants_hold() && queries_.invariants_hold() &&
            framebuffers_.invariants_hold() && mappings_.invariants_hold() && slices_.invariants_hold() && shadows_.invariants_hold() &&
            staging_.invariants_hold() && channel_.invariants_hold() && pacing_.invariants_hold();
 }
@@ -489,11 +531,20 @@ bool GuestGlContext::invariants_hold() const
 Status GuestGlContext::build()
 {
     AV_SCOPE("GuestGlContext::build");
-    if (link_.acquire() != Status::ok) return Status::not_supported;
+    if (link_.acquire() != Status::ok) {
+        lines_.write("the context could not take its device link");
+        return Status::not_supported;
+    }
     GuestConnection &device = link_.device();
     const Status     opened = channel_.open(device, options_);
-    if (opened != Status::ok) return opened == Status::no_memory ? Status::no_memory : Status::invalid_parameter;
-    if (slices_.enroll() != Status::ok) return Status::no_memory;
+    if (opened != Status::ok) LogLine(lines_).text("the context's host channel did not open, status ").number(static_cast<uint32_t>(opened)).write();
+    if (opened == Status::invalid_parameter || opened == Status::invalid_state || opened == Status::no_space)
+        return opened;
+    if (opened != Status::ok) return Status::no_memory;
+    if (slices_.enroll() != Status::ok) {
+        lines_.write("the context's buffer slices could not be enrolled");
+        return Status::no_memory;
+    }
     static_cast<void>(pacing_.bind(device.kmt(), lines_, device.adapter(), device.device()));
     if (device.kmt().adapter_luid(device.adapter(), luid_) != Status::ok) luid_ = 0u;
     return Status::ok;

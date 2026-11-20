@@ -35,9 +35,9 @@ uint32_t list_type_of(D3D12DDI_COMMAND_QUEUE_FLAGS flags)
 D3d12Device::D3d12Device(BlockSource &memory, d3d::D3dSession &session, KeyedLog &log,
                          const D3d12HostCaps &caps,
                          void *const &list_table, d3d::D3dCallTrace &trace)
-    : session_(session), lines_(log), refused_(lines_), caps_(caps), list_table_(list_table), runtime_{}, core_(nullptr), kernel_(nullptr), lender_(session), clock_origin_(session, log), memories_(memory, session, log), follower_(), residency_(), channel_(), addresses_(), commitment_(),
+    : memory_(memory), session_(session), lines_(log), refused_(lines_), caps_(caps), list_table_(list_table), runtime_{}, core_(nullptr), kernel_(nullptr), lender_(session), clock_origin_(session, log), memories_(memory, session, log), follower_(), orders_(memory), residency_(), channel_(), addresses_(), commitment_(),
       recorder_(*this), null_resource_{}, loss_(lines_), library_blob_(), trace_(trace),
-      context_number_(trace.number_context())
+      context_number_(trace.number_context()), placed_heaps_(false)
 {
     AV_SCOPE("D3d12Device::D3d12Device");
     null_resource_.depth_or_array = 1u;
@@ -47,12 +47,19 @@ D3d12Device::D3d12Device(BlockSource &memory, d3d::D3dSession &session, KeyedLog
 D3d12Device::~D3d12Device()
 {
     AV_SCOPE("D3d12Device::~D3d12Device");
+    orders_.destroy_all();
     follower_.destroy();
     residency_.destroy();
     if (!channel_.constructed()) return;
     static_cast<void>(channel_.object().flush());
     channel_.destroy();
     session_.leave();
+}
+
+const D3d12HostCaps &D3d12Device::caps() const
+{
+    AV_SCOPE("D3d12Device::caps");
+    return caps_;
 }
 
 HRESULT D3d12Device::initialize(uint32_t adapter, const D3D12DDIARG_CREATEDEVICE_0109 &create)
@@ -67,7 +74,7 @@ HRESULT D3d12Device::initialize(uint32_t adapter, const D3D12DDIARG_CREATEDEVICE
     if (create.pKTCallbacks != nullptr) {
         static_cast<void>(follower_.construct(*create.pKTCallbacks, runtime_.handle, session_.transport()));
     }
-    if (core_ != nullptr) static_cast<void>(residency_.construct(*core_, runtime_));
+    if (core_ != nullptr) static_cast<void>(residency_.construct(*core_, runtime_, commitment_));
     static_cast<void>(channel_.construct(session_.stream(), session_.lock(), 0u));
     commitment_.learn(caps_.local_budget());
     uint32_t hresult = 1u;
@@ -78,6 +85,9 @@ HRESULT D3d12Device::initialize(uint32_t adapter, const D3D12DDIARG_CREATEDEVICE
         session_.leave();
         return d3d::SessionRefusal(exhausted).for_d3d();
     }
+    uint32_t placed = 0u;
+    placed_heaps_ = d3d12proto::av_d3d12_QueryHeapPlacement12(channel_.object(), &placed) && placed != 0u;
+    if (placed_heaps_) lines_.write("upload and readback heaps are native host memory the guest maps");
     return S_OK;
 }
 
@@ -98,6 +108,34 @@ d3d::D3dDeviceChannel &D3d12Device::wire()
 {
     AV_SCOPE("D3d12Device::wire");
     return channel_.object();
+}
+
+d3d::D3dDeviceChannel &D3d12Device::queue_wire(const QueueRecord &queue)
+{
+    AV_SCOPE("D3d12Device::queue_wire");
+    return queue.order != nullptr ? queue.order->wire() : wire();
+}
+
+void D3d12Device::reset_list(ListRecord &list, uint32_t pool, uint32_t type)
+{
+    AV_SCOPE("D3d12Device::reset_list");
+    d3d::ContextOrder *const order = list.order != nullptr ? orders_.find(list.order) : nullptr;
+    list.order = nullptr;
+    if (order == nullptr || order->lane().ran(list.fence)) {
+        static_cast<void>(sent(d3d12proto::av_d3d12_ResetCommandList12(wire(), list.header.stamp.id(), pool, 0u),
+                               "ResetCommandList12"));
+        return;
+    }
+    static_cast<void>(sent(d3d12proto::av_d3d12_Destroy12(order->wire(), list.header.stamp.id()), "Destroy12"));
+    list.header.stamp = d3d::RecordStamp(ListRecord::tag, next_id());
+    static_cast<void>(sent(d3d12proto::av_d3d12_CreateCommandList12(wire(), list.header.stamp.id(), pool, type, 0u),
+                           "CreateCommandList12"));
+}
+
+BlockSource &D3d12Device::memory()
+{
+    AV_SCOPE("D3d12Device::memory");
+    return memory_;
 }
 
 uint32_t D3d12Device::id_of(const void *block) const
@@ -260,9 +298,16 @@ HRESULT D3d12Device::create_command_queue(const D3D12DDIARG_CREATECOMMANDQUEUE_0
         return E_OUTOFMEMORY;
     }
     queue.context = context.hContext;
+    if (kernel_ != nullptr &&
+        orders_.create(queue.order, *kernel_, runtime_.handle, queue.context, session_, lines_, 0u) != Status::ok) {
+        lines_.write("a Direct3D 12 queue has no room for its kernel order");
+        return E_OUTOFMEMORY;
+    }
     if (!sent(d3d12proto::av_d3d12_CreateCommandQueue12(wire(), queue.header.stamp.id(), queue.type, 0u, 0u),
               "CreateCommandQueue12"))
         return E_OUTOFMEMORY;
+    if (queue.order != nullptr && !queue.order->engage())
+        lines_.once("a Direct3D 12 queue stays on the session's ring: its waits do not order its work on the host");
     clock_origin_.refresh(wire(), queue.header.stamp.id());
     return S_OK;
 }
@@ -271,7 +316,8 @@ VOID D3d12Device::destroy_command_queue(D3D12DDI_HCOMMANDQUEUE handle)
 {
     AV_SCOPE("D3d12Device::destroy_command_queue");
     QueueRecord &queue = *static_cast<QueueRecord *>(handle.pDrvPrivate);
-    static_cast<void>(sent(d3d12proto::av_d3d12_Destroy12(wire(), queue.header.stamp.id()), "Destroy12"));
+    static_cast<void>(sent(d3d12proto::av_d3d12_Destroy12(queue_wire(queue), queue.header.stamp.id()), "Destroy12"));
+    if (queue.order != nullptr) static_cast<void>(orders_.destroy(queue.order));
     queue = QueueRecord{};
 }
 
@@ -280,23 +326,32 @@ VOID D3d12Device::execute_command_lists(D3D12DDI_HCOMMANDQUEUE handle, UINT coun
     AV_SCOPE("D3d12Device::execute_command_lists");
     constexpr UINT most_lists = 64u;
     QueueRecord &queue = *static_cast<QueueRecord *>(handle.pDrvPrivate);
+    d3d::D3dDeviceChannel &through = queue_wire(queue);
     icd::Pieces pieces(lists == nullptr ? 0u : count, most_lists);
     while (pieces.next()) {
         uint32_t   ids[most_lists] = {};
         const auto batch = static_cast<UINT>(pieces.count());
         for (UINT index = 0u; index < batch; index++) ids[index] = id_of(lists[pieces.offset() + index].pDrvPrivate);
-        if (!sent(d3d12proto::av_d3d12_ExecuteCommandLists12(wire(), queue.header.stamp.id(), batch, ids),
+        if (!sent(d3d12proto::av_d3d12_ExecuteCommandLists12(through, queue.header.stamp.id(), batch, ids),
                   "ExecuteCommandLists12"))
             return;
     }
     queue.executed++;
-    if (wire().flush() != Status::ok) {
+    if (through.flush() != Status::ok) {
         lost("the queue's work could not be sent");
         return;
     }
+    const bool laned = queue.order != nullptr && queue.order->engaged();
+    const uint64_t fence = laned ? queue.order->lane().newest() : 0u;
+    for (UINT index = 0u; lists != nullptr && index < count; index++) {
+        ListRecord *const list = static_cast<ListRecord *>(lists[index].pDrvPrivate);
+        if (list == nullptr) continue;
+        list->order = laned ? queue.order : nullptr;
+        list->fence = fence;
+    }
     trim_memory();
     if (!follow(queue)) return;
-    if (queue.executed % verdict_every != 0u) return;
+    if (queue.executed % verdict_every != 0u || laned) return;
     uint32_t removed = 0u;
     if (!sent(d3d12proto::av_d3d12_Finish12(wire(), &removed), "Finish12")) return;
     if (removed != 0u) {
@@ -309,7 +364,9 @@ VOID D3d12Device::execute_command_lists(D3D12DDI_HCOMMANDQUEUE handle, UINT coun
 bool D3d12Device::follow(const QueueRecord &queue)
 {
     AV_SCOPE("D3d12Device::follow");
-    const HRESULT followed = follower_.constructed() ? follower_.object().follow(queue.context) : E_FAIL;
+    const HRESULT followed = queue.order != nullptr          ? queue.order->settle()
+                             : follower_.constructed() ? follower_.object().follow(queue.context)
+                                                       : E_FAIL;
     if (SUCCEEDED(followed)) return true;
     refused_.failed("pfnSubmitCommandCb", followed);
     lost("the queue's context refused its packet");
@@ -415,7 +472,9 @@ VOID D3d12Device::destroy_command_list(D3D12DDI_HCOMMANDLIST handle)
 {
     AV_SCOPE("D3d12Device::destroy_command_list");
     ListRecord &list = *static_cast<ListRecord *>(handle.pDrvPrivate);
-    if (list.made != 0u) static_cast<void>(sent(d3d12proto::av_d3d12_Destroy12(wire(), list.header.stamp.id()), "Destroy12"));
+    d3d::ContextOrder *const order = list.order != nullptr ? orders_.find(list.order) : nullptr;
+    d3d::D3dDeviceChannel &through = order != nullptr && !order->lane().ran(list.fence) ? order->wire() : wire();
+    if (list.made != 0u) static_cast<void>(sent(d3d12proto::av_d3d12_Destroy12(through, list.header.stamp.id()), "Destroy12"));
     list = ListRecord{};
 }
 

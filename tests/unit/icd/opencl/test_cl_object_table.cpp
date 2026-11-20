@@ -114,6 +114,32 @@ TEST(cl_object, a_queue_is_known_idle_until_work_is_sent_and_again_once_it_is_do
   CHECK(queue->known_idle());
   CHECK(queue->invariants_hold()); }
 
+TEST(cl_object, an_object_keeps_the_notes_the_icd_makes_about_it)
+{ Table rig;
+  ClObject *const context = rig.make(ClObject::Kind::context, 0x900u);
+  ClObject *const memory = rig.make(ClObject::Kind::mem, 0x902u, context);
+  ClObject *const image = rig.make(ClObject::Kind::mem, 0x903u, context);
+  ClObject *const kernel = rig.make(ClObject::Kind::kernel, 0x904u, context);
+  CHECK_EQ(memory->flags(), 0u);
+  memory->keep_flags(CL_MEM_READ_ONLY | CL_MEM_HOST_NO_ACCESS);
+  CHECK_EQ(memory->flags(), static_cast<std::uint64_t>(CL_MEM_READ_ONLY | CL_MEM_HOST_NO_ACCESS));
+  CHECK(image->companion() == nullptr);
+  image->keep_companion(memory);
+  CHECK(image->companion() == memory);
+  CHECK_EQ(image->command_type(), 0u);
+  image->keep_command_type(CL_COMMAND_READ_BUFFER);
+  CHECK_EQ(image->command_type(), static_cast<std::uint32_t>(CL_COMMAND_READ_BUFFER));
+  CHECK_EQ(kernel->traits(), 0u);
+  kernel->keep_traits(ClObject::kernel_unshaped);
+  CHECK_EQ(kernel->traits(), ClObject::kernel_unshaped);
+  CHECK(kernel->shape() == nullptr);
+  kernel->keep_shape(nullptr);
+  CHECK(kernel->source() == nullptr);
+  kernel->keep_source(nullptr);
+  kernel->rewire(0x905u);
+  CHECK_EQ(kernel->wire(), 0x905u);
+  CHECK(kernel->invariants_hold()); }
+
 TEST(cl_object_table, an_object_of_another_kind_is_not_that_object)
 { Table rig;
   ClObject *const context = rig.make(ClObject::Kind::context, 0x900u);
@@ -476,6 +502,44 @@ TEST(cl_object_table, a_contexts_queues_are_idle_when_none_of_them_has_work_in_f
   CHECK(rig.objects().queues_idle(context));
   CHECK(!rig.objects().queues_idle(other));
   CHECK(rig.objects().invariants_hold()); }
+
+TEST(cl_object_table, only_the_queues_of_the_context_that_waited_on_user_events_are_marked_poisoned)
+{ Table rig;
+  ClObject *const context = rig.make(ClObject::Kind::context, 0x900u);
+  ClObject *const other = rig.make(ClObject::Kind::context, 0x910u);
+  CHECK_EQ(rig.objects().poison_gated_queues(nullptr), 0u);
+  CHECK_EQ(rig.objects().poison_gated_queues(context), 0u);
+  ClObject *const gated = rig.make(ClObject::Kind::command_queue, 0x901u, context);
+  ClObject *const plain = rig.make(ClObject::Kind::command_queue, 0x902u, context);
+  ClObject *const elsewhere = rig.make(ClObject::Kind::command_queue, 0x911u, other);
+  ClObject *const buffer = rig.make(ClObject::Kind::mem, 0x903u, context);
+  CHECK(buffer != nullptr);
+  gated->keep_traits(gated->traits() | ClObject::queue_gated);
+  elsewhere->keep_traits(elsewhere->traits() | ClObject::queue_gated);
+  buffer->keep_traits(buffer->traits() | ClObject::queue_gated);
+  CHECK_EQ(rig.objects().poison_gated_queues(context), 1u);
+  CHECK((gated->traits() & ClObject::queue_poisoned) != 0u);
+  CHECK((plain->traits() & ClObject::queue_poisoned) == 0u);
+  CHECK((elsewhere->traits() & ClObject::queue_poisoned) == 0u);
+  CHECK((buffer->traits() & ClObject::queue_poisoned) == 0u);
+  CHECK(rig.objects().invariants_hold()); }
+
+TEST(cl_object, an_object_moved_to_another_session_answers_for_it_and_forgets_the_queue_that_used_it)
+{ av::MockPlatform platform;
+  ClObject buffer(dispatch, platform, ClObject::Kind::mem, 0x900u, some_context, nullptr);
+  CHECK_EQ(buffer.last_queue(), 0u);
+  CHECK((buffer.traits() & ClObject::mem_touched) == 0u);
+  buffer.note_use(0x55u);
+  CHECK_EQ(buffer.last_queue(), 0x55u);
+  CHECK((buffer.traits() & ClObject::mem_touched) != 0u);
+  av::clicd::GuestClContext *const other =
+      reinterpret_cast<av::clicd::GuestClContext *>(std::uintptr_t{0x5678});
+  buffer.rehome(other, 0x901u);
+  CHECK(buffer.context() == other);
+  CHECK_EQ(buffer.wire(), 0x901u);
+  CHECK_EQ(buffer.last_queue(), 0u);
+  CHECK((buffer.traits() & ClObject::mem_touched) != 0u);
+  CHECK(buffer.invariants_hold()); }
 
 TEST(cl_object, an_orphan_with_no_children_does_not_owe_the_parent_one)
 { av::MockPlatform platform;

@@ -5,6 +5,8 @@
 #include "executor/channel_stats_latest.hpp"
 #include "executor/import_table.hpp"
 #include "executor/budgeted_heap.hpp"
+#include "executor/session_lease.hpp"
+#include "proto/resources/host_memory_request.hpp"
 #include "proto/client/client_blob_arena.hpp"
 #include "proto/submission/blob_role.hpp"
 #include "proto/wire/spill_block.hpp"
@@ -12,6 +14,8 @@
 
 #include <stddef.h>
 #include <stdint.h>
+
+struct AvHostMemory;
 
 namespace av {
 
@@ -39,6 +43,7 @@ public:
     uint64_t             host_limit() const;
     void                 vacate();
     void                 let_go_of_thread();
+    void                 leave_device();
     bool                 live() const;
     bool                 lost() const;
     bool                 faulted() const;
@@ -56,7 +61,10 @@ public:
     uint32_t import_blob(uint64_t blob_id, uint64_t memory_key, const BlobRole &role = BlobRole());
     void     release_blob(uint64_t blob_id);
     uint64_t imported_handle(uint64_t blob_id);
+    [[nodiscard]] Status place_memory(uint64_t size, HostMemoryRequest request, AvHostMemory &memory);
+    uint64_t             placement_owner();
     ImportTable &imports();
+    SessionLease &lease();
     uint32_t lose_device();
     void     channel_stats(uint32_t context_id, const uint8_t *body, size_t size);
     void     report_channel(StateWriter &writer) const;
@@ -87,6 +95,7 @@ private:
     SpillBlock      answer_;
     size_t          answer_length_;
     ImportTable     imports_;
+    SessionLease    lease_;
     size_t          starved_;
     ChannelStatsLatest channel_;
     bool            faulted_;

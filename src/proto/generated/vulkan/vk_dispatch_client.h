@@ -210,6 +210,7 @@ void av_vkGetPhysicalDeviceExternalFenceProperties(::av::ClientTransport& t, Han
 void av_vkGetPhysicalDeviceExternalSemaphoreProperties(::av::ClientTransport& t, HandleTranslation& handles, VkPhysicalDevice physicalDevice, const VkPhysicalDeviceExternalSemaphoreInfo* pExternalSemaphoreInfo, VkExternalSemaphoreProperties* pExternalSemaphoreProperties);
 VkResult av_vkGetPhysicalDevicePresentRectanglesKHR(::av::ClientTransport& t, HandleTranslation& handles, VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, uint32_t* pRectCount, VkRect2D* pRects);
 VkResult av_vkGetPhysicalDeviceToolProperties(::av::ClientTransport& t, HandleTranslation& handles, VkPhysicalDevice physicalDevice, uint32_t* pToolCount, VkPhysicalDeviceToolProperties* pToolProperties);
+VkResult av_vkGetPipelineCacheData(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, VkPipelineCache pipelineCache, size_t* pDataSize, void* pData);
 void av_vkGetPrivateData(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, VkObjectType objectType, uint64_t objectHandle, VkPrivateDataSlot privateDataSlot, uint64_t* pData);
 VkResult av_vkGetQueryPoolResults(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, VkQueryPool queryPool, uint32_t firstQuery, uint32_t queryCount, size_t dataSize, void* pData, VkDeviceSize stride, VkQueryResultFlags flags);
 void av_vkGetRenderAreaGranularity(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, VkRenderPass renderPass, VkExtent2D* pGranularity);
@@ -290,6 +291,8 @@ void av_vkCmdSetPrimitiveRestartEnableEXT(::av::ClientTransport& t, HandleTransl
 void av_vkCmdSetRasterizerDiscardEnableEXT(::av::ClientTransport& t, HandleTranslation& handles, VkCommandBuffer commandBuffer, VkBool32 rasterizerDiscardEnable);
 void av_vkCmdSetVertexInputEXT(::av::ClientTransport& t, HandleTranslation& handles, VkCommandBuffer commandBuffer, uint32_t vertexBindingDescriptionCount, const VkVertexInputBindingDescription2EXT* pVertexBindingDescriptions, uint32_t vertexAttributeDescriptionCount, const VkVertexInputAttributeDescription2EXT* pVertexAttributeDescriptions);
 VkResult av_vkBuildAccelerationStructuresKHR(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, VkDeferredOperationKHR deferredOperation, uint32_t infoCount, const VkAccelerationStructureBuildGeometryInfoKHR* pInfos, const VkAccelerationStructureBuildRangeInfoKHR** ppBuildRangeInfos);
+void av_vkCmdBindDescriptorBufferEmbeddedSamplersEXT(::av::ClientTransport& t, HandleTranslation& handles, VkCommandBuffer commandBuffer, VkPipelineBindPoint pipelineBindPoint, VkPipelineLayout layout, uint32_t set);
+void av_vkCmdBindDescriptorBuffersEXT(::av::ClientTransport& t, HandleTranslation& handles, VkCommandBuffer commandBuffer, uint32_t bufferCount, const VkDescriptorBufferBindingInfoEXT* pBindingInfos);
 void av_vkCmdBindShadersEXT(::av::ClientTransport& t, HandleTranslation& handles, VkCommandBuffer commandBuffer, uint32_t stageCount, const VkShaderStageFlagBits* pStages, const VkShaderEXT* pShaders);
 void av_vkCmdBindVertexBuffers2EXT(::av::ClientTransport& t, HandleTranslation& handles, VkCommandBuffer commandBuffer, uint32_t firstBinding, uint32_t bindingCount, const VkBuffer* pBuffers, const VkDeviceSize* pOffsets, const VkDeviceSize* pSizes, const VkDeviceSize* pStrides);
 void av_vkCmdBuildAccelerationStructuresIndirectKHR(::av::ClientTransport& t, HandleTranslation& handles, VkCommandBuffer commandBuffer, uint32_t infoCount, const VkAccelerationStructureBuildGeometryInfoKHR* pInfos, const VkDeviceAddress* pIndirectDeviceAddresses, const uint32_t* pIndirectStrides, const uint32_t** ppMaxPrimitiveCounts);
@@ -323,6 +326,7 @@ void av_vkCmdSetDepthClipNegativeOneToOneEXT(::av::ClientTransport& t, HandleTra
 void av_vkCmdSetDepthCompareOpEXT(::av::ClientTransport& t, HandleTranslation& handles, VkCommandBuffer commandBuffer, VkCompareOp depthCompareOp);
 void av_vkCmdSetDepthTestEnableEXT(::av::ClientTransport& t, HandleTranslation& handles, VkCommandBuffer commandBuffer, VkBool32 depthTestEnable);
 void av_vkCmdSetDepthWriteEnableEXT(::av::ClientTransport& t, HandleTranslation& handles, VkCommandBuffer commandBuffer, VkBool32 depthWriteEnable);
+void av_vkCmdSetDescriptorBufferOffsetsEXT(::av::ClientTransport& t, HandleTranslation& handles, VkCommandBuffer commandBuffer, VkPipelineBindPoint pipelineBindPoint, VkPipelineLayout layout, uint32_t firstSet, uint32_t setCount, const uint32_t* pBufferIndices, const VkDeviceSize* pOffsets);
 void av_vkCmdSetExtraPrimitiveOverestimationSizeEXT(::av::ClientTransport& t, HandleTranslation& handles, VkCommandBuffer commandBuffer, float extraPrimitiveOverestimationSize);
 void av_vkCmdSetFragmentShadingRateKHR(::av::ClientTransport& t, HandleTranslation& handles, VkCommandBuffer commandBuffer, const VkExtent2D* pFragmentSize, const VkFragmentShadingRateCombinerOpKHR* combinerOps);
 void av_vkCmdSetFrontFaceEXT(::av::ClientTransport& t, HandleTranslation& handles, VkCommandBuffer commandBuffer, VkFrontFace frontFace);
@@ -368,12 +372,16 @@ void av_vkGetAccelerationStructureBuildSizesKHR(::av::ClientTransport& t, Handle
 VkDeviceAddress av_vkGetAccelerationStructureDeviceAddressKHR(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, const VkAccelerationStructureDeviceAddressInfoKHR* pInfo);
 uint32_t av_vkGetDeferredOperationMaxConcurrencyKHR(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, VkDeferredOperationKHR operation);
 VkResult av_vkGetDeferredOperationResultKHR(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, VkDeferredOperationKHR operation);
+void av_vkGetDescriptorEXT(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, const VkDescriptorGetInfoEXT* pDescriptorInfo, size_t dataSize, void* pDescriptor);
+void av_vkGetDescriptorSetLayoutBindingOffsetEXT(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, VkDescriptorSetLayout layout, uint32_t binding, VkDeviceSize* pOffset);
+void av_vkGetDescriptorSetLayoutSizeEXT(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, VkDescriptorSetLayout layout, VkDeviceSize* pLayoutSizeInBytes);
 void av_vkGetDeviceAccelerationStructureCompatibilityKHR(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, const VkAccelerationStructureVersionInfoKHR* pVersionInfo, VkAccelerationStructureCompatibilityKHR* pCompatibility);
 void av_vkGetImageSubresourceLayout2EXT(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, VkImage image, const VkImageSubresource2* pSubresource, VkSubresourceLayout2* pLayout);
 VkResult av_vkGetPhysicalDeviceFragmentShadingRatesKHR(::av::ClientTransport& t, HandleTranslation& handles, VkPhysicalDevice physicalDevice, uint32_t* pFragmentShadingRateCount, VkPhysicalDeviceFragmentShadingRateKHR* pFragmentShadingRates);
 VkResult av_vkGetRayTracingCaptureReplayShaderGroupHandlesKHR(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, VkPipeline pipeline, uint32_t firstGroup, uint32_t groupCount, size_t dataSize, void* pData);
 VkResult av_vkGetRayTracingShaderGroupHandlesKHR(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, VkPipeline pipeline, uint32_t firstGroup, uint32_t groupCount, size_t dataSize, void* pData);
 VkDeviceSize av_vkGetRayTracingShaderGroupStackSizeKHR(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, VkPipeline pipeline, uint32_t group, VkShaderGroupShaderKHR groupShader);
+VkResult av_vkGetShaderBinaryDataEXT(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, VkShaderEXT shader, size_t* pDataSize, void* pData);
 VkResult av_vkTransitionImageLayoutEXT(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, uint32_t transitionCount, const VkHostImageLayoutTransitionInfo* pTransitions);
 VkResult av_vkWriteAccelerationStructuresPropertiesKHR(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, uint32_t accelerationStructureCount, const VkAccelerationStructureKHR* pAccelerationStructures, VkQueryType queryType, size_t dataSize, void* pData, size_t stride);
 VkResult av_vkGetCalibratedTimestampsEXT(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, uint32_t timestampCount, const VkCalibratedTimestampInfoKHR* pTimestampInfos, uint64_t* pTimestamps, uint64_t* pMaxDeviation);
@@ -385,6 +393,7 @@ VkResult av_vkCreatePipelineBinariesKHR(::av::ClientTransport& t, HandleTranslat
 void av_vkDestroyPipelineBinaryKHR(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, VkPipelineBinaryKHR pipelineBinary, const VkAllocationCallbacks* pAllocator);
 void av_vkGetDeviceImageSubresourceLayoutKHR(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, const VkDeviceImageSubresourceInfo* pInfo, VkSubresourceLayout2* pLayout);
 void av_vkGetImageSubresourceLayout2KHR(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, VkImage image, const VkImageSubresource2* pSubresource, VkSubresourceLayout2* pLayout);
+VkResult av_vkGetPipelineBinaryDataKHR(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, const VkPipelineBinaryDataInfoKHR* pInfo, VkPipelineBinaryKeyKHR* pPipelineBinaryKey, size_t* pPipelineBinaryDataSize, void* pPipelineBinaryData);
 VkResult av_vkGetPipelineKeyKHR(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, const VkPipelineCreateInfoKHR* pPipelineCreateInfo, VkPipelineBinaryKeyKHR* pPipelineKey);
 void av_vkGetRenderingAreaGranularityKHR(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, const VkRenderingAreaInfo* pRenderingAreaInfo, VkExtent2D* pGranularity);
 VkResult av_vkReleaseCapturedPipelineDataKHR(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, const VkReleaseCapturedPipelineDataInfoKHR* pInfo, const VkAllocationCallbacks* pAllocator);
@@ -405,6 +414,7 @@ void av_vkAntiLagUpdateAMD(::av::ClientTransport& t, HandleTranslation& handles,
 void av_vkCmdBindDescriptorBufferEmbeddedSamplers2EXT(::av::ClientTransport& t, HandleTranslation& handles, VkCommandBuffer commandBuffer, const VkBindDescriptorBufferEmbeddedSamplersInfoEXT* pBindDescriptorBufferEmbeddedSamplersInfo);
 void av_vkCmdBindDescriptorSets2KHR(::av::ClientTransport& t, HandleTranslation& handles, VkCommandBuffer commandBuffer, const VkBindDescriptorSetsInfo* pBindDescriptorSetsInfo);
 void av_vkCmdDrawMultiEXT(::av::ClientTransport& t, HandleTranslation& handles, VkCommandBuffer commandBuffer, uint32_t drawCount, const VkMultiDrawInfoEXT* pVertexInfo, uint32_t instanceCount, uint32_t firstInstance, uint32_t stride);
+void av_vkCmdDrawMultiIndexedEXT(::av::ClientTransport& t, HandleTranslation& handles, VkCommandBuffer commandBuffer, uint32_t drawCount, const VkMultiDrawIndexedInfoEXT* pIndexInfo, uint32_t instanceCount, uint32_t firstInstance, uint32_t stride, const int32_t* pVertexOffset);
 void av_vkCmdPushConstants2KHR(::av::ClientTransport& t, HandleTranslation& handles, VkCommandBuffer commandBuffer, const VkPushConstantsInfo* pPushConstantsInfo);
 void av_vkCmdPushDescriptorSet2KHR(::av::ClientTransport& t, HandleTranslation& handles, VkCommandBuffer commandBuffer, const VkPushDescriptorSetInfo* pPushDescriptorSetInfo);
 void av_vkCmdPushDescriptorSetWithTemplate2KHR(::av::ClientTransport& t, HandleTranslation& handles, VkCommandBuffer commandBuffer, const VkPushDescriptorSetWithTemplateInfo* pPushDescriptorSetWithTemplateInfo);
@@ -420,5 +430,14 @@ VkResult av_vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR(::av::ClientTransp
 void av_vkGetPhysicalDeviceMultisamplePropertiesEXT(::av::ClientTransport& t, HandleTranslation& handles, VkPhysicalDevice physicalDevice, VkSampleCountFlagBits samples, VkMultisamplePropertiesEXT* pMultisampleProperties);
 void av_vkGetShaderModuleCreateInfoIdentifierEXT(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, const VkShaderModuleCreateInfo* pCreateInfo, VkShaderModuleIdentifierEXT* pIdentifier);
 void av_vkGetShaderModuleIdentifierEXT(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, VkShaderModule shaderModule, VkShaderModuleIdentifierEXT* pIdentifier);
+void av_vkCmdExecuteGeneratedCommandsEXT(::av::ClientTransport& t, HandleTranslation& handles, VkCommandBuffer commandBuffer, VkBool32 isPreprocessed, const VkGeneratedCommandsInfoEXT* pGeneratedCommandsInfo);
+void av_vkCmdPreprocessGeneratedCommandsEXT(::av::ClientTransport& t, HandleTranslation& handles, VkCommandBuffer commandBuffer, const VkGeneratedCommandsInfoEXT* pGeneratedCommandsInfo, VkCommandBuffer stateCommandBuffer);
+VkResult av_vkCreateIndirectCommandsLayoutEXT(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, const VkIndirectCommandsLayoutCreateInfoEXT* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkIndirectCommandsLayoutEXT* pIndirectCommandsLayout);
+VkResult av_vkCreateIndirectExecutionSetEXT(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, const VkIndirectExecutionSetCreateInfoEXT* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkIndirectExecutionSetEXT* pIndirectExecutionSet);
+void av_vkDestroyIndirectCommandsLayoutEXT(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, VkIndirectCommandsLayoutEXT indirectCommandsLayout, const VkAllocationCallbacks* pAllocator);
+void av_vkDestroyIndirectExecutionSetEXT(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, VkIndirectExecutionSetEXT indirectExecutionSet, const VkAllocationCallbacks* pAllocator);
+void av_vkGetGeneratedCommandsMemoryRequirementsEXT(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, const VkGeneratedCommandsMemoryRequirementsInfoEXT* pInfo, VkMemoryRequirements2* pMemoryRequirements);
+void av_vkUpdateIndirectExecutionSetPipelineEXT(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, VkIndirectExecutionSetEXT indirectExecutionSet, uint32_t executionSetWriteCount, const VkWriteIndirectExecutionSetPipelineEXT* pExecutionSetWrites);
+void av_vkUpdateIndirectExecutionSetShaderEXT(::av::ClientTransport& t, HandleTranslation& handles, VkDevice device, VkIndirectExecutionSetEXT indirectExecutionSet, uint32_t executionSetWriteCount, const VkWriteIndirectExecutionSetShaderEXT* pExecutionSetWrites);
 
 }  // namespace av::vkproto

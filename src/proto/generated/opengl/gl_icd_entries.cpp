@@ -101,7 +101,7 @@ void APIENTRY Wrap_glBindBuffersRange(GLenum target, GLuint first, GLsizei count
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
     ::av::glicd::bind_buffers_indexed(target);
-    ::av::glproto::av_glBindBuffersRange(*av_t, target, first, count, buffers, offsets, sizes);
+    ::av::glproto::av_glBindBuffersRange(*av_t, target, first, count, buffers, ::av::glicd::wide_intptrs(offsets, static_cast<size_t>(count), 0u), ::av::glicd::wide_intptrs(sizes, static_cast<size_t>(count), 1u));
 }
 
 void APIENTRY Wrap_glBindFragDataLocation(GLuint program, GLuint color, const GLchar* name) {
@@ -207,7 +207,7 @@ void APIENTRY Wrap_glBindVertexBuffers(GLuint first, GLsizei count, const GLuint
     AV_SCOPE("glBindVertexBuffers");
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
-    ::av::glproto::av_glBindVertexBuffers(*av_t, first, count, buffers, offsets, strides);
+    ::av::glproto::av_glBindVertexBuffers(*av_t, first, count, buffers, ::av::glicd::wide_intptrs(offsets, static_cast<size_t>(count), 0u), strides);
 }
 
 void APIENTRY Wrap_glBlendColor(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha) {
@@ -557,6 +557,7 @@ void APIENTRY Wrap_glCompileShader(GLuint shader) {
 void APIENTRY Wrap_glCompressedTexImage1D(GLenum target, GLint level, GLenum internalformat, GLsizei width, GLint border, GLsizei imageSize, const void* data) {
     AV_SCOPE("glCompressedTexImage1D");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_data_slice = ::av::glicd::unpack_slice_bound();
     const bool av_data_offset = !av_data_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -571,6 +572,7 @@ void APIENTRY Wrap_glCompressedTexImage1D(GLenum target, GLint level, GLenum int
 void APIENTRY Wrap_glCompressedTexImage2D(GLenum target, GLint level, GLenum internalformat, GLsizei width, GLsizei height, GLint border, GLsizei imageSize, const void* data) {
     AV_SCOPE("glCompressedTexImage2D");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_data_slice = ::av::glicd::unpack_slice_bound();
     const bool av_data_offset = !av_data_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -585,6 +587,7 @@ void APIENTRY Wrap_glCompressedTexImage2D(GLenum target, GLint level, GLenum int
 void APIENTRY Wrap_glCompressedTexImage3D(GLenum target, GLint level, GLenum internalformat, GLsizei width, GLsizei height, GLsizei depth, GLint border, GLsizei imageSize, const void* data) {
     AV_SCOPE("glCompressedTexImage3D");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_data_slice = ::av::glicd::unpack_slice_bound();
     const bool av_data_offset = !av_data_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -599,6 +602,7 @@ void APIENTRY Wrap_glCompressedTexImage3D(GLenum target, GLint level, GLenum int
 void APIENTRY Wrap_glCompressedTexSubImage1D(GLenum target, GLint level, GLint xoffset, GLsizei width, GLenum format, GLsizei imageSize, const void* data) {
     AV_SCOPE("glCompressedTexSubImage1D");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_data_slice = ::av::glicd::unpack_slice_bound();
     const bool av_data_offset = !av_data_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -613,6 +617,7 @@ void APIENTRY Wrap_glCompressedTexSubImage1D(GLenum target, GLint level, GLint x
 void APIENTRY Wrap_glCompressedTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLsizei imageSize, const void* data) {
     AV_SCOPE("glCompressedTexSubImage2D");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_data_slice = ::av::glicd::unpack_slice_bound();
     const bool av_data_offset = !av_data_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -627,6 +632,7 @@ void APIENTRY Wrap_glCompressedTexSubImage2D(GLenum target, GLint level, GLint x
 void APIENTRY Wrap_glCompressedTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLsizei imageSize, const void* data) {
     AV_SCOPE("glCompressedTexSubImage3D");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_data_slice = ::av::glicd::unpack_slice_bound();
     const bool av_data_offset = !av_data_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -641,6 +647,7 @@ void APIENTRY Wrap_glCompressedTexSubImage3D(GLenum target, GLint level, GLint x
 void APIENTRY Wrap_glCompressedTextureSubImage1D(GLuint texture, GLint level, GLint xoffset, GLsizei width, GLenum format, GLsizei imageSize, const void* data) {
     AV_SCOPE("glCompressedTextureSubImage1D");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_data_slice = ::av::glicd::unpack_slice_bound();
     const bool av_data_offset = !av_data_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -655,6 +662,7 @@ void APIENTRY Wrap_glCompressedTextureSubImage1D(GLuint texture, GLint level, GL
 void APIENTRY Wrap_glCompressedTextureSubImage2D(GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLsizei imageSize, const void* data) {
     AV_SCOPE("glCompressedTextureSubImage2D");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_data_slice = ::av::glicd::unpack_slice_bound();
     const bool av_data_offset = !av_data_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -669,6 +677,7 @@ void APIENTRY Wrap_glCompressedTextureSubImage2D(GLuint texture, GLint level, GL
 void APIENTRY Wrap_glCompressedTextureSubImage3D(GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLsizei imageSize, const void* data) {
     AV_SCOPE("glCompressedTextureSubImage3D");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_data_slice = ::av::glicd::unpack_slice_bound();
     const bool av_data_offset = !av_data_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -683,6 +692,7 @@ void APIENTRY Wrap_glCompressedTextureSubImage3D(GLuint texture, GLint level, GL
 void APIENTRY Wrap_glCopyBufferSubData(GLenum readTarget, GLenum writeTarget, GLintptr readOffset, GLintptr writeOffset, GLsizeiptr size) {
     AV_SCOPE("glCopyBufferSubData");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     ::av::glicd::host_writes_target(writeTarget);
     ::av::glproto::av_glCopyBufferSubData(*av_t, readTarget, writeTarget, readOffset, writeOffset, size);
@@ -698,6 +708,7 @@ void APIENTRY Wrap_glCopyImageSubData(GLuint srcName, GLenum srcTarget, GLint sr
 void APIENTRY Wrap_glCopyNamedBufferSubData(GLuint readBuffer, GLuint writeBuffer, GLintptr readOffset, GLintptr writeOffset, GLsizeiptr size) {
     AV_SCOPE("glCopyNamedBufferSubData");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     ::av::glicd::host_writes_buffer(writeBuffer);
     ::av::glproto::av_glCopyNamedBufferSubData(*av_t, readBuffer, writeBuffer, readOffset, writeOffset, size);
@@ -707,56 +718,72 @@ void APIENTRY Wrap_glCopyTexImage1D(GLenum target, GLint level, GLenum internalf
     AV_SCOPE("glCopyTexImage1D");
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glCopyTexImage1D(*av_t, target, level, internalformat, x, y, width, border);
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glCopyTexImage2D(GLenum target, GLint level, GLenum internalformat, GLint x, GLint y, GLsizei width, GLsizei height, GLint border) {
     AV_SCOPE("glCopyTexImage2D");
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glCopyTexImage2D(*av_t, target, level, internalformat, x, y, width, height, border);
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glCopyTexSubImage1D(GLenum target, GLint level, GLint xoffset, GLint x, GLint y, GLsizei width) {
     AV_SCOPE("glCopyTexSubImage1D");
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glCopyTexSubImage1D(*av_t, target, level, xoffset, x, y, width);
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glCopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y, GLsizei width, GLsizei height) {
     AV_SCOPE("glCopyTexSubImage2D");
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glCopyTexSubImage2D(*av_t, target, level, xoffset, yoffset, x, y, width, height);
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glCopyTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLint x, GLint y, GLsizei width, GLsizei height) {
     AV_SCOPE("glCopyTexSubImage3D");
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glCopyTexSubImage3D(*av_t, target, level, xoffset, yoffset, zoffset, x, y, width, height);
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glCopyTextureSubImage1D(GLuint texture, GLint level, GLint xoffset, GLint x, GLint y, GLsizei width) {
     AV_SCOPE("glCopyTextureSubImage1D");
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glCopyTextureSubImage1D(*av_t, texture, level, xoffset, x, y, width);
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glCopyTextureSubImage2D(GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y, GLsizei width, GLsizei height) {
     AV_SCOPE("glCopyTextureSubImage2D");
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glCopyTextureSubImage2D(*av_t, texture, level, xoffset, yoffset, x, y, width, height);
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glCopyTextureSubImage3D(GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLint x, GLint y, GLsizei width, GLsizei height) {
     AV_SCOPE("glCopyTextureSubImage3D");
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glCopyTextureSubImage3D(*av_t, texture, level, xoffset, yoffset, zoffset, x, y, width, height);
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glCreateBuffers(GLsizei n, GLuint* buffers) {
@@ -914,14 +941,6 @@ void APIENTRY Wrap_glDeleteSync(GLsync sync) {
     ::av::glproto::av_glDeleteSync(*av_t, reinterpret_cast<uint64_t>(sync));
 }
 
-void APIENTRY Wrap_glDeleteTextures(GLsizei n, const GLuint* textures) {
-    AV_SCOPE("glDeleteTextures");
-    auto* av_t = ::av::glicd::wire();
-    ::av::glicd::forget_bindings();
-    if (av_t == nullptr) return;
-    ::av::glproto::av_glDeleteTextures(*av_t, n, textures);
-}
-
 void APIENTRY Wrap_glDepthFunc(GLenum func) {
     AV_SCOPE("glDepthFunc");
     auto* av_t = ::av::glicd::wire();
@@ -971,13 +990,6 @@ void APIENTRY Wrap_glDetachShader(GLuint program, GLuint shader) {
     ::av::glproto::av_glDetachShader(*av_t, program, shader);
 }
 
-void APIENTRY Wrap_glDisable(GLenum cap) {
-    AV_SCOPE("glDisable");
-    auto* av_t = ::av::glicd::wire();
-    if (av_t == nullptr) return;
-    ::av::glproto::av_glDisable(*av_t, cap);
-}
-
 void APIENTRY Wrap_glDisableVertexArrayAttrib(GLuint vaobj, GLuint index) {
     AV_SCOPE("glDisableVertexArrayAttrib");
     auto* av_t = ::av::glicd::wire();
@@ -1013,6 +1025,7 @@ void APIENTRY Wrap_glDrawArraysIndirect(GLenum mode, const void* indirect) {
     auto* av_t = ::av::glicd::wire();
     ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
+    if (::av::glicd::refuse_client_arrays()) return;
     ::av::glproto::av_glDrawArraysIndirect(*av_t, mode, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(indirect)));
 }
 
@@ -1021,13 +1034,13 @@ void APIENTRY Wrap_glDrawArraysInstancedBaseInstance(GLenum mode, GLint first, G
     auto* av_t = ::av::glicd::wire();
     ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
+    if (!::av::glicd::stage_client_arrays(first, count)) return;
     ::av::glproto::av_glDrawArraysInstancedBaseInstance(*av_t, mode, first, count, instancecount, baseinstance);
 }
 
 void APIENTRY Wrap_glDrawBuffers(GLsizei n, const GLenum* bufs) {
     AV_SCOPE("glDrawBuffers");
     auto* av_t = ::av::glicd::wire();
-    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     ::av::glproto::av_glDrawBuffers(*av_t, n, bufs);
 }
@@ -1037,7 +1050,9 @@ void APIENTRY Wrap_glDrawElementsBaseVertex(GLenum mode, GLsizei count, GLenum t
     auto* av_t = ::av::glicd::wire();
     ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
+    if (!::av::glicd::stage_client_elements(type, count, indices, basevertex)) return;
     ::av::glproto::av_glDrawElementsBaseVertex(*av_t, mode, count, type, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(indices)), basevertex);
+    ::av::glicd::finish_client_draw();
 }
 
 void APIENTRY Wrap_glDrawElementsIndirect(GLenum mode, GLenum type, const void* indirect) {
@@ -1045,6 +1060,7 @@ void APIENTRY Wrap_glDrawElementsIndirect(GLenum mode, GLenum type, const void* 
     auto* av_t = ::av::glicd::wire();
     ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
+    if (::av::glicd::refuse_client_arrays()) return;
     ::av::glproto::av_glDrawElementsIndirect(*av_t, mode, type, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(indirect)));
 }
 
@@ -1053,7 +1069,9 @@ void APIENTRY Wrap_glDrawElementsInstancedBaseInstance(GLenum mode, GLsizei coun
     auto* av_t = ::av::glicd::wire();
     ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
+    if (!::av::glicd::stage_client_elements(type, count, indices, 0)) return;
     ::av::glproto::av_glDrawElementsInstancedBaseInstance(*av_t, mode, count, type, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(indices)), instancecount, baseinstance);
+    ::av::glicd::finish_client_draw();
 }
 
 void APIENTRY Wrap_glDrawElementsInstancedBaseVertex(GLenum mode, GLsizei count, GLenum type, const void* indices, GLsizei instancecount, GLint basevertex) {
@@ -1061,7 +1079,9 @@ void APIENTRY Wrap_glDrawElementsInstancedBaseVertex(GLenum mode, GLsizei count,
     auto* av_t = ::av::glicd::wire();
     ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
+    if (!::av::glicd::stage_client_elements(type, count, indices, basevertex)) return;
     ::av::glproto::av_glDrawElementsInstancedBaseVertex(*av_t, mode, count, type, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(indices)), instancecount, basevertex);
+    ::av::glicd::finish_client_draw();
 }
 
 void APIENTRY Wrap_glDrawElementsInstancedBaseVertexBaseInstance(GLenum mode, GLsizei count, GLenum type, const void* indices, GLsizei instancecount, GLint basevertex, GLuint baseinstance) {
@@ -1069,7 +1089,9 @@ void APIENTRY Wrap_glDrawElementsInstancedBaseVertexBaseInstance(GLenum mode, GL
     auto* av_t = ::av::glicd::wire();
     ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
+    if (!::av::glicd::stage_client_elements(type, count, indices, basevertex)) return;
     ::av::glproto::av_glDrawElementsInstancedBaseVertexBaseInstance(*av_t, mode, count, type, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(indices)), instancecount, basevertex, baseinstance);
+    ::av::glicd::finish_client_draw();
 }
 
 void APIENTRY Wrap_glDrawRangeElementsBaseVertex(GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type, const void* indices, GLint basevertex) {
@@ -1077,7 +1099,9 @@ void APIENTRY Wrap_glDrawRangeElementsBaseVertex(GLenum mode, GLuint start, GLui
     auto* av_t = ::av::glicd::wire();
     ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
+    if (!::av::glicd::stage_client_elements(type, count, indices, basevertex)) return;
     ::av::glproto::av_glDrawRangeElementsBaseVertex(*av_t, mode, start, end, count, type, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(indices)), basevertex);
+    ::av::glicd::finish_client_draw();
 }
 
 void APIENTRY Wrap_glDrawTransformFeedback(GLenum mode, GLuint id) {
@@ -1085,6 +1109,7 @@ void APIENTRY Wrap_glDrawTransformFeedback(GLenum mode, GLuint id) {
     auto* av_t = ::av::glicd::wire();
     ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
+    if (::av::glicd::refuse_client_arrays()) return;
     ::av::glproto::av_glDrawTransformFeedback(*av_t, mode, id);
 }
 
@@ -1093,6 +1118,7 @@ void APIENTRY Wrap_glDrawTransformFeedbackInstanced(GLenum mode, GLuint id, GLsi
     auto* av_t = ::av::glicd::wire();
     ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
+    if (::av::glicd::refuse_client_arrays()) return;
     ::av::glproto::av_glDrawTransformFeedbackInstanced(*av_t, mode, id, instancecount);
 }
 
@@ -1101,6 +1127,7 @@ void APIENTRY Wrap_glDrawTransformFeedbackStream(GLenum mode, GLuint id, GLuint 
     auto* av_t = ::av::glicd::wire();
     ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
+    if (::av::glicd::refuse_client_arrays()) return;
     ::av::glproto::av_glDrawTransformFeedbackStream(*av_t, mode, id, stream);
 }
 
@@ -1109,14 +1136,8 @@ void APIENTRY Wrap_glDrawTransformFeedbackStreamInstanced(GLenum mode, GLuint id
     auto* av_t = ::av::glicd::wire();
     ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
+    if (::av::glicd::refuse_client_arrays()) return;
     ::av::glproto::av_glDrawTransformFeedbackStreamInstanced(*av_t, mode, id, stream, instancecount);
-}
-
-void APIENTRY Wrap_glEnable(GLenum cap) {
-    AV_SCOPE("glEnable");
-    auto* av_t = ::av::glicd::wire();
-    if (av_t == nullptr) return;
-    ::av::glproto::av_glEnable(*av_t, cap);
 }
 
 void APIENTRY Wrap_glEnableVertexArrayAttrib(GLuint vaobj, GLuint index) {
@@ -1164,6 +1185,7 @@ void APIENTRY Wrap_glEndTransformFeedback(void) {
 GLsync APIENTRY Wrap_glFenceSync(GLenum condition, GLbitfield flags) {
     AV_SCOPE("glFenceSync");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::order_persistent_mappings();
     if (av_t == nullptr) return nullptr;
     return reinterpret_cast<GLsync>(static_cast<uintptr_t>(::av::glproto::av_glFenceSync(*av_t, condition, flags)));
 }
@@ -2282,13 +2304,6 @@ GLboolean APIENTRY Wrap_glIsEnabledi(GLenum target, GLuint index) {
     return ::av::glproto::av_glIsEnabledi(*av_t, target, index);
 }
 
-GLboolean APIENTRY Wrap_glIsFramebuffer(GLuint framebuffer) {
-    AV_SCOPE("glIsFramebuffer");
-    auto* av_t = ::av::glicd::wire();
-    if (av_t == nullptr) return 0;
-    return ::av::glproto::av_glIsFramebuffer(*av_t, framebuffer);
-}
-
 GLboolean APIENTRY Wrap_glIsProgram(GLuint program) {
     AV_SCOPE("glIsProgram");
     auto* av_t = ::av::glicd::wire();
@@ -2376,6 +2391,7 @@ void APIENTRY Wrap_glLogicOp(GLenum opcode) {
 void APIENTRY Wrap_glMemoryBarrier(GLbitfield barriers) {
     AV_SCOPE("glMemoryBarrier");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::order_persistent_mappings();
     if (av_t == nullptr) return;
     ::av::glproto::av_glMemoryBarrier(*av_t, barriers);
 }
@@ -2383,6 +2399,7 @@ void APIENTRY Wrap_glMemoryBarrier(GLbitfield barriers) {
 void APIENTRY Wrap_glMemoryBarrierByRegion(GLbitfield barriers) {
     AV_SCOPE("glMemoryBarrierByRegion");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::order_persistent_mappings();
     if (av_t == nullptr) return;
     ::av::glproto::av_glMemoryBarrierByRegion(*av_t, barriers);
 }
@@ -2399,6 +2416,7 @@ void APIENTRY Wrap_glMultiDrawArrays(GLenum mode, const GLint* first, const GLsi
     auto* av_t = ::av::glicd::wire();
     ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
+    if (!::av::glicd::stage_client_multi_arrays(first, count, drawcount)) return;
     ::av::glproto::av_glMultiDrawArrays(*av_t, mode, first, count, drawcount);
 }
 
@@ -2407,6 +2425,7 @@ void APIENTRY Wrap_glMultiDrawArraysIndirect(GLenum mode, const void* indirect, 
     auto* av_t = ::av::glicd::wire();
     ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
+    if (::av::glicd::refuse_client_arrays()) return;
     ::av::glproto::av_glMultiDrawArraysIndirect(*av_t, mode, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(indirect)), drawcount, stride);
 }
 
@@ -2415,6 +2434,7 @@ void APIENTRY Wrap_glMultiDrawArraysIndirectCount(GLenum mode, const void* indir
     auto* av_t = ::av::glicd::wire();
     ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
+    if (::av::glicd::refuse_client_arrays()) return;
     ::av::glproto::av_glMultiDrawArraysIndirectCount(*av_t, mode, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(indirect)), drawcount, maxdrawcount, stride);
 }
 
@@ -2423,7 +2443,10 @@ void APIENTRY Wrap_glMultiDrawElements(GLenum mode, const GLsizei* count, GLenum
     auto* av_t = ::av::glicd::wire();
     ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
-    ::av::glproto::av_glMultiDrawElements(*av_t, mode, count, type, ::av::glicd::offsets_of(indices, static_cast<size_t>(drawcount)), drawcount);
+    const uint64_t* staged_offsets = nullptr;
+    if (!::av::glicd::stage_client_multi_elements(count, type, indices, drawcount, nullptr, staged_offsets)) return;
+    ::av::glproto::av_glMultiDrawElements(*av_t, mode, count, type, (staged_offsets != nullptr ? staged_offsets : ::av::glicd::offsets_of(indices, static_cast<size_t>(drawcount))), drawcount);
+    ::av::glicd::finish_client_draw();
 }
 
 void APIENTRY Wrap_glMultiDrawElementsBaseVertex(GLenum mode, const GLsizei* count, GLenum type, const void* const* indices, GLsizei drawcount, const GLint* basevertex) {
@@ -2431,7 +2454,10 @@ void APIENTRY Wrap_glMultiDrawElementsBaseVertex(GLenum mode, const GLsizei* cou
     auto* av_t = ::av::glicd::wire();
     ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
-    ::av::glproto::av_glMultiDrawElementsBaseVertex(*av_t, mode, count, type, ::av::glicd::offsets_of(indices, static_cast<size_t>(drawcount)), drawcount, basevertex);
+    const uint64_t* staged_offsets = nullptr;
+    if (!::av::glicd::stage_client_multi_elements(count, type, indices, drawcount, basevertex, staged_offsets)) return;
+    ::av::glproto::av_glMultiDrawElementsBaseVertex(*av_t, mode, count, type, (staged_offsets != nullptr ? staged_offsets : ::av::glicd::offsets_of(indices, static_cast<size_t>(drawcount))), drawcount, basevertex);
+    ::av::glicd::finish_client_draw();
 }
 
 void APIENTRY Wrap_glMultiDrawElementsIndirect(GLenum mode, GLenum type, const void* indirect, GLsizei drawcount, GLsizei stride) {
@@ -2439,6 +2465,7 @@ void APIENTRY Wrap_glMultiDrawElementsIndirect(GLenum mode, GLenum type, const v
     auto* av_t = ::av::glicd::wire();
     ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
+    if (::av::glicd::refuse_client_arrays()) return;
     ::av::glproto::av_glMultiDrawElementsIndirect(*av_t, mode, type, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(indirect)), drawcount, stride);
 }
 
@@ -2447,6 +2474,7 @@ void APIENTRY Wrap_glMultiDrawElementsIndirectCount(GLenum mode, GLenum type, co
     auto* av_t = ::av::glicd::wire();
     ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
+    if (::av::glicd::refuse_client_arrays()) return;
     ::av::glproto::av_glMultiDrawElementsIndirectCount(*av_t, mode, type, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(indirect)), drawcount, maxdrawcount, stride);
 }
 
@@ -3083,6 +3111,7 @@ void APIENTRY Wrap_glQueryCounter(GLuint id, GLenum target) {
 void APIENTRY Wrap_glReadnPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, GLsizei bufSize, void* data) {
     AV_SCOPE("glReadnPixels");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_data_slice = ::av::glicd::pack_slice_bound();
     const bool av_data_offset = !av_data_slice && ::av::glicd::pixel_buffer_bound(true);
@@ -3090,9 +3119,11 @@ void APIENTRY Wrap_glReadnPixels(GLint x, GLint y, GLsizei width, GLsizei height
     if (av_data_slice && !::av::glicd::slice_pack_pixels(data, av_data_bytes)) return;
     const bool av_data_staged = !av_data_offset && ::av::glicd::stage_download(data, av_data_bytes);
     if (av_data_offset) ::av::glicd::host_writes_target(0x88EBu);
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glReadnPixels(*av_t, x, y, width, height, format, type, bufSize, av_data_staged ? nullptr : data, av_data_offset || av_data_staged);
     if (av_data_staged) ::av::glicd::finish_download(data, av_data_bytes);
     if (av_data_slice) ::av::glicd::pack_slice_done();
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glReleaseShaderCompiler(void) {
@@ -3364,6 +3395,7 @@ void APIENTRY Wrap_glTexCoordP4uiv(GLenum type, const GLuint* coords) {
 void APIENTRY Wrap_glTexImage1D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLint border, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glTexImage1D");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -3378,6 +3410,7 @@ void APIENTRY Wrap_glTexImage1D(GLenum target, GLint level, GLint internalformat
 void APIENTRY Wrap_glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glTexImage2D");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -3399,6 +3432,7 @@ void APIENTRY Wrap_glTexImage2DMultisample(GLenum target, GLsizei samples, GLenu
 void APIENTRY Wrap_glTexImage3D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLsizei depth, GLint border, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glTexImage3D");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -3497,6 +3531,7 @@ void APIENTRY Wrap_glTexStorage3DMultisample(GLenum target, GLsizei samples, GLe
 void APIENTRY Wrap_glTexSubImage1D(GLenum target, GLint level, GLint xoffset, GLsizei width, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glTexSubImage1D");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -3511,6 +3546,7 @@ void APIENTRY Wrap_glTexSubImage1D(GLenum target, GLint level, GLint xoffset, GL
 void APIENTRY Wrap_glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glTexSubImage2D");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -3525,6 +3561,7 @@ void APIENTRY Wrap_glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GL
 void APIENTRY Wrap_glTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glTexSubImage3D");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -3637,6 +3674,7 @@ void APIENTRY Wrap_glTextureStorage3DMultisample(GLuint texture, GLsizei samples
 void APIENTRY Wrap_glTextureSubImage1D(GLuint texture, GLint level, GLint xoffset, GLsizei width, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glTextureSubImage1D");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -3651,6 +3689,7 @@ void APIENTRY Wrap_glTextureSubImage1D(GLuint texture, GLint level, GLint xoffse
 void APIENTRY Wrap_glTextureSubImage2D(GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glTextureSubImage2D");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -3665,6 +3704,7 @@ void APIENTRY Wrap_glTextureSubImage2D(GLuint texture, GLint level, GLint xoffse
 void APIENTRY Wrap_glTextureSubImage3D(GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glTextureSubImage3D");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -4152,7 +4192,7 @@ void APIENTRY Wrap_glVertexArrayVertexBuffers(GLuint vaobj, GLuint first, GLsize
     AV_SCOPE("glVertexArrayVertexBuffers");
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
-    ::av::glproto::av_glVertexArrayVertexBuffers(*av_t, vaobj, first, count, buffers, offsets, strides);
+    ::av::glproto::av_glVertexArrayVertexBuffers(*av_t, vaobj, first, count, buffers, ::av::glicd::wide_intptrs(offsets, static_cast<size_t>(count), 0u), strides);
 }
 
 void APIENTRY Wrap_glVertexAttrib1d(GLuint index, GLdouble x) {
@@ -4826,6 +4866,7 @@ void APIENTRY Wrap_glBegin(GLenum mode) {
     }
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    ::av::glicd::begin_client_primitives();
     ::av::glproto::av_glBegin(*av_t, mode);
 }
 
@@ -5269,7 +5310,9 @@ void APIENTRY Wrap_glCopyPixels(GLint x, GLint y, GLsizei width, GLsizei height,
     }
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glCopyPixels(*av_t, x, y, width, height, type);
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glDeleteLists(GLuint list, GLsizei range) {
@@ -8503,6 +8546,419 @@ void APIENTRY Wrap_glWindowPos3sv(const GLshort* v) {
     ::av::glproto::av_glWindowPos3sv(*av_t, v);
 }
 
+void APIENTRY Wrap_glVertexAttrib1dARB(GLuint index, GLdouble x) {
+    AV_SCOPE("glVertexAttrib1dARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glVertexAttrib1dARB(*av_t, index, x);
+}
+
+void APIENTRY Wrap_glVertexAttrib1dvARB(GLuint index, const GLdouble* v) {
+    AV_SCOPE("glVertexAttrib1dvARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glVertexAttrib1dvARB(*av_t, index, v);
+}
+
+void APIENTRY Wrap_glVertexAttrib1fARB(GLuint index, GLfloat x) {
+    AV_SCOPE("glVertexAttrib1fARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glVertexAttrib1fARB(*av_t, index, x);
+}
+
+void APIENTRY Wrap_glVertexAttrib1fvARB(GLuint index, const GLfloat* v) {
+    AV_SCOPE("glVertexAttrib1fvARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glVertexAttrib1fvARB(*av_t, index, v);
+}
+
+void APIENTRY Wrap_glVertexAttrib1sARB(GLuint index, GLshort x) {
+    AV_SCOPE("glVertexAttrib1sARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glVertexAttrib1sARB(*av_t, index, x);
+}
+
+void APIENTRY Wrap_glVertexAttrib1svARB(GLuint index, const GLshort* v) {
+    AV_SCOPE("glVertexAttrib1svARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glVertexAttrib1svARB(*av_t, index, v);
+}
+
+void APIENTRY Wrap_glVertexAttrib2dARB(GLuint index, GLdouble x, GLdouble y) {
+    AV_SCOPE("glVertexAttrib2dARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glVertexAttrib2dARB(*av_t, index, x, y);
+}
+
+void APIENTRY Wrap_glVertexAttrib2dvARB(GLuint index, const GLdouble* v) {
+    AV_SCOPE("glVertexAttrib2dvARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glVertexAttrib2dvARB(*av_t, index, v);
+}
+
+void APIENTRY Wrap_glVertexAttrib2fARB(GLuint index, GLfloat x, GLfloat y) {
+    AV_SCOPE("glVertexAttrib2fARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glVertexAttrib2fARB(*av_t, index, x, y);
+}
+
+void APIENTRY Wrap_glVertexAttrib2fvARB(GLuint index, const GLfloat* v) {
+    AV_SCOPE("glVertexAttrib2fvARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glVertexAttrib2fvARB(*av_t, index, v);
+}
+
+void APIENTRY Wrap_glVertexAttrib2sARB(GLuint index, GLshort x, GLshort y) {
+    AV_SCOPE("glVertexAttrib2sARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glVertexAttrib2sARB(*av_t, index, x, y);
+}
+
+void APIENTRY Wrap_glVertexAttrib2svARB(GLuint index, const GLshort* v) {
+    AV_SCOPE("glVertexAttrib2svARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glVertexAttrib2svARB(*av_t, index, v);
+}
+
+void APIENTRY Wrap_glVertexAttrib3dARB(GLuint index, GLdouble x, GLdouble y, GLdouble z) {
+    AV_SCOPE("glVertexAttrib3dARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glVertexAttrib3dARB(*av_t, index, x, y, z);
+}
+
+void APIENTRY Wrap_glVertexAttrib3dvARB(GLuint index, const GLdouble* v) {
+    AV_SCOPE("glVertexAttrib3dvARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glVertexAttrib3dvARB(*av_t, index, v);
+}
+
+void APIENTRY Wrap_glVertexAttrib3fARB(GLuint index, GLfloat x, GLfloat y, GLfloat z) {
+    AV_SCOPE("glVertexAttrib3fARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glVertexAttrib3fARB(*av_t, index, x, y, z);
+}
+
+void APIENTRY Wrap_glVertexAttrib3fvARB(GLuint index, const GLfloat* v) {
+    AV_SCOPE("glVertexAttrib3fvARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glVertexAttrib3fvARB(*av_t, index, v);
+}
+
+void APIENTRY Wrap_glVertexAttrib3sARB(GLuint index, GLshort x, GLshort y, GLshort z) {
+    AV_SCOPE("glVertexAttrib3sARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glVertexAttrib3sARB(*av_t, index, x, y, z);
+}
+
+void APIENTRY Wrap_glVertexAttrib3svARB(GLuint index, const GLshort* v) {
+    AV_SCOPE("glVertexAttrib3svARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glVertexAttrib3svARB(*av_t, index, v);
+}
+
+void APIENTRY Wrap_glVertexAttrib4NbvARB(GLuint index, const GLbyte* v) {
+    AV_SCOPE("glVertexAttrib4NbvARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glVertexAttrib4NbvARB(*av_t, index, v);
+}
+
+void APIENTRY Wrap_glVertexAttrib4NivARB(GLuint index, const GLint* v) {
+    AV_SCOPE("glVertexAttrib4NivARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glVertexAttrib4NivARB(*av_t, index, v);
+}
+
+void APIENTRY Wrap_glVertexAttrib4NsvARB(GLuint index, const GLshort* v) {
+    AV_SCOPE("glVertexAttrib4NsvARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glVertexAttrib4NsvARB(*av_t, index, v);
+}
+
+void APIENTRY Wrap_glVertexAttrib4NubARB(GLuint index, GLubyte x, GLubyte y, GLubyte z, GLubyte w) {
+    AV_SCOPE("glVertexAttrib4NubARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glVertexAttrib4NubARB(*av_t, index, x, y, z, w);
+}
+
+void APIENTRY Wrap_glVertexAttrib4NubvARB(GLuint index, const GLubyte* v) {
+    AV_SCOPE("glVertexAttrib4NubvARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glVertexAttrib4NubvARB(*av_t, index, v);
+}
+
+void APIENTRY Wrap_glVertexAttrib4NuivARB(GLuint index, const GLuint* v) {
+    AV_SCOPE("glVertexAttrib4NuivARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glVertexAttrib4NuivARB(*av_t, index, v);
+}
+
+void APIENTRY Wrap_glVertexAttrib4NusvARB(GLuint index, const GLushort* v) {
+    AV_SCOPE("glVertexAttrib4NusvARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glVertexAttrib4NusvARB(*av_t, index, v);
+}
+
+void APIENTRY Wrap_glVertexAttrib4bvARB(GLuint index, const GLbyte* v) {
+    AV_SCOPE("glVertexAttrib4bvARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glVertexAttrib4bvARB(*av_t, index, v);
+}
+
+void APIENTRY Wrap_glVertexAttrib4dARB(GLuint index, GLdouble x, GLdouble y, GLdouble z, GLdouble w) {
+    AV_SCOPE("glVertexAttrib4dARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glVertexAttrib4dARB(*av_t, index, x, y, z, w);
+}
+
+void APIENTRY Wrap_glVertexAttrib4dvARB(GLuint index, const GLdouble* v) {
+    AV_SCOPE("glVertexAttrib4dvARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glVertexAttrib4dvARB(*av_t, index, v);
+}
+
+void APIENTRY Wrap_glVertexAttrib4fARB(GLuint index, GLfloat x, GLfloat y, GLfloat z, GLfloat w) {
+    AV_SCOPE("glVertexAttrib4fARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glVertexAttrib4fARB(*av_t, index, x, y, z, w);
+}
+
+void APIENTRY Wrap_glVertexAttrib4fvARB(GLuint index, const GLfloat* v) {
+    AV_SCOPE("glVertexAttrib4fvARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glVertexAttrib4fvARB(*av_t, index, v);
+}
+
+void APIENTRY Wrap_glVertexAttrib4ivARB(GLuint index, const GLint* v) {
+    AV_SCOPE("glVertexAttrib4ivARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glVertexAttrib4ivARB(*av_t, index, v);
+}
+
+void APIENTRY Wrap_glVertexAttrib4sARB(GLuint index, GLshort x, GLshort y, GLshort z, GLshort w) {
+    AV_SCOPE("glVertexAttrib4sARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glVertexAttrib4sARB(*av_t, index, x, y, z, w);
+}
+
+void APIENTRY Wrap_glVertexAttrib4svARB(GLuint index, const GLshort* v) {
+    AV_SCOPE("glVertexAttrib4svARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glVertexAttrib4svARB(*av_t, index, v);
+}
+
+void APIENTRY Wrap_glVertexAttrib4ubvARB(GLuint index, const GLubyte* v) {
+    AV_SCOPE("glVertexAttrib4ubvARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glVertexAttrib4ubvARB(*av_t, index, v);
+}
+
+void APIENTRY Wrap_glVertexAttrib4uivARB(GLuint index, const GLuint* v) {
+    AV_SCOPE("glVertexAttrib4uivARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glVertexAttrib4uivARB(*av_t, index, v);
+}
+
+void APIENTRY Wrap_glVertexAttrib4usvARB(GLuint index, const GLushort* v) {
+    AV_SCOPE("glVertexAttrib4usvARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glVertexAttrib4usvARB(*av_t, index, v);
+}
+
+void APIENTRY Wrap_glProgramStringARB(GLenum target, GLenum format, GLsizei len, const void* string) {
+    AV_SCOPE("glProgramStringARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glProgramStringARB(*av_t, target, format, len, string);
+}
+
+void APIENTRY Wrap_glBindProgramARB(GLenum target, GLuint program) {
+    AV_SCOPE("glBindProgramARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glBindProgramARB(*av_t, target, program);
+}
+
+void APIENTRY Wrap_glDeleteProgramsARB(GLsizei n, const GLuint* programs) {
+    AV_SCOPE("glDeleteProgramsARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glDeleteProgramsARB(*av_t, n, programs);
+}
+
+void APIENTRY Wrap_glGenProgramsARB(GLsizei n, GLuint* programs) {
+    AV_SCOPE("glGenProgramsARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glGenProgramsARB(*av_t, n, programs);
+}
+
+void APIENTRY Wrap_glProgramEnvParameter4dARB(GLenum target, GLuint index, GLdouble x, GLdouble y, GLdouble z, GLdouble w) {
+    AV_SCOPE("glProgramEnvParameter4dARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glProgramEnvParameter4dARB(*av_t, target, index, x, y, z, w);
+}
+
+void APIENTRY Wrap_glProgramEnvParameter4dvARB(GLenum target, GLuint index, const GLdouble* params) {
+    AV_SCOPE("glProgramEnvParameter4dvARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glProgramEnvParameter4dvARB(*av_t, target, index, params);
+}
+
+void APIENTRY Wrap_glProgramEnvParameter4fARB(GLenum target, GLuint index, GLfloat x, GLfloat y, GLfloat z, GLfloat w) {
+    AV_SCOPE("glProgramEnvParameter4fARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glProgramEnvParameter4fARB(*av_t, target, index, x, y, z, w);
+}
+
+void APIENTRY Wrap_glProgramEnvParameter4fvARB(GLenum target, GLuint index, const GLfloat* params) {
+    AV_SCOPE("glProgramEnvParameter4fvARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glProgramEnvParameter4fvARB(*av_t, target, index, params);
+}
+
+void APIENTRY Wrap_glProgramLocalParameter4dARB(GLenum target, GLuint index, GLdouble x, GLdouble y, GLdouble z, GLdouble w) {
+    AV_SCOPE("glProgramLocalParameter4dARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glProgramLocalParameter4dARB(*av_t, target, index, x, y, z, w);
+}
+
+void APIENTRY Wrap_glProgramLocalParameter4dvARB(GLenum target, GLuint index, const GLdouble* params) {
+    AV_SCOPE("glProgramLocalParameter4dvARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glProgramLocalParameter4dvARB(*av_t, target, index, params);
+}
+
+void APIENTRY Wrap_glProgramLocalParameter4fARB(GLenum target, GLuint index, GLfloat x, GLfloat y, GLfloat z, GLfloat w) {
+    AV_SCOPE("glProgramLocalParameter4fARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glProgramLocalParameter4fARB(*av_t, target, index, x, y, z, w);
+}
+
+void APIENTRY Wrap_glProgramLocalParameter4fvARB(GLenum target, GLuint index, const GLfloat* params) {
+    AV_SCOPE("glProgramLocalParameter4fvARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glProgramLocalParameter4fvARB(*av_t, target, index, params);
+}
+
+void APIENTRY Wrap_glGetProgramEnvParameterdvARB(GLenum target, GLuint index, GLdouble* params) {
+    AV_SCOPE("glGetProgramEnvParameterdvARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glGetProgramEnvParameterdvARB(*av_t, target, index, params);
+}
+
+void APIENTRY Wrap_glGetProgramEnvParameterfvARB(GLenum target, GLuint index, GLfloat* params) {
+    AV_SCOPE("glGetProgramEnvParameterfvARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glGetProgramEnvParameterfvARB(*av_t, target, index, params);
+}
+
+void APIENTRY Wrap_glGetProgramLocalParameterdvARB(GLenum target, GLuint index, GLdouble* params) {
+    AV_SCOPE("glGetProgramLocalParameterdvARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glGetProgramLocalParameterdvARB(*av_t, target, index, params);
+}
+
+void APIENTRY Wrap_glGetProgramLocalParameterfvARB(GLenum target, GLuint index, GLfloat* params) {
+    AV_SCOPE("glGetProgramLocalParameterfvARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glGetProgramLocalParameterfvARB(*av_t, target, index, params);
+}
+
+void APIENTRY Wrap_glGetProgramivARB(GLenum target, GLenum pname, GLint* params) {
+    AV_SCOPE("glGetProgramivARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glGetProgramivARB(*av_t, target, pname, params);
+}
+
+void APIENTRY Wrap_glGetVertexAttribdvARB(GLuint index, GLenum pname, GLdouble* params) {
+    AV_SCOPE("glGetVertexAttribdvARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glGetVertexAttribdvARB(*av_t, index, pname, params);
+}
+
+void APIENTRY Wrap_glGetVertexAttribfvARB(GLuint index, GLenum pname, GLfloat* params) {
+    AV_SCOPE("glGetVertexAttribfvARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glGetVertexAttribfvARB(*av_t, index, pname, params);
+}
+
+void APIENTRY Wrap_glGetVertexAttribivARB(GLuint index, GLenum pname, GLint* params) {
+    AV_SCOPE("glGetVertexAttribivARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glGetVertexAttribivARB(*av_t, index, pname, params);
+}
+
+GLboolean APIENTRY Wrap_glIsProgramARB(GLuint program) {
+    AV_SCOPE("glIsProgramARB");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return 0;
+    return ::av::glproto::av_glIsProgramARB(*av_t, program);
+}
+
+void APIENTRY Wrap_glSubpixelPrecisionBiasNV(GLuint xbits, GLuint ybits) {
+    AV_SCOPE("glSubpixelPrecisionBiasNV");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glSubpixelPrecisionBiasNV(*av_t, xbits, ybits);
+}
+
+void APIENTRY Wrap_glBlendBarrierKHR(void) {
+    AV_SCOPE("glBlendBarrierKHR");
+    auto* av_t = ::av::glicd::wire();
+    if (av_t == nullptr) return;
+    ::av::glproto::av_glBlendBarrierKHR(*av_t);
+}
+
 void APIENTRY Wrap_glDeleteObjectARB(GLhandleARB obj) {
     AV_SCOPE("glDeleteObjectARB");
     auto* av_t = ::av::glicd::wire();
@@ -8633,98 +9089,6 @@ void APIENTRY Wrap_glResolveDepthValuesNV(void) {
     ::av::glproto::av_glResolveDepthValuesNV(*av_t);
 }
 
-GLuint64 APIENTRY Wrap_glGetTextureHandleARB(GLuint texture) {
-    AV_SCOPE("glGetTextureHandleARB");
-    auto* av_t = ::av::glicd::wire();
-    if (av_t == nullptr) return 0;
-    return ::av::glproto::av_glGetTextureHandleARB(*av_t, texture);
-}
-
-GLuint64 APIENTRY Wrap_glGetTextureSamplerHandleARB(GLuint texture, GLuint sampler) {
-    AV_SCOPE("glGetTextureSamplerHandleARB");
-    auto* av_t = ::av::glicd::wire();
-    if (av_t == nullptr) return 0;
-    return ::av::glproto::av_glGetTextureSamplerHandleARB(*av_t, texture, sampler);
-}
-
-void APIENTRY Wrap_glMakeTextureHandleResidentARB(GLuint64 handle) {
-    AV_SCOPE("glMakeTextureHandleResidentARB");
-    auto* av_t = ::av::glicd::wire();
-    if (av_t == nullptr) return;
-    ::av::glproto::av_glMakeTextureHandleResidentARB(*av_t, handle);
-}
-
-void APIENTRY Wrap_glMakeTextureHandleNonResidentARB(GLuint64 handle) {
-    AV_SCOPE("glMakeTextureHandleNonResidentARB");
-    auto* av_t = ::av::glicd::wire();
-    if (av_t == nullptr) return;
-    ::av::glproto::av_glMakeTextureHandleNonResidentARB(*av_t, handle);
-}
-
-GLuint64 APIENTRY Wrap_glGetImageHandleARB(GLuint texture, GLint level, GLboolean layered, GLint layer, GLenum format) {
-    AV_SCOPE("glGetImageHandleARB");
-    auto* av_t = ::av::glicd::wire();
-    if (av_t == nullptr) return 0;
-    return ::av::glproto::av_glGetImageHandleARB(*av_t, texture, level, layered, layer, format);
-}
-
-void APIENTRY Wrap_glMakeImageHandleResidentARB(GLuint64 handle, GLenum access) {
-    AV_SCOPE("glMakeImageHandleResidentARB");
-    auto* av_t = ::av::glicd::wire();
-    if (av_t == nullptr) return;
-    ::av::glicd::shaders_write_buffers();
-    ::av::glproto::av_glMakeImageHandleResidentARB(*av_t, handle, access);
-}
-
-void APIENTRY Wrap_glMakeImageHandleNonResidentARB(GLuint64 handle) {
-    AV_SCOPE("glMakeImageHandleNonResidentARB");
-    auto* av_t = ::av::glicd::wire();
-    if (av_t == nullptr) return;
-    ::av::glproto::av_glMakeImageHandleNonResidentARB(*av_t, handle);
-}
-
-void APIENTRY Wrap_glUniformHandleui64ARB(GLint location, GLuint64 value) {
-    AV_SCOPE("glUniformHandleui64ARB");
-    auto* av_t = ::av::glicd::wire();
-    if (av_t == nullptr) return;
-    ::av::glproto::av_glUniformHandleui64ARB(*av_t, location, value);
-}
-
-void APIENTRY Wrap_glUniformHandleui64vARB(GLint location, GLsizei count, const GLuint64* value) {
-    AV_SCOPE("glUniformHandleui64vARB");
-    auto* av_t = ::av::glicd::wire();
-    if (av_t == nullptr) return;
-    ::av::glproto::av_glUniformHandleui64vARB(*av_t, location, count, value);
-}
-
-void APIENTRY Wrap_glProgramUniformHandleui64ARB(GLuint program, GLint location, GLuint64 value) {
-    AV_SCOPE("glProgramUniformHandleui64ARB");
-    auto* av_t = ::av::glicd::wire();
-    if (av_t == nullptr) return;
-    ::av::glproto::av_glProgramUniformHandleui64ARB(*av_t, program, location, value);
-}
-
-void APIENTRY Wrap_glProgramUniformHandleui64vARB(GLuint program, GLint location, GLsizei count, const GLuint64* values) {
-    AV_SCOPE("glProgramUniformHandleui64vARB");
-    auto* av_t = ::av::glicd::wire();
-    if (av_t == nullptr) return;
-    ::av::glproto::av_glProgramUniformHandleui64vARB(*av_t, program, location, count, values);
-}
-
-GLboolean APIENTRY Wrap_glIsTextureHandleResidentARB(GLuint64 handle) {
-    AV_SCOPE("glIsTextureHandleResidentARB");
-    auto* av_t = ::av::glicd::wire();
-    if (av_t == nullptr) return 0;
-    return ::av::glproto::av_glIsTextureHandleResidentARB(*av_t, handle);
-}
-
-GLboolean APIENTRY Wrap_glIsImageHandleResidentARB(GLuint64 handle) {
-    AV_SCOPE("glIsImageHandleResidentARB");
-    auto* av_t = ::av::glicd::wire();
-    if (av_t == nullptr) return 0;
-    return ::av::glproto::av_glIsImageHandleResidentARB(*av_t, handle);
-}
-
 void APIENTRY Wrap_glVertexAttribL1ui64ARB(GLuint index, GLuint64EXT x) {
     AV_SCOPE("glVertexAttribL1ui64ARB");
     auto* av_t = ::av::glicd::wire();
@@ -8744,98 +9108,6 @@ void APIENTRY Wrap_glGetVertexAttribLui64vARB(GLuint index, GLenum pname, GLuint
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
     ::av::glproto::av_glGetVertexAttribLui64vARB(*av_t, index, pname, params);
-}
-
-GLuint64 APIENTRY Wrap_glGetTextureHandleNV(GLuint texture) {
-    AV_SCOPE("glGetTextureHandleNV");
-    auto* av_t = ::av::glicd::wire();
-    if (av_t == nullptr) return 0;
-    return ::av::glproto::av_glGetTextureHandleNV(*av_t, texture);
-}
-
-GLuint64 APIENTRY Wrap_glGetTextureSamplerHandleNV(GLuint texture, GLuint sampler) {
-    AV_SCOPE("glGetTextureSamplerHandleNV");
-    auto* av_t = ::av::glicd::wire();
-    if (av_t == nullptr) return 0;
-    return ::av::glproto::av_glGetTextureSamplerHandleNV(*av_t, texture, sampler);
-}
-
-void APIENTRY Wrap_glMakeTextureHandleResidentNV(GLuint64 handle) {
-    AV_SCOPE("glMakeTextureHandleResidentNV");
-    auto* av_t = ::av::glicd::wire();
-    if (av_t == nullptr) return;
-    ::av::glproto::av_glMakeTextureHandleResidentNV(*av_t, handle);
-}
-
-void APIENTRY Wrap_glMakeTextureHandleNonResidentNV(GLuint64 handle) {
-    AV_SCOPE("glMakeTextureHandleNonResidentNV");
-    auto* av_t = ::av::glicd::wire();
-    if (av_t == nullptr) return;
-    ::av::glproto::av_glMakeTextureHandleNonResidentNV(*av_t, handle);
-}
-
-GLuint64 APIENTRY Wrap_glGetImageHandleNV(GLuint texture, GLint level, GLboolean layered, GLint layer, GLenum format) {
-    AV_SCOPE("glGetImageHandleNV");
-    auto* av_t = ::av::glicd::wire();
-    if (av_t == nullptr) return 0;
-    return ::av::glproto::av_glGetImageHandleNV(*av_t, texture, level, layered, layer, format);
-}
-
-void APIENTRY Wrap_glMakeImageHandleResidentNV(GLuint64 handle, GLenum access) {
-    AV_SCOPE("glMakeImageHandleResidentNV");
-    auto* av_t = ::av::glicd::wire();
-    if (av_t == nullptr) return;
-    ::av::glicd::shaders_write_buffers();
-    ::av::glproto::av_glMakeImageHandleResidentNV(*av_t, handle, access);
-}
-
-void APIENTRY Wrap_glMakeImageHandleNonResidentNV(GLuint64 handle) {
-    AV_SCOPE("glMakeImageHandleNonResidentNV");
-    auto* av_t = ::av::glicd::wire();
-    if (av_t == nullptr) return;
-    ::av::glproto::av_glMakeImageHandleNonResidentNV(*av_t, handle);
-}
-
-void APIENTRY Wrap_glUniformHandleui64NV(GLint location, GLuint64 value) {
-    AV_SCOPE("glUniformHandleui64NV");
-    auto* av_t = ::av::glicd::wire();
-    if (av_t == nullptr) return;
-    ::av::glproto::av_glUniformHandleui64NV(*av_t, location, value);
-}
-
-void APIENTRY Wrap_glUniformHandleui64vNV(GLint location, GLsizei count, const GLuint64* value) {
-    AV_SCOPE("glUniformHandleui64vNV");
-    auto* av_t = ::av::glicd::wire();
-    if (av_t == nullptr) return;
-    ::av::glproto::av_glUniformHandleui64vNV(*av_t, location, count, value);
-}
-
-void APIENTRY Wrap_glProgramUniformHandleui64NV(GLuint program, GLint location, GLuint64 value) {
-    AV_SCOPE("glProgramUniformHandleui64NV");
-    auto* av_t = ::av::glicd::wire();
-    if (av_t == nullptr) return;
-    ::av::glproto::av_glProgramUniformHandleui64NV(*av_t, program, location, value);
-}
-
-void APIENTRY Wrap_glProgramUniformHandleui64vNV(GLuint program, GLint location, GLsizei count, const GLuint64* values) {
-    AV_SCOPE("glProgramUniformHandleui64vNV");
-    auto* av_t = ::av::glicd::wire();
-    if (av_t == nullptr) return;
-    ::av::glproto::av_glProgramUniformHandleui64vNV(*av_t, program, location, count, values);
-}
-
-GLboolean APIENTRY Wrap_glIsTextureHandleResidentNV(GLuint64 handle) {
-    AV_SCOPE("glIsTextureHandleResidentNV");
-    auto* av_t = ::av::glicd::wire();
-    if (av_t == nullptr) return 0;
-    return ::av::glproto::av_glIsTextureHandleResidentNV(*av_t, handle);
-}
-
-GLboolean APIENTRY Wrap_glIsImageHandleResidentNV(GLuint64 handle) {
-    AV_SCOPE("glIsImageHandleResidentNV");
-    auto* av_t = ::av::glicd::wire();
-    if (av_t == nullptr) return 0;
-    return ::av::glproto::av_glIsImageHandleResidentNV(*av_t, handle);
 }
 
 void APIENTRY Wrap_glBufferStorageMemEXT(GLenum target, GLsizeiptr size, GLuint memory, GLuint64 offset) {
@@ -8954,6 +9226,7 @@ void APIENTRY Wrap_glGetUnsignedBytevEXT(GLenum pname, GLubyte* data) {
     AV_SCOPE("glGetUnsignedBytevEXT");
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    if (::av::glicd::answer_device_luid(pname, data)) return;
     ::av::glproto::av_glGetUnsignedBytevEXT(*av_t, pname, data);
 }
 
@@ -9531,6 +9804,7 @@ void APIENTRY Wrap_glTextureParameterivEXT(GLuint texture, GLenum target, GLenum
 void APIENTRY Wrap_glTextureImage1DEXT(GLuint texture, GLenum target, GLint level, GLint internalformat, GLsizei width, GLint border, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glTextureImage1DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -9545,6 +9819,7 @@ void APIENTRY Wrap_glTextureImage1DEXT(GLuint texture, GLenum target, GLint leve
 void APIENTRY Wrap_glTextureImage2DEXT(GLuint texture, GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glTextureImage2DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -9559,6 +9834,7 @@ void APIENTRY Wrap_glTextureImage2DEXT(GLuint texture, GLenum target, GLint leve
 void APIENTRY Wrap_glTextureSubImage1DEXT(GLuint texture, GLenum target, GLint level, GLint xoffset, GLsizei width, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glTextureSubImage1DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -9573,6 +9849,7 @@ void APIENTRY Wrap_glTextureSubImage1DEXT(GLuint texture, GLenum target, GLint l
 void APIENTRY Wrap_glTextureSubImage2DEXT(GLuint texture, GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glTextureSubImage2DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -9588,28 +9865,36 @@ void APIENTRY Wrap_glCopyTextureImage1DEXT(GLuint texture, GLenum target, GLint 
     AV_SCOPE("glCopyTextureImage1DEXT");
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glCopyTextureImage1DEXT(*av_t, texture, target, level, internalformat, x, y, width, border);
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glCopyTextureImage2DEXT(GLuint texture, GLenum target, GLint level, GLenum internalformat, GLint x, GLint y, GLsizei width, GLsizei height, GLint border) {
     AV_SCOPE("glCopyTextureImage2DEXT");
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glCopyTextureImage2DEXT(*av_t, texture, target, level, internalformat, x, y, width, height, border);
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glCopyTextureSubImage1DEXT(GLuint texture, GLenum target, GLint level, GLint xoffset, GLint x, GLint y, GLsizei width) {
     AV_SCOPE("glCopyTextureSubImage1DEXT");
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glCopyTextureSubImage1DEXT(*av_t, texture, target, level, xoffset, x, y, width);
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glCopyTextureSubImage2DEXT(GLuint texture, GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y, GLsizei width, GLsizei height) {
     AV_SCOPE("glCopyTextureSubImage2DEXT");
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glCopyTextureSubImage2DEXT(*av_t, texture, target, level, xoffset, yoffset, x, y, width, height);
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glGetTextureImageEXT(GLuint texture, GLenum target, GLint level, GLenum format, GLenum type, void* pixels) {
@@ -9658,6 +9943,7 @@ void APIENTRY Wrap_glGetTextureLevelParameterivEXT(GLuint texture, GLenum target
 void APIENTRY Wrap_glTextureImage3DEXT(GLuint texture, GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLsizei depth, GLint border, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glTextureImage3DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -9672,6 +9958,7 @@ void APIENTRY Wrap_glTextureImage3DEXT(GLuint texture, GLenum target, GLint leve
 void APIENTRY Wrap_glTextureSubImage3DEXT(GLuint texture, GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glTextureSubImage3DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -9687,7 +9974,9 @@ void APIENTRY Wrap_glCopyTextureSubImage3DEXT(GLuint texture, GLenum target, GLi
     AV_SCOPE("glCopyTextureSubImage3DEXT");
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glCopyTextureSubImage3DEXT(*av_t, texture, target, level, xoffset, yoffset, zoffset, x, y, width, height);
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glBindMultiTextureEXT(GLenum texunit, GLenum target, GLuint texture) {
@@ -9841,6 +10130,7 @@ void APIENTRY Wrap_glMultiTexParameterfvEXT(GLenum texunit, GLenum target, GLenu
 void APIENTRY Wrap_glMultiTexImage1DEXT(GLenum texunit, GLenum target, GLint level, GLint internalformat, GLsizei width, GLint border, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glMultiTexImage1DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -9855,6 +10145,7 @@ void APIENTRY Wrap_glMultiTexImage1DEXT(GLenum texunit, GLenum target, GLint lev
 void APIENTRY Wrap_glMultiTexImage2DEXT(GLenum texunit, GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glMultiTexImage2DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -9869,6 +10160,7 @@ void APIENTRY Wrap_glMultiTexImage2DEXT(GLenum texunit, GLenum target, GLint lev
 void APIENTRY Wrap_glMultiTexSubImage1DEXT(GLenum texunit, GLenum target, GLint level, GLint xoffset, GLsizei width, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glMultiTexSubImage1DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -9883,6 +10175,7 @@ void APIENTRY Wrap_glMultiTexSubImage1DEXT(GLenum texunit, GLenum target, GLint 
 void APIENTRY Wrap_glMultiTexSubImage2DEXT(GLenum texunit, GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glMultiTexSubImage2DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -9898,28 +10191,36 @@ void APIENTRY Wrap_glCopyMultiTexImage1DEXT(GLenum texunit, GLenum target, GLint
     AV_SCOPE("glCopyMultiTexImage1DEXT");
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glCopyMultiTexImage1DEXT(*av_t, texunit, target, level, internalformat, x, y, width, border);
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glCopyMultiTexImage2DEXT(GLenum texunit, GLenum target, GLint level, GLenum internalformat, GLint x, GLint y, GLsizei width, GLsizei height, GLint border) {
     AV_SCOPE("glCopyMultiTexImage2DEXT");
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glCopyMultiTexImage2DEXT(*av_t, texunit, target, level, internalformat, x, y, width, height, border);
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glCopyMultiTexSubImage1DEXT(GLenum texunit, GLenum target, GLint level, GLint xoffset, GLint x, GLint y, GLsizei width) {
     AV_SCOPE("glCopyMultiTexSubImage1DEXT");
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glCopyMultiTexSubImage1DEXT(*av_t, texunit, target, level, xoffset, x, y, width);
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glCopyMultiTexSubImage2DEXT(GLenum texunit, GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y, GLsizei width, GLsizei height) {
     AV_SCOPE("glCopyMultiTexSubImage2DEXT");
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glCopyMultiTexSubImage2DEXT(*av_t, texunit, target, level, xoffset, yoffset, x, y, width, height);
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glGetMultiTexImageEXT(GLenum texunit, GLenum target, GLint level, GLenum format, GLenum type, void* pixels) {
@@ -9968,6 +10269,7 @@ void APIENTRY Wrap_glGetMultiTexLevelParameterivEXT(GLenum texunit, GLenum targe
 void APIENTRY Wrap_glMultiTexImage3DEXT(GLenum texunit, GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLsizei depth, GLint border, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glMultiTexImage3DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -9982,6 +10284,7 @@ void APIENTRY Wrap_glMultiTexImage3DEXT(GLenum texunit, GLenum target, GLint lev
 void APIENTRY Wrap_glMultiTexSubImage3DEXT(GLenum texunit, GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLenum type, const void* pixels) {
     AV_SCOPE("glMultiTexSubImage3DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     const bool av_pixels_slice = ::av::glicd::unpack_slice_bound();
     const bool av_pixels_offset = !av_pixels_slice && ::av::glicd::pixel_buffer_bound(false);
@@ -9997,7 +10300,9 @@ void APIENTRY Wrap_glCopyMultiTexSubImage3DEXT(GLenum texunit, GLenum target, GL
     AV_SCOPE("glCopyMultiTexSubImage3DEXT");
     auto* av_t = ::av::glicd::wire();
     if (av_t == nullptr) return;
+    const bool av_resolved = ::av::glicd::resolve_window_read();
     ::av::glproto::av_glCopyMultiTexSubImage3DEXT(*av_t, texunit, target, level, xoffset, yoffset, zoffset, x, y, width, height);
+    if (av_resolved) ::av::glicd::window_read_done();
 }
 
 void APIENTRY Wrap_glEnableClientStateIndexedEXT(GLenum array, GLuint index) {
@@ -10066,6 +10371,7 @@ void APIENTRY Wrap_glGetBooleanIndexedvEXT(GLenum target, GLuint index, GLboolea
 void APIENTRY Wrap_glCompressedTextureImage3DEXT(GLuint texture, GLenum target, GLint level, GLenum internalformat, GLsizei width, GLsizei height, GLsizei depth, GLint border, GLsizei imageSize, const void* bits) {
     AV_SCOPE("glCompressedTextureImage3DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     ::av::glproto::av_glCompressedTextureImage3DEXT(*av_t, texture, target, level, internalformat, width, height, depth, border, imageSize, bits);
 }
@@ -10073,6 +10379,7 @@ void APIENTRY Wrap_glCompressedTextureImage3DEXT(GLuint texture, GLenum target, 
 void APIENTRY Wrap_glCompressedTextureImage2DEXT(GLuint texture, GLenum target, GLint level, GLenum internalformat, GLsizei width, GLsizei height, GLint border, GLsizei imageSize, const void* bits) {
     AV_SCOPE("glCompressedTextureImage2DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     ::av::glproto::av_glCompressedTextureImage2DEXT(*av_t, texture, target, level, internalformat, width, height, border, imageSize, bits);
 }
@@ -10080,6 +10387,7 @@ void APIENTRY Wrap_glCompressedTextureImage2DEXT(GLuint texture, GLenum target, 
 void APIENTRY Wrap_glCompressedTextureImage1DEXT(GLuint texture, GLenum target, GLint level, GLenum internalformat, GLsizei width, GLint border, GLsizei imageSize, const void* bits) {
     AV_SCOPE("glCompressedTextureImage1DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     ::av::glproto::av_glCompressedTextureImage1DEXT(*av_t, texture, target, level, internalformat, width, border, imageSize, bits);
 }
@@ -10087,6 +10395,7 @@ void APIENTRY Wrap_glCompressedTextureImage1DEXT(GLuint texture, GLenum target, 
 void APIENTRY Wrap_glCompressedTextureSubImage3DEXT(GLuint texture, GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLsizei imageSize, const void* bits) {
     AV_SCOPE("glCompressedTextureSubImage3DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     ::av::glproto::av_glCompressedTextureSubImage3DEXT(*av_t, texture, target, level, xoffset, yoffset, zoffset, width, height, depth, format, imageSize, bits);
 }
@@ -10094,6 +10403,7 @@ void APIENTRY Wrap_glCompressedTextureSubImage3DEXT(GLuint texture, GLenum targe
 void APIENTRY Wrap_glCompressedTextureSubImage2DEXT(GLuint texture, GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLsizei imageSize, const void* bits) {
     AV_SCOPE("glCompressedTextureSubImage2DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     ::av::glproto::av_glCompressedTextureSubImage2DEXT(*av_t, texture, target, level, xoffset, yoffset, width, height, format, imageSize, bits);
 }
@@ -10101,6 +10411,7 @@ void APIENTRY Wrap_glCompressedTextureSubImage2DEXT(GLuint texture, GLenum targe
 void APIENTRY Wrap_glCompressedTextureSubImage1DEXT(GLuint texture, GLenum target, GLint level, GLint xoffset, GLsizei width, GLenum format, GLsizei imageSize, const void* bits) {
     AV_SCOPE("glCompressedTextureSubImage1DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     ::av::glproto::av_glCompressedTextureSubImage1DEXT(*av_t, texture, target, level, xoffset, width, format, imageSize, bits);
 }
@@ -10123,6 +10434,7 @@ void APIENTRY Wrap_glGetCompressedTextureImageEXT(GLuint texture, GLenum target,
 void APIENTRY Wrap_glCompressedMultiTexImage3DEXT(GLenum texunit, GLenum target, GLint level, GLenum internalformat, GLsizei width, GLsizei height, GLsizei depth, GLint border, GLsizei imageSize, const void* bits) {
     AV_SCOPE("glCompressedMultiTexImage3DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     ::av::glproto::av_glCompressedMultiTexImage3DEXT(*av_t, texunit, target, level, internalformat, width, height, depth, border, imageSize, bits);
 }
@@ -10130,6 +10442,7 @@ void APIENTRY Wrap_glCompressedMultiTexImage3DEXT(GLenum texunit, GLenum target,
 void APIENTRY Wrap_glCompressedMultiTexImage2DEXT(GLenum texunit, GLenum target, GLint level, GLenum internalformat, GLsizei width, GLsizei height, GLint border, GLsizei imageSize, const void* bits) {
     AV_SCOPE("glCompressedMultiTexImage2DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     ::av::glproto::av_glCompressedMultiTexImage2DEXT(*av_t, texunit, target, level, internalformat, width, height, border, imageSize, bits);
 }
@@ -10137,6 +10450,7 @@ void APIENTRY Wrap_glCompressedMultiTexImage2DEXT(GLenum texunit, GLenum target,
 void APIENTRY Wrap_glCompressedMultiTexImage1DEXT(GLenum texunit, GLenum target, GLint level, GLenum internalformat, GLsizei width, GLint border, GLsizei imageSize, const void* bits) {
     AV_SCOPE("glCompressedMultiTexImage1DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     ::av::glproto::av_glCompressedMultiTexImage1DEXT(*av_t, texunit, target, level, internalformat, width, border, imageSize, bits);
 }
@@ -10144,6 +10458,7 @@ void APIENTRY Wrap_glCompressedMultiTexImage1DEXT(GLenum texunit, GLenum target,
 void APIENTRY Wrap_glCompressedMultiTexSubImage3DEXT(GLenum texunit, GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLsizei imageSize, const void* bits) {
     AV_SCOPE("glCompressedMultiTexSubImage3DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     ::av::glproto::av_glCompressedMultiTexSubImage3DEXT(*av_t, texunit, target, level, xoffset, yoffset, zoffset, width, height, depth, format, imageSize, bits);
 }
@@ -10151,6 +10466,7 @@ void APIENTRY Wrap_glCompressedMultiTexSubImage3DEXT(GLenum texunit, GLenum targ
 void APIENTRY Wrap_glCompressedMultiTexSubImage2DEXT(GLenum texunit, GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLsizei imageSize, const void* bits) {
     AV_SCOPE("glCompressedMultiTexSubImage2DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     ::av::glproto::av_glCompressedMultiTexSubImage2DEXT(*av_t, texunit, target, level, xoffset, yoffset, width, height, format, imageSize, bits);
 }
@@ -10158,6 +10474,7 @@ void APIENTRY Wrap_glCompressedMultiTexSubImage2DEXT(GLenum texunit, GLenum targ
 void APIENTRY Wrap_glCompressedMultiTexSubImage1DEXT(GLenum texunit, GLenum target, GLint level, GLint xoffset, GLsizei width, GLenum format, GLsizei imageSize, const void* bits) {
     AV_SCOPE("glCompressedMultiTexSubImage1DEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     ::av::glproto::av_glCompressedMultiTexSubImage1DEXT(*av_t, texunit, target, level, xoffset, width, format, imageSize, bits);
 }
@@ -10793,6 +11110,7 @@ void APIENTRY Wrap_glGetFramebufferParameterivEXT(GLuint framebuffer, GLenum pna
 void APIENTRY Wrap_glNamedCopyBufferSubDataEXT(GLuint readBuffer, GLuint writeBuffer, GLintptr readOffset, GLintptr writeOffset, GLsizeiptr size) {
     AV_SCOPE("glNamedCopyBufferSubDataEXT");
     auto* av_t = ::av::glicd::wire();
+    ::av::glicd::flush_persistent_mappings();
     if (av_t == nullptr) return;
     ::av::glicd::host_writes_buffer(writeBuffer);
     ::av::glproto::av_glNamedCopyBufferSubDataEXT(*av_t, readBuffer, writeBuffer, readOffset, writeOffset, size);

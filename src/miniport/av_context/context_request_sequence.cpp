@@ -106,17 +106,43 @@ Status ContextRequestSequence::accept(const uint8_t *bytes, size_t length)
     GpuResponseReader answer;
     const bool readable = answer.decode(bytes, length) == Status::ok;
     const bool done = readable && answer.type() == GpuResponse::ok_nodata;
-    if (phase_ == Phase::setting_up) finish_setup_step(done || !readable);
-    else step_++;
-    if (phase_ == Phase::tearing_down && step_ > blobs_created_) abandon();
+    if (phase_ == Phase::tearing_down) return accept_teardown(readable, done, readable ? answer.type() : unreadable);
+    finish_setup_step(done || !readable);
     if (!readable) {
         refuse(unreadable);
-        phase_ = phase_ == Phase::setting_up ? Phase::set_up : phase_;
+        phase_ = Phase::set_up;
         return Status::malformed;
     }
     if (done) return Status::ok;
     refuse(answer.type());
     return Status::not_supported;
+}
+
+Status ContextRequestSequence::accept_teardown(bool readable, bool done, uint32_t type)
+{
+    AV_SCOPE("ContextRequestSequence::accept_teardown");
+    const uint32_t unknown = step_ == context_step ? GpuResponse::err_invalid_context_id
+                                                   : GpuResponse::err_invalid_resource_id;
+    if (!done && !(readable && type == unknown)) {
+        refuse(type);
+        return readable ? Status::not_supported : Status::malformed;
+    }
+    step_++;
+    if (step_ > blobs_created_) abandon();
+    return Status::ok;
+}
+
+void ContextRequestSequence::unanswered(bool sent)
+{
+    AV_SCOPE("ContextRequestSequence::unanswered");
+    platform_.require_irql_at_most(Irql::dispatch, "ContextRequestSequence::unanswered");
+    if (!awaiting_) return;
+    awaiting_ = false;
+    if (phase_ != Phase::setting_up) return;
+    if (sent && step_ == context_step) context_created_ = true;
+    if (sent && step_ >= first_blob_step && step_ < setup_step) blobs_created_++;
+    refuse(unreadable);
+    phase_ = Phase::set_up;
 }
 
 void ContextRequestSequence::finish_setup_step(bool done)

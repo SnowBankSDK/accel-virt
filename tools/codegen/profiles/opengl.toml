@@ -1,4 +1,22 @@
 extra = [
+    "glVertexAttrib1dARB", "glVertexAttrib1dvARB", "glVertexAttrib1fARB", "glVertexAttrib1fvARB",
+    "glVertexAttrib1sARB", "glVertexAttrib1svARB", "glVertexAttrib2dARB", "glVertexAttrib2dvARB",
+    "glVertexAttrib2fARB", "glVertexAttrib2fvARB", "glVertexAttrib2sARB", "glVertexAttrib2svARB",
+    "glVertexAttrib3dARB", "glVertexAttrib3dvARB", "glVertexAttrib3fARB", "glVertexAttrib3fvARB",
+    "glVertexAttrib3sARB", "glVertexAttrib3svARB", "glVertexAttrib4NbvARB", "glVertexAttrib4NivARB",
+    "glVertexAttrib4NsvARB", "glVertexAttrib4NubARB", "glVertexAttrib4NubvARB", "glVertexAttrib4NuivARB",
+    "glVertexAttrib4NusvARB", "glVertexAttrib4bvARB", "glVertexAttrib4dARB", "glVertexAttrib4dvARB",
+    "glVertexAttrib4fARB", "glVertexAttrib4fvARB", "glVertexAttrib4ivARB", "glVertexAttrib4sARB",
+    "glVertexAttrib4svARB", "glVertexAttrib4ubvARB", "glVertexAttrib4uivARB", "glVertexAttrib4usvARB",
+    "glVertexAttribPointerARB", "glEnableVertexAttribArrayARB", "glDisableVertexAttribArrayARB",
+    "glProgramStringARB", "glBindProgramARB", "glDeleteProgramsARB", "glGenProgramsARB",
+    "glProgramEnvParameter4dARB", "glProgramEnvParameter4dvARB", "glProgramEnvParameter4fARB",
+    "glProgramEnvParameter4fvARB", "glProgramLocalParameter4dARB", "glProgramLocalParameter4dvARB",
+    "glProgramLocalParameter4fARB", "glProgramLocalParameter4fvARB", "glGetProgramEnvParameterdvARB",
+    "glGetProgramEnvParameterfvARB", "glGetProgramLocalParameterdvARB", "glGetProgramLocalParameterfvARB",
+    "glGetProgramivARB", "glGetProgramStringARB", "glGetVertexAttribdvARB", "glGetVertexAttribfvARB",
+    "glGetVertexAttribivARB", "glGetVertexAttribPointervARB", "glIsProgramARB",
+    "glSubpixelPrecisionBiasNV",
     "glGetString", "glGetStringi", "glGetError",
     "glGetIntegerv", "glGetFloatv", "glGetBooleanv",
 
@@ -32,7 +50,7 @@ extra = [
     "glGenRenderbuffers", "glDeleteRenderbuffers", "glBindRenderbuffer",
     "glRenderbufferStorage", "glFramebufferRenderbuffer", "glBlitFramebuffer",
 
-    "glDrawArrays", "glDrawElements", "glDrawArraysInstanced",
+    "glBlendBarrierKHR", "glDrawArrays", "glDrawElements", "glDrawArraysInstanced",
     "glDrawElementsInstanced",
 
     "glDeleteObjectARB", "glGetHandleARB", "glGetObjectParameterfvARB",
@@ -236,7 +254,46 @@ synchronous = ["glFinish"]
 
 read_into_blob = ["glGetTextureSubImage"]
 
+reads_buffers = [
+    "glDrawArraysIndirect", "glDrawArraysInstancedBaseInstance", "glDrawElementsBaseVertex", "glDrawElementsIndirect",
+    "glDrawElementsInstancedBaseInstance", "glDrawElementsInstancedBaseVertex",
+    "glDrawElementsInstancedBaseVertexBaseInstance", "glDrawRangeElementsBaseVertex", "glDrawTransformFeedback",
+    "glDrawTransformFeedbackInstanced", "glDrawTransformFeedbackStream", "glDrawTransformFeedbackStreamInstanced",
+    "glMultiDrawArrays", "glMultiDrawArraysIndirect", "glMultiDrawArraysIndirectCount", "glMultiDrawElements",
+    "glMultiDrawElementsBaseVertex", "glMultiDrawElementsIndirect", "glMultiDrawElementsIndirectCount",
+    "glDispatchCompute", "glDispatchComputeIndirect",
+    "glCopyBufferSubData", "glCopyNamedBufferSubData", "glNamedCopyBufferSubDataEXT",
+    "glTexImage1D", "glTexImage2D", "glTexImage3D", "glTexSubImage1D", "glTexSubImage2D", "glTexSubImage3D",
+    "glTextureSubImage1D", "glTextureSubImage2D", "glTextureSubImage3D",
+    "glCompressedTexImage1D", "glCompressedTexImage2D", "glCompressedTexImage3D",
+    "glCompressedTexSubImage1D", "glCompressedTexSubImage2D", "glCompressedTexSubImage3D",
+    "glCompressedTextureSubImage1D", "glCompressedTextureSubImage2D", "glCompressedTextureSubImage3D",
+    "glTextureImage1DEXT", "glTextureImage2DEXT", "glTextureImage3DEXT",
+    "glTextureSubImage1DEXT", "glTextureSubImage2DEXT", "glTextureSubImage3DEXT",
+    "glMultiTexImage1DEXT", "glMultiTexImage2DEXT", "glMultiTexImage3DEXT",
+    "glMultiTexSubImage1DEXT", "glMultiTexSubImage2DEXT", "glMultiTexSubImage3DEXT",
+    "glCompressedTextureImage1DEXT", "glCompressedTextureImage2DEXT", "glCompressedTextureImage3DEXT",
+    "glCompressedTextureSubImage1DEXT", "glCompressedTextureSubImage2DEXT", "glCompressedTextureSubImage3DEXT",
+    "glCompressedMultiTexImage1DEXT", "glCompressedMultiTexImage2DEXT", "glCompressedMultiTexImage3DEXT",
+    "glCompressedMultiTexSubImage1DEXT", "glCompressedMultiTexSubImage2DEXT", "glCompressedMultiTexSubImage3DEXT",
+    "glDrawPixels", "glReadnPixels",
+]
+
+orders_mappings = ["glMemoryBarrier", "glMemoryBarrierByRegion", "glFenceSync"]
+
+reads_window = [
+    "glReadnPixels", "glCopyPixels",
+    "glCopyTexImage1D", "glCopyTexImage2D", "glCopyTexSubImage1D", "glCopyTexSubImage2D", "glCopyTexSubImage3D",
+    "glCopyTextureSubImage1D", "glCopyTextureSubImage2D", "glCopyTextureSubImage3D",
+    "glCopyTextureImage1DEXT", "glCopyTextureImage2DEXT", "glCopyTextureSubImage1DEXT",
+    "glCopyTextureSubImage2DEXT", "glCopyTextureSubImage3DEXT",
+    "glCopyMultiTexImage1DEXT", "glCopyMultiTexImage2DEXT", "glCopyMultiTexSubImage1DEXT",
+    "glCopyMultiTexSubImage2DEXT", "glCopyMultiTexSubImage3DEXT",
+]
+
 excluded = [
+    "glGetTextureHandleNV", "glGetTextureSamplerHandleNV", "glMakeTextureHandleResidentNV", "glMakeTextureHandleNonResidentNV", "glGetImageHandleNV", "glMakeImageHandleResidentNV", "glMakeImageHandleNonResidentNV", "glUniformHandleui64NV", "glUniformHandleui64vNV", "glProgramUniformHandleui64NV", "glProgramUniformHandleui64vNV", "glIsTextureHandleResidentNV", "glIsImageHandleResidentNV",
+    "glGetVertexAttribPointervARB",
     "glGetBufferPointerv",
     "glGetVertexAttribPointerv",
     "glGetPointerv",
@@ -504,6 +561,9 @@ len = "(size < 0 ? 0 : static_cast<size_t>(size))"
 
 [params."glGetNamedBufferSubDataEXT.data"]
 len = "(size < 0 ? 0 : static_cast<size_t>(size))"
+
+[params."glGetProgramStringARB.string"]
+len = "::av::glproto::program_string_bytes(av_t)"
 
 [params."glGetNamedProgramStringEXT.string"]
 len = "::av::glproto::named_program_string_bytes(av_t, program, target)"
@@ -798,6 +858,17 @@ GL_POINT_SIZE_IMPLEMENTATION_DEPENDENT = 2
 
 GL_TEXTURE_SWIZZLE_RGBA = 4
 GL_TEXTURE_BORDER_COLOR = 4
+
+GL_AMBIENT = 4
+GL_DIFFUSE = 4
+GL_SPECULAR = 4
+GL_POSITION = 4
+GL_SPOT_DIRECTION = 3
+GL_EMISSION = 4
+GL_AMBIENT_AND_DIFFUSE = 4
+GL_COLOR_INDEXES = 3
+GL_EYE_PLANE = 4
+GL_OBJECT_PLANE = 4
 
 [extension_requires]
 GL_ARB_sparse_texture2 = "GL_ARB_sparse_texture"

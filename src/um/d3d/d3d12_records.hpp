@@ -9,6 +9,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+namespace av::d3d {
+class ContextOrder;
+}
+
 namespace av::d3d12 {
 
 class HeapMemory;
@@ -33,7 +37,11 @@ struct HeapRecord {
     uint32_t                 made;
     uint32_t                 asked;
     uint64_t                 charged;
+    uint64_t                 parked;
+    uint64_t                 leased;
     D3DKMT_HANDLE            allocation;
+    HANDLE                   runtime_object;
+    uint64_t                 key;
 };
 
 struct ResourceRecord {
@@ -84,7 +92,10 @@ struct ShaderRecord {
     uint32_t     stage;
     uint32_t     code_bytes;
     uint32_t     signature_count;
-    uint32_t     reserved;
+    uint32_t     stream_out_count;
+    uint32_t     stride_count;
+    uint32_t     rasterized_stream;
+    uint32_t     strides[4];
 };
 
 struct BlendRecord {
@@ -118,6 +129,8 @@ struct LayoutRecord {
     d3d12proto::InputElement elements[max_elements];
 };
 
+enum class ShaderIo : uint32_t { standard, tessellation, mesh, none };
+
 struct ObjectRecord {
     static constexpr uint32_t tag = 0x004F5641u;
 
@@ -132,6 +145,7 @@ struct QueueRecord {
     RecordHeader             header;
     D3D12DDI_HRTCOMMANDQUEUE runtime;
     HANDLE                   context;
+    d3d::ContextOrder       *order;
     uint32_t                 type;
     uint32_t                 reserved;
     uint64_t                 executed;
@@ -152,12 +166,37 @@ struct RecorderRecord {
     PoolRecord  *pool;
 };
 
+struct StateIdentifier {
+    uint64_t key;
+    uint32_t found;
+    uint32_t reserved;
+    uint32_t value[8];
+};
+
+struct StateIdentifierChunk {
+    static constexpr uint32_t entries = 31u;
+
+    StateIdentifierChunk *next;
+    uint32_t              used;
+    uint32_t              reserved;
+    StateIdentifier       identifiers[entries];
+};
+
+struct StateObjectRecord {
+    static constexpr uint32_t tag = 0x00585641u;
+
+    RecordHeader          header;
+    StateIdentifierChunk *chunks;
+};
+
 struct ListRecord {
     static constexpr uint32_t tag = 0x00495641u;
 
-    RecordHeader header;
-    uint32_t     type;
-    uint32_t     made;
+    RecordHeader       header;
+    uint32_t           type;
+    uint32_t           made;
+    d3d::ContextOrder *order;
+    uint64_t           fence;
 };
 
 }

@@ -1,14 +1,21 @@
 #include "core/platform/block_source.hpp"
 #include "core/log/log_line.hpp"
+#include "icd/d3d/shader_code_extent.hpp"
+#include "um/common/readable_extent.hpp"
 #include "core/trace/function_scope.hpp"
 #include "guest/transport/shared_object_call.hpp"
 #include "core/log/keyed_log.hpp"
 #include "icd/d3d/d3d_command_stream.hpp"
+#include "icd/d3d/kernel_heap.hpp"
 #include "icd/d3d/kernel_surface.hpp"
 #include "guest/transport/host_allocation.hpp"
 #include "icd/d3d/passthrough_geometry_shader.hpp"
+#include "icd/d3d/query_kind.hpp"
+#include "icd/d3d/resource_size_limit.hpp"
 #include "proto/generated/d3d/d3d_dispatch_client.h"
+#include "proto/d3d/resource_footprint.hpp"
 #include "proto/d3d/resource_misc.hpp"
+#include "proto/submission/lease_record.hpp"
 #include "proto/resources/shared_object_kind.hpp"
 #include "icd/d3d/shared_rows_request.hpp"
 #include "um/d3d/d3d11_host_caps.hpp"
@@ -24,6 +31,7 @@ constexpr uint32_t api_texture_cube = 0x4u;
 constexpr uint32_t misc_same_bits = 0xF0u;
 constexpr uint32_t api_bind_uav = 0x80u;
 constexpr uint32_t api_bind_pipeline = 0x7Fu;
+constexpr uint64_t accounted_bytes_least = uint64_t{1} << 20u;
 
 constexpr uint32_t view_buffer = 1u;
 constexpr uint32_t view_1d = 2u;
@@ -76,10 +84,6 @@ VOID D3d11Device::create_resource(const D3D11DDIARG_CREATERESOURCE *args, D3D10D
     }
     ResourceRecord &resource = record(handle);
     resource = ResourceRecord{};
-    if (args->ResourceDimension == D3D10DDIRESOURCE_BUFFER && args->pMipInfoList[0].TexelWidth > caps_.max_buffer_bytes()) {
-        set_error(E_OUTOFMEMORY);
-        return;
-    }
     resource.stamp = d3d::RecordStamp(ResourceRecord::tag, next_id());
     resource.dimension = static_cast<uint32_t>(args->ResourceDimension);
     resource.usage = args->Usage;
@@ -95,6 +99,15 @@ VOID D3d11Device::create_resource(const D3D11DDIARG_CREATERESOURCE *args, D3D10D
     resource.layers = args->ArraySize;
     resource.samples = args->SampleDesc.Count;
     resource.runtime_resource = runtime.handle;
+    const d3d::ResourceShape shape = {resource.dimension == D3D10DDIRESOURCE_BUFFER,
+                                      resource.dimension == D3D10DDIRESOURCE_TEXTURE3D,
+                                      resource.format, resource.width, resource.height, resource.depth,
+                                      resource.mips, resource.layers};
+    if (d3d::ResourceSizeLimit(caps_.max_buffer_bytes()).exceeded_by(shape)) {
+        resource = ResourceRecord{};
+        set_error(E_OUTOFMEMORY);
+        return;
+    }
 
     d3dproto::ResourceDesc desc = {};
     desc.dimension = cube ? static_cast<uint32_t>(D3D10DDIRESOURCE_TEXTURE2D) : resource.dimension;
@@ -110,7 +123,10 @@ VOID D3d11Device::create_resource(const D3D11DDIARG_CREATERESOURCE *args, D3D10D
                       ((args->BindFlags & D3D11_DDI_BIND_UNORDERED_ACCESS) != 0u ? api_bind_uav : 0u);
     desc.misc_flags = (args->MiscFlags & misc_same_bits) |
                       ((args->MiscFlags & D3D10_DDI_RESOURCE_AUTO_GEN_MIP_MAP) != 0u ? api_generate_mips : 0u) |
-                      (cube ? api_texture_cube : 0u);
+                      (cube ? api_texture_cube : 0u) |
+                      ((args->MiscFlags & D3DWDDM1_3DDI_RESOURCE_MISC_TILED) != 0u ? ResourceMisc::tiled_bit : 0u) |
+                      ((args->MiscFlags & D3DWDDM1_3DDI_RESOURCE_MISC_TILE_POOL) != 0u ? ResourceMisc::tile_pool_bit
+                                                                                      : 0u);
     desc.structure_stride = args->ByteStride;
     const d3d::SwapChainBuffer::Model buffer_model =
         d3d::SwapChainBuffer(args->pPrimaryDesc != nullptr, args->MiscFlags).model();
@@ -141,11 +157,23 @@ VOID D3d11Device::create_resource(const D3D11DDIARG_CREATERESOURCE *args, D3D10D
             .write();
     const bool as_rows = interop && !across && rows_.asked_by(caller_.thread_id());
     if (interop && !across) desc.misc_flags |= ResourceMisc::shared_bit | (as_rows ? ResourceMisc::rows_bit : 0u);
+    const uint64_t leased = ResourceFootprint(desc).leased(0u);
+    if (!session_.lease().take(leased)) {
+        resource = ResourceRecord{};
+        set_error(E_OUTOFMEMORY);
+        return;
+    }
+    resource.leased = leased;
     if (kernel_visible) {
         const HRESULT allocated = allocate(resource, *args, runtime);
         if (FAILED(allocated)) set_error(allocated);
     }
+    if (!kernel_visible) account(resource, runtime);
     const uint64_t lent_name = resource.lent != nullptr ? resource.lent->handle() : 0u;
+    if (lent_name != 0u) {
+        session_.lease().give(resource.leased);
+        resource.leased = 0u;
+    }
     const uint32_t lent_pitch = resource.lent != nullptr ? resource.allocation_pitch : 0u;
     if (!d3dproto::av_d3d_CreateResource(wire(), resource.stamp.id(), desc, resource.shared_key, lent_name,
                                          lent_pitch)) {
@@ -153,6 +181,9 @@ VOID D3d11Device::create_resource(const D3D11DDIARG_CREATERESOURCE *args, D3D10D
         return;
     }
     if (as_rows && resource.shared_key != 0u) publish_shared(resource);
+    if ((args->MiscFlags & D3D10_DDI_RESOURCE_MISC_SHARED) != 0u && args->pPrimaryDesc == nullptr &&
+        (args->BindFlags & D3D10_DDI_BIND_PRESENT) == 0u)
+        engage();
 
     if (args->Usage == D3D10_DDI_USAGE_DYNAMIC || args->Usage == D3D10_DDI_USAGE_STAGING || args->MapFlags != 0u) {
         size_t bytes = 0u;
@@ -191,6 +222,25 @@ VOID D3d11Device::create_resource(const D3D11DDIARG_CREATERESOURCE *args, D3D10D
     if (kernel_visible && wire().run_held() != Status::ok) lost(__func__);
 }
 
+void D3d11Device::account(ResourceRecord &resource, D3D10DDI_HRTRESOURCE runtime)
+{
+    AV_SCOPE("D3d11Device::account");
+    if (resource.dimension == D3D10DDIRESOURCE_BUFFER && resource.width < accounted_bytes_least) return;
+    if ((resource.misc & (D3DWDDM1_3DDI_RESOURCE_MISC_TILED | D3DWDDM1_3DDI_RESOURCE_MISC_TILE_POOL)) != 0u) return;
+    uint64_t bytes = 0u;
+    for (uint32_t sub = 0u; sub < subresource_count(resource); sub++) bytes += subresource_bytes(resource, sub);
+    if (bytes < accounted_bytes_least) return;
+    d3d::KernelHeap heap(bytes, resource.stamp.id());
+    if (heap.make() != Status::ok) return;
+    D3DKMT_HANDLE allocation = 0u;
+    const HRESULT made = allocations_.make_heap(heap, runtime.handle, allocation);
+    if (FAILED(made)) {
+        set_error(made);
+        return;
+    }
+    resource.accounted = allocation;
+}
+
 void D3d11Device::publish_shared(const ResourceRecord &resource)
 {
     AV_SCOPE("D3d11Device::publish_shared");
@@ -217,7 +267,10 @@ VOID D3d11Device::open_resource(const D3D10DDIARG_OPENRESOURCE *args, D3D10DDI_H
     resource = ResourceRecord{};
     resource.stamp = d3d::RecordStamp(ResourceRecord::tag, next_id());
     resource.runtime_resource = runtime.handle;
-    if (args->NumAllocations != 0u) resource.allocation = args->pOpenAllocationInfo2[0].hAllocation;
+    if (args->NumAllocations != 0u) {
+        resource.allocation = args->pOpenAllocationInfo2[0].hAllocation;
+        resource.allocation_owned = 1u;
+    }
     d3d::KernelSurface opened;
     const bool         surface =
         args->NumAllocations != 0u &&
@@ -252,6 +305,7 @@ VOID D3d11Device::open_resource(const D3D10DDIARG_OPENRESOURCE *args, D3D10DDI_H
         return;
     }
     resource.shared_key = key;
+    engage();
     resource.dimension = desc.dimension;
     resource.width = desc.width;
     resource.height = desc.height == 0u ? 1u : desc.height;
@@ -274,12 +328,15 @@ VOID D3d11Device::destroy_resource(D3D10DDI_HRESOURCE handle)
     forget_guest_surface(resource);
     forget_maps(resource.stamp.id());
     destroy_object(resource.stamp.id());
+    session_.lease().give(resource.leased);
     if (resource.lent != nullptr) lender_.retire(*resource.lent);
     session_.shared_memory().reclaim();
     if (resource.slice.bytes_ != 0u) leave_slice(resource);
     else if (resource.shadow != nullptr) shadows_.release(resource.shadow, resource.shadow_watched != 0u);
     if (resource.allocation_owned != 0u)
         allocations_.give_back(resource.allocation, static_cast<HANDLE>(resource.runtime_resource));
+    else if (resource.accounted != 0u)
+        allocations_.give_back(resource.accounted, static_cast<HANDLE>(resource.runtime_resource));
     resource = ResourceRecord{};
 }
 
@@ -523,14 +580,13 @@ VOID D3d11Device::destroy_unordered_access_view(D3D11DDI_HUNORDEREDACCESSVIEW ha
 }
 
 
-void D3d11Device::create_shader(uint32_t stage, const UINT *code, D3D10DDI_HSHADER shader,
+bool D3d11Device::create_shader(uint32_t stage, const UINT *code, ObjectRecord &record_of,
                                 const D3D11_1DDIARG_SIGNATURE_ENTRY2 *inputs, UINT input_count,
                                 const D3D11_1DDIARG_SIGNATURE_ENTRY2 *outputs, UINT output_count,
                                 const D3D11_1DDIARG_SIGNATURE_ENTRY2 *patch, UINT patch_count,
                                 const D3D11DDIARG_CREATEGEOMETRYSHADERWITHSTREAMOUTPUT *stream_out)
 {
     AV_SCOPE("D3d11Device::create_shader");
-    ObjectRecord &record_of = *static_cast<ObjectRecord *>(shader.pDrvPrivate);
     record_of = ObjectRecord{d3d::RecordStamp(ObjectRecord::tag, next_id()), stage, 0u};
     constexpr uint32_t max_entries = 128u;
     d3dproto::SignatureEntry signatures[3][max_entries] = {};
@@ -559,14 +615,17 @@ void D3d11Device::create_shader(uint32_t stage, const UINT *code, D3D10DDI_HSHAD
         strides = stream_out->BufferStridesInBytes;
         rasterized = stream_out->RasterizedStream;
     }
-    const size_t bytes = static_cast<size_t>(code[1]) * sizeof(UINT);
+    const size_t bytes = d3d::ShaderCodeExtent(ReadableExtent(size_t{1} << 28u).from(code)).bytes(code);
     const uint64_t wanted_1[1] = {static_cast<uint64_t>(bytes)};
     if (!wire().make_room_for_blobs(wanted_1, 1u))
         lines_.write("a shader larger than the arena");
     if (!d3dproto::av_d3d_CreateShader(wire(), record_of.stamp.id(), stage, counts[0], signatures[0], counts[1],
                                         signatures[1], counts[2], signatures[2], declared, declaration, strides_count,
-                                        strides, rasterized, code, bytes))
+                                        strides, rasterized, code, bytes)) {
         set_error(E_OUTOFMEMORY);
+        return false;
+    }
+    return true;
 }
 
 SIZE_T D3d11Device::calc_private_shader_size(const UINT *, const D3D11_1DDIARG_STAGE_IO_SIGNATURES *)
@@ -585,7 +644,7 @@ SIZE_T D3d11Device::calc_private_geometry_shader_with_stream_output(
     const D3D11DDIARG_CREATEGEOMETRYSHADERWITHSTREAMOUTPUT *, const D3D11_1DDIARG_STAGE_IO_SIGNATURES *)
 {
     AV_SCOPE("D3d11Device::calc_private_geometry_shader_with_stream_output");
-    return sizeof(ObjectRecord);
+    return sizeof(StreamPassthroughRecord);
 }
 
 VOID D3d11Device::create_vertex_shader(const UINT *code, D3D10DDI_HSHADER shader, D3D10DDI_HRTSHADER runtime,
@@ -593,7 +652,7 @@ VOID D3d11Device::create_vertex_shader(const UINT *code, D3D10DDI_HSHADER shader
 {
     AV_SCOPE("D3d11Device::create_vertex_shader");
     if (context_local(shader.pDrvPrivate, runtime.handle, sizeof(ObjectRecord))) return;
-    create_shader(stage_vertex, code, shader, signatures->pInputSignature, signatures->NumInputSignatureEntries,
+    create_shader(stage_vertex, code, *static_cast<ObjectRecord *>(shader.pDrvPrivate), signatures->pInputSignature, signatures->NumInputSignatureEntries,
                   signatures->pOutputSignature, signatures->NumOutputSignatureEntries, nullptr, 0u, nullptr);
 }
 
@@ -602,7 +661,7 @@ VOID D3d11Device::create_geometry_shader(const UINT *code, D3D10DDI_HSHADER shad
 {
     AV_SCOPE("D3d11Device::create_geometry_shader");
     if (context_local(shader.pDrvPrivate, runtime.handle, sizeof(ObjectRecord))) return;
-    create_shader(stage_geometry, code, shader, signatures->pInputSignature, signatures->NumInputSignatureEntries,
+    create_shader(stage_geometry, code, *static_cast<ObjectRecord *>(shader.pDrvPrivate), signatures->pInputSignature, signatures->NumInputSignatureEntries,
                   signatures->pOutputSignature, signatures->NumOutputSignatureEntries, nullptr, 0u, nullptr);
 }
 
@@ -611,7 +670,7 @@ VOID D3d11Device::create_pixel_shader(const UINT *code, D3D10DDI_HSHADER shader,
 {
     AV_SCOPE("D3d11Device::create_pixel_shader");
     if (context_local(shader.pDrvPrivate, runtime.handle, sizeof(ObjectRecord))) return;
-    create_shader(stage_pixel, code, shader, signatures->pInputSignature, signatures->NumInputSignatureEntries,
+    create_shader(stage_pixel, code, *static_cast<ObjectRecord *>(shader.pDrvPrivate), signatures->pInputSignature, signatures->NumInputSignatureEntries,
                   signatures->pOutputSignature, signatures->NumOutputSignatureEntries, nullptr, 0u, nullptr);
 }
 
@@ -620,12 +679,12 @@ VOID D3d11Device::create_geometry_shader_with_stream_output(const D3D11DDIARG_CR
                                                             const D3D11_1DDIARG_STAGE_IO_SIGNATURES *signatures)
 {
     AV_SCOPE("D3d11Device::create_geometry_shader_with_stream_output");
-    if (context_local(shader.pDrvPrivate, runtime.handle, sizeof(ObjectRecord))) return;
+    if (context_local(shader.pDrvPrivate, runtime.handle, sizeof(StreamPassthroughRecord))) return;
     if (args->pShaderCode == nullptr) {
         stream_vertex_output(*args, shader, *signatures);
         return;
     }
-    create_shader(stage_geometry, args->pShaderCode, shader, signatures->pInputSignature,
+    create_shader(stage_geometry, args->pShaderCode, *static_cast<ObjectRecord *>(shader.pDrvPrivate), signatures->pInputSignature,
                   signatures->NumInputSignatureEntries, signatures->pOutputSignature,
                   signatures->NumOutputSignatureEntries, nullptr, 0u, args);
 }
@@ -637,17 +696,34 @@ void D3d11Device::stream_vertex_output(const D3D11DDIARG_CREATEGEOMETRYSHADERWIT
     const bool reads = signatures.NumInputSignatureEntries != 0u;
     const D3D11_1DDIARG_SIGNATURE_ENTRY2 *const passed = reads ? signatures.pInputSignature : signatures.pOutputSignature;
     const UINT count = reads ? signatures.NumInputSignatureEntries : signatures.NumOutputSignatureEntries;
-    d3d::PassthroughGeometryShader written;
-    bool                           taken = passed != nullptr && count != 0u;
-    for (UINT index = 0u; taken && index < count; index++)
-        taken = written.add(passed[index].Register, passed[index].Mask, static_cast<uint32_t>(passed[index].SystemValue));
-    const uint32_t *const tokens = taken ? written.tokens() : nullptr;
-    if (tokens == nullptr) {
-        lines_.write("a stream output with no shader names no register it can pass through");
-        set_error(E_INVALIDARG);
+    constexpr d3d::PassthroughPrimitive classes[StreamPassthroughRecord::variants + 1u] = {
+        d3d::PassthroughPrimitive::point, d3d::PassthroughPrimitive::line, d3d::PassthroughPrimitive::triangle,
+        d3d::PassthroughPrimitive::line_adjacency, d3d::PassthroughPrimitive::triangle_adjacency};
+    StreamPassthroughRecord &record = *static_cast<StreamPassthroughRecord *>(shader.pDrvPrivate);
+    for (uint32_t variant = 0u; variant <= StreamPassthroughRecord::variants; variant++) {
+        d3d::PassthroughGeometryShader written(classes[variant]);
+        bool                           taken = passed != nullptr && count != 0u;
+        for (UINT index = 0u; taken && index < count; index++)
+            taken = written.add(passed[index].Register, passed[index].Mask,
+                                static_cast<uint32_t>(passed[index].SystemValue));
+        const uint32_t *const tokens = taken ? written.tokens() : nullptr;
+        ObjectRecord          made = {};
+        bool                  created = false;
+        if (tokens != nullptr) {
+            created = create_shader(stage_geometry, tokens, variant == 0u ? record.head : made, passed, count, passed,
+                                    count, nullptr, 0u, &args);
+            if (created && variant != 0u) record.variant[variant - 1u] = made.stamp.id();
+        } else {
+            lines_.write("a stream output with no shader names no register it can pass through");
+            set_error(E_INVALIDARG);
+        }
+        if (created) continue;
+        for (uint32_t made_before = 1u; made_before < variant; made_before++) destroy_object(record.variant[made_before - 1u]);
+        if (variant > 0u) destroy_object(record.head.stamp.id());
+        record = StreamPassthroughRecord{};
         return;
     }
-    create_shader(stage_geometry, tokens, shader, passed, count, passed, count, nullptr, 0u, &args);
+    record.head.resource = StreamPassthroughRecord::marker;
 }
 
 VOID D3d11Device::create_hull_shader(const UINT *code, D3D10DDI_HSHADER shader, D3D10DDI_HRTSHADER runtime,
@@ -655,7 +731,7 @@ VOID D3d11Device::create_hull_shader(const UINT *code, D3D10DDI_HSHADER shader, 
 {
     AV_SCOPE("D3d11Device::create_hull_shader");
     if (context_local(shader.pDrvPrivate, runtime.handle, sizeof(ObjectRecord))) return;
-    create_shader(stage_hull, code, shader, signatures->pInputSignature, signatures->NumInputSignatureEntries,
+    create_shader(stage_hull, code, *static_cast<ObjectRecord *>(shader.pDrvPrivate), signatures->pInputSignature, signatures->NumInputSignatureEntries,
                   signatures->pOutputSignature, signatures->NumOutputSignatureEntries,
                   signatures->pPatchConstantSignature, signatures->NumPatchConstantSignatureEntries, nullptr);
 }
@@ -665,7 +741,7 @@ VOID D3d11Device::create_domain_shader(const UINT *code, D3D10DDI_HSHADER shader
 {
     AV_SCOPE("D3d11Device::create_domain_shader");
     if (context_local(shader.pDrvPrivate, runtime.handle, sizeof(ObjectRecord))) return;
-    create_shader(stage_domain, code, shader, signatures->pInputSignature, signatures->NumInputSignatureEntries,
+    create_shader(stage_domain, code, *static_cast<ObjectRecord *>(shader.pDrvPrivate), signatures->pInputSignature, signatures->NumInputSignatureEntries,
                   signatures->pOutputSignature, signatures->NumOutputSignatureEntries,
                   signatures->pPatchConstantSignature, signatures->NumPatchConstantSignatureEntries, nullptr);
 }
@@ -674,13 +750,17 @@ VOID D3d11Device::create_compute_shader(const UINT *code, D3D10DDI_HSHADER shade
 {
     AV_SCOPE("D3d11Device::create_compute_shader");
     if (context_local(shader.pDrvPrivate, runtime.handle, sizeof(ObjectRecord))) return;
-    create_shader(stage_compute, code, shader, nullptr, 0u, nullptr, 0u, nullptr, 0u, nullptr);
+    create_shader(stage_compute, code, *static_cast<ObjectRecord *>(shader.pDrvPrivate), nullptr, 0u, nullptr, 0u, nullptr, 0u, nullptr);
 }
 
 VOID D3d11Device::destroy_shader(D3D10DDI_HSHADER handle)
 {
     AV_SCOPE("D3d11Device::destroy_shader");
     if (parent_ != nullptr) return;
+    const auto &record = *static_cast<const StreamPassthroughRecord *>(handle.pDrvPrivate);
+    if (record.head.resource == StreamPassthroughRecord::marker)
+        for (uint32_t variant = 0u; variant < StreamPassthroughRecord::variants; variant++)
+            destroy_object(record.variant[variant]);
     destroy_object(id_of(handle.pDrvPrivate));
 }
 
@@ -870,11 +950,10 @@ VOID D3d11Device::create_query(const D3DWDDM2_0DDIARG_CREATEQUERY *args, D3D10DD
     AV_SCOPE("D3d11Device::create_query");
     if (context_local(handle.pDrvPrivate, runtime.handle, sizeof(QueryRecord))) return;
     QueryRecord &query = *static_cast<QueryRecord *>(handle.pDrvPrivate);
-    constexpr uint32_t sizes[] = {4u, 8u, 8u, 16u, 88u, 4u, 16u, 4u, 16u, 16u, 16u, 16u, 4u, 4u, 4u, 4u};
-    const uint32_t type = static_cast<uint32_t>(args->Query);
-    query = QueryRecord{d3d::RecordStamp(QueryRecord::tag, next_id()), type, type < sizeof(sizes) / sizeof(sizes[0]) ? sizes[type] : 0u,
-                        0u, 0u, 0u, 0u};
-    if (query.data_bytes == 0u) {
+    const d3d::QueryKind kind(static_cast<uint32_t>(args->Query));
+    const uint32_t type = kind.api_type();
+    query = QueryRecord{d3d::RecordStamp(QueryRecord::tag, next_id()), type, kind.data_bytes(), 0u, 0u, 0u, 0u, 0u};
+    if (!kind.known()) {
         set_error(E_INVALIDARG);
         return;
     }

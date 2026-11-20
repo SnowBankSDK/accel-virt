@@ -3,6 +3,7 @@
 #include "core/trace/function_scope.hpp"
 #include "executor/executor_log.hpp"
 #include "device/abi/av_executor.h"
+#include "core/platform/thread_lock_hold.hpp"
 #include "executor/shim/physical_device_identity.hpp"
 
 #include <string.h>
@@ -12,8 +13,8 @@ namespace av {
 
 LoaderHostApis::LoaderHostApis(ExecutorLog &log)
     : instance_(nullptr), uuids_{}, sub_apis_{}, opencl_devices_{},
-      gl_displays_{}, d3d_runtime_(), d3d11_devices_{}, d3d12_devices_{}, d3d9_devices_{}, heap_(), surfaces_{},
-      shares_{}, ledgers_{}, gauge_(), host_ram_(), vram_gate_(*this, heap_), count_(0u), opened_(false)
+      lifecycles_(), gl_displays_{}, d3d_runtime_(), d3d11_devices_{}, d3d12_devices_{}, d3d9_devices_{}, heap_(), surfaces_{},
+      shares_{}, ledgers_{}, gauge_(), host_ram_(), vram_gate_(*this, heap_), reopen_lock_(), reopened_{}, count_(0u), opened_(false)
 {
     AV_SCOPE("LoaderHostApis::LoaderHostApis");
     host_ram_.watch(&gauge_);
@@ -76,14 +77,21 @@ void LoaderHostApis::enumerate()
             if ((memory.memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0u)
                 local += memory.memoryHeaps[heap].size;
         ledgers_[i].learn(local);
+        VkPhysicalDeviceProperties properties = {};
+        vkGetPhysicalDeviceProperties(devices[i], &properties);
+        if (properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU) ledgers_[i].share_host_ram(&host_ram_);
+        budgets_[i].bind(devices[i]);
+        ledgers_[i].follow(&budgets_[i]);
         if (opencl_devices_[i].find(uuids_[i].raw())) sub_apis_[i] |= AV_EXECUTOR_SUB_API_OPENCL;
-        if (compositors_[i].open(uuids_[i].raw()))
+        HostLifecycleGate *const gate = lifecycles_.add(uuids_[i].raw(), identity.driver());
+        if (compositors_[i].open(uuids_[i].raw(), gate))
             static_cast<void>(sources_[i].construct(exporters_[i].object(), heap_));
-        if (gl_displays_[i].open(uuids_[i].raw())) sub_apis_[i] |= AV_EXECUTOR_SUB_API_OPENGL;
+        if (gate != nullptr && gl_displays_[i].open(uuids_[i].raw(), *gate)) sub_apis_[i] |= AV_EXECUTOR_SUB_API_OPENGL;
     }
     count_ = found;
     if (d3d_runtime_.open()) {
         d3d_runtime_.give_vram_gate(vram_gate_.abi());
+        static_cast<void>(d3d_runtime_.give_lifecycle_gates(lifecycles_.abi()));
         for (uint32_t i = 0u; i < found; i++)
             if (d3d11_devices_[i].object().open(d3d_runtime_, uuids_[i].raw(), shares_[i].object())) {
                 sub_apis_[i] |= AV_EXECUTOR_SUB_API_D3D;
@@ -159,6 +167,12 @@ HostRamLedger *LoaderHostApis::host_ram_ledger()
     return &host_ram_;
 }
 
+HostLifecycleGate *LoaderHostApis::lifecycle_gate(uint32_t index)
+{
+    AV_SCOPE("LoaderHostApis::lifecycle_gate");
+    return index < count_ ? lifecycles_.of(uuids_[index].raw()) : nullptr;
+}
+
 HostMemorySource *LoaderHostApis::memory_source(uint32_t index)
 {
     AV_SCOPE("LoaderHostApis::memory_source");
@@ -192,7 +206,18 @@ D3d9HostDevice *LoaderHostApis::d3d9_device(uint32_t index)
 D3d12HostDevice *LoaderHostApis::d3d12_device(uint32_t index)
 {
     AV_SCOPE("LoaderHostApis::d3d12_device");
-    return index < count_ && d3d12_devices_[index].object().placed() ? &d3d12_devices_[index].object() : nullptr;
+    if (index >= count_) return nullptr;
+    D3d12HostDevice &device = d3d12_devices_[index].object();
+    if (device.placed()) return &device;
+    if (!d3d11_devices_[index].object().placed()) return nullptr;
+    constexpr uint32_t most_reopens = 8u;
+    const ThreadLockHold held(reopen_lock_);
+    if (device.placed()) return &device;
+    if (reopened_[index] >= most_reopens) return nullptr;
+    reopened_[index]++;
+    if (!device.open(d3d_runtime_, uuids_[index].raw())) return nullptr;
+    d3d11_devices_[index].object().pair(&device);
+    return &device;
 }
 
 SharedSurfaces *LoaderHostApis::surfaces(uint32_t index)

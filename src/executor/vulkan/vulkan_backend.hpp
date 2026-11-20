@@ -6,16 +6,21 @@
 #include "executor/vulkan/guest_device.hpp"
 #include "executor/vulkan/vulkan_destroyer.hpp"
 #include "executor/monotonic_clock.hpp"
+#include "executor/vulkan/issued_binaries.hpp"
+#include "executor/vulkan/vulkan_addresses.hpp"
+#include "proto/vulkan/host_copy_images.hpp"
 #include "executor/vulkan/spirv_validator.hpp"
 #include "executor/vulkan/vram_budget.hpp"
 #include "executor/vulkan/vulkan_fence_targets.hpp"
 #include "executor/vulkan/vulkan_fence_watch.hpp"
+#include "executor/gpu_work_window.hpp"
 #include "executor/vulkan/vulkan_guard.hpp"
 #include "executor/vulkan/vulkan_host_waits.hpp"
 #include "executor/vulkan/vulkan_park_host.hpp"
 #include "executor/vulkan/vulkan_parked_submits.hpp"
 #include "executor/vulkan/vulkan_object_kind.hpp"
 #include "executor/vulkan/vulkan_queue_families.hpp"
+#include "executor/vulkan/vulkan_robust_access.hpp"
 #include "executor/vulkan/vulkan_submit_progress.hpp"
 #include "executor/vulkan/guest_memory_types.hpp"
 #include "executor/host_object_registry.hpp"
@@ -34,6 +39,8 @@
 
 namespace av {
 
+class SessionLease;
+
 class ByteLedger;
 
 class DriverLog;
@@ -45,6 +52,7 @@ class HostMemorySource;
 class ImportTable;
 class SourceMemory;
 class VramLedger;
+class HostLifecycleGate;
 class VulkanSubmitSet;
 
 class VulkanBackend final : public vkproto::RealVulkanDispatch, public SessionBackend, private VulkanDestroyer, private VulkanParkHost {
@@ -53,6 +61,7 @@ public:
     VulkanBackend(BlockSource &blocks, DriverLog &lines);
 
     void use_vram(ByteLedger *vram, ByteLedger *host);
+    void gate_lifecycle(HostLifecycleGate *gate);
     void initialize(const HostGpu &gpu, HostMemorySource *source, ImportTable &imports);
 
     bool knows(uint32_t command_id) const override;
@@ -85,6 +94,8 @@ public:
                                                     const VkAllocationCallbacks *pAllocator,
                                                     VkDescriptorUpdateTemplate *pDescriptorUpdateTemplate) override;
     uint64_t template_bytes(VkDescriptorUpdateTemplate made) const override;
+    bool     image_copy_bytes(VkImage image, const VkImageSubresourceLayers &layers, VkExtent3D extent,
+                              uint32_t row_length, uint32_t image_height, uint64_t &bytes) const override;
     void on_vkUpdateDescriptorSetWithTemplate(VkDevice device, VkDescriptorSet descriptorSet,
                                               VkDescriptorUpdateTemplate descriptorUpdateTemplate,
                                               const void *pData) override;
@@ -110,6 +121,19 @@ public:
     VkResult on_vkQueueSubmit(VkQueue queue, uint32_t submitCount, const VkSubmitInfo *pSubmits,
                               VkFence fence) override;
     VkResult on_vkSetEvent(VkDevice device, VkEvent event) override;
+    void     on_vkCmdCopyBuffer(VkCommandBuffer commandBuffer, VkBuffer srcBuffer, VkBuffer dstBuffer,
+                                uint32_t regionCount, const VkBufferCopy *pRegions) override;
+    void     on_vkCmdFillBuffer(VkCommandBuffer commandBuffer, VkBuffer dstBuffer, VkDeviceSize dstOffset,
+                                VkDeviceSize size, uint32_t data) override;
+    void     on_vkCmdCopyImage(VkCommandBuffer commandBuffer, VkImage srcImage, VkImageLayout srcImageLayout,
+                               VkImage dstImage, VkImageLayout dstImageLayout, uint32_t regionCount,
+                               const VkImageCopy *pRegions) override;
+    void     on_vkCmdCopyBufferToImage(VkCommandBuffer commandBuffer, VkBuffer srcBuffer, VkImage dstImage,
+                                       VkImageLayout dstImageLayout, uint32_t regionCount,
+                                       const VkBufferImageCopy *pRegions) override;
+    void     on_vkCmdCopyImageToBuffer(VkCommandBuffer commandBuffer, VkImage srcImage, VkImageLayout srcImageLayout,
+                                       VkBuffer dstBuffer, uint32_t regionCount,
+                                       const VkBufferImageCopy *pRegions) override;
     void     on_vkCmdWaitEvents(VkCommandBuffer commandBuffer, uint32_t eventCount, const VkEvent *pEvents,
                                 VkPipelineStageFlags srcStageMask, VkPipelineStageFlags dstStageMask,
                                 uint32_t memoryBarrierCount, const VkMemoryBarrier *pMemoryBarriers,
@@ -133,6 +157,7 @@ public:
                                                VkPipelineCache pipelineCache, uint32_t createInfoCount,
                                                const VkRayTracingPipelineCreateInfoKHR *pCreateInfos,
                                                const VkAllocationCallbacks *pAllocator, VkPipeline *pPipelines) override;
+    VkResult on_vkDeferredOperationJoinKHR(VkDevice device, VkDeferredOperationKHR operation) override;
     VkResult on_vkCreateCommandPool(VkDevice device, const VkCommandPoolCreateInfo *pCreateInfo,
                                     const VkAllocationCallbacks *pAllocator, VkCommandPool *pCommandPool) override;
 
@@ -140,8 +165,19 @@ public:
                                                 VkPhysicalDeviceMemoryProperties *pMemoryProperties) override;
     void on_vkGetPhysicalDeviceMemoryProperties2(VkPhysicalDevice physicalDevice,
                                                  VkPhysicalDeviceMemoryProperties2 *pMemoryProperties) override;
+    void on_vkGetPhysicalDeviceProperties2(VkPhysicalDevice physicalDevice,
+                                           VkPhysicalDeviceProperties2 *pProperties) override;
+    void on_vkGetPhysicalDeviceProperties2KHR(VkPhysicalDevice physicalDevice,
+                                              VkPhysicalDeviceProperties2 *pProperties) override;
     void on_vkGetPhysicalDeviceMemoryProperties2KHR(VkPhysicalDevice physicalDevice,
                                                     VkPhysicalDeviceMemoryProperties2 *pMemoryProperties) override;
+
+    void on_vkGetPhysicalDeviceQueueFamilyProperties(VkPhysicalDevice physicalDevice, uint32_t *pQueueFamilyPropertyCount,
+                                                     VkQueueFamilyProperties *pQueueFamilyProperties) override;
+    void on_vkGetPhysicalDeviceQueueFamilyProperties2(VkPhysicalDevice physicalDevice, uint32_t *pQueueFamilyPropertyCount,
+                                                      VkQueueFamilyProperties2 *pQueueFamilyProperties) override;
+    void on_vkGetPhysicalDeviceQueueFamilyProperties2KHR(VkPhysicalDevice physicalDevice, uint32_t *pQueueFamilyPropertyCount,
+                                                         VkQueueFamilyProperties2 *pQueueFamilyProperties) override;
 
     VkResult on_vkCreateBuffer(VkDevice device, const VkBufferCreateInfo *pCreateInfo,
                                const VkAllocationCallbacks *pAllocator, VkBuffer *pBuffer) override;
@@ -197,6 +233,65 @@ public:
                                                  VkAccelerationStructureKHR *pAccelerationStructure) override;
     void     on_vkDestroyAccelerationStructureKHR(VkDevice device, VkAccelerationStructureKHR accelerationStructure,
                                                   const VkAllocationCallbacks *pAllocator) override;
+    VkDeviceAddress on_vkGetBufferDeviceAddress(VkDevice device, const VkBufferDeviceAddressInfo *pInfo) override;
+    VkDeviceAddress on_vkGetBufferDeviceAddressKHR(VkDevice device, const VkBufferDeviceAddressInfo *pInfo) override;
+    void on_vkCmdBuildAccelerationStructuresKHR(VkCommandBuffer commandBuffer, uint32_t infoCount,
+                                                const VkAccelerationStructureBuildGeometryInfoKHR *pInfos,
+                                                const VkAccelerationStructureBuildRangeInfoKHR **ppBuildRangeInfos) override;
+    void on_vkCmdBuildAccelerationStructuresIndirectKHR(VkCommandBuffer commandBuffer, uint32_t infoCount,
+                                                        const VkAccelerationStructureBuildGeometryInfoKHR *pInfos,
+                                                        const VkDeviceAddress *pIndirectDeviceAddresses,
+                                                        const uint32_t *pIndirectStrides,
+                                                        const uint32_t **ppMaxPrimitiveCounts) override;
+    void on_vkCmdTraceRaysKHR(VkCommandBuffer commandBuffer, const VkStridedDeviceAddressRegionKHR *pRaygenShaderBindingTable,
+                              const VkStridedDeviceAddressRegionKHR *pMissShaderBindingTable,
+                              const VkStridedDeviceAddressRegionKHR *pHitShaderBindingTable,
+                              const VkStridedDeviceAddressRegionKHR *pCallableShaderBindingTable, uint32_t width,
+                              uint32_t height, uint32_t depth) override;
+    void on_vkCmdTraceRaysIndirectKHR(VkCommandBuffer commandBuffer,
+                                      const VkStridedDeviceAddressRegionKHR *pRaygenShaderBindingTable,
+                                      const VkStridedDeviceAddressRegionKHR *pMissShaderBindingTable,
+                                      const VkStridedDeviceAddressRegionKHR *pHitShaderBindingTable,
+                                      const VkStridedDeviceAddressRegionKHR *pCallableShaderBindingTable,
+                                      VkDeviceAddress indirectDeviceAddress) override;
+    void on_vkCmdTraceRaysIndirect2KHR(VkCommandBuffer commandBuffer, VkDeviceAddress indirectDeviceAddress) override;
+    void on_vkCmdBindDescriptorBuffersEXT(VkCommandBuffer commandBuffer, uint32_t bufferCount,
+                                          const VkDescriptorBufferBindingInfoEXT *pBindingInfos) override;
+    VkResult on_vkCreateIndirectCommandsLayoutEXT(VkDevice device, const VkIndirectCommandsLayoutCreateInfoEXT *pCreateInfo,
+                                                  const VkAllocationCallbacks *pAllocator,
+                                                  VkIndirectCommandsLayoutEXT *pIndirectCommandsLayout) override;
+    void     on_vkDestroyIndirectCommandsLayoutEXT(VkDevice device, VkIndirectCommandsLayoutEXT indirectCommandsLayout,
+                                                   const VkAllocationCallbacks *pAllocator) override;
+    VkResult on_vkCreateIndirectExecutionSetEXT(VkDevice device, const VkIndirectExecutionSetCreateInfoEXT *pCreateInfo,
+                                                const VkAllocationCallbacks *pAllocator,
+                                                VkIndirectExecutionSetEXT *pIndirectExecutionSet) override;
+    void     on_vkDestroyIndirectExecutionSetEXT(VkDevice device, VkIndirectExecutionSetEXT indirectExecutionSet,
+                                                 const VkAllocationCallbacks *pAllocator) override;
+    void     on_vkUpdateIndirectExecutionSetPipelineEXT(VkDevice device, VkIndirectExecutionSetEXT indirectExecutionSet,
+                                                        uint32_t executionSetWriteCount,
+                                                        const VkWriteIndirectExecutionSetPipelineEXT *pExecutionSetWrites) override;
+    void     on_vkUpdateIndirectExecutionSetShaderEXT(VkDevice device, VkIndirectExecutionSetEXT indirectExecutionSet,
+                                                      uint32_t executionSetWriteCount,
+                                                      const VkWriteIndirectExecutionSetShaderEXT *pExecutionSetWrites) override;
+    void     on_vkCmdPreprocessGeneratedCommandsEXT(VkCommandBuffer commandBuffer,
+                                                    const VkGeneratedCommandsInfoEXT *pGeneratedCommandsInfo,
+                                                    VkCommandBuffer stateCommandBuffer) override;
+    void     on_vkCmdExecuteGeneratedCommandsEXT(VkCommandBuffer commandBuffer, VkBool32 isPreprocessed,
+                                                 const VkGeneratedCommandsInfoEXT *pGeneratedCommandsInfo) override;
+    void on_vkGetDescriptorEXT(VkDevice device, const VkDescriptorGetInfoEXT *pDescriptorInfo, size_t dataSize,
+                               void *pDescriptor) override;
+    VkResult on_vkCreateShadersEXT(VkDevice device, uint32_t createInfoCount, const VkShaderCreateInfoEXT *pCreateInfos,
+                                   const VkAllocationCallbacks *pAllocator, VkShaderEXT *pShaders) override;
+    VkResult on_vkGetShaderBinaryDataEXT(VkDevice device, VkShaderEXT shader, size_t *pDataSize, void *pData) override;
+    void     on_vkDestroyShaderEXT(VkDevice device, VkShaderEXT shader, const VkAllocationCallbacks *pAllocator) override;
+    VkResult on_vkCreatePipelineBinariesKHR(VkDevice device, const VkPipelineBinaryCreateInfoKHR *pCreateInfo,
+                                            const VkAllocationCallbacks *pAllocator,
+                                            VkPipelineBinaryHandlesInfoKHR *pBinaries) override;
+    VkResult on_vkGetPipelineBinaryDataKHR(VkDevice device, const VkPipelineBinaryDataInfoKHR *pInfo,
+                                           VkPipelineBinaryKeyKHR *pPipelineBinaryKey, size_t *pPipelineBinaryDataSize,
+                                           void *pPipelineBinaryData) override;
+    VkResult on_vkGetPipelineKeyKHR(VkDevice device, const VkPipelineCreateInfoKHR *pPipelineCreateInfo,
+                                    VkPipelineBinaryKeyKHR *pPipelineKey) override;
     void     on_vkDestroyEvent(VkDevice device, VkEvent event, const VkAllocationCallbacks *pAllocator) override;
     void     on_vkDestroyDescriptorSetLayout(VkDevice device, VkDescriptorSetLayout descriptorSetLayout, const VkAllocationCallbacks *pAllocator) override;
     void     on_vkDestroyDescriptorPool(VkDevice device, VkDescriptorPool descriptorPool, const VkAllocationCallbacks *pAllocator) override;
@@ -221,6 +316,9 @@ public:
     void     on_vkUpdateDescriptorSets(VkDevice device, uint32_t descriptorWriteCount, const VkWriteDescriptorSet *pDescriptorWrites, uint32_t descriptorCopyCount, const VkCopyDescriptorSet *pDescriptorCopies) override;
     VkResult on_vkQueueSubmit2(VkQueue queue, uint32_t submitCount, const VkSubmitInfo2 *pSubmits, VkFence fence) override;
     VkResult on_vkQueueSubmit2KHR(VkQueue queue, uint32_t submitCount, const VkSubmitInfo2 *pSubmits, VkFence fence) override;
+    void     on_vkGetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice, VkPhysicalDeviceFeatures2 *pFeatures) override;
+    void     on_vkGetPhysicalDeviceFeatures2KHR(VkPhysicalDevice physicalDevice, VkPhysicalDeviceFeatures2 *pFeatures) override;
+    VkResult on_vkQueueBindSparse(VkQueue queue, uint32_t bindInfoCount, const VkBindSparseInfo *pBindInfo, VkFence fence) override;
 
     VkResult on_vkGetMemoryFdKHR(VkDevice device, const VkMemoryGetFdInfoKHR *pGetFdInfo,
                                  int *pFd) override;
@@ -256,9 +354,11 @@ public:
     void               release_object(uint32_t kind, uint64_t wire_handle, uint64_t detail) override;
 
     void use_host_ram(ByteLedger *ledger, uint64_t limit) override;
+    void lease_from(SessionLease *lease) override;
 
     void     shut_down() override;
     void     let_go_of_thread() override;
+    void     leave_device() override;
 
     uint64_t ran() const;
     bool     room_for(uint64_t handles) override;
@@ -295,11 +395,13 @@ private:
 
     [[nodiscard]] Status gather(const VkSubmitInfo *submits, uint32_t count, VulkanSubmitSet &set) const;
     [[nodiscard]] Status gather(const VkSubmitInfo2 *submits, uint32_t count, VulkanSubmitSet &set) const;
+    [[nodiscard]] Status gather(const VkBindSparseInfo *binds, uint32_t count, VulkanSubmitSet &set) const;
     template <typename Submit>
     Hold hold_back(VkQueue queue, uint64_t device, uint64_t mark, const Submit *submits, uint32_t count);
     bool events_unset(uint64_t device, const VulkanSubmitSet &set);
     bool host_settable(const VkDependencyInfo &dependency) const;
     void note_waits(VkCommandBuffer commandBuffer, uint32_t count, const VkEvent *events);
+    void pace_window(uint64_t mark, uint64_t device);
     void wait_events2(VkCommandBuffer commandBuffer, uint32_t count, const VkEvent *events,
                       const VkDependencyInfo *dependencies);
     void forget_waits_under(uint64_t pool);
@@ -321,6 +423,8 @@ private:
     uint64_t device_of_buffer(uint64_t handle) const;
     bool     reusable(VkCommandBuffer commandBuffer);
     bool     queue_admits(uint32_t command_id, const WireReader &payload) const;
+    bool     extension_admits(uint32_t command_id, const WireReader &payload) const;
+    bool     command_refused(uint32_t command_id) const;
     bool     family_flags(VkDevice device, uint32_t family, uint32_t &flags);
     bool     template_named(VkDescriptorUpdateTemplate made, const void *data, uint64_t set, uint64_t device);
     bool     resolved(const VulkanTemplates::Reference &reference, uint64_t &handle) const;
@@ -332,6 +436,8 @@ private:
     [[nodiscard]] bool import_memory(GuestDevice &device, int fd, uint64_t size, uint64_t &wire_handle);
     [[nodiscard]] bool import_payload(int fd, uint64_t into, uint64_t &wire_handle, uint64_t &detail);
     bool               imports_nothing(const void *next) const;
+    bool               exports_memory(const void *next) const;
+    [[nodiscard]] bool place_exported(GuestDevice &device, uint32_t guest_type, uint64_t memory, uint64_t size);
 
     static constexpr uint64_t guest_semaphore = 1u;
 
@@ -348,6 +454,12 @@ private:
     VkPhysicalDevice bound_device(VkInstance instance);
     VkResult         shader_verdict(VkDevice device, const uint32_t *code, size_t bytes);
     VkResult         stage_verdicts(VkDevice device, const VkPipelineShaderStageCreateInfo *stages, uint32_t count);
+    VkResult         pipeline_verdicts(VkDevice device, const VkPipelineCreateInfoKHR *info);
+    void             learn_ray_limits(VkPhysicalDevice physical);
+    bool             refuse_addresses(const char *what);
+    bool             builds_admitted(VkDevice device, uint32_t count, const VkAccelerationStructureBuildGeometryInfoKHR *infos,
+                                     const VkAccelerationStructureBuildRangeInfoKHR *const *ranges,
+                                     const uint32_t *const *maxima);
 
     static constexpr uint32_t lowest_api_version = 1u << 22;
 
@@ -365,6 +477,7 @@ private:
     VkApplicationInfo  application_;
     ObjectPool<GuestDevice> devices_;
     GuestDevice     *adopting_;
+    HostLifecycleGate *lifecycle_;
     VkPhysicalDevice physical_;
     bool             memory_import_;
     HostObjectRegistry<uint64_t, VulkanObjectKind, uint64_t> handles_;
@@ -384,15 +497,22 @@ private:
     bool                 framed_;
     bool                 replaying_;
     VkResult             last_submit_;
+    GpuWorkWindow        work_window_;
     DriverLog           &lines_;
     VulkanFenceWatch     fence_watch_;
     SpirvValidator       spirv_;
+    IssuedBinaries       issued_;
+    VulkanAddresses      addresses_;
+    bool                 ray_limits_learnt_ = false;
+    HostCopyImages       copies_;
     VramBudget           vram_;
     VulkanSubmitProgress progress_;
     VulkanTimelineSubmit timeline_submit_;
     VulkanFenceTargets   fence_targets_;
     mutable VulkanGuard guard_;
+    VulkanRobustAccess robust_;
     uint64_t parent_;
+    uint64_t created_extensions_;
     uint64_t ran_;
     bool     lost_;
     bool     devices_leaked_;

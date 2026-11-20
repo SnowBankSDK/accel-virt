@@ -204,7 +204,7 @@ TEST(cl_icd_root_refusals, the_extensions_the_loader_asks_for_need_room_for_the_
 { ClIcdRig rig;
   CHECK(rig.loader().load() == FakeClLoader::Load::kept);
   cl_platform_id platform = this_platform(rig);
-  static const char expected[] = "cl_khr_d3d10_sharing cl_khr_d3d11_sharing";
+  static const char expected[] = "cl_khr_icd cl_khr_d3d10_sharing cl_khr_d3d11_sharing";
   char        short_of[sizeof expected - 1u];
   std::memset(short_of, 'x', sizeof short_of);
   std::size_t bytes = 0u;
@@ -325,7 +325,7 @@ TEST(cl_icd_root_refusals, a_context_made_on_no_device_or_several_is_refused)
   CHECK_EQ(error, CL_INVALID_VALUE);
   error = CL_SUCCESS;
   CHECK(rig.root().create_context(nullptr, devices, 2u, &error) == nullptr);
-  CHECK_EQ(error, CL_INVALID_DEVICE);
+  CHECK_EQ(error, CL_INVALID_VALUE);
   cl_device_id stranger = reinterpret_cast<cl_device_id>(std::uintptr_t{0x1234});
   error = CL_SUCCESS;
   CHECK(rig.root().create_context(nullptr, &stranger, 1u, &error) == nullptr);

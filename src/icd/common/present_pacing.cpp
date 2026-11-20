@@ -54,14 +54,18 @@ uint32_t PresentPacing::next_admit_milliseconds() const
     return pacer_.constructed() ? pacer_.object().next_blank_milliseconds() : 1u;
 }
 
-void PresentPacing::after_present()
+void PresentPacing::before_show()
 {
-    AV_SCOPE("PresentPacing::after_present");
-    if (!pacer_.constructed()) return;
-    for (uint32_t blank = 0u; blank < blanks_; blank++) {
-        pacer_.object().wait();
+    AV_SCOPE("PresentPacing::before_show");
+    if (blanks_ == 0u || !pacer_.constructed()) return;
+    FramePacer &pacer = pacer_.object();
+    uint32_t    owed = pacer.admits() ? blanks_ - 1u : blanks_;
+    if (owed == 0u) return;
+    for (; owed != 0u; owed--) {
+        pacer.wait();
         waited_++;
     }
+    static_cast<void>(pacer.admits());
 }
 
 uint64_t PresentPacing::waited() const

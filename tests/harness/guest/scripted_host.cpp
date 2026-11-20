@@ -224,6 +224,13 @@ void ScriptedHost::gl_bytes(const std::uint8_t *bytes, std::uint32_t size)
     queue(writer);
 }
 
+void ScriptedHost::gl_raw(const std::uint8_t *bytes, std::uint32_t size)
+{
+    WireWriter writer(answer_, sizeof answer_);
+    writer.write(bytes, size);
+    queue(writer);
+}
+
 void ScriptedHost::gl_integer(std::int32_t value)
 {
     std::uint8_t bytes[sizeof value];
@@ -435,6 +442,11 @@ void ScriptedHost::cl_read(std::int32_t result, const float *values, std::uint32
     writer.write_varint(count * sizeof(float));
     writer.write(values, count * sizeof(float));
     queue(writer);
+}
+
+void ScriptedHost::cl_kernel_undescribed()
+{
+    cl_info(-48, nullptr, 0u);
 }
 
 void ScriptedHost::cl_info(std::int32_t result, const char *value, std::uint32_t size)

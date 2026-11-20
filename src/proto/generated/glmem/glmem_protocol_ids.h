@@ -12,5 +12,6 @@ inline constexpr uint16_t kApi = 3;
 inline constexpr uint32_t kCmd_QueryBufferSlicesGL = 0x00038000;
 inline constexpr uint32_t kCmd_PlaceBufferSlice = 0x00038001;
 inline constexpr uint32_t kCmd_ForgetBufferSlice = 0x00038002;
+inline constexpr uint32_t kCmd_WriteBufferSlice = 0x00038003;
 
 }  // namespace av::glmemproto

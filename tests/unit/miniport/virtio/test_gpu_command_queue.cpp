@@ -391,7 +391,7 @@ TEST(gpu_command_queue_exchange, answers_not_found_when_the_device_never_does)
   CHECK_EQ(fixture.control().in_flight(), 1u);
 
   const std::uint16_t published = fixture.device(0u).available_index();
-  CHECK_STATUS(exchange_move(fixture, written), Status::not_found);
+  CHECK_STATUS(exchange_move(fixture, written), Status::conflict);
   CHECK_EQ(fixture.device(0u).available_index(), published);
   CHECK_EQ(fixture.platform().interrupt_time(), gave_up);
   CHECK_EQ(fixture.platform().logged(), 1u);
@@ -503,6 +503,31 @@ TEST(gpu_command_queue_exchange, carries_a_wide_request)
   CHECK_STATUS(fixture.control().exchange(wide_request_bytes, GpuRequestWriter::max_request_size + 16u, answer,
                                           sizeof answer, written), Status::ok);
   CHECK_EQ(written, GpuRequestWriter::response_size); }
+
+TEST(gpu_command_queue_exchange, is_sent_while_every_slot_of_requests_sent_without_waiting_is_in_flight)
+{ Fixture fixture;
+  CHECK_STATUS(fixture.start(), Status::ok);
+  for (std::uint32_t slot = 0u; slot < GpuCommandQueue::slot_count; slot++)
+      CHECK_STATUS(fixture.control().send(request_bytes, move_request(static_cast<std::int32_t>(slot))), Status::ok);
+  const std::size_t wide = GpuRequestWriter::max_request_size + 16u;
+  CHECK_STATUS(fixture.control().send(wide_request_bytes, wide), Status::ok);
+  CHECK_STATUS(fixture.control().send(request_bytes, move_request(98)), Status::no_space);
+  CHECK_STATUS(fixture.control().send(wide_request_bytes, wide), Status::no_space);
+  Answering host(fixture, ok_nodata, 0u);
+  std::uint8_t  answer[GpuRequestWriter::max_response_size] = {};
+  std::uint32_t written = 0u;
+  CHECK_STATUS(fixture.control().exchange(request_bytes, move_request(7), answer, sizeof answer, written),
+               Status::ok);
+  CHECK_EQ(written, GpuRequestWriter::response_size);
+  CHECK_EQ(host.answered(), GpuCommandQueue::slot_count + 2u);
+  CHECK_EQ(fixture.control().in_flight(), 0u);
+  for (std::uint32_t slot = 0u; slot < GpuCommandQueue::slot_count; slot++)
+      CHECK_STATUS(fixture.control().send(request_bytes, move_request(static_cast<std::int32_t>(slot))), Status::ok);
+  CHECK_STATUS(fixture.control().send(wide_request_bytes, wide), Status::ok);
+  CHECK_STATUS(fixture.control().exchange(wide_request_bytes, wide, answer, sizeof answer, written), Status::ok);
+  CHECK_EQ(written, GpuRequestWriter::response_size);
+  CHECK_EQ(fixture.control().in_flight(), 0u);
+  CHECK(fixture.control().invariants_hold()); }
 
 TEST(gpu_command_queue_exchange, answers_a_queue_with_no_room)
 { Fixture fixture(2u);

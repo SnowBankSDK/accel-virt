@@ -10,6 +10,7 @@
 #include "icd/common/host_channel.hpp"
 #include "icd/common/id_mint.hpp"
 #include "icd/d3d/d3d_command_stream.hpp"
+#include "icd/d3d/d3d_session_lease.hpp"
 #include "um/d3d/d3d11_ddi.hpp"
 #include "um/d3d/session_memory.hpp"
 #include "core/support/object_pool.hpp"
@@ -55,18 +56,28 @@ public:
     uint32_t               next_id();
     d3d::D3dCommandStream &stream();
     ThreadLock            &lock();
+    DriverLog             &log();
+    KmtBlobArena          *arena();
     d3d11::QueryResults   &query_results();
     bool                   has_arena() const;
     uint64_t               arena_bytes() const;
     ClientBlobArena       &blobs();
     KmtTransport          &transport();
+    GuestConnection       &connection();
+    BlockSource           &memory();
+    uint32_t               select_command() const;
+    uint32_t               flush_command() const;
     Kmt                   &kmt() const;
     ObjectPool<d3d11::D3d11Device> &contexts();
     SessionMemory                  &shared_memory();
+    D3dSessionLease                &lease();
     [[nodiscard]] Status            open_memory(uint64_t bytes, HostMemoryRequest memory, HostAllocation *&made);
     [[nodiscard]] Status            adopt_memory(void *address, uint64_t bytes, HostMemoryRequest memory,
                                                  HostAllocation *&made);
+    [[nodiscard]] Status            place_memory(uint64_t bytes, HostMemoryRequest memory, uint64_t named,
+                                                 HostAllocation *&made);
     void                            close_memory(HostAllocation &allocation);
+    ThreadLock                     &placement_lock();
 
 private:
     static constexpr uint8_t  ring_order = 22u;
@@ -78,11 +89,14 @@ private:
     void    close();
 
     DriverLog                      &lines_;
+    BlockSource                    &memory_;
     SrwLock                              lock_;
+    SrwLock                              placement_lock_;
     GuestConnection                      connection_;
     icd::HostChannel                     channel_;
     ObjectStorage<d3d::D3dCommandStream> stream_;
     SessionMemory                        shared_memory_;
+    ObjectStorage<D3dSessionLease>       lease_;
     d3d11::QueryResults                  query_results_;
     ObjectPool<d3d11::D3d11Device>       contexts_;
     uint32_t                             members_;

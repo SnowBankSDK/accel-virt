@@ -165,6 +165,8 @@ void MockSessionBackend::use_host_ram(ByteLedger *ledger, std::uint64_t limit)
     host_ram_limit_ = limit;
 }
 
+void MockSessionBackend::lease_from(SessionLease *) {}
+
 ByteLedger *MockSessionBackend::host_ram_ledger() const { return host_ram_ledger_; }
 
 std::uint64_t MockSessionBackend::host_ram_limit() const { return host_ram_limit_; }
@@ -179,6 +181,10 @@ void MockSessionBackend::shut_down()
 }
 
 void MockSessionBackend::let_go_of_thread() { __atomic_fetch_add(&let_goes_, 1u, __ATOMIC_RELAXED); }
+
+void MockSessionBackend::leave_device() { __atomic_fetch_add(&left_devices_, 1u, __ATOMIC_RELAXED); }
+
+std::uint32_t MockSessionBackend::left_devices() const { return __atomic_load_n(&left_devices_, __ATOMIC_RELAXED); }
 
 std::uint32_t MockSessionBackend::let_goes() const { return __atomic_load_n(&let_goes_, __ATOMIC_RELAXED); }
 

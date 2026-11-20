@@ -74,6 +74,16 @@ const uint64_t *offsets_of(const void *const *offsets, size_t count) noexcept
     return converted;
 }
 
+const int64_t *wide_intptrs(const GLintptr *values, size_t count, uint32_t which) noexcept
+{
+    AV_SCOPE("wide_intptrs");
+    GuestGlContext *const context = current_context();
+    if (context == nullptr) return nullptr;
+    const int64_t *const wide = context->arrays().widened(values, count, which);
+    if (wide == nullptr && values != nullptr) context->record(GuestGlContext::gl_out_of_memory);
+    return wide;
+}
+
 bool pixel_buffer_bound(bool packing) noexcept
 {
     AV_SCOPE("pixel_buffer_bound");
@@ -101,6 +111,32 @@ void flush_persistent_mappings() noexcept
     GuestGlContext *const context = current_context();
     ClientTransport *const wire = context != nullptr ? context->wire() : nullptr;
     if (wire != nullptr) context->mappings().flush_persistent(*wire);
+}
+
+void order_persistent_mappings() noexcept
+{
+    AV_SCOPE("order_persistent_mappings");
+    GuestGlContext *const context = current_context();
+    ClientTransport *const wire = context != nullptr ? context->wire() : nullptr;
+    if (wire != nullptr) context->mappings().order_persistent(*wire);
+}
+
+bool resolve_window_read() noexcept
+{
+    AV_SCOPE("resolve_window_read");
+    GuestGlContext *const context = current_context();
+    ClientTransport *const wire = context != nullptr ? context->wire() : nullptr;
+    return wire != nullptr && context->framebuffers().resolved_read(*wire, context->calls_sent());
+}
+
+void window_read_done() noexcept
+{
+    AV_SCOPE("window_read_done");
+    GuestGlContext *const context = current_context();
+    ClientTransport *const wire = context != nullptr ? context->wire() : nullptr;
+    if (wire == nullptr) return;
+    context->framebuffers().resolved_read_done(*wire);
+    context->framebuffers().resolved_through(context->calls_sent());
 }
 
 void forget_bindings() noexcept
@@ -335,6 +371,62 @@ bool invalidate_named_buffer_range(GLuint buffer, GLintptr offset, GLsizeiptr le
     return gl_icd_binding.bound() && gl_icd_binding.root().manual().invalidate_named_buffer_range(buffer, offset, length);
 }
 
+bool stage_client_arrays(GLint first, GLsizei count) noexcept
+{
+    AV_SCOPE("stage_client_arrays");
+    return !gl_icd_binding.bound() || gl_icd_binding.root().manual().stage_arrays(first, count);
+}
+
+bool stage_client_elements(GLenum type, GLsizei count, const void *&indices, GLint base_vertex) noexcept
+{
+    AV_SCOPE("stage_client_elements");
+    return !gl_icd_binding.bound() || gl_icd_binding.root().manual().stage_elements(type, count, indices, base_vertex);
+}
+
+bool stage_client_multi_arrays(const GLint *first, const GLsizei *count, GLsizei draws) noexcept
+{
+    AV_SCOPE("stage_client_multi_arrays");
+    return !gl_icd_binding.bound() || gl_icd_binding.root().manual().stage_multi_arrays(first, count, draws);
+}
+
+bool stage_client_multi_elements(const GLsizei *count, GLenum type, const void *const *indices, GLsizei draws,
+                                 const GLint *base_vertex, const uint64_t *&host_indices) noexcept
+{
+    AV_SCOPE("stage_client_multi_elements");
+    host_indices = nullptr;
+    return !gl_icd_binding.bound() ||
+           gl_icd_binding.root().manual().stage_multi_elements(count, type, indices, draws, base_vertex, host_indices);
+}
+
+bool refuse_client_arrays() noexcept
+{
+    AV_SCOPE("refuse_client_arrays");
+    return gl_icd_binding.bound() && gl_icd_binding.root().manual().refuse_indirect_draw();
+}
+
+void finish_client_draw() noexcept
+{
+    AV_SCOPE("finish_client_draw");
+    if (gl_icd_binding.bound()) gl_icd_binding.root().manual().finish_client_draw();
+}
+
+void begin_client_primitives() noexcept
+{
+    AV_SCOPE("begin_client_primitives");
+    if (gl_icd_binding.bound()) gl_icd_binding.root().manual().begin_primitives();
+}
+
+bool answer_device_luid(GLenum pname, GLubyte *data) noexcept
+{
+    AV_SCOPE("answer_device_luid");
+    constexpr GLenum gl_device_luid = 0x9599u;
+    const GuestGlContext *const context = current_context();
+    if (pname != gl_device_luid || data == nullptr || context == nullptr || context->adapter_luid() == 0u) return false;
+    const uint64_t luid = context->adapter_luid();
+    __builtin_memcpy(data, &luid, sizeof luid);
+    return true;
+}
+
 bool legacy_calls_live() noexcept
 {
     AV_SCOPE("legacy_calls_live");
@@ -372,14 +464,24 @@ size_t uniform_block_value_count(ClientTransport &, GLuint, GLuint, GLenum pname
     return context != nullptr ? context->queries().block_values(pname) : 0u;
 }
 
-size_t map_value_count(ClientTransport &, GLenum, GLenum) noexcept
-{
-    AV_SCOPE("map_value_count");
-    return 0u;
-}
-size_t map_point_values(GLenum) noexcept
+size_t map_point_values(GLenum target) noexcept
 {
     AV_SCOPE("map_point_values");
+    switch (target) {
+    case 0x0D91: case 0x0DB1: case 0x0D93: case 0x0DB3: return 1u;
+    case 0x0D94: case 0x0DB4: return 2u;
+    case 0x0D92: case 0x0DB2: case 0x0D95: case 0x0DB5: case 0x0D97: case 0x0DB7: return 3u;
+    case 0x0D90: case 0x0DB0: case 0x0D96: case 0x0DB6: case 0x0D98: case 0x0DB8: return 4u;
+    default: return 0u;
+    }
+}
+size_t map_value_count(ClientTransport &, GLenum target, GLenum query) noexcept
+{
+    AV_SCOPE("map_value_count");
+    const bool two_dimensional = target >= 0x0DB0u && target <= 0x0DB8u;
+    if (map_point_values(target) == 0u) return 0u;
+    if (query == 0x0A01u) return two_dimensional ? 2u : 1u;
+    if (query == 0x0A02u) return two_dimensional ? 4u : 2u;
     return 0u;
 }
 size_t pixel_map_size(ClientTransport &, GLenum) noexcept
@@ -387,15 +489,23 @@ size_t pixel_map_size(ClientTransport &, GLenum) noexcept
     AV_SCOPE("pixel_map_size");
     return 0u;
 }
-size_t stipple_bytes(ClientTransport &, bool) noexcept
+size_t stipple_bytes(ClientTransport &, bool packing) noexcept
 {
     AV_SCOPE("stipple_bytes");
-    return 0u;
+    const glicd::ClientArrayState *const state = glicd::arrays();
+    return state != nullptr ? state->bitmap_bytes(32, 32, packing) : 0u;
 }
-size_t bitmap_bytes(ClientTransport &, GLsizei, GLsizei) noexcept
+size_t bitmap_bytes(ClientTransport &, GLsizei width, GLsizei height) noexcept
 {
     AV_SCOPE("bitmap_bytes");
-    return 0u;
+    const glicd::ClientArrayState *const state = glicd::arrays();
+    return state != nullptr ? state->bitmap_bytes(width, height, false) : 0u;
+}
+size_t program_string_bytes(ClientTransport &) noexcept
+{
+    AV_SCOPE("program_string_bytes");
+    glicd::GuestGlContext *const context = glicd::current_context();
+    return context != nullptr ? context->vertex().program_length() : 0u;
 }
 size_t named_program_string_bytes(ClientTransport &, GLuint, GLenum) noexcept
 {

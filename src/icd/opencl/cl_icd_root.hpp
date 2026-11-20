@@ -6,6 +6,7 @@
 #include "icd/common/refused_calls.hpp"
 #include "icd/common/shared_handles.hpp"
 #include "icd/opencl/cl_blocking_wait.hpp"
+#include "icd/opencl/cl_context_group.hpp"
 #include "icd/opencl/cl_destructor_callbacks.hpp"
 #include "icd/opencl/cl_host_numbers.hpp"
 #include "icd/opencl/cl_devices.hpp"
@@ -14,6 +15,11 @@
 #include "icd/opencl/cl_event_watcher.hpp"
 #include "icd/opencl/cl_icd_binding.hpp"
 #include "icd/opencl/cl_info_answers.hpp"
+#include "icd/opencl/cl_image_judge.hpp"
+#include "icd/opencl/cl_kernel_args.hpp"
+#include "icd/opencl/cl_kernel_shape.hpp"
+#include "icd/opencl/cl_replicas.hpp"
+#include "icd/opencl/cl_program_source.hpp"
 #include "icd/opencl/cl_object_table.hpp"
 #include "icd/opencl/cl_pending_reads.hpp"
 #include "icd/opencl/cl_refusal_log.hpp"
@@ -55,6 +61,7 @@ class D3d11Bridge;
 class D3d11Object;
 class D3dAdapterSource;
 class GlShareSource;
+class HeaderSource;
 struct ClIcdRootProbe;
 
 class ClIcdRoot final : public StateReporter, public ClEventOwner {
@@ -64,7 +71,7 @@ public:
 
     ClIcdRoot(BlockSource &memory, Kmt &kmt, ThreadLock &lock, ThreadLock &send_lock,
               ThreadLock &objects_lock, ThreadLock &blocks_lock, KeyedLog &log, icd::ServiceThread &watcher_thread, GlShareSource &gl_share,
-              D3dAdapterSource &d3d_adapters, D3d11Bridge &d3d11,
+              D3dAdapterSource &d3d_adapters, D3d11Bridge &d3d11, HeaderSource &headers,
               ClIcdBinding &binding);
     ~ClIcdRoot();
     ClIcdRoot(const ClIcdRoot &) = delete;
@@ -102,6 +109,8 @@ public:
                                   const uint64_t *properties, cl_int *error);
     cl_mem           create_buffer(cl_context context, cl_mem_flags flags, size_t bytes,
                                    void *host_pointer, const uint64_t *properties, cl_int *error);
+    cl_mem           create_buffer_for_host(cl_context context, cl_mem_flags flags, size_t bytes,
+                                            void *host_pointer, const uint64_t *properties, cl_int *error);
     cl_mem           create_over_application(ClObject &context, ClientTransport &wire, cl_mem_flags flags,
                                              size_t bytes, void *host_pointer, cl_int *error);
     cl_program       create_program(cl_context context, cl_uint count, const char **sources,
@@ -215,12 +224,22 @@ public:
     static constexpr cl_uint d3d10_preferred_devices = 0x4012u;
     static constexpr cl_uint d3d10_all_devices = 0x4013u;
     static constexpr cl_uint d3d10_context_device = 0x4014u;
+    static constexpr cl_uint d3d10_resource_info = 0x4015u;
+    static constexpr cl_uint d3d10_subresource_info = 0x4016u;
     static constexpr cl_int  invalid_d3d10_device = -1002;
+    static constexpr cl_int  invalid_d3d10_resource = -1003;
+    static constexpr cl_command_type acquire_d3d10_command = 0x4017u;
+    static constexpr cl_command_type release_d3d10_command = 0x4018u;
 
     cl_int device_ids_from_d3d10(cl_platform_id platform, cl_uint source, void *object, cl_uint set,
                                  cl_uint num_entries, cl_device_id *devices, cl_uint *num_devices);
-    cl_mem create_from_d3d10(cl_context context, cl_int *error);
-    cl_int enqueue_d3d10_objects(cl_command_queue queue);
+    cl_mem create_from_d3d10_buffer(cl_context context, cl_mem_flags flags, void *resource, cl_int *error);
+    cl_mem create_from_d3d10_texture(cl_context context, cl_mem_flags flags, void *resource, cl_uint subresource,
+                                     D3d11Resource::Kind kind, cl_int *error);
+    cl_int enqueue_acquire_d3d10(cl_command_queue queue, cl_uint count, const cl_mem *objects, cl_uint waits,
+                                 const cl_event *events, cl_event *event);
+    cl_int enqueue_release_d3d10(cl_command_queue queue, cl_uint count, const cl_mem *objects, cl_uint waits,
+                                 const cl_event *events, cl_event *event);
 
     static constexpr cl_uint d3d11_device_source = 0x4019u;
     static constexpr cl_uint d3d11_adapter_source = 0x401Au;
@@ -232,6 +251,8 @@ public:
     static constexpr cl_uint d3d11_prefer_shared = 0x402Du;
     static constexpr cl_int  invalid_d3d11_device = -1006;
     static constexpr cl_int  invalid_d3d11_resource = -1007;
+    static constexpr cl_command_type acquire_d3d11_command = 0x4020u;
+    static constexpr cl_command_type release_d3d11_command = 0x4021u;
 
     cl_int device_ids_from_d3d11(cl_platform_id platform, cl_uint source, void *object, cl_uint set,
                                  cl_uint num_entries, cl_device_id *devices, cl_uint *num_devices);
@@ -359,16 +380,24 @@ private:
     void             learn_devices();
     uint64_t         host_device_of(ClObject &object);
     cl_int           device_ids_for_luid(uint64_t luid, cl_device_id *devices, cl_uint *num_devices);
-    cl_int           d3d11_device_for(const ClPropertyList &list, const ClDevice &on, void *&device);
+    cl_int           d3d11_device_for(const ClPropertyList &list, const ClDevice &on, void *&device, bool &d3d10);
+    cl_mem           create_from_d3d_buffer(cl_context context, cl_mem_flags flags, void *resource, bool d3d10,
+                                            cl_int *error);
+    cl_mem           create_from_d3d_texture(cl_context context, cl_mem_flags flags, void *resource, cl_uint subresource,
+                                             D3d11Resource::Kind kind, bool d3d10, cl_int *error);
+    cl_int           enqueue_acquire_d3d(cl_command_queue queue, cl_uint count, const cl_mem *objects, cl_uint waits,
+                                         const cl_event *events, cl_event *event, bool d3d10);
+    cl_int           enqueue_release_d3d(cl_command_queue queue, cl_uint count, const cl_mem *objects, cl_uint waits,
+                                         const cl_event *events, cl_event *event, bool d3d10);
     cl_int           d3d11_resource(cl_context context, cl_mem_flags flags, void *resource, uint32_t subresource,
                                     D3d11Resource::Kind kind, ClObject *&held, GuestClContext *&owner,
-                                    D3d11Resource &described);
+                                    D3d11Resource &described, bool d3d10);
     cl_mem           d3d11_object(cl_mem made, GuestClContext &owner, void *resource, uint32_t subresource,
                                   const D3d11Resource &described, cl_mem_flags flags, cl_int *error);
     cl_mem           d3d11_twin(ClObject &held, GuestClContext &owner, void *resource, uint32_t subresource,
                                 void *&twin);
     cl_int           d3d11_queue(cl_command_queue queue, cl_uint waits, const cl_event *events, ClObject *&held,
-                                 GuestClContext *&context, ClientTransport *&wire);
+                                 GuestClContext *&context, ClientTransport *&wire, bool d3d10);
     cl_int           d3d11_copy_in(cl_command_queue queue, GuestClContext &context, const cl_mem *objects,
                                    cl_uint count);
     cl_int           d3d11_copy_out(cl_command_queue queue, GuestClContext &context, const cl_mem *objects,
@@ -379,11 +408,46 @@ private:
     void             let_go_of_memory(GuestClContext &context, ClObject &buffer);
     [[nodiscard]] cl_int drain_unless_idle(ClientTransport &wire, ClObject &queue);
     ClObject        *busied(cl_command_queue queue);
-    cl_int           marker_event(ClientTransport &wire, ClObject &queue, cl_event *event);
-    cl_int           wait_list(GuestClContext &context, cl_uint count, const cl_event *events, ClHostNumbers &room,
+    [[nodiscard]] cl_int judge_host_transfer(const ClObject &queue, const ClObject &mem, bool host_reads);
+    [[nodiscard]] cl_int judge_host_map(const ClObject &queue, const ClObject &mem, cl_map_flags map_flags);
+    [[nodiscard]] cl_int judge_buffer_range(const ClObject &mem, uint64_t offset, uint64_t bytes);
+    bool                 same_backing(const ClObject &first, const ClObject &second);
+    bool                 buffer_ranges_overlap(const ClObject &first, uint64_t first_offset, const ClObject &second,
+                                               uint64_t second_offset, uint64_t bytes);
+    [[nodiscard]] cl_int judge_rect_copy(const ClObject &source, const ClObject &target, const size_t *from_origin,
+                                         const size_t *to_origin, const size_t *region, size_t from_row_pitch,
+                                         size_t from_slice_pitch, size_t to_row_pitch, size_t to_slice_pitch);
+    [[nodiscard]] cl_int judge_rect_transfer(const ClObject &mem, const ClBufferRect &rect);
+    [[nodiscard]] cl_int judge_fill(const ClObject &mem, size_t pattern_bytes, size_t offset, size_t bytes);
+    ClKernelShape   *kernel_shape(ClObject &kernel, ClientTransport &wire);
+    [[nodiscard]] cl_int judge_kernel_argument(ClKernelShape &shape, uint32_t index, size_t bytes, const void *value);
+    cl_int           marker_event(ClientTransport &wire, ClObject &queue, cl_event *event, cl_command_type type = 0u);
+    cl_int           wait_list(ClObject &queue, cl_uint count, const cl_event *events, ClHostNumbers &room,
                                uint64_t *&into);
+    void             heal_queue(ClObject &queue);
+    cl_int           group_devices(cl_uint num_devices, const cl_device_id *devices, ClDevice **members);
+    cl_int           open_session(ClDevice &device, uint32_t gl_share, const cl_context_properties *properties,
+                                  const ClContextNotify &notify, GuestClContext *&session, uint64_t &host_context);
+    void             retire_group(ClContextGroup &group);
+    ClContextGroup::Member *member_of(ClObject &context, ClObject *device);
+    uint64_t         copy_queue_of(ClContextGroup::Member &member);
+    uint64_t         done_event_of(ClContextGroup::Member &member);
+    cl_int           bring(ClObject &queue, ClObject *first, ClObject *second = nullptr);
+    cl_int           bring_mem(ClObject &queue, ClObject &mem);
+    cl_int           migrate_mem(ClObject &mem, GuestClContext &source, GuestClContext &target);
+    cl_int           bring_kernel(ClObject &queue, ClObject &kernel);
+    cl_int           foreign_event(ClObject &queue, ClObject &event, uint64_t &handle);
+    using ReplicaMaker = uint64_t (*)(ClientTransport &wire, uint64_t host_context, const void *what, cl_int &error);
+    cl_int           replicate_to_peers(ClObject &object, ClObject::Kind kind, ReplicaMaker make, const void *what);
+    cl_int           replicate_program(ClObject &program, cl_uint count, const char **sources, const size_t *lengths);
+    cl_int           replicate_sampler(ClObject &sampler, const uint64_t *properties);
+    cl_int           replicate_user_event(ClObject &event);
+    void             release_replicas(ClReplicas &replicas, ClObject::Kind kind);
     cl_int           gl_share_for(const ClPropertyList &list, uint32_t &share);
     ClObject        *gl_sharing(cl_context context, cl_int *error);
+    static bool      texture_target(cl_GLenum target);
+    bool             source_needs_unreported_extension(ClObject &program);
+    uint64_t         failed_link_stand_in(ClientTransport &wire, uint64_t context);
     void             note_build_log(ClientTransport &wire, uint64_t program, uint64_t device, const char *options);
     cl_int           program_devices(ClObject &context, cl_uint num_devices, const cl_device_id *device_list);
     cl_int           program_list(ClObject &context, cl_uint count, const cl_program *programs, ClHostNumbers &room,
@@ -417,6 +481,9 @@ private:
     void            *wrap(ClientTransport &transport, ClObject::Kind kind, uint64_t wire,
                           GuestClContext *context,
                           ClObject *parent, cl_int *error);
+    ClImageLimits    image_limits(ClObject &context, bool dimensions, bool pitch);
+    uint64_t         max_allocation(ClObject &context);
+    cl_int           build_with_includes(ClObject &program, ClientTransport &wire, const char *options);
     cl_int           refusal_for(ClObject::Kind kind) const;
     ClObject        *drop_reference(void *object, ClObject &held, ClObject::Kind kind, ClDestructorCallbacks::Due &due);
     cl_uint          reference_count(const ClObject &held);
@@ -426,6 +493,7 @@ private:
     GlShareSource         &gl_share_;
     D3dAdapterSource      &d3d_adapters_;
     D3d11Bridge           &d3d11_;
+    HeaderSource          &headers_;
     ClIcdBinding          &binding_;
     ClDispatchTable        dispatch_;
     ClPlatform             platform_;
@@ -434,6 +502,11 @@ private:
     ClDevices              devices_;
     icd::SharedHandles     shared_handles_;
     ObjectPool<GuestClContext> contexts_;
+    ObjectPool<ClKernelShape>  shapes_;
+    ObjectPool<ClProgramSource> sources_;
+    ObjectPool<ClContextGroup>  groups_;
+    ObjectPool<ClReplicas>      replicas_;
+    ObjectPool<ClKernelArgs>    kernel_args_;
     BlockSource           &memory_;
     ThreadLock            &send_lock_;
     ThreadLock            &blocks_lock_;

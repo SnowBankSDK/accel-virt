@@ -14,6 +14,8 @@ public:
     void raise() override;
     bool wait(std::uint32_t milliseconds) override;
 
+    void          on_wait(void (*waited)(void *context), void *context);
+
     std::uint32_t raises() const;
     std::uint32_t waits() const;
     std::uint32_t last_wait() const;
@@ -23,6 +25,8 @@ private:
     std::uint32_t waits_;
     std::uint32_t last_wait_;
     bool          pending_;
+    void        (*waited_)(void *context);
+    void         *context_;
 };
 
 }

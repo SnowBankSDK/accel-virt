@@ -368,6 +368,10 @@ public:
         if (pToolCount != nullptr) { *pToolCount = 0; }
         return VK_SUCCESS;
     }
+    VkResult on_vkGetPipelineCacheData(VkDevice, VkPipelineCache, size_t* pDataSize, void*) override {
+        if (pDataSize != nullptr) { *pDataSize = 0; }
+        return VK_SUCCESS;
+    }
     void on_vkGetPrivateData(VkDevice, VkObjectType, uint64_t, VkPrivateDataSlot, uint64_t*) override {}
     VkResult on_vkGetQueryPoolResults(VkDevice, VkQueryPool, uint32_t, uint32_t, size_t, void*, VkDeviceSize, VkQueryResultFlags) override {
         return VK_SUCCESS;
@@ -505,6 +509,8 @@ public:
     VkResult on_vkBuildAccelerationStructuresKHR(VkDevice, VkDeferredOperationKHR, uint32_t, const VkAccelerationStructureBuildGeometryInfoKHR*, const VkAccelerationStructureBuildRangeInfoKHR**) override {
         return VK_SUCCESS;
     }
+    void on_vkCmdBindDescriptorBufferEmbeddedSamplersEXT(VkCommandBuffer, VkPipelineBindPoint, VkPipelineLayout, uint32_t) override {}
+    void on_vkCmdBindDescriptorBuffersEXT(VkCommandBuffer, uint32_t, const VkDescriptorBufferBindingInfoEXT*) override {}
     void on_vkCmdBindShadersEXT(VkCommandBuffer, uint32_t, const VkShaderStageFlagBits*, const VkShaderEXT*) override {}
     void on_vkCmdBindVertexBuffers2EXT(VkCommandBuffer, uint32_t, uint32_t, const VkBuffer*, const VkDeviceSize*, const VkDeviceSize*, const VkDeviceSize*) override {}
     void on_vkCmdBuildAccelerationStructuresIndirectKHR(VkCommandBuffer, uint32_t, const VkAccelerationStructureBuildGeometryInfoKHR*, const VkDeviceAddress*, const uint32_t*, const uint32_t**) override {}
@@ -538,6 +544,7 @@ public:
     void on_vkCmdSetDepthCompareOpEXT(VkCommandBuffer, VkCompareOp) override {}
     void on_vkCmdSetDepthTestEnableEXT(VkCommandBuffer, VkBool32) override {}
     void on_vkCmdSetDepthWriteEnableEXT(VkCommandBuffer, VkBool32) override {}
+    void on_vkCmdSetDescriptorBufferOffsetsEXT(VkCommandBuffer, VkPipelineBindPoint, VkPipelineLayout, uint32_t, uint32_t, const uint32_t*, const VkDeviceSize*) override {}
     void on_vkCmdSetExtraPrimitiveOverestimationSizeEXT(VkCommandBuffer, float) override {}
     void on_vkCmdSetFragmentShadingRateKHR(VkCommandBuffer, const VkExtent2D*, const VkFragmentShadingRateCombinerOpKHR*) override {}
     void on_vkCmdSetFrontFaceEXT(VkCommandBuffer, VkFrontFace) override {}
@@ -611,6 +618,9 @@ public:
     VkResult on_vkGetDeferredOperationResultKHR(VkDevice, VkDeferredOperationKHR) override {
         return VK_SUCCESS;
     }
+    void on_vkGetDescriptorEXT(VkDevice, const VkDescriptorGetInfoEXT*, size_t, void*) override {}
+    void on_vkGetDescriptorSetLayoutBindingOffsetEXT(VkDevice, VkDescriptorSetLayout, uint32_t, VkDeviceSize*) override {}
+    void on_vkGetDescriptorSetLayoutSizeEXT(VkDevice, VkDescriptorSetLayout, VkDeviceSize*) override {}
     void on_vkGetDeviceAccelerationStructureCompatibilityKHR(VkDevice, const VkAccelerationStructureVersionInfoKHR*, VkAccelerationStructureCompatibilityKHR*) override {}
     void on_vkGetImageSubresourceLayout2EXT(VkDevice, VkImage, const VkImageSubresource2*, VkSubresourceLayout2*) override {}
     VkResult on_vkGetPhysicalDeviceFragmentShadingRatesKHR(VkPhysicalDevice, uint32_t* pFragmentShadingRateCount, VkPhysicalDeviceFragmentShadingRateKHR*) override {
@@ -624,6 +634,10 @@ public:
         return VK_SUCCESS;
     }
     VkDeviceSize on_vkGetRayTracingShaderGroupStackSizeKHR(VkDevice, VkPipeline, uint32_t, VkShaderGroupShaderKHR) override {
+        return VK_SUCCESS;
+    }
+    VkResult on_vkGetShaderBinaryDataEXT(VkDevice, VkShaderEXT, size_t* pDataSize, void*) override {
+        if (pDataSize != nullptr) { *pDataSize = 0; }
         return VK_SUCCESS;
     }
     VkResult on_vkTransitionImageLayoutEXT(VkDevice, uint32_t, const VkHostImageLayoutTransitionInfo*) override {
@@ -648,6 +662,10 @@ public:
     void on_vkDestroyPipelineBinaryKHR(VkDevice, VkPipelineBinaryKHR, const VkAllocationCallbacks*) override {}
     void on_vkGetDeviceImageSubresourceLayoutKHR(VkDevice, const VkDeviceImageSubresourceInfo*, VkSubresourceLayout2*) override {}
     void on_vkGetImageSubresourceLayout2KHR(VkDevice, VkImage, const VkImageSubresource2*, VkSubresourceLayout2*) override {}
+    VkResult on_vkGetPipelineBinaryDataKHR(VkDevice, const VkPipelineBinaryDataInfoKHR*, VkPipelineBinaryKeyKHR*, size_t* pPipelineBinaryDataSize, void*) override {
+        if (pPipelineBinaryDataSize != nullptr) { *pPipelineBinaryDataSize = 0; }
+        return VK_SUCCESS;
+    }
     VkResult on_vkGetPipelineKeyKHR(VkDevice, const VkPipelineCreateInfoKHR*, VkPipelineBinaryKeyKHR*) override {
         return VK_SUCCESS;
     }
@@ -684,6 +702,7 @@ public:
     void on_vkCmdBindDescriptorBufferEmbeddedSamplers2EXT(VkCommandBuffer, const VkBindDescriptorBufferEmbeddedSamplersInfoEXT*) override {}
     void on_vkCmdBindDescriptorSets2KHR(VkCommandBuffer, const VkBindDescriptorSetsInfo*) override {}
     void on_vkCmdDrawMultiEXT(VkCommandBuffer, uint32_t, const VkMultiDrawInfoEXT*, uint32_t, uint32_t, uint32_t) override {}
+    void on_vkCmdDrawMultiIndexedEXT(VkCommandBuffer, uint32_t, const VkMultiDrawIndexedInfoEXT*, uint32_t, uint32_t, uint32_t, const int32_t*) override {}
     void on_vkCmdPushConstants2KHR(VkCommandBuffer, const VkPushConstantsInfo*) override {}
     void on_vkCmdPushDescriptorSet2KHR(VkCommandBuffer, const VkPushDescriptorSetInfo*) override {}
     void on_vkCmdPushDescriptorSetWithTemplate2KHR(VkCommandBuffer, const VkPushDescriptorSetWithTemplateInfo*) override {}
@@ -707,6 +726,19 @@ public:
     void on_vkGetPhysicalDeviceMultisamplePropertiesEXT(VkPhysicalDevice, VkSampleCountFlagBits, VkMultisamplePropertiesEXT*) override {}
     void on_vkGetShaderModuleCreateInfoIdentifierEXT(VkDevice, const VkShaderModuleCreateInfo*, VkShaderModuleIdentifierEXT*) override {}
     void on_vkGetShaderModuleIdentifierEXT(VkDevice, VkShaderModule, VkShaderModuleIdentifierEXT*) override {}
+    void on_vkCmdExecuteGeneratedCommandsEXT(VkCommandBuffer, VkBool32, const VkGeneratedCommandsInfoEXT*) override {}
+    void on_vkCmdPreprocessGeneratedCommandsEXT(VkCommandBuffer, const VkGeneratedCommandsInfoEXT*, VkCommandBuffer) override {}
+    VkResult on_vkCreateIndirectCommandsLayoutEXT(VkDevice, const VkIndirectCommandsLayoutCreateInfoEXT*, const VkAllocationCallbacks*, VkIndirectCommandsLayoutEXT*) override {
+        return VK_SUCCESS;
+    }
+    VkResult on_vkCreateIndirectExecutionSetEXT(VkDevice, const VkIndirectExecutionSetCreateInfoEXT*, const VkAllocationCallbacks*, VkIndirectExecutionSetEXT*) override {
+        return VK_SUCCESS;
+    }
+    void on_vkDestroyIndirectCommandsLayoutEXT(VkDevice, VkIndirectCommandsLayoutEXT, const VkAllocationCallbacks*) override {}
+    void on_vkDestroyIndirectExecutionSetEXT(VkDevice, VkIndirectExecutionSetEXT, const VkAllocationCallbacks*) override {}
+    void on_vkGetGeneratedCommandsMemoryRequirementsEXT(VkDevice, const VkGeneratedCommandsMemoryRequirementsInfoEXT*, VkMemoryRequirements2*) override {}
+    void on_vkUpdateIndirectExecutionSetPipelineEXT(VkDevice, VkIndirectExecutionSetEXT, uint32_t, const VkWriteIndirectExecutionSetPipelineEXT*) override {}
+    void on_vkUpdateIndirectExecutionSetShaderEXT(VkDevice, VkIndirectExecutionSetEXT, uint32_t, const VkWriteIndirectExecutionSetShaderEXT*) override {}
 };
 
 }  // namespace av::vkproto

@@ -29,6 +29,7 @@ public:
 
 private:
     bool     moved();
+    bool     faulted_by_host() const;
     uint64_t word(uint32_t offset) const;
 
     Kmt                 &kmt_;

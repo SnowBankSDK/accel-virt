@@ -387,3 +387,33 @@ TEST(d3d_object_table_invariants, catch_a_view_list_or_an_entry_out_of_step)
       if (knob == 4) D3dObjectTableProbe::drop_object(table, 1u);
       CHECK(!table.invariants_hold());
   } }
+
+TEST(d3d_object_table_missed, names_the_id_the_last_failed_lookup_asked_for)
+{ MockPlatform   platform;
+  D3dObjectTable table(platform);
+  Counted texture;
+  CHECK_STATUS(table.insert(40u, D3dObjectKind::resource, &texture), Status::ok);
+  CHECK_EQ(table.missed(), 0u);
+  CHECK(table.find(40u, D3dObjectKind::resource) == &texture);
+  CHECK_EQ(table.missed(), 0u);
+  CHECK(table.find(41u, D3dObjectKind::resource) == nullptr);
+  CHECK_EQ(table.missed(), 41u);
+  D3dObjectKind kind = D3dObjectKind::none;
+  CHECK(table.find_any(42u, kind) == nullptr);
+  CHECK_EQ(table.missed(), 42u);
+  CHECK(table.find_view(43u) == nullptr);
+  CHECK_EQ(table.missed(), 43u);
+  CHECK(table.find(40u, D3dObjectKind::resource) == &texture);
+  CHECK_EQ(table.missed(), 43u);
+  table.release_all(); }
+
+TEST(d3d_object_table_forget_miss, leaves_no_id_named_until_a_lookup_fails_again)
+{ MockPlatform   platform;
+  D3dObjectTable table(platform);
+  CHECK(table.find(7u, D3dObjectKind::resource) == nullptr);
+  CHECK_EQ(table.missed(), 7u);
+  table.forget_miss();
+  CHECK_EQ(table.missed(), 0u);
+  CHECK(table.find(8u, D3dObjectKind::query) == nullptr);
+  CHECK_EQ(table.missed(), 8u);
+  table.release_all(); }
