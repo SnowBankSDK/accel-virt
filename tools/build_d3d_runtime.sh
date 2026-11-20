@@ -48,11 +48,7 @@ apply_series() {
     for patch in "${patches[@]}"; do git -C "$dir" apply "$patch"; done
 }
 
-apply_series "$ROOT/third_party/dxvk" "$ROOT"/tools/dxvk-patches/*.patch
-apply_series "$ROOT/third_party/dxvk/subprojects/dxbc-spirv" "$ROOT"/tools/dxvk-patches/dxbc-spirv/*.patch
-
-apply_series "$ROOT/third_party/vkd3d-proton" "$ROOT"/tools/vkd3d-proton-patches/*.patch
-
+apply_series "$ROOT/third_party/dxvk/subprojects/dxbc-spirv" "$ROOT"/tools/dxbc-spirv-patches/*.patch
 apply_series "$ROOT/third_party/vkd3d-proton/subprojects/dxil-spirv" "$ROOT"/tools/dxil-spirv-patches/*.patch
 
 build dxvk "$ROOT/third_party/dxvk" -Denable_d3d8=false -Denable_d3d9=true -Denable_d3d10=false

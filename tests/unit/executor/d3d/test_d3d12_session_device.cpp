@@ -121,7 +121,7 @@ bool imports(av::D3d12HostDevice &device, av::D3dLoopback &wire)
         exported ? device.import_dmabuf_heap(held->pointer(), shared.fd(), held->size()) : nullptr;
     wire.close_memory(memory);
     if (imported == nullptr) {
-        std::fprintf(stderr, "this vkd3d-proton opens no heap over a dma-buf (tools/vkd3d-proton-patches): nothing judged\n");
+        std::fprintf(stderr, "this vkd3d-proton opens no heap over a dma-buf (third_party/vkd3d-proton is not accel-virt's fork): nothing judged\n");
         return false;
     }
     imported->Release();

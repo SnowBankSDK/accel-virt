@@ -62,7 +62,7 @@ they would on a physical card, and every command runs on the Linux host's own GP
 |---|---|---|---|
 | **Desktop** (DWM, GDI) | `avumd.dll` (Direct3D 11) | DXVK | composited on the host GPU, scanned out zero-copy, 60 fps |
 | **Direct3D 11** | `d3d11.dll` → `avumd.dll` (`OpenAdapter10_2`, the D3D11 DDI at WDDM 3.2) | DXVK's `d3d11`, native | feature levels up to 12_1 |
-| **Direct3D 12** | `D3D12Core.dll` → `avumd.dll` (`OpenAdapter12`) | vkd3d-proton, native and patched | what vkd3d-proton offers on the host GPU |
+| **Direct3D 12** | `D3D12Core.dll` → `avumd.dll` (`OpenAdapter12`) | vkd3d-proton, native, from accel-virt's fork | what vkd3d-proton offers on the host GPU |
 | **Vulkan** | Khronos loader → `avvk.dll` | the host's Vulkan driver | Vulkan 1.3, with the host device's extensions under the ICD's extension policy |
 | **OpenGL** | `opengl32.dll` → `avgl.dll` | EGL + the host's GL | up to 4.6, core and compatibility profiles, WGL pixel formats and sharing |
 | **OpenCL** | Khronos loader → `avcl.dll` | the host's OpenCL | OpenCL 3.0, including SVM and `cl_khr_gl_sharing` |
@@ -370,7 +370,7 @@ cmake --build build
 cmake -S . -B build-qemu -G Ninja -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Release -DAV_QEMU=ON
 cmake --build build-qemu
 
-# 3. The host's Direct3D: DXVK and vkd3d-proton, with tools/*-patches applied
+# 3. The host's Direct3D: DXVK and vkd3d-proton from accel-virt's forks in third_party/
 tools/build_d3d_runtime.sh
 ```
 
@@ -930,9 +930,9 @@ tools/                        gates, fetches, generators, reports, profilers
   host/                         list_gpus.py, device captures
   mcp/                          av_inspect.py
   re/                           symbol and binary fetching for reverse engineering
-  dxvk-patches/  vkd3d-proton-patches/   what the host's Direct3D is patched with
+  dxbc-spirv-patches/  dxil-spirv-patches/   the shader compilers' changes until upstream has them
 cmake/                        the Windows kernel and user-mode cross toolchains (clang-cl, lld-link; user mode x64 or x86)
-third_party/                  fetched and pinned: windows-kit, khronos, qemu, dxvk, vkd3d-proton, loaders, CTS
+third_party/                  fetched and pinned: windows-kit, khronos, qemu, dxvk and vkd3d-proton (accel-virt's forks), loaders, CTS
 docs/images/                  the diagrams in this README; architecture-*.svg come from tools/readme_diagram.py
 ```
 

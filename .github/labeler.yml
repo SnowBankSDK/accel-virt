@@ -15,7 +15,7 @@
       - any-glob-to-any-file: ["src/proto/**", "tools/codegen/**"]
 "api: direct3d":
   - changed-files:
-      - any-glob-to-any-file: ["src/icd/d3d/**", "src/um/d3d/**", "src/executor/d3d/**", "tools/dxvk-patches/**", "tools/vkd3d-proton-patches/**"]
+      - any-glob-to-any-file: ["src/icd/d3d/**", "src/um/d3d/**", "src/executor/d3d/**", "third_party/dxvk", "third_party/vkd3d-proton", "tools/dxbc-spirv-patches/**", "tools/dxil-spirv-patches/**"]
 "api: vulkan":
   - changed-files:
       - any-glob-to-any-file: ["src/icd/vulkan/**", "src/um/vulkan/**", "src/executor/vulkan/**"]
