@@ -934,8 +934,9 @@ TEST(vulkan_backend_device, buffers_and_images_are_made_for_host_allocation_wher
       vkproto::av_vkGetPhysicalDeviceMemoryProperties(wire, translation, as_handle<VkPhysicalDevice>(made.physical()), &guest);
       for (std::uint32_t type = 0u; type < guest.memoryTypeCount; type++)
           if ((guest.memoryTypes[type].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) == 0u) native |= 1u << type;
-      CHECK(imports || (driver & native) != 0u);
-      CHECK_EQ(wire_image_types(wire, made.device(), image), imports ? driver : driver & native);
+      CHECK(imports || (driver & host_bits_of(made.probe().types(), native)) != 0u);
+      CHECK_EQ(host_bits_of(made.probe().types(), wire_image_types(wire, made.device(), image)),
+               imports ? driver : driver & host_bits_of(made.probe().types(), native));
   }
 }
 

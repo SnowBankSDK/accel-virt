@@ -3,6 +3,7 @@
 #include "executor/host_memory_source.hpp"
 #include "executor/shim/loader_host_apis.hpp"
 #include "executor/source_memory.hpp"
+#include "executor/vulkan/guest_memory_types.hpp"
 #include "harness/framework/test_registry.hpp"
 #include "harness/icd/recording_log.hpp"
 #include "proto/resources/host_memory_request.hpp"
@@ -203,43 +204,46 @@ TEST(compositor_memory_device, upload_and_readback_import_back_as_memory_a_cpu_m
       }
   } }
 
-TEST(compositor_memory_device, every_mappable_type_is_coherent_and_answers_its_own_caching)
+TEST(compositor_memory_device, every_guest_type_the_guest_maps_is_shared_memory_of_its_host_type_and_the_rest_are_refused)
 { av::LoaderHostApis &host = opened_host();
   for (std::uint32_t index = 0u; index < host.gpu_count(); index++) {
       HostMemorySource *const source = host.memory_source(index);
       if (source == nullptr) continue;
-      const std::uint32_t mappable = source->mappable_types();
-      CHECK(mappable != 0u);
-      for (std::uint32_t type = 0u; type < HostMemoryRequest::memory_types; type++) {
-          if ((mappable >> type & 1u) == 0u) continue;
+      CHECK(source->mappable_types() != 0u);
+      av::GuestMemoryTypes types;
+      CHECK(source->vulkan_types(types));
+      VkPhysicalDeviceMemoryProperties shown = {};
+      types.properties(shown);
+      for (std::uint32_t guest = 0u; guest < shown.memoryTypeCount; guest++) {
+          const std::uint32_t key = 100u + guest;
+          AvHostMemory        answered = {-1, 0u, 0u};
+          const Status        status = source->allocate(domain, key, bytes,
+                                                        HostMemoryRequest(HostMemoryRequest::Kind::vulkan, guest), answered);
+          if ((shown.memoryTypes[guest].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) == 0u) {
+              CHECK_STATUS(status, Status::invalid_parameter);
+              CHECK_EQ(answered.fd, -1);
+              continue;
+          }
+          CHECK_STATUS(status, Status::ok);
+          const std::uint32_t type = types.host_type(guest);
           const std::uint32_t flags = driver_flags(host, index, type);
+          CHECK((source->mappable_types() >> type & 1u) != 0u);
           CHECK((flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0u);
           CHECK((flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0u);
-          AvHostMemory answered = {-1, 0u, 0u};
-          CHECK_STATUS(source->allocate(domain, 100u + type, bytes,
-                                        HostMemoryRequest(HostMemoryRequest::Kind::vulkan, type), answered),
-                       Status::ok);
           const std::uint32_t caching = (flags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) != 0u ? AV_MEMORY_WRITE_BACK
                                                                                          : AV_MEMORY_WRITE_COMBINED;
           CHECK_EQ(answered.caching, caching);
-          SourceMemory *const held = source->acquire(domain, 100u + type);
+          SourceMemory *const held = source->acquire(domain, key);
           CHECK(held != nullptr);
           if (held != nullptr) {
               CHECK_EQ(held->memory_type(), type);
               source->release(*held);
           }
-          judge_shared(*source, 100u + type, answered);
-          source->free(domain, 100u + type);
+          judge_shared(*source, key, answered);
+          source->free(domain, key);
           ::close(answered.fd);
       }
-      for (std::uint32_t type = 0u; type < HostMemoryRequest::memory_types; type++) {
-          if ((mappable >> type & 1u) != 0u) continue;
-          AvHostMemory answered = {-1, 0u, 0u};
-          CHECK_STATUS(source->allocate(domain, 200u, bytes, HostMemoryRequest(HostMemoryRequest::Kind::vulkan, type),
-                                        answered),
-                       Status::invalid_parameter);
-          CHECK_EQ(answered.fd, -1);
-      }
+      CHECK_EQ(source->live(), 0u);
       CHECK(source->invariants_hold());
   } }
 

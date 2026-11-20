@@ -19,6 +19,7 @@ public:
     bool               loaded() const;
     bool               interoperates() const;
     bool               imports_dma_bufs() const;
+    bool               integrated() const;
     VkDevice           device() const;
     [[nodiscard]] bool lose() const;
 
@@ -80,6 +81,7 @@ private:
     VkPhysicalDevice                 physical_;
     VkDevice                         device_;
     VkPhysicalDeviceMemoryProperties memory_;
+    bool                             integrated_;
     PFN_vkGetPhysicalDeviceImageFormatProperties2 format_properties_;
     PFN_vkGetPhysicalDeviceFormatProperties2      format_features_;
     PFN_vkGetImageDrmFormatModifierPropertiesEXT  image_modifier_;

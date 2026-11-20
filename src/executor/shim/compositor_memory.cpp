@@ -68,6 +68,19 @@ bool CompositorMemory::imports_alike(uint32_t type)
     return false;
 }
 
+bool CompositorMemory::maps_coherently(uint32_t type)
+{
+    AV_SCOPE("CompositorMemory::maps_coherently");
+    const VulkanDeviceTable         &table = device_.table();
+    VkPhysicalDeviceMemoryProperties memory = {};
+    table.memory_properties(memory);
+    if (type >= memory.memoryTypeCount) return false;
+    const VkMemoryType kind = memory.memoryTypes[type];
+    if ((kind.propertyFlags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) != 0u) return true;
+    if (table.integrated() || kind.heapIndex >= memory.memoryHeapCount) return false;
+    return (memory.memoryHeaps[kind.heapIndex].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0u;
+}
+
 Status CompositorMemory::allocate(uint32_t type, uint64_t size, ExportedMemory &memory)
 {
     AV_SCOPE("CompositorMemory::allocate");

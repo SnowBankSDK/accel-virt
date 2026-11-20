@@ -15,7 +15,7 @@ constexpr uint64_t drm_format_mod_invalid = 0x00ffffffffffffffull;
 }
 
 VulkanDeviceTable::VulkanDeviceTable()
-    : physical_(VK_NULL_HANDLE), device_(VK_NULL_HANDLE), memory_{}, format_properties_(nullptr),
+    : physical_(VK_NULL_HANDLE), device_(VK_NULL_HANDLE), memory_{}, integrated_(false), format_properties_(nullptr),
       format_features_(nullptr), image_modifier_(nullptr),
       create_image_(nullptr), destroy_image_(nullptr), requirements_(nullptr), allocate_(nullptr), free_(nullptr), map_(nullptr),
       bind_(nullptr), layout_(nullptr), memory_fd_(nullptr), create_semaphore_(nullptr), destroy_semaphore_(nullptr),
@@ -37,8 +37,13 @@ bool VulkanDeviceTable::load(VkInstance instance, VkPhysicalDevice physical, VkD
         vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceImageFormatProperties2"));
     format_features_ = reinterpret_cast<PFN_vkGetPhysicalDeviceFormatProperties2>(
         vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceFormatProperties2"));
+    auto device_properties = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(
+        vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceProperties"));
     if (properties == nullptr) return false;
     properties(physical, &memory_);
+    VkPhysicalDeviceProperties described = {};
+    if (device_properties != nullptr) device_properties(physical, &described);
+    integrated_ = described.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU;
     const auto entry = [device](const char *name) { return vkGetDeviceProcAddr(device, name); };
     create_image_ = reinterpret_cast<PFN_vkCreateImage>(entry("vkCreateImage"));
     destroy_image_ = reinterpret_cast<PFN_vkDestroyImage>(entry("vkDestroyImage"));
@@ -84,6 +89,12 @@ bool VulkanDeviceTable::interoperates() const
     AV_SCOPE("VulkanDeviceTable::interoperates");
     return loaded() && memory_fd_ != nullptr && import_semaphore_ != nullptr && semaphore_fd_ != nullptr &&
            wait_semaphores_ != nullptr;
+}
+
+bool VulkanDeviceTable::integrated() const
+{
+    AV_SCOPE("VulkanDeviceTable::integrated");
+    return loaded() && integrated_;
 }
 
 bool VulkanDeviceTable::imports_dma_bufs() const

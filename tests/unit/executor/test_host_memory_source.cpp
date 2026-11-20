@@ -181,6 +181,26 @@ TEST(host_memory_source_types, never_asks_past_the_thirty_two_a_request_can_name
   CHECK_EQ(rig.source.mappable_types(), 0x55555555u);
   CHECK_EQ(rig.exporter.misuses(), 0u); }
 
+TEST(host_memory_source_types, memory_a_cached_mapping_would_not_see_coherently_is_never_mapped_and_uploads_take_cached_memory)
+{ Rig rig;
+  rig.discrete();
+  rig.exporter.map_incoherently(1u);
+  rig.exporter.map_incoherently(3u);
+  CHECK_EQ(rig.source.mappable_types(), 0x4u);
+  CHECK(rig.source.imports_heaps());
+  CHECK_EQ(rig.exporter.export_questions(1u), 0u);
+  CHECK_EQ(rig.exporter.export_questions(3u), 0u);
+  AvHostMemory memory = {};
+  CHECK_STATUS(rig.allocate(1u, upload, memory), Status::ok);
+  CHECK_EQ(rig.exporter.last_type(), 2u);
+  CHECK_EQ(memory.caching, std::uint32_t{AV_MEMORY_WRITE_BACK});
+  CHECK_EQ(rig.guest_uncached(), av::GuestMemoryTypes::no_type);
+  CHECK_EQ(rig.guest_bar(), av::GuestMemoryTypes::no_type);
+  CHECK(rig.guest_cached() != av::GuestMemoryTypes::no_type);
+  CHECK_EQ(rig.exporter.misuses(), 0u);
+  CHECK(rig.source.invariants_hold());
+  rig.source.free(domain, 1u); }
+
 TEST(host_memory_source_choice, upload_prefers_the_bar_written_combined)
 { Rig rig;
   rig.discrete();

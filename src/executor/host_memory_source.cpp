@@ -40,7 +40,7 @@ void HostMemorySource::learn()
         asked_ |= bit;
         const VkMemoryPropertyFlags flags = host_.memoryTypes[type].propertyFlags;
         constexpr VkMemoryPropertyFlags shared = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-        if ((flags & shared) != shared || !exporter_.exportable(type)) continue;
+        if ((flags & shared) != shared || !exporter_.maps_coherently(type) || !exporter_.exportable(type)) continue;
         mappable_ |= bit;
         if (exporter_.imports_host_visible(type)) visible_ |= bit;
         if (exporter_.imports_alike(type)) alike_ |= bit;
