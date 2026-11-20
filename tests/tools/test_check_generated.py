@@ -69,6 +69,19 @@ class CheckGenerated(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("extra.cpp", result.stdout + result.stderr)
 
+    def test_write_regenerates_an_edited_tree_so_it_matches_again(self):
+        self.assertEqual(self.generate().returncode, 0)
+        (self.out / "toy.h").write_text("// someone typed this\n")
+        written = self.check("--write")
+        self.assertEqual(written.returncode, 0, written.stdout + written.stderr)
+        self.assertEqual(self.check().returncode, 0)
+
+    def test_only_limits_the_plan_to_the_named_apis(self):
+        self.assertEqual(self.generate().returncode, 0)
+        (self.out / "toy.h").write_text("// someone typed this\n")
+        self.assertEqual(self.check("--only", "other").returncode, 0)
+        self.assertNotEqual(self.check("--only", "toy").returncode, 0)
+
     def test_without_the_registries_it_skips_and_says_why(self):
         self.assertEqual(self.generate().returncode, 0)
         (self.registries / "toy.xml").unlink()

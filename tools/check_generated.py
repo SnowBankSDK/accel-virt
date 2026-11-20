@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The committed generated sources are what the generators write."""
+"""The committed generated sources are what the generators write, or, with --write, regenerate them."""
 import argparse
 import pathlib
 import subprocess
@@ -23,21 +23,24 @@ def plan_from(path):
     return trees
 
 
-def command_for(generator, registry, out, extra):
+def command_for(generator, registry, out, extra, write=False):
     if generator.endswith(".py"):
         argv = [sys.executable, str(ROOT / generator)]
     else:
         argv = [sys.executable, "-m", generator]
-    argv += ["--xml", str(ROOT / registry), "--out", str(ROOT / out), "--check"]
+    argv += ["--xml", str(ROOT / registry), "--out", str(ROOT / out)] + ([] if write else ["--check"])
     return argv + [argument.replace("@", str(ROOT) + "/") for argument in extra]
 
 
-def check(api, generator, registry, out, extra):
+def check(api, generator, registry, out, extra, write=False):
     environment = {"PYTHONPATH": str(ROOT / "tools" / "codegen")}
-    result = subprocess.run(command_for(generator, registry, out, extra), capture_output=True,
+    result = subprocess.run(command_for(generator, registry, out, extra, write), capture_output=True,
                             text=True, cwd=str(ROOT), env={**_environ(), **environment})
     if result.returncode == 0:
-        return True, f"generated: {api} matches {out}"
+        return True, f"generated: {api} {'written to' if write else 'matches'} {out}"
+    if write:
+        detail = (result.stderr.strip() or result.stdout.strip()).splitlines()
+        return False, f"generated: {api} failed to write {out}\n" + "\n".join(f"  {line}" for line in detail)
     detail = (result.stderr.strip() or result.stdout.strip()).splitlines()
     return False, f"generated: {api} differs from {out}\n" + "\n".join(f"  {line}" for line in detail)
 
@@ -50,20 +53,24 @@ def _environ():
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--plan", type=pathlib.Path, default=DEFAULT_PLAN)
+    parser.add_argument("--write", action="store_true", help="regenerate every tree instead of checking it")
+    parser.add_argument("--only", action="append", help="an api of the plan; repeat for several")
     arguments = parser.parse_args(argv)
 
-    trees = plan_from(arguments.plan)
+    trees = [tree for tree in plan_from(arguments.plan) if not arguments.only or tree[0] in arguments.only]
     missing = sorted({registry for _api, _generator, registry, _out, _extra in trees
                       if not (ROOT / registry).is_file()})
     if missing:
         print(f"generated: skipped, no {', '.join(missing)}; run {FETCH} to check them")
-        return 0
+        return 1 if arguments.write else 0
 
-    verdicts = [check(*tree) for tree in trees]
+    verdicts = [check(*tree, write=arguments.write) for tree in trees]
     for passed, message in verdicts:
         print(message) if passed else print(message, file=sys.stderr)
     if all(passed for passed, _message in verdicts):
         return 0
+    if arguments.write:
+        return 1
     print("generated: fix the emitter and regenerate; never edit what it wrote", file=sys.stderr)
     return 1
 

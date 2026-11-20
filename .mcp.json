@@ -1,5 +1,10 @@
 {
   "mcpServers": {
+    "av-dev": {
+      "type": "stdio",
+      "command": "python3",
+      "args": ["tools/mcp/av_dev.py"]
+    },
     "av-inspect": {
       "type": "stdio",
       "command": "python3",
