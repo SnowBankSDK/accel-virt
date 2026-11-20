@@ -20,9 +20,18 @@ outside contributors.
 
 ## Take a new upstream release
 
-Merge, never rebase: `git -C third_party/<fork> fetch origin --tags`, then `git merge <tag>` on `accel-virt`, resolve,
-build and test, push. The branch refuses force pushes and deletion, so every commit an older accel-virt revision pins
-stays reachable. `git diff <tag> accel-virt` shows everything the fork changes.
+1. Tag the current head and push the tag: `git tag -a accel-virt-on-<base> -m ... accel-virt && git push fork
+   accel-virt-on-<base>`. The forks refuse to move or delete `accel-virt-on-*` tags, so every commit an older
+   accel-virt revision pins stays reachable.
+2. `git fetch origin`, then `git rebase origin/master` (or a release tag) on `accel-virt`. Drop a commit upstream
+   now has; keep only what upstream lacks of one it partly has.
+3. Check the shader compiler series still apply to the new subproject commits, build with `av-dev` `d3d_runtime`,
+   and run `test area=gpu`. Compare failures with the old runtime built from the tag before calling one a
+   regression, and load the same environment ctest gives the test (the device loss layer, for one).
+4. `git push --force fork accel-virt`, rebase `wip` (`git rebase --onto accel-virt <old base> wip`) and push it, then
+   move accel-virt's submodule and commit.
+
+`git log origin/master..accel-virt` lists everything the fork changes.
 
 ## The shader compilers
 

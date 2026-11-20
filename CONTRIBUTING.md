@@ -30,9 +30,10 @@ branch, the fork's default branch.
   fork's branch. When it touches accel-virt too, open the accel-virt pull request with the
   submodule pointing at your fork commit, so CI builds both together. The fork pull request
   is merged first, and the submodule then points at the merged commit.
-- The `accel-virt` branch is never rewritten: a new upstream release is merged into it,
-  so every commit an accel-virt revision points at stays on the branch and that revision
-  still builds. `git diff <upstream tag> accel-virt` shows everything the fork changes.
+- The `accel-virt` branch is accel-virt's changes rebased onto upstream: `git log origin/master..accel-virt`
+  lists them. Before a rebase, its head is tagged `accel-virt-on-<what it was based on>`, and those tags are
+  never moved or deleted, so every commit an older accel-virt revision points at stays reachable and that
+  revision still builds. Unfinished work waits on the `wip` branch, rebased along with it.
 - dxbc-spirv and dxil-spirv, the shader compilers inside DXVK and vkd3d-proton, are not
   forked: their few changes are patches in `tools/dxbc-spirv-patches/` and
   `tools/dxil-spirv-patches/`, applied by `tools/build_d3d_runtime.sh`, until upstream
