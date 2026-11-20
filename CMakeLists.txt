@@ -753,8 +753,8 @@ endif()
 add_test(NAME check_spirv
          COMMAND python3 -B ${CMAKE_SOURCE_DIR}/tools/gen_spirv.py --check)
 
-add_test(NAME shared_header_patches
-         COMMAND python3 -B ${CMAKE_SOURCE_DIR}/tools/shared_header_patches.py --check)
+add_test(NAME shared_headers
+         COMMAND python3 -B ${CMAKE_SOURCE_DIR}/tools/shared_headers.py)
 
 add_test(NAME extension_policy
          COMMAND python3 -B ${CMAKE_SOURCE_DIR}/tools/check_extension_policy.py ${CMAKE_SOURCE_DIR})
