@@ -108,13 +108,21 @@ class JobsTest(unittest.TestCase):
 
 
 class BuildLimitsTest(unittest.TestCase):
-    def test_builds_take_the_lock_and_the_cpu_quota(self):
-        limits = mcp_server.BuildLimits(lock="/run/test.lock")
+    def test_builds_take_the_lock_and_the_limits_the_environment_sets(self):
+        limits = mcp_server.BuildLimits(lock="/run/test.lock", environment={
+            "LSW_BUILD_JOBS": "3", "LSW_BUILD_CPU_QUOTA": "300%", "LSW_BUILD_MEMORY_HIGH": "5G"})
         wrapped = limits.wrap(["cmake", "--build", "build"])
         self.assertEqual(wrapped[:2], ["flock", "/run/test.lock"])
-        self.assertIn("CPUQuota=400%", wrapped)
+        self.assertIn("CPUQuota=300%", wrapped)
+        self.assertIn("MemoryHigh=5G", wrapped)
         self.assertEqual(wrapped[-3:], ["cmake", "--build", "build"])
-        self.assertEqual(limits.environment()["CMAKE_BUILD_PARALLEL_LEVEL"], "4")
+        self.assertEqual(limits.environment()["CMAKE_BUILD_PARALLEL_LEVEL"], "3")
+
+    def test_without_settings_builds_use_every_cpu_and_no_quota(self):
+        limits = mcp_server.BuildLimits(lock="/run/test.lock", environment={})
+        wrapped = limits.wrap(["true"])
+        self.assertFalse(any(part.startswith(("CPUQuota", "MemoryHigh")) for part in wrapped))
+        self.assertEqual(limits.environment()["CMAKE_BUILD_PARALLEL_LEVEL"], str(mcp_server.os.cpu_count()))
 
 
 if __name__ == "__main__":

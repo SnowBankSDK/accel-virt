@@ -4,8 +4,8 @@ root=$(cd "$(dirname "$0")/../../.." && pwd)
 source_dir=$root/tools/guest/probes
 output=${1:-$root/build/guest-probes}
 mkdir -p "$output"
-PATH=$PATH:/opt/llvm-mingw/bin
-command -v x86_64-w64-mingw32-clang++ >/dev/null || { echo "llvm-mingw is not installed (x86_64-w64-mingw32-clang++)" >&2; exit 1; }
+PATH=$PATH:${LLVM_MINGW:-/opt/llvm-mingw}/bin
+command -v x86_64-w64-mingw32-clang++ >/dev/null || { echo "llvm-mingw is not installed (x86_64-w64-mingw32-clang++); set LLVM_MINGW to its directory" >&2; exit 1; }
 x86_64-w64-mingw32-clang++ -O2 -std=c++17 -municode -Wall -Wno-unknown-pragmas -static \
     "$source_dir/wgc_probe.cpp" -o "$output/wgc_probe.exe" \
     -ld3d11 -ldxgi -ldwmapi -lwinmm -lruntimeobject -luser32 -lgdi32

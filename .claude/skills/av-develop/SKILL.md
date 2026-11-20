@@ -7,7 +7,8 @@ description: Build and test accel-virt's components (avgpu.sys, the guest UMDs a
 
 The `av-dev` MCP server (`tools/mcp/av_dev.py`) runs the steps. Builds and tests are background jobs: `wait_job`
 waits up to 55 s and returns the log tail, `job_log` greps it, `cancel_job` stops it. Builds take the build lock,
-run at four CPUs and refuse to start beside another build. Read `CLAUDE.md` and `docs/constitution.md` before
+run at the limits `LSW_BUILD_JOBS`, `LSW_BUILD_CPU_QUOTA` and `LSW_BUILD_MEMORY_HIGH` set, and refuse to start beside
+another build. Read `CLAUDE.md` and `docs/constitution.md` before
 writing code: the gates enforce them.
 
 ## Build profiles

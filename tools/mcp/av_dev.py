@@ -54,8 +54,8 @@ class AvDev(JobTools):
         return [
             tool("status", "The accel-virt checkout: branch and changes, the DXVK and vkd3d-proton forks, which build "
                  "profiles are configured, the build lock and the running jobs."),
-            tool("build", "Configures (when needed) and builds a profile as a background job at four CPUs under the "
-                 "build lock. Targets: all by default; drivers for avgpu.sys and the guest UMDs and ICDs, avgpu, "
+            tool("build", "Configures (when needed) and builds a profile as a background job under the build lock, at the "
+                 "limits LSW_BUILD_JOBS, LSW_BUILD_CPU_QUOTA and LSW_BUILD_MEMORY_HIGH set. Targets: all by default; drivers for avgpu.sys and the guest UMDs and ICDs, avgpu, "
                  "avtest, or any CMake target.",
                  {"profile": profile, "target": {"type": "string"}, "reconfigure": {"type": "boolean"}}),
             tool("test", "Runs ctest as a job. area picks a set: unit (every unit and harness test), tools (the "
