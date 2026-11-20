@@ -14,9 +14,9 @@ ROOT = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT / "tools" / "guest"))
 import trace_format  # noqa: E402
+from mcp_server import Server, ToolError, tool  # noqa: E402
 from guest_agent import AgentError, AgentTimeout, GuestAgent, Qmp  # noqa: E402
 
-PROTOCOL = "2025-06-18"
 SERVER = {"name": "av-inspect", "version": "1"}
 GUEST_DIRECTORY = "C:\\av"
 INSPECTOR = GUEST_DIRECTORY + "\\avinspect.exe"
@@ -30,10 +30,6 @@ TABLE_LINE = re.compile(r"^avgpu: trace table at physical 0x([0-9a-fA-F]+) bytes
 SCOPE = re.compile(r'AV_SCOPE\("((?:[^"\\]|\\.)*)"\)')
 SOURCE_SUFFIXES = (".cpp", ".hpp", ".h", ".c")
 HOST_MODULES = ("device", "executor")
-
-
-class ToolError(Exception):
-    pass
 
 
 def shm_directory():
@@ -514,12 +510,6 @@ class Inspector:
         return name
 
 
-def tool(name, description, properties, required=()):
-    return {"name": name, "description": description,
-            "inputSchema": {"type": "object", "properties": properties, "required": list(required),
-                            "additionalProperties": False}}
-
-
 def qemu_pids(work):
     pids = []
     marker = str(work / "qmp.sock").encode()
@@ -534,84 +524,8 @@ def qemu_pids(work):
     return pids
 
 
-class Server:
-    def __init__(self, inspector, reader, writer):
-        self.inspector = inspector
-        self.reader = reader
-        self.writer = writer
-
-    def serve(self):
-        for line in self.reader:
-            line = line.strip()
-            if not line:
-                continue
-            answer = self.handle(line)
-            if answer is not None:
-                self.writer.write(json.dumps(answer) + "\n")
-                self.writer.flush()
-
-    def handle(self, line):
-        try:
-            message = json.loads(line)
-        except ValueError:
-            return error_reply(None, -32700, "parse error")
-        if not isinstance(message, dict) or message.get("jsonrpc") != "2.0" or "method" not in message:
-            return error_reply(message.get("id") if isinstance(message, dict) else None, -32600,
-                               "invalid request")
-        method = message["method"]
-        params = message.get("params") or {}
-        if "id" not in message:
-            return None
-        identity = message["id"]
-        if method == "initialize":
-            requested = params.get("protocolVersion") if isinstance(params, dict) else None
-            return reply(identity, {"protocolVersion": requested or PROTOCOL, "capabilities": {"tools": {}},
-                                    "serverInfo": SERVER})
-        if method == "ping":
-            return reply(identity, {})
-        if method == "tools/list":
-            return reply(identity, {"tools": self.inspector.tools()})
-        if method == "tools/call":
-            return self.call(identity, params)
-        return error_reply(identity, -32601, f"method not found: {method}")
-
-    def call(self, identity, params):
-        name = params.get("name") if isinstance(params, dict) else None
-        arguments = (params.get("arguments") or {}) if isinstance(params, dict) else {}
-        known = {entry["name"]: entry for entry in self.inspector.tools()}
-        if name not in known:
-            return error_reply(identity, -32602, f"unknown tool: {name}")
-        if not isinstance(arguments, dict):
-            return error_reply(identity, -32602, f"{name}: arguments are an object")
-        schema = known[name]["inputSchema"]
-        missing = [field for field in schema["required"] if field not in arguments]
-        unexpected = [field for field in arguments if field not in schema["properties"]]
-        if missing or unexpected:
-            return error_reply(identity, -32602, f"{name}: missing {missing}, unexpected {unexpected}")
-        try:
-            value = getattr(self.inspector, name)(**arguments)
-        except ToolError as error:
-            return reply(identity, content(str(error), True))
-        except Exception as error:
-            return reply(identity, content(f"{name} failed: {type(error).__name__}: {error}", True))
-        text = value if isinstance(value, str) else json.dumps(value, indent=1)
-        return reply(identity, content(text, False))
-
-
-def content(text, failed):
-    return {"content": [{"type": "text", "text": text}], "isError": failed}
-
-
-def reply(identity, result):
-    return {"jsonrpc": "2.0", "id": identity, "result": result}
-
-
-def error_reply(identity, code, text):
-    return {"jsonrpc": "2.0", "id": identity, "error": {"code": code, "message": text}}
-
-
 def main():
-    Server(Inspector(), sys.stdin, sys.stdout).serve()
+    Server(Inspector(), SERVER, sys.stdin, sys.stdout).serve()
 
 
 if __name__ == "__main__":
