@@ -5,6 +5,7 @@
 #include "device/renderer/doorbell_offers.hpp"
 #include "device/renderer/forwarded_request.hpp"
 #include "device/renderer/guest_memory_table.hpp"
+#include "device/shim/posix_renderer_channel.hpp"
 #include "proto/context/gpu_identity.hpp"
 
 #include <errno.h>
@@ -60,9 +61,9 @@ void post(int descriptor)
 
 }
 
-PosixRendererHost::PosixRendererHost(GuestMemoryTable &memory, DoorbellOffers &doorbells)
-    : memory_(memory), doorbells_(doorbells), executor_(), main_loop_{}, main_loop_known_(false), wakeup_(-1),
-      posted_lock_(), posted_first_(nullptr), posted_last_(nullptr), locks_(*this),
+PosixRendererHost::PosixRendererHost(GuestMemoryTable &memory, DoorbellOffers &doorbells, PosixRendererChannel &channel)
+    : memory_(memory), doorbells_(doorbells), channel_(channel), executor_(), main_loop_{}, main_loop_known_(false),
+      wakeup_(-1), posted_lock_(), posted_first_(nullptr), posted_last_(nullptr), locks_(*this),
       interrupt_lines_{}, interrupts_connected_(false)
 {
     AV_SCOPE("PosixRendererHost::PosixRendererHost");
@@ -149,6 +150,12 @@ Status PosixRendererHost::load_executor(const char *path, uint32_t length, const
     if (opened != Status::ok) return opened;
     ops = executor_.ops();
     return Status::ok;
+}
+
+Status PosixRendererHost::send_answer(const uint8_t *bytes, size_t length, int descriptor)
+{
+    AV_SCOPE("PosixRendererHost::send_answer");
+    return channel_.send(bytes, length, &descriptor, descriptor >= 0 ? 1u : 0u);
 }
 
 void PosixRendererHost::take_interrupt_lines(const int *descriptors, uint32_t count)

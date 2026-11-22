@@ -4,13 +4,15 @@
 #include "harness/host/mock_host.hpp"
 
 #include <cstring>
+#include <fcntl.h>
 #include <unistd.h>
 
 namespace av {
 
 MockRendererResources::MockRendererResources(MockHost &qemu, const AvExecutorOps &executor)
     : qemu_(qemu), executor_(executor), held_{}, mappings_(0u), lines_{},
-      refuse_executor_(false), load_nothing_(false), loads_(0u), path_{}
+      refuse_executor_(false), load_nothing_(false), loads_(0u), path_{}, answers_{}, first_answer_(0u),
+      answer_count_(0u), refuse_answers_(false)
 {
     for (int &line : lines_) line = -1;
     for (int &held : held_) held = -1;
@@ -27,6 +29,10 @@ MockRendererResources::~MockRendererResources()
                                                 live_descriptors());
     for (int held : held_)
         if (held >= 0) ::close(held);
+    for (std::uint32_t index = 0u; index < answer_count_; index++) {
+        const int crossed = answers_[(first_answer_ + index) % max_answers].crossed;
+        if (crossed >= 0) ::close(crossed);
+    }
 }
 
 Status MockRendererResources::map_region(int descriptor, std::uint64_t size, void *&base)
@@ -87,6 +93,49 @@ Status MockRendererResources::load_executor(const char *path, std::uint32_t leng
     }
     if (!load_nothing_) ops = &executor_;
     return Status::ok;
+}
+
+Status MockRendererResources::send_answer(const std::uint8_t *bytes, std::size_t length, int descriptor)
+{
+    if (refuse_answers_) return Status::not_found;
+    if (answer_count_ == max_answers || length > answer_bytes) {
+        TestRegistry::instance().record_failure(__FILE__, __LINE__, "the renderer's answers were never taken");
+        return Status::too_large;
+    }
+    Answer &answer = answers_[(first_answer_ + answer_count_) % max_answers];
+    std::memcpy(answer.bytes, bytes, length);
+    answer.length = length;
+    answer.sent = descriptor;
+    answer.crossed = descriptor >= 0 ? ::fcntl(descriptor, F_DUPFD_CLOEXEC, 0) : -1;
+    answer_count_++;
+    return Status::ok;
+}
+
+void MockRendererResources::refuse_answers()
+{
+    refuse_answers_ = true;
+}
+
+std::uint32_t MockRendererResources::answers() const
+{
+    return answer_count_;
+}
+
+bool MockRendererResources::take_answer(std::uint8_t *bytes, std::size_t capacity, std::size_t &length, int &sent,
+                                        int &crossed)
+{
+    length = 0u;
+    sent = -1;
+    crossed = -1;
+    if (answer_count_ == 0u) return false;
+    const Answer &answer = answers_[first_answer_];
+    first_answer_ = (first_answer_ + 1u) % max_answers;
+    answer_count_--;
+    length = answer.length;
+    std::memcpy(bytes, answer.bytes, answer.length < capacity ? answer.length : capacity);
+    sent = answer.sent;
+    crossed = answer.crossed;
+    return true;
 }
 
 void MockRendererResources::adopt(const int *descriptors, std::uint32_t count)

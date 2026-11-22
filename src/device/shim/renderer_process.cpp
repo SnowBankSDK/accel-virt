@@ -11,8 +11,8 @@
 namespace av {
 
 RendererProcess::RendererProcess()
-    : memory_(), doorbells_(), host_(memory_, doorbells_), service_(host_, host_, memory_, doorbells_),
-      channel_(inherited_socket), datagram_{}, answer_{}
+    : channel_(inherited_socket), memory_(), doorbells_(), host_(memory_, doorbells_, channel_),
+      service_(host_, host_, memory_, doorbells_), datagram_{}, answer_{}
 {
     AV_SCOPE("RendererProcess::RendererProcess");
 }

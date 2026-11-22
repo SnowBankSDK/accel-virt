@@ -14,12 +14,13 @@ namespace av {
 
 class DoorbellOffers;
 class GuestMemoryTable;
+class PosixRendererChannel;
 
 class PosixRendererHost final : public Host, public RendererResources {
 public:
     static constexpr uint32_t max_interrupt_lines = 64u;
 
-    PosixRendererHost(GuestMemoryTable &memory, DoorbellOffers &doorbells);
+    PosixRendererHost(GuestMemoryTable &memory, DoorbellOffers &doorbells, PosixRendererChannel &channel);
     ~PosixRendererHost();
     PosixRendererHost(const PosixRendererHost &) = delete;
     PosixRendererHost &operator=(const PosixRendererHost &) = delete;
@@ -33,6 +34,7 @@ public:
     void                 take_interrupt_lines(const int *descriptors, uint32_t count) override;
     void                 drop_interrupt_lines() override;
     [[nodiscard]] Status load_executor(const char *path, uint32_t length, const AvExecutorOps *&ops) override;
+    [[nodiscard]] Status send_answer(const uint8_t *bytes, size_t length, int descriptor) override;
 
     void log(const char *message) override;
     void require_main_loop(const char *function) override;
@@ -140,6 +142,7 @@ private:
 
     GuestMemoryTable   &memory_;
     DoorbellOffers     &doorbells_;
+    PosixRendererChannel &channel_;
     PosixExecutorModule executor_;
     pthread_t         main_loop_;
     bool              main_loop_known_;

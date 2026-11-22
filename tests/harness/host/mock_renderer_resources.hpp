@@ -15,6 +15,8 @@ public:
     static constexpr std::uint32_t max_lines = 64u;
     static constexpr std::size_t   max_path = 128u;
     static constexpr std::uint32_t max_held = 256u;
+    static constexpr std::uint32_t max_answers = 16u;
+    static constexpr std::size_t   answer_bytes = 128u;
 
     MockRendererResources(MockHost &qemu, const AvExecutorOps &executor);
     ~MockRendererResources();
@@ -27,9 +29,13 @@ public:
     void                 take_interrupt_lines(const int *descriptors, std::uint32_t count) override;
     void                 drop_interrupt_lines() override;
     [[nodiscard]] Status load_executor(const char *path, std::uint32_t length, const AvExecutorOps *&ops) override;
+    [[nodiscard]] Status send_answer(const std::uint8_t *bytes, std::size_t length, int descriptor) override;
 
     void          adopt(const int *descriptors, std::uint32_t count);
     void          refuse_executor();
+    void          refuse_answers();
+    std::uint32_t answers() const;
+    bool          take_answer(std::uint8_t *bytes, std::size_t capacity, std::size_t &length, int &sent, int &crossed);
     void          load_executor_without_table();
     std::uint32_t live_descriptors() const;
     std::uint32_t live_mappings() const;
@@ -38,6 +44,13 @@ public:
     const char   *executor_path() const;
 
 private:
+    struct Answer {
+        std::uint8_t bytes[answer_bytes];
+        std::size_t  length;
+        int          sent;
+        int          crossed;
+    };
+
     MockHost             &qemu_;
     const AvExecutorOps &executor_;
     int                   held_[max_held];
@@ -47,6 +60,10 @@ private:
     bool                  load_nothing_;
     std::uint32_t         loads_;
     char                  path_[max_path];
+    Answer                answers_[max_answers];
+    std::uint32_t         first_answer_;
+    std::uint32_t         answer_count_;
+    bool                  refuse_answers_;
 };
 
 }

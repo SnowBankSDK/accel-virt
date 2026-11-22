@@ -5,6 +5,7 @@
 #include "device/renderer/doorbell_offers.hpp"
 #include "device/renderer/forwarded_request.hpp"
 #include "device/renderer/guest_memory_table.hpp"
+#include "device/shim/posix_renderer_channel.hpp"
 #include "device/shim/posix_renderer_host.hpp"
 #include "harness/framework/test_registry.hpp"
 #include "proto/context/gpu_identity.hpp"
@@ -19,10 +20,12 @@
 #include <pthread.h>
 #include <sys/eventfd.h>
 #include <sys/mman.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 using av::DoorbellOffers;
 using av::GuestMemoryTable;
+using av::PosixRendererChannel;
 using av::PosixRendererHost;
 using av::Status;
 
@@ -30,17 +33,27 @@ namespace {
 
 constexpr std::uint64_t page = 4096u;
 
+int paired(int (&ends)[2])
+{
+    if (::socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, ends) != 0) return -1;
+    return ends[0];
+}
+
 class Rig {
 public:
-    Rig() : host_(memory_, offers_) {}
-    PosixRendererHost &host() { return host_; }
-    GuestMemoryTable  &memory() { return memory_; }
-    DoorbellOffers    &offers() { return offers_; }
+    Rig() : ends_{-1, -1}, channel_(paired(ends_)), qemu_(ends_[1]), host_(memory_, offers_, channel_) {}
+    PosixRendererHost    &host() { return host_; }
+    GuestMemoryTable     &memory() { return memory_; }
+    DoorbellOffers       &offers() { return offers_; }
+    PosixRendererChannel &qemu() { return qemu_; }
 
 private:
-    GuestMemoryTable  memory_;
-    DoorbellOffers    offers_;
-    PosixRendererHost host_;
+    int                  ends_[2];
+    PosixRendererChannel channel_;
+    PosixRendererChannel qemu_;
+    GuestMemoryTable     memory_;
+    DoorbellOffers       offers_;
+    PosixRendererHost    host_;
 };
 
 int memfd(std::uint64_t size)
@@ -528,3 +541,24 @@ TEST(posix_renderer_host, its_clock_moves_forward_and_its_memory_is_zeroed)
   for (std::uint32_t index = 0u; block != nullptr && index < 64u; index++) zeroed = zeroed && block[index] == 0u;
   CHECK(zeroed);
   rig.host().release(block); }
+
+TEST(posix_renderer_host_send_answer, carries_the_answer_to_qemu_with_its_descriptor_when_there_is_one)
+{ Rig rig;
+  const std::uint8_t answer[3] = {7u, 8u, 9u};
+  const int          sent = memfd(page);
+  CHECK_STATUS(rig.host().send_answer(answer, sizeof answer, sent), Status::ok);
+  CHECK_STATUS(rig.host().send_answer(answer, 2u, -1), Status::ok);
+  std::uint8_t  bytes[8] = {};
+  std::size_t   length = 0u;
+  int           descriptors[PosixRendererChannel::max_descriptors] = {};
+  std::uint32_t count = 0u;
+  CHECK_STATUS(rig.qemu().receive(bytes, sizeof bytes, length, descriptors, count), Status::ok);
+  CHECK_EQ(length, 3u);
+  CHECK_EQ(bytes[2], 9u);
+  CHECK_EQ(count, 1u);
+  CHECK(descriptors[0] != sent);
+  ::close(descriptors[0]);
+  CHECK_STATUS(rig.qemu().receive(bytes, sizeof bytes, length, descriptors, count), Status::ok);
+  CHECK_EQ(length, 2u);
+  CHECK_EQ(count, 0u);
+  ::close(sent); }

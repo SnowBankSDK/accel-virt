@@ -604,6 +604,7 @@ TEST(renderer_context_plane_memory, is_allocated_in_the_renderer_and_its_dma_buf
   fixture.qemu().close_descriptor(memory.fd);
   CHECK_EQ(fixture.peer().resources().live_descriptors(), 1u);
   fixture.plane().free_memory(0x01000002u);
+  fixture.peer().settle();
   CHECK_EQ(fixture.ops().memory_frees(), 1u);
   CHECK_EQ(fixture.ops().held_memory(), 0u);
   CHECK(!fixture.renderer_owners().owns(3u, 0x01000002u));

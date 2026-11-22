@@ -9,6 +9,8 @@
 #include "device/memory/blob_window.hpp"
 #include "device/renderer/doorbell_offers.hpp"
 #include "device/renderer/guest_memory_table.hpp"
+#include "device/renderer/image_export.hpp"
+#include "device/renderer/memory_allocation.hpp"
 #include "device/renderer/renderer_host_blobs.hpp"
 #include "device/renderer/renderer_service.hpp"
 #include "harness/executor/mock_executor_ops.hpp"
@@ -42,6 +44,7 @@
 #include <cstdint>
 #include <cstring>
 #include <fcntl.h>
+#include <sched.h>
 #include <unistd.h>
 
 using av::MockExecutorOps;
@@ -139,11 +142,36 @@ int fresh_descriptor()
 
 bool is_open(int descriptor) { return ::fcntl(descriptor, F_GETFD) != -1; }
 
+bool export_waits = false;
+bool allocation_waits = false;
+std::uint32_t (*allocate_unheld)(void *, std::uint32_t, std::uint64_t, std::uint64_t, std::uint32_t,
+                                 AvHostMemory *) = nullptr;
+
+void hold(bool &gate) { __atomic_store_n(&gate, true, __ATOMIC_RELEASE); }
+void let_go(bool &gate) { __atomic_store_n(&gate, false, __ATOMIC_RELEASE); }
+void wait_at(const bool &gate)
+{
+    while (__atomic_load_n(&gate, __ATOMIC_ACQUIRE)) sched_yield();
+}
+
+std::uint32_t export_held(void *opaque, std::uint32_t domain, std::uint64_t key, AvExportedImage *image)
+{
+    wait_at(export_waits);
+    return export_published(opaque, domain, key, image);
+}
+
+std::uint32_t allocate_held(void *opaque, std::uint32_t domain, std::uint64_t key, std::uint64_t size,
+                            std::uint32_t request, AvHostMemory *memory)
+{
+    wait_at(allocation_waits);
+    return allocate_unheld(opaque, domain, key, size, request, memory);
+}
+
 class Rig {
 public:
     Rig()
         : ops_(both), resources_(qemu_, ops_.table()), service_(host_, resources_, memory_, doorbells_), ram_{}, answer_{},
-          answer_length_(0u), answer_descriptor_(-1)
+          answer_length_(0u), answer_descriptor_(-1), crossed_(-1), settles_(true)
     {
         host_.translate_guest_with(
             [](void *context, std::uint64_t address, std::uint64_t length) -> void * {
@@ -156,6 +184,8 @@ public:
     ~Rig()
     {
         service_.shut_down();
+        static_cast<void>(host_.run_main_loop());
+        if (crossed_ >= 0) ::close(crossed_);
         void         *base = nullptr;
         std::uint64_t size = 0u;
         int           descriptor = -1;
@@ -176,6 +206,7 @@ public:
     const std::uint8_t        *answer() const { return answer_; }
     std::size_t                answer_length() const { return answer_length_; }
     int                        answer_descriptor() const { return answer_descriptor_; }
+    int                        crossed() const { return crossed_; }
 
     Status send(Kind kind, std::uint64_t sequence, const std::uint8_t *body, std::uint32_t length,
                 const int *descriptors = nullptr, std::uint32_t count = 0u)
@@ -189,8 +220,47 @@ public:
                std::size_t room = RendererService::answer_capacity)
     {
         resources_.adopt(descriptors, count);
-        return service_.receive(datagram, length, descriptors, count, answer_, room, answer_length_,
-                                answer_descriptor_);
+        if (crossed_ >= 0) ::close(crossed_);
+        crossed_ = -1;
+        const Status received = service_.receive(datagram, length, descriptors, count, answer_, room, answer_length_,
+                                                 answer_descriptor_);
+        if (!settles_) return received;
+        idle();
+        if (answer_length_ == 0u) collect();
+        return received;
+    }
+    void settle_answers(bool settles) { settles_ = settles; }
+    Status export_key(std::uint64_t key, std::uint64_t sequence)
+    {
+        std::uint8_t body[av::ExportImageMessage::encoded_size] = {};
+        static_cast<void>(av::ExportImageMessage(key).encode(body, sizeof body));
+        return send(Kind::export_image, sequence, body, sizeof body);
+    }
+    av::ExportedImageMessage exported(std::uint64_t sequence)
+    {
+        RendererMessageHeader    header;
+        av::ExportedImageMessage message;
+        CHECK_STATUS(header.decode(answer_, answer_length_), Status::ok);
+        CHECK(header.kind() == Kind::exported_image);
+        CHECK_EQ(header.sequence(), sequence);
+        CHECK_STATUS(message.decode(answer_ + RendererMessageHeader::encoded_size, header.body_length(),
+                                    answer_descriptor_ >= 0 ? 1u : 0u),
+                     Status::ok);
+        return message;
+    }
+    void collect()
+    {
+        if (crossed_ >= 0) ::close(crossed_);
+        crossed_ = -1;
+        static_cast<void>(resources_.take_answer(answer_, sizeof answer_, answer_length_, answer_descriptor_, crossed_));
+    }
+    void idle()
+    {
+        for (std::uint32_t spins = 0u; spins < 50000000u && service_.outstanding() != 0u; spins++) {
+            static_cast<void>(host_.run_main_loop());
+            sched_yield();
+        }
+        static_cast<void>(host_.run_main_loop());
     }
     Status allocate(std::uint32_t context, std::uint64_t key, std::uint64_t size, std::uint64_t sequence = 5u,
                     std::size_t room = RendererService::answer_capacity)
@@ -297,6 +367,8 @@ private:
     std::uint8_t              answer_[RendererService::answer_capacity];
     std::size_t               answer_length_;
     int                       answer_descriptor_;
+    int                       crossed_;
+    bool                      settles_;
 };
 
 }
@@ -533,8 +605,9 @@ TEST(renderer_service_allocate_memory, answers_the_librarys_memory_and_keeps_its
   CHECK(answer.allocated());
   CHECK_EQ(answer.size(), 0x2000u);
   CHECK_EQ(answer.caching(), std::uint32_t{AV_MEMORY_WRITE_COMBINED});
-  const int handed = rig.answer_descriptor();
-  CHECK(is_open(handed));
+  CHECK(rig.answer_descriptor() >= 0);
+  CHECK(!is_open(rig.answer_descriptor()));
+  CHECK(is_open(rig.crossed()));
   const MockExecutorOps::MemoryRequest asked = rig.ops().last_memory_request();
   CHECK_EQ(asked.key, key);
   CHECK_EQ(asked.size, 0x2000u);
@@ -543,7 +616,6 @@ TEST(renderer_service_allocate_memory, answers_the_librarys_memory_and_keeps_its
   CHECK(!RendererServiceProbe::owners(rig.service()).owns(context_id + 1u, key));
   CHECK_EQ(rig.resources().live_descriptors(), 0u);
   CHECK_STATUS(rig.free_memory(key), Status::ok);
-  CHECK(!is_open(handed));
   CHECK_EQ(rig.answer_length(), 0u);
   CHECK_EQ(rig.ops().memory_frees(), 1u);
   CHECK_EQ(rig.ops().held_memory(), 0u);
@@ -575,7 +647,7 @@ TEST(renderer_service_allocate_memory, memory_it_cannot_hand_over_is_answered_as
   CHECK_EQ(RendererServiceProbe::owners(rig.service()).live(), 0u);
   CHECK_EQ(rig.resources().live_descriptors(), 0u); }
 
-TEST(renderer_service_allocate_memory, a_request_that_does_not_decode_or_an_answer_that_does_not_fit_is_refused)
+TEST(renderer_service_allocate_memory, a_request_that_does_not_decode_is_refused_and_asks_the_library_nothing)
 { Rig rig;
   CHECK_STATUS(rig.hello(), Status::ok);
   CHECK_STATUS(rig.allocate(0u, av::HostBlobId::first, 0x1000u), Status::malformed);
@@ -588,8 +660,7 @@ TEST(renderer_service_allocate_memory, a_request_that_does_not_decode_or_an_answ
   CHECK_STATUS(rig.send(Kind::allocate_memory, 5u, body, sizeof body, &stray, 1u), Status::malformed);
   CHECK(!is_open(stray));
   CHECK_EQ(rig.ops().memory_allocations(), 0u);
-  CHECK_STATUS(rig.allocate(context_id, av::HostBlobId::first, 0x1000u, 5u, 8u), Status::too_large);
-  CHECK_EQ(rig.answer_descriptor(), -1);
+  CHECK_EQ(rig.resources().answers(), 0u);
   CHECK_EQ(rig.resources().live_descriptors(), 0u); }
 
 TEST(renderer_service_free_memory, frees_the_key_and_forgets_its_owner)
@@ -893,7 +964,7 @@ TEST(renderer_service_invariants, a_context_without_a_hello_breaks_them)
   rig.service().shut_down();
   CHECK(rig.service().invariants_hold()); }
 
-TEST(renderer_service_allocate_memory, an_answer_with_nowhere_to_go_or_a_caching_the_protocol_has_not_got_is_refused)
+TEST(renderer_service_allocate_memory, is_answered_later_whatever_room_the_receive_had_and_an_unknown_caching_is_none)
 { Rig rig;
   CHECK_STATUS(rig.hello(), Status::ok);
   std::uint8_t datagram[RendererMessageHeader::encoded_size + av::AllocateMemoryMessage::encoded_size] = {};
@@ -903,17 +974,24 @@ TEST(renderer_service_allocate_memory, an_answer_with_nowhere_to_go_or_a_caching
   CHECK_STATUS(av::AllocateMemoryMessage(context_id, 0x101u, av::HostBlobId::first, 0x1000u)
                    .encode(datagram + RendererMessageHeader::encoded_size, av::AllocateMemoryMessage::encoded_size),
                Status::ok);
-  std::size_t answered = 0u;
-  int         descriptor = -1;
+  std::size_t answered = 9u;
+  int         descriptor = 5;
   CHECK_STATUS(rig.service().receive(datagram, sizeof datagram, nullptr, 0u, nullptr, 64u, answered, descriptor),
-               Status::too_large);
+               Status::ok);
+  CHECK_EQ(answered, 0u);
   CHECK_EQ(descriptor, -1);
+  rig.idle();
+  CHECK_EQ(rig.resources().answers(), 1u);
+  rig.collect();
   rig.ops().set_memory_caching(99u);
-  CHECK_STATUS(rig.allocate(context_id, av::HostBlobId::first + 1u, 0x1000u), Status::too_large);
+  CHECK_STATUS(rig.allocate(context_id, av::HostBlobId::first + 1u, 0x1000u, 6u), Status::ok);
+  CHECK(!rig.allocated(6u).allocated());
   CHECK_EQ(rig.answer_descriptor(), -1);
-  CHECK_EQ(rig.answer_length(), 0u); }
+  CHECK_EQ(rig.ops().memory_frees(), 1u);
+  CHECK(!RendererServiceProbe::owners(rig.service()).owns(context_id, av::HostBlobId::first + 1u));
+  CHECK_EQ(rig.service().outstanding(), 0u); }
 
-TEST(renderer_service_export_image, an_answer_with_nowhere_to_go_or_an_image_the_protocol_cannot_describe_is_refused)
+TEST(renderer_service_export_image, is_answered_later_whatever_room_the_receive_had_and_an_image_it_cannot_describe_is_none)
 { Rig rig;
   rig.ops().editable().export_image = &export_published;
   CHECK_STATUS(rig.hello(), Status::ok);
@@ -926,19 +1004,29 @@ TEST(renderer_service_export_image, an_answer_with_nowhere_to_go_or_an_image_the
   CHECK_STATUS(av::ExportImageMessage(0x77u).encode(datagram + RendererMessageHeader::encoded_size,
                                                     av::ExportImageMessage::encoded_size),
                Status::ok);
-  std::size_t  answered = 0u;
-  int          descriptor = 5;
-  std::uint8_t small[RendererMessageHeader::encoded_size] = {};
+  std::size_t answered = 9u;
+  int         descriptor = 5;
   CHECK_STATUS(rig.service().receive(datagram, sizeof datagram, nullptr, 0u, nullptr, 64u, answered, descriptor),
-               Status::too_large);
+               Status::ok);
+  CHECK_EQ(answered, 0u);
   CHECK_EQ(descriptor, -1);
-  descriptor = 5;
-  CHECK_STATUS(rig.service().receive(datagram, sizeof datagram, nullptr, 0u, small, sizeof small, answered, descriptor),
-               Status::too_large);
-  CHECK_EQ(descriptor, -1);
+  rig.idle();
+  CHECK_EQ(rig.resources().answers(), 1u);
+  rig.collect();
   published.image.width = 0u;
-  CHECK_STATUS(rig.raw(datagram, sizeof datagram, nullptr, 0u), Status::too_large);
+  published.image.slot = 0u;
+  CHECK_STATUS(rig.raw(datagram, sizeof datagram, nullptr, 0u), Status::ok);
+  RendererMessageHeader    header;
+  av::ExportedImageMessage message;
+  CHECK_STATUS(header.decode(rig.answer(), rig.answer_length()), Status::ok);
+  CHECK(header.kind() == Kind::exported_image);
+  CHECK_EQ(header.sequence(), 60u);
   CHECK_EQ(rig.answer_descriptor(), -1);
+  CHECK_STATUS(message.decode(rig.answer() + RendererMessageHeader::encoded_size, header.body_length(), 0u), Status::ok);
+  CHECK(!message.found());
+  published.image.width = 64u;
+  CHECK_STATUS(rig.raw(datagram, sizeof datagram, nullptr, 0u), Status::ok);
+  CHECK_EQ(rig.answer_descriptor(), image_fd);
   CHECK(is_open(image_fd));
   ::close(image_fd); }
 
@@ -998,3 +1086,284 @@ TEST(renderer_service_invariants, each_part_the_service_holds_can_break_them)
     av::DoorbellOffersProbe::set(doorbells.doorbells(), 0u, -2);
     CHECK(!doorbells.service().invariants_hold());
     av::DoorbellOffersProbe::set(doorbells.doorbells(), 0u, -1); } }
+
+TEST(renderer_service_export_image, waits_off_the_control_thread_which_answers_other_requests_meanwhile)
+{ Rig rig;
+  rig.ops().editable().export_image = &export_held;
+  CHECK_STATUS(rig.hello(), Status::ok);
+  const int image_fd = fresh_descriptor();
+  published = Published{true, AvExportedImage{image_fd, 0u, 64u, 32u, 256u, 0u, 0x34325258u, 0u, 7u}};
+  hold(export_waits);
+  rig.settle_answers(false);
+  CHECK_STATUS(rig.export_key(0x77u, 60u), Status::ok);
+  CHECK_EQ(rig.answer_length(), 0u);
+  CHECK_EQ(rig.service().outstanding(), 1u);
+  CHECK_STATUS(rig.context(Kind::create_context, context_id, 61u), Status::ok);
+  std::uint64_t sequence = 0u;
+  CHECK_STATUS(rig.reply(sequence).status(), Status::ok);
+  CHECK_EQ(sequence, 61u);
+  CHECK_EQ(rig.resources().answers(), 0u);
+  let_go(export_waits);
+  rig.idle();
+  CHECK_EQ(rig.service().outstanding(), 0u);
+  rig.collect();
+  const av::ExportedImageMessage message = rig.exported(60u);
+  CHECK(message.found());
+  CHECK(message.fresh());
+  CHECK_EQ(rig.answer_descriptor(), image_fd);
+  CHECK_EQ(rig.resources().answers(), 0u);
+  ::close(image_fd); }
+
+TEST(renderer_service_free_memory, a_free_while_the_key_is_being_allocated_follows_it_and_the_memory_is_answered_as_none)
+{ Rig rig;
+  allocate_unheld = rig.ops().editable().allocate_memory;
+  rig.ops().editable().allocate_memory = &allocate_held;
+  CHECK_STATUS(rig.hello(), Status::ok);
+  const std::uint32_t key = av::HostBlobId::first + 4u;
+  hold(allocation_waits);
+  rig.settle_answers(false);
+  CHECK_STATUS(rig.allocate(context_id, key, 0x1000u, 5u), Status::ok);
+  CHECK_STATUS(rig.free_memory(key + 1u), Status::ok);
+  CHECK_STATUS(rig.free_memory(key), Status::ok);
+  CHECK_EQ(rig.service().outstanding(), 3u);
+  let_go(allocation_waits);
+  rig.settle_answers(true);
+  rig.idle();
+  rig.collect();
+  CHECK(!rig.allocated(5u).allocated());
+  CHECK_EQ(rig.answer_descriptor(), -1);
+  CHECK_EQ(rig.ops().memory_allocations(), 1u);
+  CHECK_EQ(rig.ops().memory_frees(), 1u);
+  CHECK_EQ(rig.ops().held_memory(), 0u);
+  CHECK(!RendererServiceProbe::owners(rig.service()).owns(context_id, key));
+  CHECK_EQ(RendererServiceProbe::owners(rig.service()).live(), 0u);
+  CHECK_EQ(rig.resources().answers(), 0u);
+  CHECK(rig.service().invariants_hold()); }
+
+TEST(renderer_service_shut_down, answers_every_errand_still_out_and_after_it_answers_at_once)
+{ Rig rig;
+  rig.ops().editable().export_image = &export_published;
+  CHECK_STATUS(rig.hello(), Status::ok);
+  const int image_fd = fresh_descriptor();
+  published = Published{true, AvExportedImage{image_fd, 1u, 64u, 32u, 256u, 0u, 0x34325258u, 0u, 7u}};
+  rig.settle_answers(false);
+  CHECK_STATUS(rig.allocate(context_id, av::HostBlobId::first, 0x1000u, 5u), Status::ok);
+  CHECK_STATUS(rig.export_key(0x77u, 6u), Status::ok);
+  rig.service().shut_down();
+  CHECK_EQ(rig.service().outstanding(), 0u);
+  CHECK_EQ(rig.host().live_threads(), 0u);
+  CHECK_EQ(rig.resources().answers(), 2u);
+  rig.collect();
+  CHECK(rig.exported(6u).found());
+  CHECK_EQ(rig.answer_descriptor(), image_fd);
+  rig.collect();
+  CHECK(rig.allocated(5u).allocated());
+  const std::uint32_t allocations = rig.ops().memory_allocations();
+  CHECK_STATUS(rig.export_key(0x77u, 7u), Status::ok);
+  CHECK_EQ(rig.resources().answers(), 1u);
+  rig.collect();
+  CHECK(!rig.exported(7u).found());
+  CHECK_STATUS(rig.allocate(context_id, av::HostBlobId::first + 1u, 0x1000u, 8u), Status::ok);
+  rig.collect();
+  CHECK(!rig.allocated(8u).allocated());
+  CHECK_EQ(rig.ops().memory_allocations(), allocations);
+  CHECK_STATUS(rig.free_memory(av::HostBlobId::first), Status::ok);
+  CHECK_EQ(rig.ops().memory_frees(), 1u);
+  CHECK_EQ(rig.ops().held_memory(), 0u);
+  ::close(image_fd); }
+
+TEST(renderer_service_receive, an_answer_that_cannot_be_sent_is_logged_and_one_with_no_room_to_wait_is_refused)
+{ Rig rig;
+  rig.ops().editable().export_image = &export_published;
+  CHECK_STATUS(rig.hello(), Status::ok);
+  published = Published{false, AvExportedImage{}};
+  rig.resources().refuse_answers();
+  const std::uint32_t logged = rig.host().logged();
+  CHECK_STATUS(rig.export_key(0x77u, 6u), Status::ok);
+  CHECK_EQ(rig.host().logged(), logged + 1u);
+  CHECK(std::strstr(rig.host().last_log(), "could not be sent") != nullptr);
+  CHECK_EQ(rig.resources().answers(), 0u);
+  rig.host().fail_allocation_at(1u);
+  CHECK_STATUS(rig.export_key(0x77u, 7u), Status::no_memory);
+  rig.host().fail_allocation_at(1u);
+  CHECK_STATUS(rig.allocate(context_id, av::HostBlobId::first, 0x1000u, 8u), Status::no_memory);
+  CHECK_EQ(rig.ops().memory_allocations(), 0u);
+  CHECK_EQ(rig.service().outstanding(), 0u); }
+
+TEST(renderer_service_hello, a_service_thread_that_cannot_start_is_out_of_memory)
+{ for (std::uint32_t nth = 1u; nth <= 2u; nth++) {
+      Rig rig;
+      rig.host().fail_thread_start_at(nth);
+      CHECK_STATUS(rig.hello(), Status::no_memory);
+      CHECK(!rig.service().ready());
+      CHECK_EQ(rig.host().live_threads(), nth - 1u);
+      rig.service().shut_down();
+      CHECK_EQ(rig.host().live_threads(), 0u);
+  } }
+
+TEST(image_export, run_where_it_stands_answers_its_sequence_with_the_image_the_library_exported)
+{ Rig rig;
+  rig.ops().editable().export_image = &export_published;
+  CHECK_STATUS(rig.hello(), Status::ok);
+  const int image_fd = fresh_descriptor();
+  published = Published{true, AvExportedImage{image_fd, 1u, 64u, 32u, 256u, 0u, 0x34325258u, 0u, 7u}};
+  av::ImageExport errand(rig.service(), RendererServiceProbe::plane(rig.service()), uuid, 41u, 0x77u);
+  CHECK_EQ(errand.sequence(), 41u);
+  CHECK(!errand.found());
+  CHECK_EQ(errand.image().fd, -1);
+  errand.run_here();
+  CHECK(errand.found());
+  CHECK_EQ(errand.image().fd, image_fd);
+  CHECK_EQ(errand.image().width, 64u);
+  rig.collect();
+  const av::ExportedImageMessage message = rig.exported(41u);
+  CHECK(message.fresh());
+  CHECK_EQ(message.slot(), 1u);
+  CHECK_EQ(rig.answer_descriptor(), image_fd);
+  ::close(image_fd); }
+
+TEST(memory_allocation, a_forsaken_allocation_answers_none_and_leaves_the_memory_to_the_free_behind_it)
+{ Rig rig;
+  CHECK_STATUS(rig.hello(), Status::ok);
+  const std::uint32_t key = av::HostBlobId::first + 6u;
+  av::MemoryAllocation errand(rig.service(), RendererServiceProbe::plane(rig.service()), 42u,
+                              av::AllocateMemoryMessage(context_id, 0x101u, key, 0x1000u));
+  CHECK_EQ(errand.sequence(), 42u);
+  CHECK_EQ(errand.request().key(), key);
+  CHECK_STATUS(errand.status(), Status::invalid_state);
+  CHECK_EQ(errand.memory().fd, -1);
+  CHECK(!errand.forsaken());
+  CHECK(errand.frees_itself());
+  errand.forsake();
+  CHECK(errand.forsaken());
+  CHECK(!errand.frees_itself());
+  errand.run_here();
+  CHECK_STATUS(errand.status(), Status::ok);
+  CHECK_EQ(errand.memory().size, 0x1000u);
+  rig.collect();
+  CHECK(!rig.allocated(42u).allocated());
+  CHECK_EQ(rig.answer_descriptor(), -1);
+  CHECK_EQ(rig.ops().held_memory(), 1u);
+  CHECK_EQ(rig.ops().memory_frees(), 0u);
+  CHECK(!RendererServiceProbe::owners(rig.service()).owns(context_id, key));
+  CHECK_STATUS(rig.free_memory(key), Status::ok);
+  CHECK_EQ(rig.ops().held_memory(), 0u); }
+
+TEST(memory_allocation, a_disowned_allocation_answers_none_and_frees_its_own_memory)
+{ Rig rig;
+  CHECK_STATUS(rig.hello(), Status::ok);
+  const std::uint32_t key = av::HostBlobId::first + 7u;
+  av::MemoryAllocation errand(rig.service(), RendererServiceProbe::plane(rig.service()), 43u,
+                              av::AllocateMemoryMessage(context_id, 0x101u, key, 0x1000u));
+  errand.disown();
+  CHECK(errand.forsaken());
+  CHECK(errand.frees_itself());
+  errand.run_here();
+  CHECK_STATUS(errand.status(), Status::ok);
+  rig.collect();
+  CHECK(!rig.allocated(43u).allocated());
+  CHECK_EQ(rig.answer_descriptor(), -1);
+  CHECK_EQ(rig.ops().memory_frees(), 1u);
+  CHECK_EQ(rig.ops().held_memory(), 0u);
+  CHECK(!RendererServiceProbe::owners(rig.service()).owns(context_id, key)); }
+
+TEST(renderer_service_allocate_memory, is_answered_while_an_export_asked_before_it_still_waits)
+{ Rig rig;
+  rig.ops().editable().export_image = &export_held;
+  CHECK_STATUS(rig.hello(), Status::ok);
+  const int image_fd = fresh_descriptor();
+  published = Published{true, AvExportedImage{image_fd, 0u, 64u, 32u, 256u, 0u, 0x34325258u, 0u, 7u}};
+  hold(export_waits);
+  rig.settle_answers(false);
+  CHECK_STATUS(rig.export_key(0x77u, 60u), Status::ok);
+  const std::uint32_t key = av::HostBlobId::first + 8u;
+  CHECK_STATUS(rig.allocate(context_id, key, 0x1000u, 61u), Status::ok);
+  for (std::uint32_t spins = 0u; spins < 50000000u && rig.service().outstanding() != 1u; spins++) {
+      static_cast<void>(rig.host().run_main_loop());
+      sched_yield();
+  }
+  CHECK_EQ(rig.service().outstanding(), 1u);
+  CHECK_EQ(rig.resources().answers(), 1u);
+  rig.collect();
+  CHECK(rig.allocated(61u).allocated());
+  CHECK(RendererServiceProbe::owners(rig.service()).owns(context_id, key));
+  let_go(export_waits);
+  rig.idle();
+  rig.collect();
+  CHECK(rig.exported(60u).found());
+  CHECK_EQ(rig.answer_descriptor(), image_fd);
+  CHECK_EQ(rig.service().outstanding(), 0u);
+  ::close(image_fd); }
+
+TEST(renderer_service_free_memory, a_free_that_cannot_follow_the_key_frees_now_and_the_allocation_frees_its_own_memory)
+{ Rig rig;
+  allocate_unheld = rig.ops().editable().allocate_memory;
+  rig.ops().editable().allocate_memory = &allocate_held;
+  CHECK_STATUS(rig.hello(), Status::ok);
+  const std::uint32_t key = av::HostBlobId::first + 9u;
+  hold(allocation_waits);
+  rig.settle_answers(false);
+  CHECK_STATUS(rig.allocate(context_id, key, 0x1000u, 5u), Status::ok);
+  rig.host().fail_allocation_at(1u);
+  CHECK_STATUS(rig.free_memory(key), Status::ok);
+  CHECK_EQ(rig.service().outstanding(), 1u);
+  let_go(allocation_waits);
+  rig.settle_answers(true);
+  rig.idle();
+  rig.collect();
+  CHECK(!rig.allocated(5u).allocated());
+  CHECK_EQ(rig.answer_descriptor(), -1);
+  CHECK_EQ(rig.ops().memory_allocations(), 1u);
+  CHECK_EQ(rig.ops().memory_frees(), 1u);
+  CHECK_EQ(rig.ops().held_memory(), 0u);
+  CHECK(!RendererServiceProbe::owners(rig.service()).owns(context_id, key));
+  CHECK(rig.service().invariants_hold()); }
+
+TEST(renderer_service_free_memory, between_two_allocations_of_one_key_forsakes_the_first_and_leaves_the_second_kept)
+{ Rig rig;
+  allocate_unheld = rig.ops().editable().allocate_memory;
+  rig.ops().editable().allocate_memory = &allocate_held;
+  CHECK_STATUS(rig.hello(), Status::ok);
+  const std::uint32_t key = av::HostBlobId::first + 10u;
+  hold(allocation_waits);
+  rig.settle_answers(false);
+  CHECK_STATUS(rig.allocate(context_id, key, 0x1000u, 5u), Status::ok);
+  CHECK_STATUS(rig.free_memory(key), Status::ok);
+  CHECK_STATUS(rig.allocate(context_id, key, 0x2000u, 7u), Status::ok);
+  CHECK_EQ(rig.service().outstanding(), 3u);
+  let_go(allocation_waits);
+  rig.idle();
+  CHECK_EQ(rig.resources().answers(), 2u);
+  rig.collect();
+  CHECK(!rig.allocated(5u).allocated());
+  CHECK_EQ(rig.answer_descriptor(), -1);
+  rig.collect();
+  const av::AllocatedMemoryMessage second = rig.allocated(7u);
+  CHECK(second.allocated());
+  CHECK_EQ(second.size(), 0x2000u);
+  CHECK(rig.answer_descriptor() >= 0);
+  CHECK_EQ(rig.ops().memory_allocations(), 2u);
+  CHECK_EQ(rig.ops().memory_frees(), 1u);
+  CHECK_EQ(rig.ops().held_memory(), 1u);
+  CHECK(RendererServiceProbe::owners(rig.service()).owns(context_id, key));
+  rig.settle_answers(true);
+  CHECK_STATUS(rig.free_memory(key), Status::ok);
+  CHECK_EQ(rig.ops().held_memory(), 0u);
+  CHECK(rig.service().invariants_hold()); }
+
+TEST(renderer_service_receive, an_errand_with_no_room_to_wait_is_answered_as_none_at_once)
+{ Rig rig;
+  rig.ops().editable().export_image = &export_published;
+  CHECK_STATUS(rig.hello(), Status::ok);
+  rig.host().fail_allocation_at(1u);
+  CHECK_STATUS(rig.export_key(0x77u, 7u), Status::no_memory);
+  CHECK_EQ(rig.resources().answers(), 0u);
+  CHECK(!rig.exported(7u).found());
+  CHECK_EQ(rig.answer_descriptor(), -1);
+  rig.host().fail_allocation_at(1u);
+  CHECK_STATUS(rig.allocate(context_id, av::HostBlobId::first, 0x1000u, 8u), Status::no_memory);
+  CHECK_EQ(rig.resources().answers(), 0u);
+  CHECK(!rig.allocated(8u).allocated());
+  CHECK_EQ(rig.answer_descriptor(), -1);
+  CHECK_EQ(rig.ops().memory_allocations(), 0u);
+  CHECK_EQ(rig.service().outstanding(), 0u); }
