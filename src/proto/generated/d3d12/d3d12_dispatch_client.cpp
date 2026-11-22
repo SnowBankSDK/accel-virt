@@ -453,10 +453,10 @@ bool av_d3d12_CreateCommandSignature12(::av::ClientTransport& t, uint32_t signat
     return t.send_async(kCmd_CreateCommandSignature12, b) == ::av::TransportResult::ok;
 }
 
-bool av_d3d12_CreateGraphicsPipeline12(::av::ClientTransport& t, uint32_t pipeline, uint32_t root, const GraphicsState& state, uint32_t element_count, const InputElement* elements, uint32_t signature_count, const SignatureEntry* signatures, uint32_t stream_out_count, const StreamOutDeclaration* stream_out, uint32_t stride_count, const uint32_t* strides, uint32_t rasterized_stream, const void* vs, uint64_t vs_size, const void* hs, uint64_t hs_size, const void* ds, uint64_t ds_size, const void* gs, uint64_t gs_size, const void* ps, uint64_t ps_size, const void* ms, uint64_t ms_size, const void* as, uint64_t as_size) {
+bool av_d3d12_CreateGraphicsPipeline12(::av::ClientTransport& t, uint32_t pipeline, uint32_t root, const GraphicsState& state, uint32_t element_count, const InputElement* elements, uint32_t signature_count, const SignatureEntry* signatures, uint32_t stream_out_count, const StreamOutDeclaration* stream_out, uint32_t stride_count, const uint32_t* strides, uint32_t rasterized_stream, const void* vs, uint64_t vs_size, const void* hs, uint64_t hs_size, const void* ds, uint64_t ds_size, const void* gs, uint64_t gs_size, const void* ps, uint64_t ps_size, const void* ms, uint64_t ms_size, const void* as, uint64_t as_size, const void* cached, uint64_t cached_size) {
     AV_SCOPE("av_d3d12_CreateGraphicsPipeline12");
-    const uint64_t blob_sizes[] = {vs_size > inline_bytes ? vs_size : 0u, hs_size > inline_bytes ? hs_size : 0u, ds_size > inline_bytes ? ds_size : 0u, gs_size > inline_bytes ? gs_size : 0u, ps_size > inline_bytes ? ps_size : 0u, ms_size > inline_bytes ? ms_size : 0u, as_size > inline_bytes ? as_size : 0u};
-    ::av::WireWriter b = (blob_sizes[0] | blob_sizes[1] | blob_sizes[2] | blob_sizes[3] | blob_sizes[4] | blob_sizes[5] | blob_sizes[6]) != 0u ? t.request_writer_with_room(blob_sizes, 7u) : t.request_writer();
+    const uint64_t blob_sizes[] = {vs_size > inline_bytes ? vs_size : 0u, hs_size > inline_bytes ? hs_size : 0u, ds_size > inline_bytes ? ds_size : 0u, gs_size > inline_bytes ? gs_size : 0u, ps_size > inline_bytes ? ps_size : 0u, ms_size > inline_bytes ? ms_size : 0u, as_size > inline_bytes ? as_size : 0u, cached_size > inline_bytes ? cached_size : 0u};
+    ::av::WireWriter b = (blob_sizes[0] | blob_sizes[1] | blob_sizes[2] | blob_sizes[3] | blob_sizes[4] | blob_sizes[5] | blob_sizes[6] | blob_sizes[7]) != 0u ? t.request_writer_with_room(blob_sizes, 8u) : t.request_writer();
     b.write_pod<uint32_t>(pipeline);
     b.write_pod<uint32_t>(root);
     b.write_pod(state);
@@ -480,17 +480,36 @@ bool av_d3d12_CreateGraphicsPipeline12(::av::ClientTransport& t, uint32_t pipeli
     if (!put_bytes(t, b, ps, ps_size)) return abandon(t);
     if (!put_bytes(t, b, ms, ms_size)) return abandon(t);
     if (!put_bytes(t, b, as, as_size)) return abandon(t);
+    if (!put_bytes(t, b, cached, cached_size)) return abandon(t);
     return t.send_async(kCmd_CreateGraphicsPipeline12, b) == ::av::TransportResult::ok;
 }
 
-bool av_d3d12_CreateComputePipeline12(::av::ClientTransport& t, uint32_t pipeline, uint32_t root, const void* cs, uint64_t cs_size) {
+bool av_d3d12_CreateComputePipeline12(::av::ClientTransport& t, uint32_t pipeline, uint32_t root, const void* cs, uint64_t cs_size, const void* cached, uint64_t cached_size) {
     AV_SCOPE("av_d3d12_CreateComputePipeline12");
-    const uint64_t blob_sizes[] = {cs_size > inline_bytes ? cs_size : 0u};
-    ::av::WireWriter b = (blob_sizes[0]) != 0u ? t.request_writer_with_room(blob_sizes, 1u) : t.request_writer();
+    const uint64_t blob_sizes[] = {cs_size > inline_bytes ? cs_size : 0u, cached_size > inline_bytes ? cached_size : 0u};
+    ::av::WireWriter b = (blob_sizes[0] | blob_sizes[1]) != 0u ? t.request_writer_with_room(blob_sizes, 2u) : t.request_writer();
     b.write_pod<uint32_t>(pipeline);
     b.write_pod<uint32_t>(root);
     if (!put_bytes(t, b, cs, cs_size)) return abandon(t);
+    if (!put_bytes(t, b, cached, cached_size)) return abandon(t);
     return t.send_async(kCmd_CreateComputePipeline12, b) == ::av::TransportResult::ok;
+}
+
+bool av_d3d12_PipelineBlob12(::av::ClientTransport& t, uint32_t pipeline, uint32_t* hresult, void* blob, uint64_t blob_capacity, uint64_t* blob_size) {
+    AV_SCOPE("av_d3d12_PipelineBlob12");
+    const uint64_t blob_sizes[] = {blob_capacity > inline_reply_bytes ? blob_capacity : 0u};
+    ::av::WireWriter b = (blob_sizes[0]) != 0u ? t.request_writer_with_room(blob_sizes, 1u) : t.request_writer();
+    b.write_pod<uint32_t>(pipeline);
+    ::av::ClientBlobLease blob_lease;
+    if (!ask_bytes(t, b, blob, blob_capacity, blob_lease)) return abandon(t);
+    const ::av::SyncCallScope call{t};
+    ::av::WireReader r{nullptr, 0u};
+    if (t.send_sync(kCmd_PipelineBlob12, b, r) != ::av::TransportResult::ok) return false;
+    { uint32_t value{};
+      if (!r.read_pod(value)) return false;
+      if (hresult != nullptr) *hresult = value; }
+    if (!take_bytes(r, blob, blob_capacity, blob_lease, blob_size)) return false;
+    return r.remaining() == 0u;
 }
 
 bool av_d3d12_CreateCommandQueue12(::av::ClientTransport& t, uint32_t queue, uint32_t type, uint32_t priority, uint32_t flags) {

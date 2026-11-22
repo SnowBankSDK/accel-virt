@@ -139,3 +139,35 @@ TEST(d3d12_pipeline_compiles, a_compile_still_running_at_the_budget_is_reported_
   CHECK(compiles.settle(long_budget));
   CHECK(compiles.collect(job) == nullptr);
   compiles.stop(); }
+
+TEST(d3d12_pipeline_job_use_cached, a_cached_blob_reaches_the_host_as_a_copy_and_a_refused_one_is_compiled_again_without_it)
+{ Root             root;
+  av::FakeDevice   device;
+  D3d12PipelineJob job;
+  job.bind(blocks);
+  job.describe(7u, &root, compute());
+  std::uint8_t blob[24] = {};
+  for (std::uint8_t at = 0u; at < sizeof blob; at++) blob[at] = static_cast<std::uint8_t>(at * 9u + 1u);
+  CHECK(job.use_cached(blob, sizeof blob));
+  for (std::uint8_t &byte : blob) byte = 0u;
+  job.compile(&device);
+  CHECK_EQ(device.compute_calls, 2u);
+  CHECK_EQ(device.cached[0].CachedBlobSizeInBytes, sizeof blob);
+  CHECK(device.cached[0].pCachedBlob != blob);
+  const std::uint8_t *const sent = static_cast<const std::uint8_t *>(device.cached[0].pCachedBlob);
+  for (std::uint8_t at = 0u; at < sizeof blob; at++) CHECK_EQ(sent[at], static_cast<std::uint8_t>(at * 9u + 1u));
+  CHECK(device.cached[1].pCachedBlob == nullptr);
+  CHECK_EQ(device.cached[1].CachedBlobSizeInBytes, 0u);
+  job.clear(); }
+
+TEST(d3d12_pipeline_job_use_cached, no_blob_compiles_once_with_nothing_cached)
+{ Root             root;
+  av::FakeDevice   device;
+  D3d12PipelineJob job;
+  job.bind(blocks);
+  job.describe(8u, &root, compute());
+  CHECK(job.use_cached(nullptr, 0u));
+  job.compile(&device);
+  CHECK_EQ(device.compute_calls, 1u);
+  CHECK_EQ(device.cached[0].CachedBlobSizeInBytes, 0u);
+  job.clear(); }

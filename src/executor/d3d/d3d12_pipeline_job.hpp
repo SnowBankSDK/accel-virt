@@ -30,6 +30,7 @@ public:
                                                 const uint32_t *strides, uint32_t stride_count, uint32_t rasterized);
     void describe(uint32_t id, ID3D12RootSignature *root, const D3d12GraphicsStream &stream);
     void describe(uint32_t id, ID3D12RootSignature *root, const D3D12_COMPUTE_PIPELINE_STATE_DESC &desc);
+    [[nodiscard]] bool use_cached(const uint8_t *bytes, uint64_t size);
     void compile(ID3D12Device *device);
 
     uint32_t             id() const;

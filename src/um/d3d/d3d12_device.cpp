@@ -36,7 +36,7 @@ D3d12Device::D3d12Device(BlockSource &memory, d3d::D3dSession &session, KeyedLog
                          const D3d12HostCaps &caps,
                          void *const &list_table, d3d::D3dCallTrace &trace)
     : memory_(memory), session_(session), lines_(log), refused_(lines_), caps_(caps), list_table_(list_table), runtime_{}, core_(nullptr), kernel_(nullptr), lender_(session), clock_origin_(session, log), memories_(memory, session, log), follower_(), orders_(memory), residency_(), channel_(), addresses_(), commitment_(),
-      recorder_(*this), null_resource_{}, loss_(lines_), library_blob_(), trace_(trace),
+      recorder_(*this), null_resource_{}, loss_(lines_), trace_(trace),
       context_number_(trace.number_context()), placed_heaps_(false)
 {
     AV_SCOPE("D3d12Device::D3d12Device");

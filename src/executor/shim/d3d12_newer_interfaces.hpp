@@ -25,6 +25,7 @@ constexpr int subobject_render_target_formats = 15;
 constexpr int subobject_depth_stencil_format = 16;
 constexpr int subobject_sample_desc = 17;
 constexpr int subobject_node_mask = 18;
+constexpr int subobject_cached_pso = 19;
 constexpr int subobject_flags = 20;
 constexpr int subobject_view_instancing = 22;
 constexpr int subobject_as = 24;

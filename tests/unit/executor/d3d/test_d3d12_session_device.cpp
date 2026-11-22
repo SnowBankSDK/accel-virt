@@ -40,6 +40,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <vector>
 #include <unistd.h>
 
 namespace {
@@ -264,7 +265,8 @@ std::uint32_t pixel(const av::D3dLoopback &wire, std::uint32_t x, std::uint32_t 
     return value;
 }
 
-void make_triangle(av::D3dLoopback &wire, bool whole_containers, bool native = false)
+void make_triangle(av::D3dLoopback &wire, bool whole_containers, bool native = false,
+                   const std::uint8_t *cached = nullptr, std::uint64_t cached_size = 0u)
 {
     if (native) {
         CHECK(place_heap(wire, upload_heap, heap_upload, upload_native));
@@ -318,7 +320,7 @@ void make_triangle(av::D3dLoopback &wire, bool whole_containers, bool native = f
     const std::uint64_t ps_bytes = whole_containers ? triangle_ps::container_bytes : triangle_ps::program_bytes;
     CHECK(av_d3d12_CreateGraphicsPipeline12(wire, pipeline, root, state, 2u, elements, whole_containers ? 0u : count,
                                              signatures, 0u, nullptr, 0u, nullptr, 0xFFFFFFFFu, vs, vs_bytes, nullptr, 0u, nullptr, 0u, nullptr, 0u, ps,
-                                             ps_bytes, nullptr, 0u, nullptr, 0u));
+                                             ps_bytes, nullptr, 0u, nullptr, 0u, cached, cached_size));
 }
 
 void bind_triangle(av::D3dLoopback &wire)
@@ -429,6 +431,63 @@ TEST(d3d12_session_device, a_triangle_drawn_from_ddi_dxil_reads_back_where_it_wa
         CHECK(av_d3d12_Finish12(wire, &removed));
         CHECK_EQ(removed, 0u);
         CHECK_EQ(wire.refused(), 0u);
+        CHECK(backend.invariants_hold());
+        backend.shut_down();
+    }
+}
+
+TEST(d3d12_session_device, a_pipeline_made_from_the_blob_another_session_kept_draws_the_same_and_a_stale_blob_still_draws)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice *device11 = nullptr;
+    av::D3d12HostDevice *device12 = nullptr;
+    av::HostShares      *shares = nullptr;
+    av::HostMemorySource *source = nullptr;
+    if (!host_devices(apis, device11, device12, shares, source)) return;
+    std::vector<std::uint8_t> blob(std::size_t{1} << 20);
+    std::uint64_t             blob_size = 0u;
+    {
+        av::D3dBackend    backend(rig.log);
+        av::SessionShares session;
+        CHECK(backend.initialize(*shared_as(session, shares, backend), rig.imports, device11, device12));
+        av::D3dLoopback wire(backend, rig.imports, source, region_bytes, lent_bytes);
+        if (!imports(*device12, wire)) {
+            backend.shut_down();
+            return;
+        }
+        make_frame(wire);
+        make_triangle(wire, false);
+        std::uint32_t answered = 1u;
+        CHECK(av_d3d12_PipelineBlob12(wire, pipeline, &answered, blob.data(), blob.size(), &blob_size));
+        CHECK_EQ(answered, 0u);
+        CHECK(blob_size != 0u && blob_size <= blob.size());
+        std::uint32_t unknown = 0u;
+        std::uint64_t unknown_size = 1u;
+        CHECK(av_d3d12_PipelineBlob12(wire, 0x7777u, &unknown, blob.data() + blob_size, 16u, &unknown_size));
+        CHECK(unknown != 0u);
+        CHECK_EQ(unknown_size, 0u);
+        CHECK_EQ(wire.refused(), 0u);
+        backend.shut_down();
+    }
+    for (int stale = 0; stale < 2; stale++) {
+        std::vector<std::uint8_t> given(blob.begin(), blob.begin() + static_cast<std::ptrdiff_t>(blob_size));
+        if (stale != 0)
+            for (std::size_t at = given.size() / 4u; at < given.size(); at += 7u) given[at] ^= 0xA5u;
+        av::D3dBackend    backend(rig.log);
+        av::SessionShares session;
+        CHECK(backend.initialize(*shared_as(session, shares, backend), rig.imports, device11, device12));
+        av::D3dLoopback wire(backend, rig.imports, source, region_bytes, lent_bytes);
+        CHECK(imports(*device12, wire));
+        make_frame(wire);
+        make_triangle(wire, false, false, given.data(), given.size());
+        CHECK_EQ(wire.refused(), 0u);
+        draw_triangle(wire);
+        read_frame(wire);
+        judge_triangle(wire);
+        std::uint32_t removed = 1u;
+        CHECK(av_d3d12_Finish12(wire, &removed));
+        CHECK_EQ(removed, 0u);
         CHECK(backend.invariants_hold());
         backend.shut_down();
     }

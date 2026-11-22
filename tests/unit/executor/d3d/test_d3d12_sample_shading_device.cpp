@@ -194,7 +194,7 @@ bool make_pipeline(av::D3dLoopback &wire, std::uint32_t id, const std::uint32_t 
     return av_d3d12_CreateGraphicsPipeline12(wire, id, root, state, 1u, &position, 0u, nullptr, 0u, nullptr, 0u,
                                              nullptr, 0xFFFFFFFFu, sample_shading::vertex,
                                              sample_shading::vertex_bytes, nullptr, 0u, nullptr, 0u, nullptr, 0u, pixel,
-                                             pixel_bytes, nullptr, 0u, nullptr, 0u);
+                                             pixel_bytes, nullptr, 0u, nullptr, 0u, nullptr, 0u);
 }
 
 }

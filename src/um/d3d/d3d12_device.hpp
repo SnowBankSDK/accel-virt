@@ -9,7 +9,6 @@
 #include "icd/d3d/d3d12_address_space.hpp"
 #include "icd/d3d/d3d12_commitment.hpp"
 #include "icd/d3d/d3d_device_channel.hpp"
-#include "icd/d3d/pipeline_library_blob.hpp"
 #include "proto/generated/d3d12/d3d12_wire_types.h"
 #include "um/d3d/allocation_lender.hpp"
 #include "um/d3d/batch_follower.hpp"
@@ -152,7 +151,6 @@ private:
     D3d12Recorder                         recorder_;
     ResourceRecord                        null_resource_;
     icd::LossLatch                        loss_;
-    d3d::PipelineLibraryBlob              library_blob_;
     d3d::D3dCallTrace                    &trace_;
     uint32_t                              context_number_;
     bool                                  placed_heaps_;

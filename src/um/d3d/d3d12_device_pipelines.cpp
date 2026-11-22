@@ -1,5 +1,7 @@
 #include "core/log/keyed_log.hpp"
+#include "core/support/object_storage.hpp"
 #include "core/trace/function_scope.hpp"
+#include "icd/d3d/pipeline_library.hpp"
 #include "icd/d3d/shader_code_extent.hpp"
 #include "um/common/readable_extent.hpp"
 #include "proto/generated/d3d12/d3d12_dispatch_client.h"
@@ -29,7 +31,14 @@ constexpr uint32_t most_signatures = 1024u;
 constexpr uint32_t most_stream_outputs = 128u;
 constexpr uint32_t most_strides = 4u;
 constexpr uint32_t no_rasterized_stream = 0xFFFFFFFFu;
-constexpr SIZE_T library_private_bytes = sizeof(uint64_t);
+constexpr uint64_t first_blob_bytes = uint64_t{256} << 10u;
+using LibraryStorage = ObjectStorage<d3d::PipelineLibrary>;
+
+LibraryStorage *library_of(D3D12DDI_HPIPELINELIBRARY handle)
+{
+    AV_SCOPE("library_of");
+    return static_cast<LibraryStorage *>(handle.pDrvPrivate);
+}
 
 uint32_t code_bytes(const UINT *code)
 {
@@ -557,10 +566,18 @@ HRESULT D3d12Device::create_pipeline_state(const D3D12DDIARG_CREATE_PIPELINE_STA
     pipeline = ObjectRecord{};
     stamp(pipeline.header, ObjectRecord::tag, next_id());
     const uint32_t root = id_of(args->hRootSignature.pDrvPrivate);
+    const uint8_t *cached = nullptr;
+    uint64_t       cached_size = 0u;
+    if (const LibraryStorage *const storage = library_of(args->LibraryReference.hLibrary);
+        storage != nullptr && storage->constructed() &&
+        !storage->object().find(args->LibraryReference.PipelineIndex, cached, cached_size)) {
+        cached = nullptr;
+        cached_size = 0u;
+    }
     if (const ShaderRecord *const compute = shader_of(args->hComputeShader); compute != nullptr) {
         pipeline.kind = 1u;
         return sent(d3d12proto::av_d3d12_CreateComputePipeline12(wire(), pipeline.header.stamp.id(), root, code_of(compute),
-                                                                  code_size_of(compute)),
+                                                                  code_size_of(compute), cached, cached_size),
                     "CreateComputePipeline12")
                    ? S_OK
                    : E_OUTOFMEMORY;
@@ -590,7 +607,7 @@ HRESULT D3d12Device::create_pipeline_state(const D3D12DDIARG_CREATE_PIPELINE_STA
                   stream_outs == 0u ? no_rasterized_stream : streamed->rasterized_stream, code_of(stages[0]), code_size_of(stages[0]), code_of(stages[1]),
                   code_size_of(stages[1]), code_of(stages[2]), code_size_of(stages[2]), code_of(stages[3]),
                   code_size_of(stages[3]), code_of(stages[4]), code_size_of(stages[4]),
-                  code_of(stages[5]), code_size_of(stages[5]), code_of(stages[6]), code_size_of(stages[6])),
+                  code_of(stages[5]), code_size_of(stages[5]), code_of(stages[6]), code_size_of(stages[6]), cached, cached_size),
               "CreateGraphicsPipeline12"))
         return E_OUTOFMEMORY;
     return S_OK;
@@ -608,47 +625,67 @@ SIZE_T D3d12Device::calc_private_pipeline_library_size(const D3D12DDIARG_CREATE_
 {
     AV_SCOPE("D3d12Device::calc_private_pipeline_library_size");
     static_cast<void>(args);
-    return library_private_bytes;
+    return sizeof(LibraryStorage);
 }
 
 HRESULT D3d12Device::create_pipeline_library(const D3D12DDIARG_CREATE_PIPELINE_LIBRARY_0010 *args,
                                              D3D12DDI_HPIPELINELIBRARY handle)
 {
     AV_SCOPE("D3d12Device::create_pipeline_library");
-    static_cast<void>(handle);
-    if (args == nullptr) return E_INVALIDARG;
-    return library_blob_.opened(args->pInitialData, args->InitialDataSize);
+    LibraryStorage *const storage = library_of(handle);
+    if (args == nullptr || storage == nullptr) return E_INVALIDARG;
+    storage->forget();
+    if (storage->construct(memory()) != Status::ok) return E_OUTOFMEMORY;
+    const HRESULT opened = storage->object().open(args->pInitialData, args->InitialDataSize);
+    if (FAILED(opened)) storage->destroy();
+    return opened;
 }
 
 VOID D3d12Device::destroy_pipeline_library(D3D12DDI_HPIPELINELIBRARY handle)
 {
     AV_SCOPE("D3d12Device::destroy_pipeline_library");
-    static_cast<void>(handle);
+    LibraryStorage *const storage = library_of(handle);
+    if (storage != nullptr) storage->destroy();
 }
 
 HRESULT D3d12Device::add_pipeline_state_to_library(D3D12DDI_HPIPELINELIBRARY library, D3D12DDI_HPIPELINESTATE state,
                                                    UINT index)
 {
     AV_SCOPE("D3d12Device::add_pipeline_state_to_library");
-    static_cast<void>(library);
-    static_cast<void>(state);
-    static_cast<void>(index);
-    return S_OK;
+    LibraryStorage *const storage = library_of(library);
+    if (storage == nullptr || !storage->constructed() || state.pDrvPrivate == nullptr) return E_INVALIDARG;
+    const uint32_t pipeline = id_of(state.pDrvPrivate);
+    uint64_t       capacity = first_blob_bytes;
+    for (;;) {
+        uint8_t *const blob = static_cast<uint8_t *>(memory().allocate(static_cast<size_t>(capacity), Pool::paged));
+        if (blob == nullptr) return E_OUTOFMEMORY;
+        uint32_t answered = 0u;
+        uint64_t size = 0u;
+        const bool asked = d3d12proto::av_d3d12_PipelineBlob12(wire(), pipeline, &answered, blob, capacity, &size);
+        HRESULT kept = S_OK;
+        const bool fits = size <= capacity;
+        if (asked && SUCCEEDED(static_cast<HRESULT>(answered)) && size != 0u && fits)
+            kept = storage->object().add(index, blob, size);
+        memory().release(blob);
+        if (!asked || FAILED(static_cast<HRESULT>(answered)) || size == 0u || fits) return kept;
+        if (size > d3d::PipelineLibrary::most_blob_bytes) return S_OK;
+        capacity = size;
+    }
 }
 
 SIZE_T D3d12Device::calc_serialized_library_size(D3D12DDI_HPIPELINELIBRARY library)
 {
     AV_SCOPE("D3d12Device::calc_serialized_library_size");
-    static_cast<void>(library);
-    return library_blob_.size();
+    const LibraryStorage *const storage = library_of(library);
+    return storage != nullptr && storage->constructed() ? storage->object().serialized_size() : 0u;
 }
 
 HRESULT D3d12Device::serialize_library(D3D12DDI_HPIPELINELIBRARY library, void *blob)
 {
     AV_SCOPE("D3d12Device::serialize_library");
-    static_cast<void>(library);
-    if (blob == nullptr) return E_INVALIDARG;
-    library_blob_.write(blob);
+    const LibraryStorage *const storage = library_of(library);
+    if (blob == nullptr || storage == nullptr || !storage->constructed()) return E_INVALIDARG;
+    storage->object().serialize(blob);
     return S_OK;
 }
 

@@ -677,8 +677,11 @@ static bool decode_CreateGraphicsPipeline12(ServerDispatch& s, ::av::WireReader&
     const uint8_t* as = nullptr;
     uint64_t as_size = 0u;
     if (!read_bytes(s, r, arena, as, as_size)) return false;
+    const uint8_t* cached = nullptr;
+    uint64_t cached_size = 0u;
+    if (!read_bytes(s, r, arena, cached, cached_size)) return false;
     if (r.remaining() != 0u) return false;
-    if (!s.on_CreateGraphicsPipeline12(pipeline, root, state, element_count, elements, signature_count, signatures, stream_out_count, stream_out, stride_count, strides, rasterized_stream, vs, vs_size, hs, hs_size, ds, ds_size, gs, gs_size, ps, ps_size, ms, ms_size, as, as_size)) return false;
+    if (!s.on_CreateGraphicsPipeline12(pipeline, root, state, element_count, elements, signature_count, signatures, stream_out_count, stream_out, stride_count, strides, rasterized_stream, vs, vs_size, hs, hs_size, ds, ds_size, gs, gs_size, ps, ps_size, ms, ms_size, as, as_size, cached, cached_size)) return false;
     return true;
 }
 
@@ -694,8 +697,31 @@ static bool decode_CreateComputePipeline12(ServerDispatch& s, ::av::WireReader& 
     const uint8_t* cs = nullptr;
     uint64_t cs_size = 0u;
     if (!read_bytes(s, r, arena, cs, cs_size)) return false;
+    const uint8_t* cached = nullptr;
+    uint64_t cached_size = 0u;
+    if (!read_bytes(s, r, arena, cached, cached_size)) return false;
     if (r.remaining() != 0u) return false;
-    if (!s.on_CreateComputePipeline12(pipeline, root, cs, cs_size)) return false;
+    if (!s.on_CreateComputePipeline12(pipeline, root, cs, cs_size, cached, cached_size)) return false;
+    return true;
+}
+
+static bool decode_PipelineBlob12(ServerDispatch& s, ::av::WireReader& r, ::av::WireWriter& reply, ::av::WireArena& arena) {
+    AV_SCOPE("server:d3d12:PipelineBlob12");
+    (void)s;
+    (void)reply;
+    (void)arena;
+    uint32_t pipeline{};
+    if (!r.read_pod(pipeline)) return false;
+    uint32_t hresult{};
+    uint8_t* blob = nullptr;
+    uint64_t blob_capacity = 0u;
+    uint64_t blob_size = 0u;
+    bool blob_in_blob = false;
+    if (!read_out_bytes(s, r, arena, blob, blob_capacity, blob_in_blob)) return false;
+    if (r.remaining() != 0u) return false;
+    if (!s.on_PipelineBlob12(pipeline, hresult, blob, blob_capacity, blob_size)) return false;
+    reply.write_pod(hresult);
+    write_out_bytes(reply, blob, blob_size, blob_capacity, blob_in_blob);
     return true;
 }
 
@@ -2164,6 +2190,7 @@ bool knows_command(uint32_t cmd_id) {
         case kCmd_CreateCommandSignature12:
         case kCmd_CreateGraphicsPipeline12:
         case kCmd_CreateComputePipeline12:
+        case kCmd_PipelineBlob12:
         case kCmd_CreateCommandQueue12:
         case kCmd_CreateCommandAllocator12:
         case kCmd_ResetCommandAllocator12:
@@ -2271,6 +2298,7 @@ bool dispatch_command(ServerDispatch& s, uint32_t cmd_id, ::av::WireReader& r,
         case kCmd_CreateCommandSignature12: return decode_CreateCommandSignature12(s, r, reply, arena);
         case kCmd_CreateGraphicsPipeline12: return decode_CreateGraphicsPipeline12(s, r, reply, arena);
         case kCmd_CreateComputePipeline12: return decode_CreateComputePipeline12(s, r, reply, arena);
+        case kCmd_PipelineBlob12: return decode_PipelineBlob12(s, r, reply, arena);
         case kCmd_CreateCommandQueue12: return decode_CreateCommandQueue12(s, r, reply, arena);
         case kCmd_CreateCommandAllocator12: return decode_CreateCommandAllocator12(s, r, reply, arena);
         case kCmd_ResetCommandAllocator12: return decode_ResetCommandAllocator12(s, r, reply, arena);

@@ -281,7 +281,7 @@ void make_textured_pipeline(av::D3dLoopback &wire, std::uint32_t sample_count)
     CHECK(av_d3d12_CreateGraphicsPipeline12(wire, pipeline, root, state, 0u, nullptr, count, signatures, 0u,
                                              nullptr, 0u, nullptr, 0xFFFFFFFFu,
                                              textured_vs::program, textured_vs::program_bytes, nullptr, 0u, nullptr,
-                                             0u, nullptr, 0u, textured_ps::program, textured_ps::program_bytes, nullptr, 0u, nullptr, 0u));
+                                             0u, nullptr, 0u, textured_ps::program, textured_ps::program_bytes, nullptr, 0u, nullptr, 0u, nullptr, 0u));
 }
 
 }
@@ -377,7 +377,7 @@ TEST(d3d12_session_features_device, a_compute_dispatch_writes_through_a_view_wit
     const RootParameter   parameters[2] = {{parameter_constants, visibility_all, 0u, 0u, 1u, 0u, 0u, 0u},
                                            {parameter_table, visibility_all, 0u, 0u, 0u, 0u, 1u, 0u}};
     CHECK(av_d3d12_CreateRootSignature12(wire, root, 0u, 2u, parameters, 1u, &range, 0u, nullptr));
-    CHECK(av_d3d12_CreateComputePipeline12(wire, pipeline, root, fill_cs::program, fill_cs::program_bytes));
+    CHECK(av_d3d12_CreateComputePipeline12(wire, pipeline, root, fill_cs::program, fill_cs::program_bytes, nullptr, 0u));
 
     const std::uint32_t heaps[1] = {view_heap};
     CHECK(av_d3d12_SetDescriptorHeaps12(wire, compute_list, 1u, heaps));

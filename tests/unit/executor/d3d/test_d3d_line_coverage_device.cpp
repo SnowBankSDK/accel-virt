@@ -387,7 +387,7 @@ void make_pipeline(av::D3dLoopback &wire, std::uint32_t id, std::uint32_t line_m
     CHECK(av_d3d12_CreateGraphicsPipeline12(wire, id, root, state, 2u, elements, count, signatures, 0u, nullptr, 0u,
                                              nullptr, 0xFFFFFFFFu, triangle_vs::program, triangle_vs::program_bytes,
                                              nullptr, 0u, nullptr, 0u, nullptr, 0u, triangle_ps::program,
-                                             triangle_ps::program_bytes, nullptr, 0u, nullptr, 0u));
+                                             triangle_ps::program_bytes, nullptr, 0u, nullptr, 0u, nullptr, 0u));
 }
 
 void make(av::D3dLoopback &wire, Rig &rig)

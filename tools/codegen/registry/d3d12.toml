@@ -395,18 +395,31 @@ doc = """A graphics pipeline state. Each stage's code is what the DDI gave the d
 container, a DXIL program, or a DXBC token stream - and empty for a stage the pipeline does not have; the
 signatures are every stage's, as registers. The input layout names vertex shader input registers. The
 geometry shader's stream output declaration, if it has one, is stream_out with its buffer strides and the stream
-that is rasterized (0xFFFFFFFF for none)."""
+that is rasterized (0xFFFFFFFF for none). cached, when it is not empty, is a blob PipelineBlob12 answered for a
+pipeline made before; the host makes the pipeline from it, and from the stages alone when its driver no longer takes
+the blob."""
 params = ["u32 pipeline", "u32 root", "GraphicsState state", "u32 element_count",
           "InputElement elements[element_count] max 32", "u32 signature_count",
           "SignatureEntry signatures[signature_count] max 1024", "u32 stream_out_count",
           "StreamOutDeclaration stream_out[stream_out_count] max 128", "u32 stride_count",
           "u32 strides[stride_count] max 4", "u32 rasterized_stream", "bytes vs", "bytes hs", "bytes ds", "bytes gs",
-          "bytes ps", "bytes ms", "bytes as"]
+          "bytes ps", "bytes ms", "bytes as", "bytes cached"]
 
 [[command]]
 name = "CreateComputePipeline12"
 id = 0x1302
-params = ["u32 pipeline", "u32 root", "bytes cs"]
+doc = """A compute pipeline state. cached, when it is not empty, is a blob PipelineBlob12 answered for a pipeline made
+before; the host makes the pipeline from it, and from cs alone when its driver no longer takes the blob."""
+params = ["u32 pipeline", "u32 root", "bytes cs", "bytes cached"]
+
+[[command]]
+name = "PipelineBlob12"
+id = 0x1304
+doc = """The host's cached blob of a pipeline, what ID3D12PipelineState::GetCachedBlob answers, for a pipeline library
+to keep and give back as the cached bytes of CreateGraphicsPipeline12 or CreateComputePipeline12. hresult is not S_OK
+when the pipeline is unknown or the host has no blob, and then the blob is empty."""
+params = ["u32 pipeline"]
+reply = ["u32 hresult", "out_bytes blob"]
 
 [[command]]
 name = "CreateCommandQueue12"

@@ -100,6 +100,16 @@ TEST(d3d12_session_on_QueryCaps12, a_session_with_no_device_supports_nothing)
   CHECK_EQ(caps.feature_level, 0u);
   CHECK_EQ(formats_size, 0u); }
 
+TEST(d3d12_session_on_PipelineBlob12, a_pipeline_the_session_never_made_has_no_blob_and_writes_nothing)
+{ FreshSession fresh;
+  std::uint32_t hresult = 0u;
+  std::uint8_t  blob[16] = {0x5Au};
+  std::uint64_t blob_size = 9u;
+  CHECK(fresh.session().on_PipelineBlob12(42u, hresult, blob, sizeof blob, blob_size));
+  CHECK(hresult != 0u);
+  CHECK_EQ(blob_size, 0u);
+  CHECK_EQ(blob[0], 0x5Au); }
+
 TEST(d3d12_session_on_ResourceAllocation12, a_session_with_no_device_answers_a_size_no_heap_holds)
 { FreshSession fresh;
   ResourceDesc desc = {};
@@ -203,8 +213,8 @@ TEST(d3d12_session, makes_nothing_without_a_device)
   const GraphicsState state = {};
   const std::uint8_t *const nothing = nullptr;
   CHECK(!session.on_CreateGraphicsPipeline12(11u, 5u, state, 0u, nullptr, 0u, nullptr, 0u, nullptr, 0u, nullptr, 0xFFFFFFFFu, nothing, 0u, nothing, 0u,
-                                            nothing, 0u, nothing, 0u, nothing, 0u, nothing, 0u, nothing, 0u));
-  CHECK(!session.on_CreateComputePipeline12(12u, 5u, nothing, 0u));
+                                            nothing, 0u, nothing, 0u, nothing, 0u, nothing, 0u, nothing, 0u, nullptr, 0u));
+  CHECK(!session.on_CreateComputePipeline12(12u, 5u, nothing, 0u, nullptr, 0u));
   const IndirectArgument draw = {};
   CHECK(!session.on_CreateCommandSignature12(13u, 0u, 16u, 1u, &draw));
   for (std::uint32_t id = 1u; id <= 13u; id++) CHECK(!session.on_Destroy12(id)); }

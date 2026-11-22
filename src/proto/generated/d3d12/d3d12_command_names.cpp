@@ -39,6 +39,7 @@ const char* command_name(uint32_t id) {
         case kCmd_CreateGraphicsPipeline12: return "CreateGraphicsPipeline12";
         case kCmd_CreateComputePipeline12: return "CreateComputePipeline12";
         case kCmd_CreateCommandSignature12: return "CreateCommandSignature12";
+        case kCmd_PipelineBlob12: return "PipelineBlob12";
         case kCmd_CreateCommandQueue12: return "CreateCommandQueue12";
         case kCmd_CreateCommandAllocator12: return "CreateCommandAllocator12";
         case kCmd_ResetCommandAllocator12: return "ResetCommandAllocator12";

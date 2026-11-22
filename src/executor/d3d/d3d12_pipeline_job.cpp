@@ -85,6 +85,18 @@ void D3d12PipelineJob::describe(uint32_t id, ID3D12RootSignature *root, const D3
     graphics_described_ = false;
 }
 
+bool D3d12PipelineJob::use_cached(const uint8_t *bytes, uint64_t size)
+{
+    AV_SCOPE("D3d12PipelineJob::use_cached");
+    if (bytes == nullptr || size == 0u) return true;
+    const uint8_t *const kept = keep(bytes, size);
+    if (kept == nullptr) return false;
+    const D3D12_CACHED_PIPELINE_STATE cached = {kept, static_cast<SIZE_T>(size)};
+    graphics_.cached.value = cached;
+    compute_.CachedPSO = cached;
+    return true;
+}
+
 void D3d12PipelineJob::compile(ID3D12Device *device)
 {
     AV_SCOPE("D3d12PipelineJob::compile");
@@ -101,6 +113,12 @@ void D3d12PipelineJob::compile(ID3D12Device *device)
             result = streamed->CreatePipelineState(&desc, __uuidof(ID3D12PipelineState), &made);
             streamed->Release();
         }
+    }
+    if (FAILED(result) && (graphics_.cached.value.CachedBlobSizeInBytes != 0u || compute_.CachedPSO.CachedBlobSizeInBytes != 0u)) {
+        graphics_.cached.value = {};
+        compute_.CachedPSO = {};
+        compile(device);
+        return;
     }
     if (SUCCEEDED(result)) made_ = static_cast<ID3D12PipelineState *>(made);
 }

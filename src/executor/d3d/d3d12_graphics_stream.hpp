@@ -43,6 +43,7 @@ struct D3d12GraphicsStream {
     D3d12Subobject<d3d12new::subobject_node_mask, UINT>                       node_mask;
     D3d12Subobject<d3d12new::subobject_flags, D3D12_PIPELINE_STATE_FLAGS>     flags;
     D3d12Subobject<d3d12new::subobject_view_instancing, d3d12new::ViewInstancingDesc> view_instancing;
+    D3d12Subobject<d3d12new::subobject_cached_pso, D3D12_CACHED_PIPELINE_STATE> cached;
 };
 
 }

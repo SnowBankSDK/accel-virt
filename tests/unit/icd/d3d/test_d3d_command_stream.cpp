@@ -488,7 +488,7 @@ TEST(d3d_command_stream, a_blob_import_goes_after_the_shaders_the_stream_holds)
       first[at] = static_cast<std::uint8_t>(at);
       second[at] = static_cast<std::uint8_t>(0xFFu - at);
   }
-  CHECK(av::d3d12proto::av_d3d12_CreateComputePipeline12(fixture.stream(), 1u, 0u, first, sizeof first));
+  CHECK(av::d3d12proto::av_d3d12_CreateComputePipeline12(fixture.stream(), 1u, 0u, first, sizeof first, nullptr, 0u));
   CHECK_EQ(fixture.commands(), 0u);
   CHECK_EQ(fixture.transport().blobs().used(), code_bytes);
   std::uint8_t answer[BlobImportAnswer::encoded_size] = {};
@@ -500,7 +500,7 @@ TEST(d3d_command_stream, a_blob_import_goes_after_the_shaders_the_stream_holds)
   CHECK_EQ(fixture.id(0u), av::d3d12proto::kCmd_CreateComputePipeline12);
   CHECK_EQ(fixture.id(1u), CommandHeader::import_blob_id);
   CHECK_EQ(fixture.transport().blobs().used(), 0u);
-  CHECK(av::d3d12proto::av_d3d12_CreateComputePipeline12(fixture.stream(), 2u, 0u, second, sizeof second));
+  CHECK(av::d3d12proto::av_d3d12_CreateComputePipeline12(fixture.stream(), 2u, 0u, second, sizeof second, nullptr, 0u));
   CHECK_STATUS(fixture.stream().flush(), Status::ok);
   CHECK_EQ(fixture.commands(), 3u);
   CHECK_EQ(fixture.id(2u), av::d3d12proto::kCmd_CreateComputePipeline12);

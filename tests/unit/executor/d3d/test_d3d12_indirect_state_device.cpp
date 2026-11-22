@@ -252,7 +252,7 @@ public:
                                                  nullptr, 0u, nullptr, 0xFFFFFFFFu, triangle_vs::program,
                                                  triangle_vs::program_bytes, nullptr, 0u, nullptr, 0u, nullptr, 0u,
                                                  triangle_ps::program, triangle_ps::program_bytes, nullptr, 0u, nullptr,
-                                                 0u));
+                                                 0u, nullptr, 0u));
 
         IndirectArgument taken[4] = {};
         for (std::uint32_t i = 0u; i < state_count; i++) taken[i] = state_arguments[i];

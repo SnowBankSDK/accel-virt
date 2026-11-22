@@ -105,9 +105,17 @@ namespace av::d3d12proto {
 // container, a DXIL program, or a DXBC token stream - and empty for a stage the pipeline does not have; the
 // signatures are every stage's, as registers. The input layout names vertex shader input registers. The
 // geometry shader's stream output declaration, if it has one, is stream_out with its buffer strides and the stream
-// that is rasterized (0xFFFFFFFF for none).
-[[nodiscard]] bool av_d3d12_CreateGraphicsPipeline12(::av::ClientTransport& t, uint32_t pipeline, uint32_t root, const GraphicsState& state, uint32_t element_count, const InputElement* elements, uint32_t signature_count, const SignatureEntry* signatures, uint32_t stream_out_count, const StreamOutDeclaration* stream_out, uint32_t stride_count, const uint32_t* strides, uint32_t rasterized_stream, const void* vs, uint64_t vs_size, const void* hs, uint64_t hs_size, const void* ds, uint64_t ds_size, const void* gs, uint64_t gs_size, const void* ps, uint64_t ps_size, const void* ms, uint64_t ms_size, const void* as, uint64_t as_size);
-[[nodiscard]] bool av_d3d12_CreateComputePipeline12(::av::ClientTransport& t, uint32_t pipeline, uint32_t root, const void* cs, uint64_t cs_size);
+// that is rasterized (0xFFFFFFFF for none). cached, when it is not empty, is a blob PipelineBlob12 answered for a
+// pipeline made before; the host makes the pipeline from it, and from the stages alone when its driver no longer takes
+// the blob.
+[[nodiscard]] bool av_d3d12_CreateGraphicsPipeline12(::av::ClientTransport& t, uint32_t pipeline, uint32_t root, const GraphicsState& state, uint32_t element_count, const InputElement* elements, uint32_t signature_count, const SignatureEntry* signatures, uint32_t stream_out_count, const StreamOutDeclaration* stream_out, uint32_t stride_count, const uint32_t* strides, uint32_t rasterized_stream, const void* vs, uint64_t vs_size, const void* hs, uint64_t hs_size, const void* ds, uint64_t ds_size, const void* gs, uint64_t gs_size, const void* ps, uint64_t ps_size, const void* ms, uint64_t ms_size, const void* as, uint64_t as_size, const void* cached, uint64_t cached_size);
+// A compute pipeline state. cached, when it is not empty, is a blob PipelineBlob12 answered for a pipeline made
+// before; the host makes the pipeline from it, and from cs alone when its driver no longer takes the blob.
+[[nodiscard]] bool av_d3d12_CreateComputePipeline12(::av::ClientTransport& t, uint32_t pipeline, uint32_t root, const void* cs, uint64_t cs_size, const void* cached, uint64_t cached_size);
+// The host's cached blob of a pipeline, what ID3D12PipelineState::GetCachedBlob answers, for a pipeline library
+// to keep and give back as the cached bytes of CreateGraphicsPipeline12 or CreateComputePipeline12. hresult is not S_OK
+// when the pipeline is unknown or the host has no blob, and then the blob is empty.
+[[nodiscard]] bool av_d3d12_PipelineBlob12(::av::ClientTransport& t, uint32_t pipeline, uint32_t* hresult, void* blob, uint64_t blob_capacity, uint64_t* blob_size);
 [[nodiscard]] bool av_d3d12_CreateCommandQueue12(::av::ClientTransport& t, uint32_t queue, uint32_t type, uint32_t priority, uint32_t flags);
 [[nodiscard]] bool av_d3d12_CreateCommandAllocator12(::av::ClientTransport& t, uint32_t allocator, uint32_t type);
 [[nodiscard]] bool av_d3d12_ResetCommandAllocator12(::av::ClientTransport& t, uint32_t allocator);

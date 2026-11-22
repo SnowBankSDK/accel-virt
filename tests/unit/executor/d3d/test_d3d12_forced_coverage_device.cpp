@@ -200,7 +200,7 @@ bool make_pipeline(av::D3dLoopback &wire, std::uint32_t id, std::uint32_t sample
                                              nullptr, 0xFFFFFFFFu, coverage_counting::vertex,
                                              coverage_counting::vertex_bytes, nullptr, 0u, nullptr, 0u, nullptr, 0u,
                                              coverage_counting::pixel, coverage_counting::pixel_bytes, nullptr, 0u,
-                                             nullptr, 0u);
+                                             nullptr, 0u, nullptr, 0u);
 }
 
 bool draw_counts(av::D3dLoopback &wire, Rig &rig, std::uint32_t pipeline, std::vector<std::uint32_t> &counts)

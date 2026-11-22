@@ -19,9 +19,11 @@ public:
     HRESULT STDMETHODCALLTYPE CreateCommandQueue(const D3D12_COMMAND_QUEUE_DESC *, REFIID, void **) override { return E_NOTIMPL; }
     HRESULT STDMETHODCALLTYPE CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE, REFIID, void **) override { return E_NOTIMPL; }
     HRESULT STDMETHODCALLTYPE CreateGraphicsPipelineState(const D3D12_GRAPHICS_PIPELINE_STATE_DESC *, REFIID, void **) override { return E_NOTIMPL; }
-    HRESULT STDMETHODCALLTYPE CreateComputePipelineState(const D3D12_COMPUTE_PIPELINE_STATE_DESC *, REFIID, void **) override
+    HRESULT STDMETHODCALLTYPE CreateComputePipelineState(const D3D12_COMPUTE_PIPELINE_STATE_DESC *desc, REFIID, void **) override
     {
         if (compiling != nullptr) compiling(compiling_context);
+        if (desc != nullptr && compute_calls < compute_capacity) cached[compute_calls] = desc->CachedPSO;
+        compute_calls++;
         return E_NOTIMPL;
     }
     HRESULT STDMETHODCALLTYPE CreateCommandList(UINT, D3D12_COMMAND_LIST_TYPE, ID3D12CommandAllocator *, ID3D12PipelineState *, REFIID, void **) override { return E_NOTIMPL; }
@@ -78,6 +80,9 @@ public:
     std::uint32_t views = 0u;
     std::uint32_t copies = 0u;
     bool          refuse_fence = false;
+    static constexpr std::uint32_t compute_capacity = 4u;
+    D3D12_CACHED_PIPELINE_STATE    cached[compute_capacity] = {};
+    std::uint32_t                  compute_calls = 0u;
     ID3D12Resource *committed = nullptr;
 };
 

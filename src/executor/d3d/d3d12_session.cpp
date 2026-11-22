@@ -1158,7 +1158,8 @@ bool D3d12Session::on_CreateGraphicsPipeline12(uint32_t pipeline, uint32_t root,
                                                uint64_t hs_size, const uint8_t *ds, uint64_t ds_size,
                                                const uint8_t *gs, uint64_t gs_size, const uint8_t *ps,
                                                uint64_t ps_size, const uint8_t *ms, uint64_t ms_size,
-                                               const uint8_t *as, uint64_t as_size)
+                                               const uint8_t *as, uint64_t as_size, const uint8_t *cached,
+                                               uint64_t cached_size)
 {
     AV_SCOPE("D3d12Session::on_CreateGraphicsPipeline12");
     const uint8_t *const code[D3d12PipelineBuilder::stage_count] = {vs, hs, ds, gs, ps, ms, as};
@@ -1166,7 +1167,8 @@ bool D3d12Session::on_CreateGraphicsPipeline12(uint32_t pipeline, uint32_t root,
     D3d12PipelineJob *const job = vacant_job();
     if (job == nullptr) return false;
     if (!pipelines_.graphics(pipeline, root, state, elements, element_count, signatures, signature_count, stream_out,
-                             stream_out_count, strides, stride_count, rasterized_stream, code, sizes, *job)) {
+                             stream_out_count, strides, stride_count, rasterized_stream, code, sizes, *job) ||
+        !job->use_cached(cached, cached_size)) {
         job->clear();
         return false;
     }
@@ -1174,16 +1176,36 @@ bool D3d12Session::on_CreateGraphicsPipeline12(uint32_t pipeline, uint32_t root,
     return true;
 }
 
-bool D3d12Session::on_CreateComputePipeline12(uint32_t pipeline, uint32_t root, const uint8_t *cs, uint64_t cs_size)
+bool D3d12Session::on_CreateComputePipeline12(uint32_t pipeline, uint32_t root, const uint8_t *cs, uint64_t cs_size,
+                                              const uint8_t *cached, uint64_t cached_size)
 {
     AV_SCOPE("D3d12Session::on_CreateComputePipeline12");
     D3d12PipelineJob *const job = vacant_job();
     if (job == nullptr) return false;
-    if (!pipelines_.compute(pipeline, root, cs, cs_size, *job)) {
+    if (!pipelines_.compute(pipeline, root, cs, cs_size, *job) || !job->use_cached(cached, cached_size)) {
         job->clear();
         return false;
     }
     compiles_.start(*job);
+    return true;
+}
+
+bool D3d12Session::on_PipelineBlob12(uint32_t pipeline_id, uint32_t &hresult, uint8_t *blob, uint64_t blob_capacity,
+                                     uint64_t &blob_size)
+{
+    AV_SCOPE("D3d12Session::on_PipelineBlob12");
+    blob_size = 0u;
+    hresult = static_cast<uint32_t>(E_INVALIDARG);
+    ID3D12PipelineState *const made = pipeline(pipeline_id);
+    if (made == nullptr) return true;
+    ID3DBlob *cached = nullptr;
+    const HRESULT got = made->GetCachedBlob(&cached);
+    hresult = static_cast<uint32_t>(got);
+    if (FAILED(got) || cached == nullptr) return true;
+    blob_size = cached->GetBufferSize();
+    if (blob_size <= blob_capacity && blob != nullptr)
+        __builtin_memcpy(blob, cached->GetBufferPointer(), static_cast<size_t>(blob_size));
+    cached->Release();
     return true;
 }
 

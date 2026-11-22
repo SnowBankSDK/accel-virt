@@ -39,6 +39,7 @@ inline constexpr uint32_t kCmd_CreateRootSignature12 = 0x00041300;
 inline constexpr uint32_t kCmd_CreateGraphicsPipeline12 = 0x00041301;
 inline constexpr uint32_t kCmd_CreateComputePipeline12 = 0x00041302;
 inline constexpr uint32_t kCmd_CreateCommandSignature12 = 0x00041303;
+inline constexpr uint32_t kCmd_PipelineBlob12 = 0x00041304;
 inline constexpr uint32_t kCmd_CreateCommandQueue12 = 0x00041400;
 inline constexpr uint32_t kCmd_CreateCommandAllocator12 = 0x00041401;
 inline constexpr uint32_t kCmd_ResetCommandAllocator12 = 0x00041402;
