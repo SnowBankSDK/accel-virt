@@ -32,6 +32,7 @@ public:
     void ready_with(const ReadyMessage &ready);
     void refuse_memory();
     void fall_silent();
+    void speak_again();
     void die_on_next_delivery();
     void die_on_delivery(std::uint32_t nth);
     void queue(const std::uint8_t *bytes, std::size_t length, std::uint32_t descriptors);

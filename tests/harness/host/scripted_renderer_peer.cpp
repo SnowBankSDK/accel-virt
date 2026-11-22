@@ -166,6 +166,7 @@ void ScriptedRendererPeer::answer_requests_with(Status outcome) { outcome_ = out
 void ScriptedRendererPeer::ready_with(const ReadyMessage &ready) { ready_ = ready; }
 void ScriptedRendererPeer::refuse_memory() { refuse_memory_ = true; }
 void ScriptedRendererPeer::fall_silent() { silent_ = true; }
+void ScriptedRendererPeer::speak_again() { silent_ = false; }
 void ScriptedRendererPeer::die_on_next_delivery() { dying_ = true; }
 void ScriptedRendererPeer::die_on_delivery(std::uint32_t nth) { die_at_ = nth; }
 std::uint32_t ScriptedRendererPeer::delivered() const { return delivered_; }

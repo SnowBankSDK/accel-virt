@@ -29,8 +29,8 @@ namespace av {
 RendererContextPlane::RendererContextPlane(Host &host, BlobTable &blobs, FenceInterrupts &interrupts)
     : host_(host), blobs_(blobs), interrupts_(interrupts), link_(host, *this), renderer_{}, executor_{},
       executor_length_(0u), gpu_uuid_(), capset_{}, capset_length_(0u), ready_(), configured_(false), alive_(false),
-      interrupts_on_(false), epoch_(0u), losses_{}, loss_count_(0u), images_{}, posted_{}, mirrored_(host, Pool::paged),
-      slots_{}, extents_{}, body_{}
+      interrupts_on_(false), taking_(false), doomed_(false), epoch_(0u), losses_{}, loss_count_(0u), images_{},
+      posted_{}, asked_(host, Pool::paged), mirrored_(host, Pool::paged), slots_{}, extents_{}, body_{}
 {
     AV_SCOPE("RendererContextPlane::RendererContextPlane");
     for (int &image : images_) image = -1;
@@ -135,7 +135,23 @@ uint32_t RendererContextPlane::sub_apis() const
 Status RendererContextPlane::hand_memory(HostBlobErrand &errand, ServiceThread &)
 {
     AV_SCOPE("RendererContextPlane::hand_memory");
-    errand.run_here();
+    host_.require_main_loop("RendererContextPlane::hand_memory");
+    uint8_t    body[AllocateMemoryMessage::encoded_size] = {};
+    const bool asks = alive_ && errand.kind() != HostBlobErrand::Kind::alias && !errand.request().places() &&
+                      AllocateMemoryMessage(errand.context(), errand.request().encoded(), errand.id(), errand.size())
+                              .encode(body, sizeof body) == Status::ok;
+    if (!asks) {
+        errand.run_here();
+        return Status::ok;
+    }
+    if (asked_.reserve(asked_.size() + 1u) != Status::ok) return Status::no_memory;
+    uint64_t sequence = 0u;
+    if (link_.ask(RendererMessageHeader::Kind::allocate_memory, body, sizeof body, sequence) != Status::ok) {
+        give_up();
+        return Status::no_memory;
+    }
+    static_cast<void>(asked_.append(AskedMemory(errand, sequence, host_.monotonic_nanoseconds() + answer_patience_ns)));
+    watch();
     return Status::ok;
 }
 
@@ -146,38 +162,10 @@ Status RendererContextPlane::hand_off(Errand &errand, ServiceThread &)
     return Status::ok;
 }
 
-Status RendererContextPlane::allocate_memory(uint32_t context, uint64_t key, uint64_t size, uint32_t request,
-                                             AvHostMemory &memory)
+Status RendererContextPlane::allocate_memory(uint32_t, uint64_t, uint64_t, uint32_t request, AvHostMemory &)
 {
     AV_SCOPE("RendererContextPlane::allocate_memory");
-    host_.require_main_loop("RendererContextPlane::allocate_memory");
-    if (HostMemoryRequest(request).places()) return Status::not_supported;
-    if (!alive_) return Status::no_memory;
-    uint8_t body[AllocateMemoryMessage::encoded_size] = {};
-    if (AllocateMemoryMessage(context, request, key, size).encode(body, sizeof body) != Status::ok)
-        return Status::no_memory;
-    const uint8_t *answer = nullptr;
-    uint32_t       answer_length = 0u;
-    int            received = -1;
-    uint32_t       count = 0u;
-    const Status   status = link_.exchange(RendererMessageHeader::Kind::allocate_memory, body, sizeof body,
-                                           RendererMessageHeader::Kind::allocated_memory, answer, answer_length,
-                                           &received, 1u, count);
-    if (status != Status::ok) {
-        give_up();
-        return Status::no_memory;
-    }
-    AllocatedMemoryMessage allocated;
-    if (allocated.decode(answer, answer_length, count) != Status::ok) {
-        if (count != 0u) host_.close_descriptor(received);
-        give_up();
-        return Status::no_memory;
-    }
-    if (!allocated.allocated()) return Status::no_memory;
-    memory.fd = received;
-    memory.caching = allocated.caching();
-    memory.size = allocated.size();
-    return Status::ok;
+    return HostMemoryRequest(request).places() ? Status::not_supported : Status::no_memory;
 }
 
 void RendererContextPlane::free_memory(uint64_t key)
@@ -431,6 +419,10 @@ Status RendererContextPlane::send_interrupt_lines()
 void RendererContextPlane::give_up()
 {
     AV_SCOPE("RendererContextPlane::give_up");
+    if (taking_) {
+        doomed_ = true;
+        return;
+    }
     host_.log("virtio-gpu-av: the renderer did not answer; it is ended and its contexts lost");
     host_.kill_renderer();
     renderer_lost();
@@ -458,6 +450,7 @@ void RendererContextPlane::renderer_lost()
     drop_images();
     for (ObjectStorage<RemoteContext> &slot : slots_)
         if (slot.constructed()) slot.object().lose();
+    fail_asked_memory();
     if (!may_restart()) {
         host_.log("virtio-gpu-av: the renderer keeps dying; it is not started again");
         return;
@@ -513,8 +506,43 @@ Status RendererContextPlane::send_export(uint32_t head, uint64_t key)
 Status RendererContextPlane::take(const RendererAnswer &answer)
 {
     AV_SCOPE("RendererContextPlane::take");
-    if (answer.kind() == RendererMessageHeader::Kind::exported_image) return take_export(answer);
-    return Status::not_found;
+    taking_ = true;
+    Status taken = Status::not_found;
+    if (answer.kind() == RendererMessageHeader::Kind::exported_image) taken = take_export(answer);
+    if (answer.kind() == RendererMessageHeader::Kind::allocated_memory) taken = take_memory(answer);
+    taking_ = false;
+    if (!doomed_) return taken;
+    doomed_ = false;
+    return Status::invalid_state;
+}
+
+Status RendererContextPlane::take_memory(const RendererAnswer &answer)
+{
+    AV_SCOPE("RendererContextPlane::take_memory");
+    uint32_t index = 0u;
+    while (index < asked_.size() && !asked_.at(index).awaits(answer.sequence())) index++;
+    if (index == asked_.size()) return Status::not_found;
+    const AskedMemory asked = asked_.at(index);
+    asked_.remove_swap(index);
+    AllocatedMemoryMessage allocated;
+    if (answer.decode(allocated) != Status::ok) {
+        answer.close();
+        asked.answer(Status::no_memory, AvHostMemory{-1, 0u, 0u});
+        return Status::malformed;
+    }
+    if (!allocated.allocated()) asked.answer(Status::no_memory, AvHostMemory{-1, 0u, 0u});
+    else asked.answer(Status::ok, AvHostMemory{answer.descriptor(), allocated.caching(), allocated.size()});
+    return Status::ok;
+}
+
+void RendererContextPlane::fail_asked_memory()
+{
+    AV_SCOPE("RendererContextPlane::fail_asked_memory");
+    while (asked_.size() != 0u) {
+        const AskedMemory asked = asked_.at(asked_.size() - 1u);
+        asked_.truncate(asked_.size() - 1u);
+        asked.answer(Status::no_memory, AvHostMemory{-1, 0u, 0u});
+    }
 }
 
 Status RendererContextPlane::take_export(const RendererAnswer &answer)
@@ -554,6 +582,7 @@ uint64_t RendererContextPlane::earliest_deadline() const
     AV_SCOPE("RendererContextPlane::earliest_deadline");
     uint64_t deadline = unwatched;
     for (const PostedExport &posted : posted_) posted.earlier(deadline);
+    for (const AskedMemory &asked : asked_) asked.earlier(deadline);
     return deadline;
 }
 
@@ -627,6 +656,30 @@ bool RendererContextPlane::PostedExport::idle() const
 {
     AV_SCOPE("RendererContextPlane::PostedExport::idle");
     return !sent_ && !queued_;
+}
+
+RendererContextPlane::AskedMemory::AskedMemory(HostBlobErrand &errand, uint64_t sequence, uint64_t deadline)
+    : errand_(&errand), sequence_(sequence), deadline_(deadline)
+{
+    AV_SCOPE("RendererContextPlane::AskedMemory::AskedMemory");
+}
+
+bool RendererContextPlane::AskedMemory::awaits(uint64_t sequence) const
+{
+    AV_SCOPE("RendererContextPlane::AskedMemory::awaits");
+    return sequence_ == sequence;
+}
+
+void RendererContextPlane::AskedMemory::answer(Status status, const AvHostMemory &memory) const
+{
+    AV_SCOPE("RendererContextPlane::AskedMemory::answer");
+    errand_->answer(status, memory);
+}
+
+void RendererContextPlane::AskedMemory::earlier(uint64_t &deadline) const
+{
+    AV_SCOPE("RendererContextPlane::AskedMemory::earlier");
+    if (deadline_ < deadline) deadline = deadline_;
 }
 
 bool RendererContextPlane::compose_planes(const uint8_t *, const AvScanoutPlane *, uint32_t, uint32_t, uint32_t,
@@ -786,6 +839,7 @@ bool RendererContextPlane::invariants_hold() const
 {
     AV_SCOPE("RendererContextPlane::invariants_hold");
     if (!mirrored_.invariants_hold() || loss_count_ > max_losses || (alive_ && !configured_)) return false;
+    if (!asked_.invariants_hold() || (!alive_ && asked_.size() != 0u)) return false;
     for (const PostedExport &posted : posted_)
         if (!alive_ && !posted.idle()) return false;
     for (const ObjectStorage<RemoteContext> &slot : slots_)

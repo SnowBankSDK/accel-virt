@@ -23,6 +23,7 @@ namespace av {
 
 class SurfacePair;
 class SurfacePoint;
+class HostBlobErrand;
 
 class FenceInterrupts;
 class Host;
@@ -114,6 +115,8 @@ private:
     [[nodiscard]] Status send_export(uint32_t head, uint64_t key);
     [[nodiscard]] Status take(const RendererAnswer &answer) override;
     [[nodiscard]] Status take_export(const RendererAnswer &answer);
+    [[nodiscard]] Status take_memory(const RendererAnswer &answer);
+    void                 fail_asked_memory();
     bool                 adopt_export(const ExportedImageMessage &exported, int received, AvExportedImage &image);
     uint64_t             earliest_deadline() const;
     void                 watch();
@@ -142,6 +145,19 @@ private:
 
         friend struct RendererContextPlaneProbe;
     };
+    class AskedMemory {
+    public:
+        AskedMemory(HostBlobErrand &errand, uint64_t sequence, uint64_t deadline);
+
+        bool awaits(uint64_t sequence) const;
+        void answer(Status status, const AvHostMemory &memory) const;
+        void earlier(uint64_t &deadline) const;
+
+    private:
+        HostBlobErrand *errand_;
+        uint64_t        sequence_;
+        uint64_t        deadline_;
+    };
 
     Host            &host_;
     BlobTable       &blobs_;
@@ -157,11 +173,14 @@ private:
     bool             configured_;
     bool             alive_;
     bool             interrupts_on_;
+    bool             taking_;
+    bool             doomed_;
     uint32_t         epoch_;
     uint64_t         losses_[max_losses];
     uint32_t         loss_count_;
     int              images_[ExportedImageMessage::slots];
     PostedExport     posted_[max_heads];
+    GrowableArray<AskedMemory> asked_;
     GrowableArray<uint32_t> mirrored_;
     ObjectStorage<RemoteContext> slots_[max_contexts];
     RendererExtent   extents_[GuestBlobMessage::max_extents];

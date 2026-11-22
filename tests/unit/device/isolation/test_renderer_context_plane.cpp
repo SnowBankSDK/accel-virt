@@ -3,9 +3,14 @@
 #include "device/abi/av_executor.h"
 #include "device/context/local_context_plane.hpp"
 #include "device/control/control_request.hpp"
+#include "device/control/held_requests.hpp"
 #include "device/fence/fence_interrupts.hpp"
 #include "device/isolation/renderer_context_plane.hpp"
 #include "device/memory/blob_table.hpp"
+#include "device/memory/host_blob_errand.hpp"
+#include "device/memory/host_blob_table.hpp"
+#include "device/recording/wire_recorder.hpp"
+#include "device/threading/service_thread.hpp"
 #include "device/renderer/renderer_host_blobs.hpp"
 #include "device/renderer/renderer_service.hpp"
 #include "harness/executor/mock_executor_ops.hpp"
@@ -24,6 +29,7 @@
 #include "proto/context/protocol_version.hpp"
 #include "proto/renderer/allocated_memory_message.hpp"
 #include "proto/renderer/export_image_message.hpp"
+#include "proto/resources/host_memory_request.hpp"
 #include "proto/renderer/exported_image_message.hpp"
 #include "proto/renderer/renderer_message_header.hpp"
 #include "proto/resources/surface_point.hpp"
@@ -72,6 +78,15 @@ struct RendererContextPlaneProbe {
     static void lose_context(RendererContextPlane &plane, std::uint32_t id)
     {
         RemoteContextProbe::set_lost(plane.slot_of(id)->object(), true);
+    }
+    static void corrupt_asked(RendererContextPlane &plane, std::uint32_t capacity)
+    {
+        GrowableArrayProbe::corrupt_capacity(plane.asked_, capacity);
+    }
+    static void ask_while_lost(RendererContextPlane &plane, HostBlobErrand &errand)
+    {
+        plane.alive_ = false;
+        static_cast<void>(plane.asked_.append(RendererContextPlane::AskedMemory(errand, 1u, 1u)));
     }
     static void post_while_lost(RendererContextPlane &plane, bool queued)
     {
@@ -588,112 +603,6 @@ TEST(renderer_context_plane_blobs, mirrors_guest_blobs_and_their_release)
   CHECK_EQ(fixture.peer().delivered(), sent);
   CHECK(fixture.plane().invariants_hold()); }
 
-TEST(renderer_context_plane_memory, is_allocated_in_the_renderer_and_its_dma_buf_crosses_to_qemu)
-{ Fixture fixture;
-  CHECK_STATUS(fixture.start(), Status::ok);
-  fixture.ops().set_memory_caching(AV_MEMORY_WRITE_COMBINED);
-  AvHostMemory memory = {-1, 0u, 0u};
-  CHECK_STATUS(fixture.plane().allocate_memory(3u, 0x01000002u, 0x2000u, 0x101u, memory), Status::ok);
-  CHECK(memory.fd >= 0);
-  CHECK_EQ(memory.size, 0x2000u);
-  CHECK_EQ(memory.caching, std::uint32_t{AV_MEMORY_WRITE_COMBINED});
-  const MockExecutorOps::MemoryRequest asked = fixture.ops().last_memory_request();
-  CHECK_EQ(asked.key, 0x01000002u);
-  CHECK_EQ(asked.size, 0x2000u);
-  CHECK_EQ(asked.request, 0x101u);
-  CHECK(fixture.renderer_owners().owns(3u, 0x01000002u));
-  CHECK(!fixture.renderer_owners().owns(4u, 0x01000002u));
-  CHECK_EQ(fixture.qemu().place_in_hostmem(memory.fd, 0x2000u, 0u), Status::ok);
-  static_cast<std::uint8_t *>(fixture.qemu().placed_at(0u))[0x1001] = 0x4Bu;
-  CHECK_EQ(fixture.ops().memory_bytes(asked.domain, 0x01000002u)[0x1001], 0x4Bu);
-  fixture.qemu().remove_from_hostmem(0u, 0x2000u);
-  CHECK_EQ(fixture.qemu().live_descriptors(), 1u);
-  fixture.qemu().close_descriptor(memory.fd);
-  CHECK_EQ(fixture.peer().resources().live_descriptors(), 1u);
-  fixture.plane().free_memory(0x01000002u);
-  fixture.peer().settle();
-  CHECK_EQ(fixture.ops().memory_frees(), 1u);
-  CHECK_EQ(fixture.ops().held_memory(), 0u);
-  CHECK(!fixture.renderer_owners().owns(3u, 0x01000002u));
-  CHECK(fixture.plane().alive());
-  CHECK(fixture.plane().invariants_hold()); }
-
-TEST(renderer_context_plane_memory, memory_the_renderer_does_not_give_is_out_of_memory_and_ends_nothing)
-{ Fixture fixture;
-  AvHostMemory memory = {-1, 0u, 0u};
-  CHECK_STATUS(fixture.plane().allocate_memory(3u, 0x01000002u, 0x1000u, 1u, memory), Status::no_memory);
-  fixture.plane().free_memory(0x01000002u);
-  CHECK_EQ(fixture.peer().delivered(), 0u);
-  CHECK_STATUS(fixture.start(), Status::ok);
-  fixture.ops().refuse_memory_at(1u);
-  CHECK_STATUS(fixture.plane().allocate_memory(3u, 0x01000002u, 0x1000u, 1u, memory), Status::no_memory);
-  CHECK_EQ(memory.fd, -1);
-  CHECK_STATUS(fixture.plane().allocate_memory(3u, 77u, 0x1000u, 1u, memory), Status::no_memory);
-  CHECK_EQ(fixture.ops().memory_frees(), 1u);
-  CHECK_EQ(fixture.ops().held_memory(), 0u);
-  fixture.ops().withhold_memory_descriptor_at(1u);
-  CHECK_STATUS(fixture.plane().allocate_memory(3u, 0x01000003u, 0x1000u, 1u, memory), Status::no_memory);
-  CHECK_EQ(fixture.ops().held_memory(), 0u);
-  CHECK_EQ(fixture.qemu().renderer_kills(), 0u);
-  CHECK(fixture.plane().alive());
-  CHECK_EQ(fixture.qemu().live_descriptors(), 0u); }
-
-TEST(renderer_context_plane_memory, a_renderer_that_does_not_answer_or_cannot_be_told_is_given_up_on)
-{ Fixture fixture;
-  CHECK_STATUS(fixture.start(), Status::ok);
-  fixture.peer().fall_silent();
-  AvHostMemory memory = {-1, 0u, 0u};
-  CHECK_STATUS(fixture.plane().allocate_memory(3u, 0x01000002u, 0x1000u, 1u, memory), Status::no_memory);
-  CHECK_EQ(fixture.qemu().renderer_kills(), 1u);
-  CHECK_EQ(fixture.plane().epoch(), 2u);
-  fixture.qemu().renderer_gone();
-  fixture.plane().free_memory(0x01000002u);
-  CHECK_EQ(fixture.qemu().renderer_kills(), 2u);
-  CHECK_EQ(fixture.plane().epoch(), 3u);
-  CHECK_EQ(fixture.qemu().live_descriptors(), 0u); }
-
-TEST(renderer_context_plane_memory, a_garbled_answer_closes_what_came_with_it_and_ends_the_renderer)
-{ MockHost qemu;
-  av::ScriptedRendererPeer peer(qemu);
-  av::BlobTable blobs(qemu);
-  av::FenceInterrupts interrupts(qemu);
-  RendererContextPlane plane(qemu, blobs, interrupts);
-  static std::uint8_t region[0x1000];
-  qemu.add_guest_region(0u, region, sizeof region);
-  qemu.connect_renderer(peer);
-  CHECK_STATUS(plane.configure(renderer_path, executor_path), Status::ok);
-  CHECK_STATUS(plane.start(uuid, capset()), Status::ok);
-  std::uint8_t datagram[av::RendererMessageHeader::encoded_size + av::AllocatedMemoryMessage::encoded_size] = {};
-  CHECK_STATUS(av::RendererMessageHeader(av::RendererMessageHeader::Kind::allocated_memory,
-                                         av::AllocatedMemoryMessage::encoded_size, 3u)
-                   .encode(datagram, sizeof datagram),
-               Status::ok);
-  CHECK_STATUS(av::AllocatedMemoryMessage(AV_MEMORY_WRITE_BACK, 0x1000u)
-                   .encode(datagram + av::RendererMessageHeader::encoded_size, av::AllocatedMemoryMessage::encoded_size),
-               Status::ok);
-  peer.queue(datagram, sizeof datagram, 0u);
-  AvHostMemory memory = {-1, 0u, 0u};
-  CHECK_STATUS(plane.allocate_memory(3u, 0x01000002u, 0x1000u, 1u, memory), Status::no_memory);
-  CHECK_EQ(qemu.renderer_kills(), 1u);
-  CHECK_EQ(memory.fd, -1);
-  std::uint8_t nothing[av::RendererMessageHeader::encoded_size + av::AllocatedMemoryMessage::encoded_size] = {};
-  CHECK_STATUS(av::RendererMessageHeader(av::RendererMessageHeader::Kind::allocated_memory,
-                                         av::AllocatedMemoryMessage::encoded_size, 6u)
-                   .encode(nothing, sizeof nothing),
-               Status::ok);
-  peer.queue(nothing, sizeof nothing, 1u);
-  CHECK_STATUS(plane.allocate_memory(3u, 0x01000002u, 0x1000u, 1u, memory), Status::no_memory);
-  CHECK_EQ(qemu.renderer_kills(), 2u);
-  CHECK_EQ(qemu.live_descriptors(), 0u);
-  CHECK_STATUS(av::RendererMessageHeader(av::RendererMessageHeader::Kind::allocated_memory,
-                                         av::AllocatedMemoryMessage::encoded_size, 9u)
-                   .encode(nothing, sizeof nothing),
-               Status::ok);
-  peer.queue(nothing, sizeof nothing, 0u);
-  CHECK_STATUS(plane.allocate_memory(3u, 0x01000002u, 0x1000u, 1u, memory), Status::no_memory);
-  CHECK_EQ(qemu.renderer_kills(), 2u);
-  CHECK(plane.alive()); }
-
 TEST(renderer_context_plane_shared, a_guest_release_reaches_the_renderer_s_executor)
 { Fixture fixture;
   CHECK_STATUS(fixture.start(), Status::ok);
@@ -999,17 +908,6 @@ TEST(renderer_context_plane, owns_no_memory_domain_of_its_own_and_composes_nothi
 TEST(renderer_context_plane, exports_images_only_on_the_main_loop_that_owns_its_link)
 { Fixture fixture;
   CHECK(!fixture.plane().exports_off_main_loop()); }
-
-TEST(renderer_context_plane_memory, a_request_the_renderer_could_not_be_asked_is_out_of_memory_and_asks_nothing)
-{ Fixture fixture;
-  CHECK_STATUS(fixture.start(), Status::ok);
-  const std::uint32_t delivered = fixture.peer().delivered();
-  AvHostMemory        memory = {-1, 0u, 0u};
-  CHECK_STATUS(fixture.plane().allocate_memory(0u, 0x01000002u, 0x1000u, 1u, memory), Status::no_memory);
-  CHECK_STATUS(fixture.plane().allocate_memory(3u, 0u, 0x1000u, 1u, memory), Status::no_memory);
-  CHECK_STATUS(fixture.plane().allocate_memory(3u, 0x01000002u, 0u, 1u, memory), Status::no_memory);
-  CHECK_EQ(fixture.peer().delivered(), delivered);
-  CHECK(fixture.plane().alive()); }
 
 TEST(renderer_context_plane_blobs, a_blob_with_no_id_is_kept_until_released_and_its_release_ends_the_renderer)
 { Fixture fixture;
@@ -1479,4 +1377,288 @@ TEST(renderer_context_plane_invariants, an_export_out_or_asked_for_with_no_rende
   PostingPlane rig;
   CHECK_STATUS(rig.start(), Status::ok);
   RendererContextPlaneProbe::post_while_lost(rig.plane(), true);
+  CHECK(!rig.plane().invariants_hold()); }
+
+namespace {
+
+constexpr std::uint8_t  empty_request[24] = {};
+constexpr std::uint32_t blob_id = 0x01000002u;
+
+std::uint32_t status_answer(Status status) { return static_cast<std::uint32_t>(status); }
+
+av::HostMemoryRequest upload() { return av::HostMemoryRequest(av::HostMemoryRequest::Kind::upload, 0u); }
+
+class BlobMemory {
+public:
+    BlobMemory(MockHost &qemu, RendererContextPlane &plane)
+        : qemu_(qemu), table_(qemu), recorder_(qemu), held_(qemu), service_(qemu)
+    {
+        CHECK_STATUS(table_.initialize(plane, service_, held_, recorder_), Status::ok);
+    }
+    ~BlobMemory() { table_.release_all(); }
+
+    av::HostBlobTable &table() { return table_; }
+
+    Status ask(av::MockRequest &request, std::uint32_t id, std::uint64_t size)
+    {
+        av::ControlRequest control(qemu_, &request);
+        std::uint32_t      ticket = av::HeldRequests::no_ticket;
+        const Status       held = held_.hold(control, &status_answer, ticket);
+        if (held != Status::ok) return held;
+        const Status handed = table_.create(id, 3u, upload(), size, ticket);
+        if (handed != Status::ok) held_.conclude(ticket, handed);
+        return handed;
+    }
+
+private:
+    MockHost         &qemu_;
+    av::HostBlobTable table_;
+    av::WireRecorder  recorder_;
+    av::HeldRequests  held_;
+    av::ServiceThread service_;
+};
+
+Status answer_of(const av::MockRequest &request)
+{
+    return request.answered() ? static_cast<Status>(request.response_type()) : Status::invalid_state;
+}
+
+}
+
+TEST(renderer_context_plane_memory, is_asked_of_the_renderer_without_waiting_and_its_answer_concludes_the_blob)
+{ Fixture fixture;
+  CHECK_STATUS(fixture.start(), Status::ok);
+  BlobMemory memory(fixture.qemu(), fixture.plane());
+  fixture.ops().set_memory_caching(AV_MEMORY_WRITE_COMBINED);
+  av::MockRequest     request(empty_request, sizeof empty_request);
+  const std::uint32_t delivered = fixture.peer().delivered();
+  CHECK_STATUS(memory.ask(request, blob_id, 0x2000u), Status::ok);
+  CHECK(!request.answered());
+  CHECK_EQ(memory.table().pending(), 1u);
+  CHECK_EQ(fixture.peer().delivered(), delivered + 1u);
+  fixture.plane().take_answers();
+  CHECK_STATUS(answer_of(request), Status::ok);
+  CHECK_EQ(memory.table().pending(), 0u);
+  const MockExecutorOps::MemoryRequest asked = fixture.ops().last_memory_request();
+  CHECK_EQ(asked.key, blob_id);
+  CHECK_EQ(asked.size, 0x2000u);
+  CHECK_EQ(asked.request, upload().encoded());
+  CHECK(fixture.renderer_owners().owns(3u, blob_id));
+  std::uint32_t caching = 0u;
+  CHECK_STATUS(memory.table().map(blob_id, 0u, caching), Status::ok);
+  static_cast<std::uint8_t *>(fixture.qemu().placed_at(0u))[0x1001] = 0x4Bu;
+  CHECK_EQ(fixture.ops().memory_bytes(asked.domain, blob_id)[0x1001], 0x4Bu);
+  CHECK_STATUS(memory.table().unmap(blob_id), Status::ok);
+  CHECK_STATUS(memory.table().release(blob_id), Status::ok);
+  fixture.peer().settle();
+  CHECK_EQ(fixture.ops().memory_frees(), 1u);
+  CHECK_EQ(fixture.ops().held_memory(), 0u);
+  CHECK(!fixture.renderer_owners().owns(3u, blob_id));
+  CHECK_EQ(fixture.qemu().renderer_kills(), 0u);
+  CHECK(fixture.plane().invariants_hold()); }
+
+TEST(renderer_context_plane_memory, memory_the_renderer_does_not_give_is_out_of_memory_and_ends_nothing)
+{ Fixture fixture;
+  CHECK_STATUS(fixture.start(), Status::ok);
+  BlobMemory memory(fixture.qemu(), fixture.plane());
+  fixture.ops().refuse_memory_at(1u);
+  av::MockRequest request(empty_request, sizeof empty_request);
+  CHECK_STATUS(memory.ask(request, blob_id, 0x1000u), Status::ok);
+  fixture.plane().take_answers();
+  CHECK_STATUS(answer_of(request), Status::no_memory);
+  CHECK_EQ(memory.table().live(), 0u);
+  CHECK_EQ(fixture.qemu().renderer_kills(), 0u);
+  CHECK(fixture.plane().alive());
+  CHECK_EQ(fixture.qemu().live_descriptors(), 0u); }
+
+TEST(renderer_context_plane_memory, memory_unanswered_for_as_long_as_the_guest_waits_ends_the_renderer_and_the_blob)
+{ PostingPlane rig;
+  CHECK_STATUS(rig.start(), Status::ok);
+  BlobMemory memory(rig.qemu(), rig.plane());
+  rig.peer().fall_silent();
+  av::MockRequest request(empty_request, sizeof empty_request);
+  CHECK_STATUS(memory.ask(request, blob_id, 0x1000u), Status::ok);
+  CHECK_EQ(rig.qemu().armed_renderer_deadline(), started_at + RendererContextPlane::answer_patience_ns);
+  rig.qemu().set_clock(started_at + 3000u);
+  CHECK(rig.plane().post_export(uuid, 0u, 0x10u));
+  CHECK_EQ(rig.qemu().armed_renderer_deadline(), started_at + RendererContextPlane::answer_patience_ns);
+  rig.qemu().set_clock(started_at + RendererContextPlane::answer_patience_ns - 1u);
+  rig.plane().take_answers();
+  CHECK(!request.answered());
+  rig.peer().speak_again();
+  rig.qemu().set_clock(started_at + RendererContextPlane::answer_patience_ns);
+  rig.plane().take_answers();
+  CHECK_EQ(rig.qemu().renderer_kills(), 1u);
+  CHECK(rig.plane().alive());
+  CHECK_STATUS(answer_of(request), Status::no_memory);
+  CHECK_EQ(memory.table().live(), 0u);
+  CHECK_EQ(memory.table().pending(), 0u);
+  CHECK(rig.plane().invariants_hold()); }
+
+TEST(renderer_context_plane_memory, the_deadline_stays_with_an_older_export_when_memory_is_asked_later)
+{ PostingPlane rig;
+  CHECK_STATUS(rig.start(), Status::ok);
+  BlobMemory memory(rig.qemu(), rig.plane());
+  CHECK(rig.plane().post_export(uuid, 0u, 0x10u));
+  rig.qemu().set_clock(started_at + 3000u);
+  av::MockRequest request(empty_request, sizeof empty_request);
+  CHECK_STATUS(memory.ask(request, blob_id, 0x1000u), Status::ok);
+  CHECK_EQ(rig.qemu().armed_renderer_deadline(), started_at + RendererContextPlane::answer_patience_ns);
+  rig.plane().take_answers();
+  CHECK_STATUS(answer_of(request), Status::ok);
+  CHECK_EQ(rig.qemu().armed_renderer_deadline(), started_at + RendererContextPlane::answer_patience_ns); }
+
+TEST(renderer_context_plane_memory, an_answer_arriving_while_a_request_waits_concludes_the_blob_and_the_wait_goes_on)
+{ PostingPlane rig;
+  CHECK_STATUS(rig.start(), Status::ok);
+  BlobMemory memory(rig.qemu(), rig.plane());
+  av::MockRequest request(empty_request, sizeof empty_request);
+  CHECK_STATUS(memory.ask(request, blob_id, 0x1000u), Status::ok);
+  CHECK(!request.answered());
+  CHECK_STATUS(rig.plane().create(3u, "waiting"), Status::ok);
+  CHECK_STATUS(answer_of(request), Status::ok);
+  CHECK(rig.plane().holds(3u));
+  CHECK(memory.table().contains(blob_id));
+  CHECK_EQ(rig.qemu().renderer_kills(), 0u); }
+
+TEST(renderer_context_plane_memory, a_blob_released_or_reset_while_its_memory_is_asked_gives_the_memory_back_when_it_comes)
+{ { PostingPlane rig;
+    CHECK_STATUS(rig.start(), Status::ok);
+    BlobMemory memory(rig.qemu(), rig.plane());
+    av::MockRequest request(empty_request, sizeof empty_request);
+    CHECK_STATUS(memory.ask(request, blob_id, 0x1000u), Status::ok);
+    CHECK_STATUS(memory.table().release(blob_id), Status::ok);
+    CHECK(memory.table().contains(blob_id));
+    rig.plane().take_answers();
+    CHECK_STATUS(answer_of(request), Status::ok);
+    CHECK(!memory.table().contains(blob_id));
+    CHECK(rig.peer().kind_at(rig.peer().delivered() - 1u) == av::RendererMessageHeader::Kind::free_memory);
+    CHECK_EQ(rig.qemu().live_descriptors(), 0u); }
+  PostingPlane rig;
+  CHECK_STATUS(rig.start(), Status::ok);
+  BlobMemory memory(rig.qemu(), rig.plane());
+  av::MockRequest request(empty_request, sizeof empty_request);
+  CHECK_STATUS(memory.ask(request, blob_id, 0x1000u), Status::ok);
+  memory.table().release_all();
+  rig.plane().take_answers();
+  CHECK_STATUS(answer_of(request), Status::no_memory);
+  CHECK(rig.peer().kind_at(rig.peer().delivered() - 1u) == av::RendererMessageHeader::Kind::free_memory);
+  CHECK_EQ(rig.qemu().live_descriptors(), 0u);
+  CHECK_EQ(rig.qemu().renderer_kills(), 0u); }
+
+TEST(renderer_context_plane_memory, a_free_that_cannot_be_sent_while_an_answer_is_taken_ends_the_renderer_once_afterwards)
+{ PostingPlane rig;
+  CHECK_STATUS(rig.start(), Status::ok);
+  BlobMemory memory(rig.qemu(), rig.plane());
+  av::MockRequest request(empty_request, sizeof empty_request);
+  CHECK_STATUS(memory.ask(request, blob_id, 0x1000u), Status::ok);
+  CHECK_STATUS(memory.table().release(blob_id), Status::ok);
+  rig.qemu().fail_renderer_send_at(1u);
+  rig.plane().take_answers();
+  CHECK_STATUS(answer_of(request), Status::ok);
+  CHECK_EQ(rig.qemu().renderer_kills(), 1u);
+  CHECK_EQ(rig.plane().epoch(), 2u);
+  CHECK(rig.plane().alive());
+  CHECK(rig.plane().invariants_hold()); }
+
+TEST(renderer_context_plane_memory, a_garbled_answer_closes_what_came_with_it_fails_the_blob_and_ends_the_renderer)
+{ PostingPlane rig;
+  CHECK_STATUS(rig.start(), Status::ok);
+  BlobMemory memory(rig.qemu(), rig.plane());
+  rig.peer().fall_silent();
+  av::MockRequest request(empty_request, sizeof empty_request);
+  const std::uint32_t sent = rig.peer().delivered();
+  CHECK_STATUS(memory.ask(request, blob_id, 0x1000u), Status::ok);
+  std::uint8_t datagram[av::RendererMessageHeader::encoded_size + av::AllocatedMemoryMessage::encoded_size] = {};
+  CHECK_STATUS(av::AllocatedMemoryMessage(AV_MEMORY_WRITE_BACK, 0x1000u)
+                   .encode(datagram + av::RendererMessageHeader::encoded_size, av::AllocatedMemoryMessage::encoded_size),
+               Status::ok);
+  CHECK_STATUS(av::RendererMessageHeader(av::RendererMessageHeader::Kind::allocated_memory,
+                                         av::AllocatedMemoryMessage::encoded_size, 99u)
+                   .encode(datagram, sizeof datagram),
+               Status::ok);
+  rig.peer().queue(datagram, sizeof datagram, 1u);
+  CHECK_STATUS(av::RendererMessageHeader(av::RendererMessageHeader::Kind::allocated_memory,
+                                         av::AllocatedMemoryMessage::encoded_size, rig.peer().sequence_at(sent))
+                   .encode(datagram, sizeof datagram),
+               Status::ok);
+  rig.peer().queue(datagram, sizeof datagram, 2u);
+  rig.peer().speak_again();
+  rig.plane().take_answers();
+  CHECK_STATUS(answer_of(request), Status::no_memory);
+  CHECK_EQ(rig.qemu().renderer_kills(), 1u);
+  CHECK_EQ(memory.table().live(), 0u);
+  CHECK_EQ(rig.qemu().live_descriptors(), 0u); }
+
+TEST(renderer_context_plane_memory, a_renderer_lost_while_memory_is_asked_fails_the_blob_at_once)
+{ PostingPlane rig;
+  CHECK_STATUS(rig.start(), Status::ok);
+  BlobMemory memory(rig.qemu(), rig.plane());
+  rig.peer().fall_silent();
+  av::MockRequest request(empty_request, sizeof empty_request);
+  CHECK_STATUS(memory.ask(request, blob_id, 0x1000u), Status::ok);
+  rig.peer().speak_again();
+  rig.qemu().renderer_gone();
+  rig.plane().renderer_lost();
+  CHECK_STATUS(answer_of(request), Status::no_memory);
+  CHECK_EQ(memory.table().live(), 0u);
+  CHECK(rig.plane().alive());
+  CHECK(rig.plane().invariants_hold());
+  rig.qemu().renderer_gone();
+  rig.plane().free_memory(blob_id);
+  CHECK_EQ(rig.qemu().renderer_kills(), 1u);
+  CHECK_EQ(rig.plane().epoch(), 3u); }
+
+TEST(renderer_context_plane_memory, what_cannot_be_asked_of_the_renderer_fails_where_it_stands_and_asks_nothing)
+{ PostingPlane rig;
+  { BlobMemory      memory(rig.qemu(), rig.plane());
+    av::MockRequest request(empty_request, sizeof empty_request);
+    CHECK_STATUS(memory.ask(request, blob_id, 0x1000u), Status::ok);
+    CHECK_STATUS(answer_of(request), Status::no_memory);
+    rig.plane().free_memory(blob_id);
+    CHECK_EQ(rig.peer().delivered(), 0u); }
+  CHECK_STATUS(rig.start(), Status::ok);
+  BlobMemory          memory(rig.qemu(), rig.plane());
+  av::ServiceThread   service(rig.qemu());
+  const std::uint32_t sent = rig.peer().delivered();
+  av::HostBlobErrand  alias(memory.table(), rig.plane(), av::HostBlobErrand::Kind::alias, blob_id, 1u);
+  CHECK_STATUS(rig.plane().hand_memory(alias, service), Status::ok);
+  CHECK_STATUS(alias.status(), Status::no_memory);
+  av::HostBlobErrand placed(memory.table(), rig.plane(), av::HostBlobErrand::Kind::create, blob_id, 2u);
+  placed.ask(3u, av::HostMemoryRequest(av::HostMemoryRequest::Kind::placed, 0u), 0x1000u, 0u);
+  CHECK_STATUS(rig.plane().hand_memory(placed, service), Status::ok);
+  CHECK_STATUS(placed.status(), Status::not_supported);
+  av::HostBlobErrand nameless(memory.table(), rig.plane(), av::HostBlobErrand::Kind::lend, blob_id, 3u);
+  nameless.ask(0u, upload(), 0x1000u, 0u);
+  CHECK_STATUS(rig.plane().hand_memory(nameless, service), Status::ok);
+  CHECK_STATUS(nameless.status(), Status::no_memory);
+  CHECK_EQ(rig.peer().delivered(), sent);
+  av::HostBlobErrand unsent(memory.table(), rig.plane(), av::HostBlobErrand::Kind::lend, blob_id, 4u);
+  unsent.ask(3u, upload(), 0x1000u, 0u);
+  rig.qemu().fail_allocation_at(1u);
+  CHECK_STATUS(rig.plane().hand_memory(unsent, service), Status::no_memory);
+  CHECK_EQ(rig.peer().delivered(), sent);
+  rig.qemu().fail_renderer_send_at(1u);
+  CHECK_STATUS(rig.plane().hand_memory(unsent, service), Status::no_memory);
+  CHECK_EQ(rig.qemu().renderer_kills(), 1u);
+  CHECK(rig.plane().alive());
+  AvHostMemory refused = {-1, 0u, 0u};
+  CHECK_STATUS(rig.plane().allocate_memory(3u, blob_id, 0x1000u, upload().encoded(), refused), Status::no_memory);
+  CHECK_STATUS(rig.plane().allocate_memory(3u, blob_id, 0x1000u,
+                                           av::HostMemoryRequest(av::HostMemoryRequest::Kind::placed, 0u).encoded(),
+                                           refused),
+               Status::not_supported);
+  CHECK_EQ(refused.fd, -1); }
+
+TEST(renderer_context_plane_invariants, memory_asked_with_no_renderer_is_seen)
+{ PostingPlane rig;
+  CHECK_STATUS(rig.start(), Status::ok);
+  CHECK(rig.plane().invariants_hold());
+  RendererContextPlaneProbe::corrupt_asked(rig.plane(), 7u);
+  CHECK(!rig.plane().invariants_hold());
+  RendererContextPlaneProbe::corrupt_asked(rig.plane(), 0u);
+  CHECK(rig.plane().invariants_hold());
+  BlobMemory         memory(rig.qemu(), rig.plane());
+  av::HostBlobErrand errand(memory.table(), rig.plane(), av::HostBlobErrand::Kind::lend, blob_id, 1u);
+  RendererContextPlaneProbe::ask_while_lost(rig.plane(), errand);
   CHECK(!rig.plane().invariants_hold()); }
