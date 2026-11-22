@@ -45,6 +45,14 @@ void HostBlobErrand::place_through(ContextExecutor &executor)
     placer_ = &executor;
 }
 
+void HostBlobErrand::answer(Status status, const AvHostMemory &memory)
+{
+    AV_SCOPE("HostBlobErrand::answer");
+    status_ = status;
+    memory_ = memory;
+    finish(true);
+}
+
 void HostBlobErrand::run()
 {
     AV_SCOPE("HostBlobErrand::run");

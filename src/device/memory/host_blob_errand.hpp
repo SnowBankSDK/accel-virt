@@ -28,6 +28,7 @@ public:
     void lay(size_t offset, uint32_t entries);
     bool alias_from(ContextPlane &holder, uint64_t key);
     void place_through(ContextExecutor &executor);
+    void answer(Status status, const AvHostMemory &memory);
 
     Kind                kind() const;
     uint32_t            id() const;
