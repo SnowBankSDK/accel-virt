@@ -6,6 +6,8 @@
 
 #include <cstring>
 #include <fcntl.h>
+#include <sched.h>
+#include <unistd.h>
 
 namespace av {
 
@@ -58,6 +60,17 @@ LoopbackRendererPeer::LoopbackRendererPeer(MockHost &qemu, const AvExecutorOps &
 LoopbackRendererPeer::~LoopbackRendererPeer()
 {
     process_.destroy();
+    drop_answers();
+}
+
+void LoopbackRendererPeer::drop_answers()
+{
+    for (; queued_ != 0u; queued_--) {
+        const Answer &dropped = answers_[first_];
+        if (dropped.owned && dropped.descriptor >= 0) ::close(dropped.descriptor);
+        first_ = (first_ + 1u) % max_answers;
+    }
+    first_ = 0u;
 }
 
 void LoopbackRendererPeer::started()
@@ -66,8 +79,7 @@ void LoopbackRendererPeer::started()
     process_.destroy();
     if (process_.construct(qemu_, executor_) != Status::ok)
         TestRegistry::instance().record_failure(__FILE__, __LINE__, "the renderer process could not be made");
-    first_ = 0u;
-    queued_ = 0u;
+    drop_answers();
     spoken_to_ = false;
     silent_ = false;
     generation_++;
@@ -86,6 +98,7 @@ void LoopbackRendererPeer::deliver(const std::uint8_t *bytes, std::size_t length
     last_outcome_ = process.service.receive(bytes, length, descriptors, count, slot.bytes, sizeof slot.bytes,
                                             answer_length, answer_descriptor);
     slot.descriptor = answer_descriptor;
+    slot.owned = false;
     if (last_outcome_ == Status::ok) process.remember_region(bytes, length);
     if (answer_length == 0u || silent_) return;
     if (queued_ == max_answers) {
@@ -100,17 +113,46 @@ bool LoopbackRendererPeer::answer(std::uint8_t *buffer, std::size_t capacity, st
                                   std::uint32_t capacity_descriptors, std::uint32_t &count)
 {
     count = 0u;
+    if (queued_ == 0u) settle();
     if (queued_ == 0u) return false;
     const Answer &next = answers_[first_];
     first_ = (first_ + 1u) % max_answers;
     queued_--;
     length = next.length;
     std::memcpy(buffer, next.bytes, next.length < capacity ? next.length : capacity);
-    if (next.descriptor >= 0 && capacity_descriptors != 0u) {
-        const int crossed = ::fcntl(next.descriptor, F_DUPFD_CLOEXEC, 0);
-        if (crossed >= 0) descriptors[count++] = crossed;
-    }
+    const int crossed = next.owned || next.descriptor < 0 ? next.descriptor : ::fcntl(next.descriptor, F_DUPFD_CLOEXEC, 0);
+    if (crossed >= 0 && capacity_descriptors != 0u) descriptors[count++] = crossed;
+    else if (crossed >= 0) ::close(crossed);
     return true;
+}
+
+void LoopbackRendererPeer::settle()
+{
+    Process &process = process_.object();
+    for (std::uint32_t spins = 0u; spins < max_spins; spins++) {
+        static_cast<void>(process.host.run_main_loop());
+        collect();
+        if (process.service.outstanding() == 0u) return;
+        sched_yield();
+    }
+}
+
+void LoopbackRendererPeer::collect()
+{
+    MockRendererResources &resources = process_.object().resources;
+    for (;;) {
+        Answer     &slot = answers_[(first_ + queued_) % max_answers];
+        int         sent = -1;
+        int         crossed = -1;
+        if (!resources.take_answer(slot.bytes, sizeof slot.bytes, slot.length, sent, crossed)) return;
+        slot.descriptor = crossed;
+        slot.owned = true;
+        if (silent_ || queued_ == max_answers) {
+            if (crossed >= 0) ::close(crossed);
+            continue;
+        }
+        queued_++;
+    }
 }
 
 void LoopbackRendererPeer::fall_silent()

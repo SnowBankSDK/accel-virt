@@ -18,6 +18,7 @@ namespace av {
 class LoopbackRendererPeer final : public RendererPeer {
 public:
     static constexpr std::uint32_t max_answers = 16u;
+    static constexpr std::uint32_t max_spins = 50000000u;
 
     LoopbackRendererPeer(MockHost &qemu, const AvExecutorOps &executor);
     ~LoopbackRendererPeer();
@@ -29,6 +30,7 @@ public:
                 std::uint32_t capacity_descriptors, std::uint32_t &count) override;
 
     void                   fall_silent();
+    void                   settle();
     std::uint32_t          generation() const;
     Status                 last_outcome() const;
     std::uint32_t          delivered() const;
@@ -59,7 +61,11 @@ private:
         std::uint8_t bytes[RendererService::answer_capacity];
         std::size_t  length;
         int          descriptor;
+        bool         owned;
     };
+
+    void collect();
+    void drop_answers();
 
     MockHost               &qemu_;
     const AvExecutorOps   &executor_;

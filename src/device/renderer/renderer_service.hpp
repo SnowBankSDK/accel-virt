@@ -1,12 +1,16 @@
 #ifndef AV_RENDERER_SERVICE_HPP
 #define AV_RENDERER_SERVICE_HPP
 
+#include "core/support/object_pool.hpp"
 #include "core/support/status.hpp"
 #include "device/context/local_context_plane.hpp"
 #include "device/fence/fence_interrupts.hpp"
 #include "device/memory/blob_table.hpp"
+#include "device/renderer/image_export.hpp"
+#include "device/renderer/memory_allocation.hpp"
 #include "device/renderer/renderer_host_blobs.hpp"
 #include "device/recording/wire_recorder.hpp"
+#include "device/threading/service_thread.hpp"
 #include "proto/context/capset_info.hpp"
 #include "proto/renderer/exported_image_message.hpp"
 #include "proto/renderer/guest_blob_message.hpp"
@@ -37,20 +41,20 @@ public:
     [[nodiscard]] Status receive(const uint8_t *datagram, size_t length, const int *descriptors, uint32_t count,
                                  uint8_t *answer, size_t capacity, size_t &answer_length, int &answer_descriptor);
     void                 shut_down();
+    void                 exported(ImageExport &errand, bool ran);
+    void                 allocated(MemoryAllocation &errand, bool ran);
 
-    bool ready() const;
-    bool invariants_hold() const;
+    bool     ready() const;
+    uint32_t outstanding() const;
+    bool     invariants_hold() const;
 
 private:
     [[nodiscard]] Status hello(const RendererMessageHeader &header, const uint8_t *body, uint32_t count,
                                uint8_t *answer, size_t capacity, size_t &answer_length);
     [[nodiscard]] Status region(const uint8_t *body, uint32_t length, const int *descriptors, uint32_t count);
     [[nodiscard]] Status guest_blob(const uint8_t *body, uint32_t length, uint32_t count);
-    [[nodiscard]] Status allocate_memory(const RendererMessageHeader &header, const uint8_t *body, uint32_t count,
-                                         uint8_t *answer, size_t capacity, size_t &answer_length,
-                                         int &answer_descriptor);
+    [[nodiscard]] Status allocate_memory(const RendererMessageHeader &header, const uint8_t *body, uint32_t count);
     [[nodiscard]] Status free_memory(const uint8_t *body, uint32_t length, uint32_t count);
-    void                 close_answered_memory();
     [[nodiscard]] Status shared_released(const uint8_t *body, uint32_t length, uint32_t count);
     [[nodiscard]] Status blob_retired(const uint8_t *body, uint32_t length, uint32_t count);
     [[nodiscard]] Status context(RendererMessageHeader::Kind kind, const uint8_t *body, uint32_t length,
@@ -61,9 +65,9 @@ private:
                                          uint32_t count);
     [[nodiscard]] Status answer_with(uint64_t sequence, Status outcome, uint8_t *answer, size_t capacity,
                                      size_t &answer_length) const;
-    [[nodiscard]] Status export_image(const RendererMessageHeader &header, const uint8_t *body, uint32_t count,
-                                      uint8_t *answer, size_t capacity, size_t &answer_length,
-                                      int &answer_descriptor);
+    [[nodiscard]] Status export_image(const RendererMessageHeader &header, const uint8_t *body, uint32_t count);
+    void                 send_late(RendererMessageHeader::Kind kind, uint64_t sequence, uint32_t length,
+                                   int descriptor);
     void                 close_all(const int *descriptors, uint32_t count);
 
     Host              &host_;
@@ -77,10 +81,14 @@ private:
     LocalContextPlane  plane_;
     CapsetInfo         capset_;
     bool               ready_;
-    int                answered_memory_;
     AvExportedImage   sent_[image_slots];
     RendererExtent     extents_[GuestBlobMessage::max_extents];
     uint8_t            entries_[GuestBlobMessage::max_extents * 16u];
+    uint8_t            late_[answer_capacity];
+    ServiceThread      export_thread_;
+    ServiceThread      memory_thread_;
+    ObjectPool<ImageExport> exports_;
+    ObjectPool<MemoryAllocation> allocations_;
 
     friend struct RendererServiceProbe;
 };

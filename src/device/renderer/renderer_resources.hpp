@@ -4,6 +4,7 @@
 #include "core/support/status.hpp"
 #include "device/abi/av_executor.h"
 
+#include <stddef.h>
 #include <stdint.h>
 
 namespace av {
@@ -16,6 +17,7 @@ public:
     virtual void                 take_interrupt_lines(const int *descriptors, uint32_t count) = 0;
     virtual void                 drop_interrupt_lines() = 0;
     [[nodiscard]] virtual Status load_executor(const char *path, uint32_t length, const AvExecutorOps *&ops) = 0;
+    [[nodiscard]] virtual Status send_answer(const uint8_t *bytes, size_t length, int descriptor) = 0;
 
 protected:
     RendererResources() = default;

@@ -3,6 +3,7 @@
 #include "core/trace/function_scope.hpp"
 #include "device/control/control_request.hpp"
 #include "device/host/host.hpp"
+#include "device/memory/host_memory_free.hpp"
 #include "device/renderer/doorbell_offers.hpp"
 #include "device/renderer/forwarded_request.hpp"
 #include "device/renderer/guest_memory_table.hpp"
@@ -35,7 +36,8 @@ RendererService::RendererService(Host &host, RendererResources &resources, Guest
                                  DoorbellOffers &doorbells)
     : host_(host), resources_(resources), memory_(memory), doorbells_(doorbells), recorder_(host), blobs_(host),
       owners_(host), interrupts_(host), plane_(host, blobs_, owners_, interrupts_, recorder_), capset_(),
-      ready_(false), answered_memory_(-1), sent_{}, extents_{}, entries_{}
+      ready_(false), sent_{}, extents_{}, entries_{}, late_{}, export_thread_(host), memory_thread_(host),
+      exports_(host), allocations_(host)
 {
     AV_SCOPE("RendererService::RendererService");
     for (AvExportedImage &sent : sent_) sent.fd = -1;
@@ -45,7 +47,6 @@ RendererService::~RendererService()
 {
     AV_SCOPE("RendererService::~RendererService");
     shut_down();
-    close_answered_memory();
 }
 
 Status RendererService::receive(const uint8_t *datagram, size_t length, const int *descriptors, uint32_t count,
@@ -55,7 +56,6 @@ Status RendererService::receive(const uint8_t *datagram, size_t length, const in
     host_.require_main_loop("RendererService::receive");
     answer_length = 0u;
     answer_descriptor = -1;
-    close_answered_memory();
     RendererMessageHeader header;
     if (datagram == nullptr || header.decode(datagram, length) != Status::ok) {
         close_all(descriptors, count);
@@ -77,8 +77,7 @@ Status RendererService::receive(const uint8_t *datagram, size_t length, const in
     switch (header.kind()) {
     case Kind::region: return region(body, body_length, descriptors, count);
     case Kind::guest_blob: return guest_blob(body, body_length, count);
-    case Kind::allocate_memory:
-        return allocate_memory(header, body, count, answer, capacity, answer_length, answer_descriptor);
+    case Kind::allocate_memory: return allocate_memory(header, body, count);
     case Kind::free_memory: return free_memory(body, body_length, count);
     case Kind::blob_retired: return blob_retired(body, body_length, count);
     case Kind::shared_released: return shared_released(body, body_length, count);
@@ -90,8 +89,7 @@ Status RendererService::receive(const uint8_t *datagram, size_t length, const in
     case Kind::create_context:
     case Kind::destroy_context: decoded = context(header.kind(), body, body_length, count, outcome); break;
     case Kind::bind_context: decoded = bind(body, body_length, descriptors, count, outcome); break;
-    case Kind::export_image:
-        return export_image(header, body, count, answer, capacity, answer_length, answer_descriptor);
+    case Kind::export_image: return export_image(header, body, count);
     default: return Status::malformed;
     }
     if (decoded != Status::ok) return decoded;
@@ -111,7 +109,8 @@ Status RendererService::hello(const RendererMessageHeader &header, const uint8_t
     if (loaded != Status::ok) return loaded;
     if (plane_.accept(ops) != Status::ok || ops == nullptr) return Status::not_supported;
     if (blobs_.initialize() == Status::no_memory || owners_.initialize() == Status::no_memory ||
-        interrupts_.initialize() == Status::no_memory || plane_.initialize() == Status::no_memory)
+        interrupts_.initialize() == Status::no_memory || plane_.initialize() == Status::no_memory ||
+        export_thread_.start() == Status::no_memory || memory_thread_.start() == Status::no_memory)
         return Status::no_memory;
     static_cast<void>(plane_.start(hello.gpu_uuid(), capset_));
     const uint32_t     sub_apis = plane_.sub_apis() & ((1u << ReadyMessage::lanes) - 1u);
@@ -167,42 +166,51 @@ Status RendererService::guest_blob(const uint8_t *body, uint32_t length, uint32_
     return blobs_.create_guest(message.blob(), message.size(), request, 0u, message.count());
 }
 
-Status RendererService::allocate_memory(const RendererMessageHeader &header, const uint8_t *body, uint32_t count,
-                                        uint8_t *answer, size_t capacity, size_t &answer_length,
-                                        int &answer_descriptor)
+Status RendererService::allocate_memory(const RendererMessageHeader &header, const uint8_t *body, uint32_t count)
 {
     AV_SCOPE("RendererService::allocate_memory");
     AllocateMemoryMessage request;
     if (request.decode(body, header.body_length(), count) != Status::ok) return Status::malformed;
-    AvHostMemory           memory = {-1, 0u, 0u};
-    AllocatedMemoryMessage allocated;
-    if (plane_.allocate_memory(request.context(), request.key(), request.size(), request.request(), memory) ==
-        Status::ok) {
-        const bool kept = memory.fd >= 0 && request.key() <= UINT32_MAX &&
+    MemoryAllocation *errand = nullptr;
+    if (allocations_.create(errand, *this, plane_, header.sequence(), request) != Status::ok) {
+        static_cast<void>(AllocatedMemoryMessage().encode(late_ + RendererMessageHeader::encoded_size,
+                                                          AllocatedMemoryMessage::encoded_size));
+        send_late(RendererMessageHeader::Kind::allocated_memory, header.sequence(),
+                  AllocatedMemoryMessage::encoded_size, -1);
+        return Status::no_memory;
+    }
+    if (memory_thread_.post(*errand) != Status::ok) errand->conclude();
+    return Status::ok;
+}
+
+void RendererService::allocated(MemoryAllocation &errand, bool ran)
+{
+    AV_SCOPE("RendererService::allocated");
+    host_.require_main_loop("RendererService::allocated");
+    const AllocateMemoryMessage &request = errand.request();
+    const AvHostMemory          &memory = errand.memory();
+    AllocatedMemoryMessage       allocated;
+    int                          descriptor = -1;
+    if (ran && errand.status() == Status::ok) {
+        const AllocatedMemoryMessage described(memory.caching, memory.size);
+        const bool kept = !errand.forsaken() && memory.fd >= 0 && request.key() <= UINT32_MAX &&
+                          described.encode(late_ + RendererMessageHeader::encoded_size,
+                                           AllocatedMemoryMessage::encoded_size) == Status::ok &&
                           owners_.adopt(static_cast<uint32_t>(request.key()), request.context()) == Status::ok;
         if (kept) {
-            allocated = AllocatedMemoryMessage(memory.caching, memory.size);
-            answered_memory_ = memory.fd;
-            answer_descriptor = memory.fd;
+            allocated = described;
+            descriptor = memory.fd;
         } else {
             if (memory.fd >= 0) resources_.close_descriptor(memory.fd);
-            plane_.free_memory(request.key());
+            if (errand.frees_itself()) plane_.free_memory(request.key());
         }
     }
-    const RendererMessageHeader out(RendererMessageHeader::Kind::allocated_memory,
-                                    AllocatedMemoryMessage::encoded_size, header.sequence());
-    if (answer == nullptr || capacity < RendererMessageHeader::encoded_size + AllocatedMemoryMessage::encoded_size) {
-        answer_descriptor = -1;
-        return Status::too_large;
-    }
-    static_cast<void>(out.encode(answer, capacity));
-    if (allocated.encode(answer + RendererMessageHeader::encoded_size, capacity - RendererMessageHeader::encoded_size) !=
-        Status::ok) {
-        answer_descriptor = -1;
-        return Status::too_large;
-    }
-    answer_length = RendererMessageHeader::encoded_size + AllocatedMemoryMessage::encoded_size;
-    return Status::ok;
+    static_cast<void>(allocated.encode(late_ + RendererMessageHeader::encoded_size,
+                                       AllocatedMemoryMessage::encoded_size));
+    send_late(RendererMessageHeader::Kind::allocated_memory, errand.sequence(), AllocatedMemoryMessage::encoded_size,
+              descriptor);
+    if (descriptor >= 0) resources_.close_descriptor(descriptor);
+    static_cast<void>(allocations_.destroy(&errand));
 }
 
 Status RendererService::free_memory(const uint8_t *body, uint32_t length, uint32_t count)
@@ -211,15 +219,17 @@ Status RendererService::free_memory(const uint8_t *body, uint32_t length, uint32
     FreeMemoryMessage message;
     if (message.decode(body, length, count) != Status::ok) return Status::malformed;
     if (message.key() <= UINT32_MAX) owners_.forget(static_cast<uint32_t>(message.key()));
-    plane_.free_memory(message.key());
+    const auto asked = [&message](const MemoryAllocation &allocation) {
+        return allocation.request().key() == message.key() && !allocation.forsaken();
+    };
+    const Status handed = HostMemoryFree::hand_off(host_, plane_, memory_thread_, message.key());
+    for (MemoryAllocation *allocation = allocations_.find_if(asked); allocation != nullptr;
+         allocation = allocations_.find_if(asked)) {
+        if (handed == Status::ok) allocation->forsake();
+        else allocation->disown();
+    }
+    if (handed != Status::ok) plane_.free_memory(message.key());
     return Status::ok;
-}
-
-void RendererService::close_answered_memory()
-{
-    AV_SCOPE("RendererService::close_answered_memory");
-    if (answered_memory_ >= 0) resources_.close_descriptor(answered_memory_);
-    answered_memory_ = -1;
 }
 
 Status RendererService::shared_released(const uint8_t *body, uint32_t length, uint32_t count)
@@ -305,39 +315,56 @@ Status RendererService::answer_with(uint64_t sequence, Status outcome, uint8_t *
     return Status::ok;
 }
 
-Status RendererService::export_image(const RendererMessageHeader &header, const uint8_t *body, uint32_t count,
-                                     uint8_t *answer, size_t capacity, size_t &answer_length, int &answer_descriptor)
+Status RendererService::export_image(const RendererMessageHeader &header, const uint8_t *body, uint32_t count)
 {
     AV_SCOPE("RendererService::export_image");
     ExportImageMessage request;
     if (request.decode(body, header.body_length(), count) != Status::ok) return Status::malformed;
-    AvExportedImage     image = {};
-    ExportedImageMessage exported;
-    if (plane_.export_image(capset_.gpu().uuid(), request.key(), image) && image.fd >= 0 &&
-        image.slot < image_slots) {
+    ImageExport *errand = nullptr;
+    if (exports_.create(errand, *this, plane_, capset_.gpu().uuid(), header.sequence(), request.key()) != Status::ok) {
+        static_cast<void>(ExportedImageMessage().encode(late_ + RendererMessageHeader::encoded_size,
+                                                        ExportedImageMessage::encoded_size));
+        send_late(RendererMessageHeader::Kind::exported_image, header.sequence(), ExportedImageMessage::encoded_size,
+                  -1);
+        return Status::no_memory;
+    }
+    if (export_thread_.post(*errand) != Status::ok) errand->conclude();
+    return Status::ok;
+}
+
+void RendererService::exported(ImageExport &errand, bool ran)
+{
+    AV_SCOPE("RendererService::exported");
+    host_.require_main_loop("RendererService::exported");
+    const AvExportedImage &image = errand.image();
+    ExportedImageMessage   exported;
+    int                    descriptor = -1;
+    if (ran && errand.found() && image.fd >= 0 && image.slot < image_slots) {
         AvExportedImage &sent = sent_[image.slot];
-        const bool        fresh = sent.fd != image.fd || sent.width != image.width || sent.height != image.height ||
+        const bool       fresh = sent.fd != image.fd || sent.width != image.width || sent.height != image.height ||
                            sent.stride != image.stride || sent.offset != image.offset || sent.fourcc != image.fourcc ||
                            sent.modifier != image.modifier;
-        exported = ExportedImageMessage(fresh, image.slot, image.width, image.height, image.stride, image.offset,
-                                        image.fourcc, image.modifier);
-        if (fresh) answer_descriptor = image.fd;
-        sent = image;
+        const ExportedImageMessage described(fresh, image.slot, image.width, image.height, image.stride, image.offset,
+                                             image.fourcc, image.modifier);
+        if (described.encode(late_ + RendererMessageHeader::encoded_size, ExportedImageMessage::encoded_size) ==
+            Status::ok) {
+            exported = described;
+            descriptor = fresh ? image.fd : -1;
+            sent = image;
+        }
     }
-    const RendererMessageHeader out(RendererMessageHeader::Kind::exported_image, ExportedImageMessage::encoded_size,
-                                    header.sequence());
-    if (answer == nullptr || capacity < RendererMessageHeader::encoded_size + ExportedImageMessage::encoded_size) {
-        answer_descriptor = -1;
-        return Status::too_large;
-    }
-    static_cast<void>(out.encode(answer, capacity));
-    if (exported.encode(answer + RendererMessageHeader::encoded_size, capacity - RendererMessageHeader::encoded_size) !=
-        Status::ok) {
-        answer_descriptor = -1;
-        return Status::too_large;
-    }
-    answer_length = RendererMessageHeader::encoded_size + ExportedImageMessage::encoded_size;
-    return Status::ok;
+    static_cast<void>(exported.encode(late_ + RendererMessageHeader::encoded_size, ExportedImageMessage::encoded_size));
+    send_late(RendererMessageHeader::Kind::exported_image, errand.sequence(), ExportedImageMessage::encoded_size,
+              descriptor);
+    static_cast<void>(exports_.destroy(&errand));
+}
+
+void RendererService::send_late(RendererMessageHeader::Kind kind, uint64_t sequence, uint32_t length, int descriptor)
+{
+    AV_SCOPE("RendererService::send_late");
+    static_cast<void>(RendererMessageHeader(kind, length, sequence).encode(late_, sizeof late_));
+    if (resources_.send_answer(late_, RendererMessageHeader::encoded_size + length, descriptor) != Status::ok)
+        host_.log("an answer could not be sent to QEMU");
 }
 
 void RendererService::close_all(const int *descriptors, uint32_t count)
@@ -350,6 +377,8 @@ void RendererService::close_all(const int *descriptors, uint32_t count)
 void RendererService::shut_down()
 {
     AV_SCOPE("RendererService::shut_down");
+    export_thread_.stop();
+    memory_thread_.stop();
     plane_.destroy_all();
     interrupts_.disconnect();
     resources_.drop_interrupt_lines();
@@ -363,6 +392,12 @@ bool RendererService::ready() const
 {
     AV_SCOPE("RendererService::ready");
     return ready_;
+}
+
+uint32_t RendererService::outstanding() const
+{
+    AV_SCOPE("RendererService::outstanding");
+    return export_thread_.outstanding() + memory_thread_.outstanding();
 }
 
 bool RendererService::invariants_hold() const

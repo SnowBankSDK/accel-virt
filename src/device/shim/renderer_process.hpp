@@ -26,11 +26,11 @@ public:
 private:
     bool serve_message();
 
+    PosixRendererChannel channel_;
     GuestMemoryTable     memory_;
     DoorbellOffers       doorbells_;
     PosixRendererHost    host_;
     RendererService      service_;
-    PosixRendererChannel channel_;
     uint8_t              datagram_[RendererMessageHeader::encoded_size + RendererMessageHeader::max_body_length];
     uint8_t              answer_[RendererService::answer_capacity];
 };
