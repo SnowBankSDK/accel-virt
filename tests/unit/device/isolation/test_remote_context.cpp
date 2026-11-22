@@ -9,6 +9,7 @@
 #include "harness/host/mock_request.hpp"
 #include "harness/framework/test_registry.hpp"
 #include "harness/host/mock_host.hpp"
+#include "harness/host/recording_late_answers.hpp"
 #include "harness/host/scripted_renderer_peer.hpp"
 #include "proto/context/capset_info.hpp"
 #include "proto/context/context_setup.hpp"
@@ -59,7 +60,7 @@ av::ContextSetup setup(std::uint32_t ring_id = ring)
 
 class Fixture {
 public:
-    Fixture() : blobs_(host_), interrupts_(host_), peer_(host_), link_(host_), context_(host_, blobs_, interrupts_, context_id, "test")
+    Fixture() : blobs_(host_), interrupts_(host_), peer_(host_), answers_(), link_(host_, answers_), context_(host_, blobs_, interrupts_, context_id, "test")
     {
         host_.add_guest_ram(ram, 0x3000u);
         static_cast<void>(blobs_.initialize());
@@ -120,6 +121,7 @@ private:
     BlobTable            blobs_;
     av::FenceInterrupts  interrupts_;
     ScriptedRendererPeer peer_;
+    av::RecordingLateAnswers answers_;
     av::RendererLink     link_;
     RemoteContext        context_;
     std::uint32_t        events_ = 0u;

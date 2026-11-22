@@ -683,6 +683,11 @@ void PosixRendererHost::kill_renderer()
     AV_SCOPE("PosixRendererHost::kill_renderer");
 }
 
+void PosixRendererHost::renderer_deadline(uint64_t)
+{
+    AV_SCOPE("PosixRendererHost::renderer_deadline");
+}
+
 Status PosixRendererHost::receive_export(int, uint8_t *, size_t, size_t &length)
 {
     AV_SCOPE("PosixRendererHost::receive_export");

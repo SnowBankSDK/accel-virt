@@ -7,6 +7,7 @@
 #include "core/trace/state_writer.hpp"
 #include "device/fence/fence_interrupts.hpp"
 #include "device/host/host.hpp"
+#include "device/isolation/renderer_answer.hpp"
 #include "device/memory/blob_window.hpp"
 #include "proto/context/capset_info.hpp"
 #include "proto/context/context_setup.hpp"
@@ -26,10 +27,10 @@
 namespace av {
 
 RendererContextPlane::RendererContextPlane(Host &host, BlobTable &blobs, FenceInterrupts &interrupts)
-    : host_(host), blobs_(blobs), interrupts_(interrupts), link_(host), renderer_{}, executor_{},
+    : host_(host), blobs_(blobs), interrupts_(interrupts), link_(host, *this), renderer_{}, executor_{},
       executor_length_(0u), gpu_uuid_(), capset_{}, capset_length_(0u), ready_(), configured_(false), alive_(false),
-      interrupts_on_(false), epoch_(0u), losses_{}, loss_count_(0u), images_{}, mirrored_(host, Pool::paged), slots_{},
-      extents_{}, body_{}
+      interrupts_on_(false), epoch_(0u), losses_{}, loss_count_(0u), images_{}, posted_{}, mirrored_(host, Pool::paged),
+      slots_{}, extents_{}, body_{}
 {
     AV_SCOPE("RendererContextPlane::RendererContextPlane");
     for (int &image : images_) image = -1;
@@ -255,6 +256,7 @@ Status RendererContextPlane::destroy(uint32_t id)
 void RendererContextPlane::destroy_all()
 {
     AV_SCOPE("RendererContextPlane::destroy_all");
+    for (PostedExport &posted : posted_) posted.reset();
     for (ObjectStorage<RemoteContext> &slot : slots_)
         if (slot.constructed()) static_cast<void>(destroy(slot.object().id()));
     while (mirrored_.size() != 0u) blob_released(mirrored_.at(mirrored_.size() - 1u));
@@ -470,6 +472,7 @@ void RendererContextPlane::drop_images()
         if (image >= 0) host_.close_descriptor(image);
         image = -1;
     }
+    for (PostedExport &posted : posted_) posted = PostedExport{};
 }
 
 bool RendererContextPlane::composes() const
@@ -482,6 +485,148 @@ bool RendererContextPlane::exports_off_main_loop() const
 {
     AV_SCOPE("RendererContextPlane::exports_off_main_loop");
     return false;
+}
+
+bool RendererContextPlane::post_export(const uint8_t *, uint32_t head, uint64_t key)
+{
+    AV_SCOPE("RendererContextPlane::post_export");
+    host_.require_main_loop("RendererContextPlane::post_export");
+    if (!alive_ || head >= max_heads) return false;
+    if (!posted_[head].post(key) || send_export(head, key) == Status::ok) return true;
+    give_up();
+    return false;
+}
+
+Status RendererContextPlane::send_export(uint32_t head, uint64_t key)
+{
+    AV_SCOPE("RendererContextPlane::send_export");
+    uint8_t  body[ExportImageMessage::encoded_size] = {};
+    uint64_t sequence = 0u;
+    static_cast<void>(ExportImageMessage(key).encode(body, sizeof body));
+    const Status sent = link_.ask(RendererMessageHeader::Kind::export_image, body, sizeof body, sequence);
+    if (sent != Status::ok) return sent;
+    posted_[head].sent(sequence, host_.monotonic_nanoseconds() + answer_patience_ns);
+    watch();
+    return Status::ok;
+}
+
+Status RendererContextPlane::take(const RendererAnswer &answer)
+{
+    AV_SCOPE("RendererContextPlane::take");
+    if (answer.kind() == RendererMessageHeader::Kind::exported_image) return take_export(answer);
+    return Status::not_found;
+}
+
+Status RendererContextPlane::take_export(const RendererAnswer &answer)
+{
+    AV_SCOPE("RendererContextPlane::take_export");
+    uint32_t head = 0u;
+    while (head < max_heads && !posted_[head].awaits(answer.sequence())) head++;
+    if (head == max_heads) return Status::not_found;
+    PostedExport &posted = posted_[head];
+    const bool    shown = posted.answered();
+    ExportedImageMessage exported;
+    if (answer.decode(exported) != Status::ok) {
+        answer.close();
+        return Status::malformed;
+    }
+    AvExportedImage image = {};
+    if (adopt_export(exported, answer.descriptor(), image) && shown) static_cast<void>(host_.show_image(head, image));
+    uint64_t key = 0u;
+    if (!posted.next(key)) return Status::ok;
+    return send_export(head, key) == Status::ok ? Status::ok : Status::invalid_state;
+}
+
+void RendererContextPlane::take_answers()
+{
+    AV_SCOPE("RendererContextPlane::take_answers");
+    host_.require_main_loop("RendererContextPlane::take_answers");
+    if (!alive_) return;
+    if (link_.drain() != Status::ok || host_.monotonic_nanoseconds() >= earliest_deadline()) {
+        give_up();
+        return;
+    }
+    watch();
+}
+
+uint64_t RendererContextPlane::earliest_deadline() const
+{
+    AV_SCOPE("RendererContextPlane::earliest_deadline");
+    uint64_t deadline = unwatched;
+    for (const PostedExport &posted : posted_) posted.earlier(deadline);
+    return deadline;
+}
+
+void RendererContextPlane::watch()
+{
+    AV_SCOPE("RendererContextPlane::watch");
+    const uint64_t deadline = earliest_deadline();
+    if (deadline != unwatched) host_.renderer_deadline(deadline);
+}
+
+RendererContextPlane::PostedExport::PostedExport()
+    : sent_(false), stale_(false), queued_(false), sequence_(0u), deadline_(0u), queued_key_(0u)
+{
+    AV_SCOPE("RendererContextPlane::PostedExport::PostedExport");
+}
+
+bool RendererContextPlane::PostedExport::post(uint64_t key)
+{
+    AV_SCOPE("RendererContextPlane::PostedExport::post");
+    if (!sent_) return true;
+    queued_ = true;
+    queued_key_ = key;
+    return false;
+}
+
+void RendererContextPlane::PostedExport::sent(uint64_t sequence, uint64_t deadline)
+{
+    AV_SCOPE("RendererContextPlane::PostedExport::sent");
+    sent_ = true;
+    stale_ = false;
+    sequence_ = sequence;
+    deadline_ = deadline;
+}
+
+bool RendererContextPlane::PostedExport::awaits(uint64_t sequence) const
+{
+    AV_SCOPE("RendererContextPlane::PostedExport::awaits");
+    return sent_ && sequence_ == sequence;
+}
+
+bool RendererContextPlane::PostedExport::answered()
+{
+    AV_SCOPE("RendererContextPlane::PostedExport::answered");
+    sent_ = false;
+    return !stale_;
+}
+
+bool RendererContextPlane::PostedExport::next(uint64_t &key)
+{
+    AV_SCOPE("RendererContextPlane::PostedExport::next");
+    if (!queued_) return false;
+    queued_ = false;
+    key = queued_key_;
+    return true;
+}
+
+void RendererContextPlane::PostedExport::reset()
+{
+    AV_SCOPE("RendererContextPlane::PostedExport::reset");
+    stale_ = sent_;
+    queued_ = false;
+}
+
+void RendererContextPlane::PostedExport::earlier(uint64_t &deadline) const
+{
+    AV_SCOPE("RendererContextPlane::PostedExport::earlier");
+    if (sent_ && deadline_ < deadline) deadline = deadline_;
+}
+
+bool RendererContextPlane::PostedExport::idle() const
+{
+    AV_SCOPE("RendererContextPlane::PostedExport::idle");
+    return !sent_ && !queued_;
 }
 
 bool RendererContextPlane::compose_planes(const uint8_t *, const AvScanoutPlane *, uint32_t, uint32_t, uint32_t,
@@ -515,6 +660,12 @@ bool RendererContextPlane::export_image(const uint8_t *, uint64_t key, AvExporte
         give_up();
         return false;
     }
+    return adopt_export(exported, received, image);
+}
+
+bool RendererContextPlane::adopt_export(const ExportedImageMessage &exported, int received, AvExportedImage &image)
+{
+    AV_SCOPE("RendererContextPlane::adopt_export");
     if (!exported.found()) return false;
     int &held = images_[exported.slot()];
     if (exported.fresh()) {
@@ -635,6 +786,8 @@ bool RendererContextPlane::invariants_hold() const
 {
     AV_SCOPE("RendererContextPlane::invariants_hold");
     if (!mirrored_.invariants_hold() || loss_count_ > max_losses || (alive_ && !configured_)) return false;
+    for (const PostedExport &posted : posted_)
+        if (!alive_ && !posted.idle()) return false;
     for (const ObjectStorage<RemoteContext> &slot : slots_)
         if (slot.constructed() && !slot.object().invariants_hold()) return false;
     return true;

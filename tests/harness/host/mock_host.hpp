@@ -106,6 +106,7 @@ public:
                               std::uint32_t capacity_descriptors, std::uint32_t &count,
                               std::uint32_t timeout_ms) override;
     void     kill_renderer() override;
+    void     renderer_deadline(std::uint64_t deadline) override;
     Status   receive_export(int connection, std::uint8_t *buffer, std::size_t capacity, std::size_t &length) override;
     Status   send_export(int connection, const std::uint8_t *bytes, std::size_t length, int descriptor) override;
     void     shutdown_export(int connection) override;
@@ -187,6 +188,7 @@ public:
     void          forward_requests();
     void          connect_renderer(RendererPeer &peer);
     void          fail_renderer_start_at(std::uint32_t nth);
+    void          fail_renderer_send_at(std::uint32_t nth);
     void          renderer_gone();
     bool          renderer_running();
     std::uint32_t renderer_starts();
@@ -196,6 +198,7 @@ public:
     std::uint32_t exports_closed();
     const char   *started_renderer();
     std::uint32_t renderer_datagrams();
+    std::uint64_t armed_renderer_deadline();
     std::uint32_t last_receive_timeout();
 
     void          add_display_heads(std::uint32_t heads);
@@ -441,9 +444,11 @@ private:
     RendererPeer   *renderer_peer_;
     bool            renderer_running_;
     std::uint32_t   fail_renderer_start_;
+    std::uint32_t   fail_renderer_send_;
     std::uint32_t   renderer_starts_;
     std::uint32_t   renderer_kills_;
     std::uint32_t   renderer_datagrams_;
+    std::uint64_t   renderer_deadline_;
     std::uint32_t   receive_timeout_;
     bool            forward_requests_;
     std::uint32_t   fail_event_descriptor_;

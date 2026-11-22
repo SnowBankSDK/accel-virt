@@ -383,6 +383,12 @@ TEST(local_context_plane, exports_images_from_any_thread)
 { Fixture fixture;
   CHECK(fixture.plane().exports_off_main_loop()); }
 
+TEST(local_context_plane, posts_no_export_and_has_no_answers_to_take)
+{ Fixture fixture;
+  CHECK(!fixture.plane().post_export(uuid, 0u, 0x51u));
+  fixture.plane().take_answers();
+  CHECK(fixture.plane().invariants_hold()); }
+
 TEST(local_context_plane, copies_surfaces_through_its_library_once_it_has_a_domain)
 { Fixture fixture;
   CHECK(!fixture.plane().copies_surfaces());

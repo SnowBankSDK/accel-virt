@@ -52,8 +52,8 @@ MockHost::MockHost()
       recordings_{}, fail_recording_create_(0u), fail_recording_append_(0u),
       fail_recording_truncate_(0u), display_heads_(0u), refuse_scanout_(0u), scanouts_{}, images_shown_{}, last_images_{},
       update_rects_{}, renderer_regions_{}, renderer_region_count_(0u), renderer_peer_(nullptr),
-      renderer_running_(false), fail_renderer_start_(0u), renderer_starts_(0u), renderer_kills_(0u),
-      renderer_datagrams_(0u), receive_timeout_(0u), forward_requests_(false), fail_event_descriptor_(0u), started_renderer_{},
+      renderer_running_(false), fail_renderer_start_(0u), fail_renderer_send_(0u), renderer_starts_(0u), renderer_kills_(0u),
+      renderer_datagrams_(0u), renderer_deadline_(0u), receive_timeout_(0u), forward_requests_(false), fail_event_descriptor_(0u), started_renderer_{},
       fail_export_send_(0u), export_sends_(0u), exports_closed_(0u)
 {
     for (int &descriptor : counted_) descriptor = -1;
@@ -1670,7 +1670,7 @@ Status MockHost::send_renderer(const std::uint8_t *bytes, std::size_t length, co
     RendererPeer *peer = nullptr;
     {
         StateLock lock(state_);
-        if (!renderer_running_) return Status::not_found;
+        if (!renderer_running_ || fail_now(fail_renderer_send_)) return Status::not_found;
         renderer_datagrams_++;
         peer = renderer_peer_;
     }
@@ -1704,6 +1704,13 @@ Status MockHost::receive_renderer(std::uint8_t *buffer, std::size_t capacity, st
     for (std::uint32_t index = 0u; index < taken && index < capacity_descriptors; index++)
         if (descriptors[index] >= 0) count_descriptor(descriptors[index]);
     return Status::ok;
+}
+
+void MockHost::renderer_deadline(std::uint64_t deadline)
+{
+    require_main_loop("MockHost::renderer_deadline");
+    StateLock lock(state_);
+    renderer_deadline_ = deadline;
 }
 
 void MockHost::kill_renderer()
@@ -1842,12 +1849,14 @@ void MockHost::fail_event_descriptor_at(std::uint32_t nth) { StateLock lock(stat
 void MockHost::forward_requests() { StateLock lock(state_); forward_requests_ = true; }
 void MockHost::connect_renderer(RendererPeer &peer) { StateLock lock(state_); renderer_peer_ = &peer; }
 void MockHost::fail_renderer_start_at(std::uint32_t nth) { StateLock lock(state_); fail_renderer_start_ = nth; }
+void MockHost::fail_renderer_send_at(std::uint32_t nth) { StateLock lock(state_); fail_renderer_send_ = nth; }
 void MockHost::renderer_gone() { StateLock lock(state_); renderer_running_ = false; }
 bool MockHost::renderer_running() { StateLock lock(state_); return renderer_running_; }
 std::uint32_t MockHost::renderer_starts() { StateLock lock(state_); return renderer_starts_; }
 std::uint32_t MockHost::renderer_kills() { StateLock lock(state_); return renderer_kills_; }
 const char *MockHost::started_renderer() { StateLock lock(state_); return started_renderer_; }
 std::uint32_t MockHost::renderer_datagrams() { StateLock lock(state_); return renderer_datagrams_; }
+std::uint64_t MockHost::armed_renderer_deadline() { StateLock lock(state_); return renderer_deadline_; }
 std::uint32_t MockHost::last_receive_timeout() { StateLock lock(state_); return receive_timeout_; }
 
 }

@@ -3,6 +3,8 @@
 #include "device/isolation/renderer_link.hpp"
 #include "harness/framework/test_registry.hpp"
 #include "harness/host/mock_host.hpp"
+#include "harness/host/recording_late_answers.hpp"
+#include "harness/host/renderer_peer.hpp"
 #include "harness/host/scripted_renderer_peer.hpp"
 #include "proto/renderer/context_message.hpp"
 #include "proto/renderer/ready_message.hpp"
@@ -25,7 +27,7 @@ constexpr std::uint64_t millisecond = 1000000u;
 
 class Fixture {
 public:
-    Fixture() : peer_(host_), link_(host_)
+    Fixture() : peer_(host_), answers_(), link_(host_, answers_)
     {
         host_.connect_renderer(peer_);
         static_cast<void>(host_.start_renderer("av-renderer"));
@@ -33,8 +35,16 @@ public:
 
     MockHost             &host() { return host_; }
     ScriptedRendererPeer &peer() { return peer_; }
+    av::RecordingLateAnswers &answers() { return answers_; }
     RendererLink         &link() { return link_; }
 
+    void queue_late(Kind kind, std::uint64_t sequence, std::uint8_t first, std::uint32_t descriptors)
+    {
+        std::uint8_t datagram[RendererMessageHeader::encoded_size + 4u] = {};
+        static_cast<void>(RendererMessageHeader(kind, 4u, sequence).encode(datagram, sizeof datagram));
+        datagram[RendererMessageHeader::encoded_size] = first;
+        peer_.queue(datagram, sizeof datagram, descriptors);
+    }
     Status create(Status &outcome)
     {
         std::uint8_t body[av::ContextMessage::encoded_size] = {};
@@ -45,7 +55,26 @@ public:
 private:
     MockHost             host_;
     ScriptedRendererPeer peer_;
+    av::RecordingLateAnswers answers_;
     RendererLink         link_;
+};
+
+class EndlessPeer final : public av::RendererPeer {
+public:
+    EndlessPeer() : answered_(0u) {}
+    void deliver(const std::uint8_t *, std::size_t, const int *, std::uint32_t) override {}
+    bool answer(std::uint8_t *buffer, std::size_t capacity, std::size_t &length, int *, std::uint32_t,
+                std::uint32_t &count) override
+    {
+        count = 0u;
+        answered_++;
+        length = RendererMessageHeader::encoded_size;
+        return RendererMessageHeader(Kind::exported_image, 0u, answered_).encode(buffer, capacity) == Status::ok;
+    }
+    std::uint32_t answered() const { return answered_; }
+
+private:
+    std::uint32_t answered_;
 };
 
 }
@@ -294,3 +323,91 @@ TEST(renderer_link_exchange, fails_as_a_request_does)
   CHECK_STATUS(fixture.link().exchange(Kind::export_image, nullptr, 0u, Kind::exported_image, answer, length, nullptr, 0u,
                                        count),
                Status::invalid_state); }
+
+TEST(renderer_link_ask, frames_the_next_sequence_and_returns_without_waiting_for_the_answer)
+{ Fixture fixture;
+  const std::uint8_t body[2] = {0x11u, 0x22u};
+  std::uint64_t      sequence = 0u;
+  CHECK_STATUS(fixture.link().post(Kind::interrupts_off, nullptr, 0u, nullptr, 0u), Status::ok);
+  CHECK_STATUS(fixture.link().ask(Kind::export_image, body, sizeof body, sequence), Status::ok);
+  CHECK_EQ(sequence, 2u);
+  CHECK_EQ(fixture.peer().delivered(), 2u);
+  CHECK(fixture.peer().kind_at(1u) == Kind::export_image);
+  CHECK_EQ(fixture.peer().sequence_at(1u), 2u);
+  CHECK_EQ(fixture.peer().descriptors_at(1u), 0u);
+  CHECK(std::memcmp(fixture.peer().body_at(1u), body, sizeof body) == 0);
+  CHECK_EQ(fixture.host().last_receive_timeout(), 0u);
+  CHECK_STATUS(fixture.link().ask(Kind::export_image, nullptr, 2u, sequence), Status::invalid_parameter);
+  CHECK_EQ(fixture.peer().delivered(), 2u);
+  fixture.host().renderer_gone();
+  CHECK_STATUS(fixture.link().ask(Kind::export_image, body, sizeof body, sequence), Status::not_found); }
+
+TEST(renderer_link_request, an_answer_no_wait_is_for_goes_to_the_late_taker_and_the_wait_goes_on)
+{ Fixture fixture;
+  fixture.answers().claim(Kind::exported_image, Status::ok);
+  fixture.queue_late(Kind::exported_image, 41u, 0x5Au, 1u);
+  fixture.queue_late(Kind::allocated_memory, 42u, 0x6Bu, 2u);
+  Status outcome = Status::invalid_state;
+  CHECK_STATUS(fixture.create(outcome), Status::ok);
+  CHECK_STATUS(outcome, Status::ok);
+  CHECK_EQ(fixture.answers().taken(), 1u);
+  CHECK_EQ(fixture.answers().sequence_at(0u), 41u);
+  CHECK_EQ(fixture.answers().descriptors_at(0u), 1u);
+  CHECK_EQ(fixture.answers().first_byte_at(0u), 0x5Au);
+  CHECK_EQ(fixture.peer().queued(), 0u);
+  CHECK_EQ(fixture.host().live_descriptors(), 0u); }
+
+TEST(renderer_link_request, a_late_answer_the_taker_finds_bad_ends_the_wait_with_its_status)
+{ Fixture fixture;
+  fixture.answers().claim(Kind::exported_image, Status::malformed);
+  fixture.queue_late(Kind::exported_image, 41u, 0u, 1u);
+  Status outcome = Status::ok;
+  CHECK_STATUS(fixture.create(outcome), Status::malformed);
+  CHECK_STATUS(outcome, Status::invalid_state);
+  CHECK_EQ(fixture.answers().taken(), 1u);
+  CHECK_EQ(fixture.peer().queued(), 1u);
+  CHECK_EQ(fixture.host().live_descriptors(), 0u); }
+
+TEST(renderer_link_drain, hands_every_answer_already_there_to_the_late_taker_and_closes_what_is_not_its)
+{ Fixture fixture;
+  fixture.answers().claim(Kind::exported_image, Status::ok);
+  fixture.queue_late(Kind::exported_image, 7u, 1u, 1u);
+  fixture.queue_late(Kind::reply, 3u, 0u, 2u);
+  const std::uint8_t garbage[3] = {0xFFu, 0xFFu, 0xFFu};
+  fixture.peer().queue(garbage, sizeof garbage, 1u);
+  fixture.queue_late(Kind::exported_image, 8u, 2u, 0u);
+  CHECK_STATUS(fixture.link().drain(), Status::ok);
+  CHECK_EQ(fixture.answers().taken(), 2u);
+  CHECK_EQ(fixture.answers().sequence_at(0u), 7u);
+  CHECK_EQ(fixture.answers().sequence_at(1u), 8u);
+  CHECK_EQ(fixture.peer().queued(), 0u);
+  CHECK_EQ(fixture.host().live_descriptors(), 0u);
+  CHECK_EQ(fixture.host().last_receive_timeout(), 0u);
+  CHECK_EQ(fixture.peer().delivered(), 0u);
+  CHECK_STATUS(fixture.link().drain(), Status::ok); }
+
+TEST(renderer_link_drain, stops_at_the_first_answer_the_taker_finds_bad_or_a_renderer_gone)
+{ { Fixture fixture;
+    fixture.answers().claim(Kind::exported_image, Status::invalid_state);
+    fixture.queue_late(Kind::exported_image, 7u, 1u, 0u);
+    fixture.queue_late(Kind::exported_image, 8u, 1u, 0u);
+    CHECK_STATUS(fixture.link().drain(), Status::invalid_state);
+    CHECK_EQ(fixture.answers().taken(), 1u);
+    CHECK_EQ(fixture.peer().queued(), 1u); }
+  Fixture fixture;
+  fixture.host().renderer_gone();
+  CHECK_STATUS(fixture.link().drain(), Status::not_found);
+  CHECK_EQ(fixture.answers().taken(), 0u); }
+
+TEST(renderer_link_drain, takes_no_more_than_its_bound_from_a_renderer_that_never_stops_talking)
+{ MockHost                 host;
+  EndlessPeer              peer;
+  av::RecordingLateAnswers answers;
+  av::LateAnswers         &taker = answers;
+  RendererLink             link(host, taker);
+  host.connect_renderer(peer);
+  CHECK_STATUS(host.start_renderer("av-renderer"), Status::ok);
+  answers.claim(Kind::exported_image, Status::ok);
+  CHECK_STATUS(link.drain(), Status::ok);
+  CHECK_EQ(peer.answered(), RendererLink::max_drained);
+  CHECK_EQ(answers.taken(), av::RecordingLateAnswers::max_taken); }

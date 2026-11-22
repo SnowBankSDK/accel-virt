@@ -184,6 +184,13 @@ void VirtioGpuAv::renderer_lost()
     contexts_->renderer_lost();
 }
 
+void VirtioGpuAv::renderer_due()
+{
+    AV_SCOPE("VirtioGpuAv::renderer_due");
+    host_.require_main_loop("VirtioGpuAv::renderer_due");
+    contexts_->take_answers();
+}
+
 bool VirtioGpuAv::control(void *request, uint32_t type)
 {
     AV_SCOPE("VirtioGpuAv::control");
@@ -356,10 +363,8 @@ void VirtioGpuAv::show_latched_frames()
         return;
     }
     for (uint32_t head = 0u; head < DisplayClock::heads; head++) {
-        uint64_t         key = 0u;
-        AvExportedImage image = {};
-        if (!clock_.take_unshown(head, key) || !export_head(head, key, image)) continue;
-        static_cast<void>(host_.show_image(head, image));
+        uint64_t key = 0u;
+        if (clock_.take_unshown(head, key)) static_cast<void>(post_head(head, key));
     }
 }
 
@@ -368,14 +373,17 @@ bool VirtioGpuAv::show_frame(uint32_t head, uint64_t key)
     AV_SCOPE("VirtioGpuAv::show_frame");
     host_.require_main_loop("VirtioGpuAv::show_frame");
     if (!realized() || head >= DisplayClock::heads || !host_.display_takes_dmabuf(head)) return false;
-    if (!contexts_->exports_off_main_loop()) {
-        AvExportedImage image = {};
-        return export_head(head, key, image) && host_.show_image(head, image) == Status::ok;
-    }
+    if (!contexts_->exports_off_main_loop()) return post_head(head, key);
     if (shower_.start() != Status::ok) return false;
     shower_.ask(head, key);
     shower_.wake();
     return true;
+}
+
+bool VirtioGpuAv::post_head(uint32_t head, uint64_t key)
+{
+    AV_SCOPE("VirtioGpuAv::post_head");
+    return key != 0u && !planes_.composed(head) && contexts_->post_export(capset_.info().gpu().uuid(), head, key);
 }
 
 void VirtioGpuAv::export_latched_frames()

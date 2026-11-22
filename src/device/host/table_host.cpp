@@ -515,6 +515,12 @@ void TableHost::kill_renderer()
     if (ops_.kill_renderer != nullptr) ops_.kill_renderer(ops_.opaque);
 }
 
+void TableHost::renderer_deadline(uint64_t deadline)
+{
+    AV_SCOPE("TableHost::renderer_deadline");
+    if (ops_.renderer_deadline != nullptr) ops_.renderer_deadline(ops_.opaque, deadline);
+}
+
 Status TableHost::receive_export(int connection, uint8_t *buffer, size_t capacity, size_t &length)
 {
     AV_SCOPE("TableHost::receive_export");

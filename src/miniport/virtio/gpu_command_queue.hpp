@@ -7,6 +7,7 @@
 #include "core/platform/wake_event.hpp"
 #include "core/support/status.hpp"
 #include "miniport/virtio/virt_queue.hpp"
+#include "proto/virtio_gpu/gpu_response.hpp"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -52,7 +53,8 @@ private:
     static constexpr uint32_t poll_microseconds = 20u;
     static constexpr uint64_t spin_ticks = 20000u;
     static constexpr uint64_t sleep_ticks = 100000u;
-    static constexpr uint64_t patience_ticks = 30000000u;
+    static constexpr uint64_t ticks_per_millisecond = 10000u;
+    static constexpr uint64_t patience_ticks = uint64_t{GpuResponse::patience_ms} * ticks_per_millisecond;
 
     uint32_t slot_for(size_t length) const;
     [[nodiscard]] Status send_locked(uint32_t slot, const uint8_t *request, size_t length,

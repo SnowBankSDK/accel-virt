@@ -134,6 +134,8 @@ typedef struct AvHostOps {
     int (*duplicate_export)(void *opaque, int descriptor);
 
     uint64_t (*guest_memory_bytes)(void *opaque);
+
+    void (*renderer_deadline)(void *opaque, uint64_t deadline);
 } AvHostOps;
 
 typedef struct AvRecordingOptions {
@@ -169,6 +171,7 @@ void av_device_set_hybrid(AvDevice *device, uint32_t role);
 void av_device_status(AvDevice *device, uint8_t status);
 void av_device_reset(AvDevice *device);
 void av_device_renderer_lost(AvDevice *device);
+void av_device_renderer_due(AvDevice *device);
 int av_device_export_accepted(AvDevice *device, int connection, int same_user);
 int av_device_destroy(AvDevice *device);
 
