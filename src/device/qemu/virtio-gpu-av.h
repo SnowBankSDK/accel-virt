@@ -26,6 +26,8 @@ typedef struct VirtIOGPUAvRenderer {
     int pidfd;
     int socket;
     guint hangup;
+    guint readable;
+    QEMUTimer *deadline;
     uint32_t region_count;
     VirtIOGPUAvRegion regions[VIRTIO_GPU_AV_MAX_REGIONS];
 } VirtIOGPUAvRenderer;

@@ -24,6 +24,7 @@ public:
     };
     static constexpr uint32_t map_cache_cached = 1u;
     static constexpr uint32_t map_cache_wc = 3u;
+    static constexpr uint32_t patience_ms = 3000u;
     static constexpr size_t   max_length = 24u + CapsetInfo::encoded_size > DisplayModeSet::max_encoded_size
                                                ? 24u + CapsetInfo::encoded_size
                                                : DisplayModeSet::max_encoded_size;

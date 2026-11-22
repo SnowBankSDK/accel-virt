@@ -39,6 +39,8 @@
 
 #include <cstdint>
 #include <cstring>
+#include <fcntl.h>
+#include <unistd.h>
 
 using av::DriverStatus;
 using av::GpuRequestBuilder;
@@ -924,6 +926,7 @@ public:
 
     MockHost                 &host() { return host_; }
     av::LoopbackRendererPeer &peer() { return peer_; }
+    av::MockExecutorOps      &executor() { return executor_; }
     VirtioGpuAv             &device() { return device_; }
     TextBuffer               &message() { return message_; }
     Status realize(const char *renderer, const char *executor_path, const AvExecutorOps *executor = nullptr)
@@ -1272,6 +1275,7 @@ TEST(virtio_gpu_av_export_head, composes_a_head_only_when_it_shows_more_than_its
 { ClockedDevice rig;
   rig.executor.editable().compose_planes = compose_two;
   AvExportedImage image = {};
+  CHECK(!rig.device.export_head(0u, 0u, image));
   CHECK(rig.device.export_head(0u, 0x51u, image));
   CHECK_EQ(image.fd, 12);
   const auto send = [&](std::uint32_t layer, std::uint64_t key, std::uint32_t right) {
@@ -1388,3 +1392,94 @@ TEST(virtio_gpu_av_invariants, an_export_connection_on_a_device_that_was_never_r
   CHECK_STATUS(av::VirtioGpuAvProbe::accept_export(device, consumer.device_end()), Status::ok);
   CHECK(!device.invariants_hold());
   device.reset(); }
+
+namespace {
+
+int renderer_image = -1;
+
+std::uint32_t export_renderer_image(void *, std::uint32_t, std::uint64_t key, AvExportedImage *image)
+{
+    if (key != 0x61u || renderer_image < 0) return AV_UNKNOWN;
+    *image = AvExportedImage{renderer_image, 1u, 640u, 480u, 2560u, 0u, 0x34325258u, 0u, 0u};
+    return AV_EXECUTED;
+}
+
+}
+
+TEST(virtio_gpu_av_show_frame, with_a_renderer_a_frame_is_asked_without_waiting_and_shown_when_it_answers)
+{ RendererDevice rig;
+  int ends[2] = {-1, -1};
+  CHECK_EQ(::pipe2(ends, O_CLOEXEC), 0);
+  ::close(ends[1]);
+  renderer_image = ends[0];
+  rig.executor().editable().export_image = export_renderer_image;
+  rig.host().add_display_heads(2u);
+  rig.host().set_clock(1000u);
+  CHECK_STATUS(rig.realize("/usr/libexec/av-renderer", "/opt/av/libav_executor.so"), Status::ok);
+  rig.device().status(DriverStatus::driver_ok);
+  CHECK(rig.device().show_frame(0u, 0x61u));
+  CHECK_EQ(rig.host().images_shown(0u), 0u);
+  rig.device().renderer_due();
+  CHECK_EQ(rig.host().images_shown(0u), 1u);
+  CHECK_EQ(rig.host().last_image(0u).width, 640u);
+  CHECK(!rig.device().show_frame(1u, 0u));
+  GpuRequestBuilder page(0x02F4u);
+  page.u64(0x101000u);
+  MockRequest page_request(page.bytes(), page.size());
+  CHECK(rig.device().control(&page_request, 0x02F4u));
+  CHECK_EQ(page_request.response_type(), 0x1100u);
+  CHECK(rig.device().post_frame(0u, 5u, 0x61u));
+  rig.host().set_clock(1000u + 16666667u);
+  CHECK(rig.host().wait_for_main_loop_work(1u, 2000u));
+  CHECK(rig.host().run_main_loop() >= 1u);
+  CHECK_EQ(rig.host().images_shown(0u), 1u);
+  rig.device().renderer_due();
+  CHECK_EQ(rig.host().images_shown(0u), 2u);
+  const auto plane = [&](std::uint32_t layer, std::uint64_t key, std::uint32_t right) {
+      GpuRequestBuilder request(av::ScanoutPlaneRequest::type);
+      request.u32(0u).u32(layer).u32(av::ScanoutPlaneRequest::flag_shown).u32(0u).u64(key);
+      request.u32(0u).u32(0u).u32(right).u32(800u);
+      request.u32(0u).u32(0u).u32(right).u32(800u);
+      request.u32(1280u).u32(800u);
+      MockRequest mock(request.bytes(), request.size());
+      return rig.device().control(&mock, av::ScanoutPlaneRequest::type) ? mock.response_type() : 0u;
+  };
+  CHECK_EQ(plane(0u, 0x61u, 1280u), 0x1100u);
+  CHECK_EQ(plane(1u, 0x77u, 640u), 0x1100u);
+  CHECK(!rig.device().show_frame(0u, 0x61u));
+  CHECK(rig.device().post_frame(0u, 6u, 0x61u));
+  rig.host().set_clock(1000u + 2u * 16666667u);
+  CHECK(rig.host().wait_for_main_loop_work(1u, 2000u));
+  CHECK(rig.host().run_main_loop() >= 1u);
+  rig.device().renderer_due();
+  CHECK_EQ(rig.host().images_shown(0u), 2u);
+  const std::uint32_t kills = rig.host().renderer_kills();
+  rig.host().fail_renderer_send_at(1u);
+  CHECK(!rig.device().show_frame(1u, 0x61u));
+  CHECK_EQ(rig.host().renderer_kills(), kills + 1u);
+  rig.device().reset();
+  ::close(ends[0]);
+  renderer_image = -1;
+  CHECK(rig.device().invariants_hold()); }
+
+TEST(virtio_gpu_av_renderer_due, with_the_contexts_in_process_there_is_nothing_to_take)
+{ ClockedDevice rig;
+  rig.device.renderer_due();
+  CHECK_EQ(rig.host.images_shown(0u), 0u);
+  CHECK(rig.device.invariants_hold()); }
+
+TEST(virtio_gpu_av_show_frame, in_process_a_frame_is_handed_to_the_display_thread_that_exports_it)
+{ { MockHost    host;
+    VirtioGpuAv unrealized(host);
+    CHECK(!unrealized.show_frame(0u, 0x51u)); }
+  ClockedDevice rig;
+  CHECK(!rig.device.show_frame(av::DisplayClock::heads, 0x51u));
+  CHECK(!rig.device.show_frame(2u, 0x51u));
+  rig.host.fail_thread_start_at(1u);
+  CHECK(!rig.device.show_frame(0u, 0x51u));
+  CHECK(rig.device.show_frame(0u, 0x51u));
+  CHECK(rig.host.wait_for_main_loop_work(1u, 2000u));
+  CHECK(rig.host.run_main_loop() >= 1u);
+  CHECK_EQ(rig.host.images_shown(0u), 1u);
+  CHECK_EQ(rig.host.last_image(0u).width, 640u);
+  CHECK(rig.device.invariants_hold()); }

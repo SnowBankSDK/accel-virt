@@ -583,7 +583,8 @@ bool virtio_gpu_av_show_image(VirtIOGPUAv *r, uint32_t head, const AvExportedIma
     int32_t duplicate;
     uint32_t stride, offset;
 
-    if (!con || !qemu_console_has_gl(con) || image->slot >= 2 || image->fd < 0 || fstat(image->fd, &identity) < 0) {
+    if (!con || !qemu_console_has_gl(con) || VIRTIO_GPU_BASE(r)->scanout[head].resource_id == 0 || image->slot >= 2 ||
+        image->fd < 0 || fstat(image->fd, &identity) < 0) {
         return false;
     }
     buffer = r->exported[head][image->slot];

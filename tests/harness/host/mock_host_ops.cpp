@@ -183,6 +183,7 @@ MockHostOps::MockHostOps(MockHost &host) : table_{}
         return received == Status::invalid_state ? 1 : 2;
     };
     table_.kill_renderer = [](void *opaque) { host_of(opaque).kill_renderer(); };
+    table_.renderer_deadline = [](void *opaque, std::uint64_t deadline) { host_of(opaque).renderer_deadline(deadline); };
     table_.receive_export = [](void *opaque, int connection, std::uint8_t *buffer, std::size_t capacity,
                                std::size_t *length) {
         return host_of(opaque).receive_export(connection, buffer, capacity, *length) == Status::ok ? 0 : 1;

@@ -509,7 +509,8 @@ TEST(posix_renderer_host, what_only_qemu_has_is_not_supported)
   CHECK_STATUS(host.receive_renderer(buffer, sizeof buffer, length, nullptr, 0u, count, 0u), Status::not_supported);
   CHECK_EQ(length, 0u);
   CHECK_EQ(count, 0u);
-  host.kill_renderer(); }
+  host.kill_renderer();
+  host.renderer_deadline(1u); }
 
 TEST(posix_renderer_host_executor, loads_the_library_the_hello_named)
 { Rig rig;

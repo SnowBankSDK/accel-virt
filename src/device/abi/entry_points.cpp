@@ -95,6 +95,10 @@ void av_device_renderer_lost(AvDevice *device)
 { reinterpret_cast<av::DeviceInstance *>(device)->device().renderer_lost(); }
 
 __attribute__((visibility("default")))
+void av_device_renderer_due(AvDevice *device)
+{ reinterpret_cast<av::DeviceInstance *>(device)->device().renderer_due(); }
+
+__attribute__((visibility("default")))
 int av_device_export_accepted(AvDevice *device, int connection, int same_user)
 { return reinterpret_cast<av::DeviceInstance *>(device)->device().export_accepted(connection, same_user != 0) ? 0 : 1; }
 

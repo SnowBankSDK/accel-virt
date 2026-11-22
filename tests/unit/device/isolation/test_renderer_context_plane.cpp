@@ -23,6 +23,7 @@
 #include "proto/context/gpu_identity.hpp"
 #include "proto/context/protocol_version.hpp"
 #include "proto/renderer/allocated_memory_message.hpp"
+#include "proto/renderer/export_image_message.hpp"
 #include "proto/renderer/exported_image_message.hpp"
 #include "proto/renderer/renderer_message_header.hpp"
 #include "proto/resources/surface_point.hpp"
@@ -71,6 +72,12 @@ struct RendererContextPlaneProbe {
     static void lose_context(RendererContextPlane &plane, std::uint32_t id)
     {
         RemoteContextProbe::set_lost(plane.slot_of(id)->object(), true);
+    }
+    static void post_while_lost(RendererContextPlane &plane, bool queued)
+    {
+        plane.alive_ = false;
+        if (queued) plane.posted_[1].queued_ = true;
+        else plane.posted_[1].sent_ = true;
     }
 };
 
@@ -1183,3 +1190,293 @@ TEST(renderer_context_plane, reads_no_surface_texture)
   AvFrameView view = {};
   CHECK(!fixture.plane().map_surface(uuid, 9u, 50u, view));
   fixture.plane().unmap_surface(uuid, 9u); }
+
+namespace {
+
+constexpr std::uint64_t started_at = 1000u;
+
+class PostingPlane {
+public:
+    PostingPlane() : peer_(qemu_), blobs_(qemu_), interrupts_(qemu_), plane_(qemu_, blobs_, interrupts_), region_{}
+    {
+        qemu_.add_guest_region(0u, region_, sizeof region_);
+        qemu_.add_display_heads(2u);
+        qemu_.connect_renderer(peer_);
+        qemu_.set_clock(started_at);
+    }
+    ~PostingPlane() { plane_.destroy_all(); }
+
+    MockHost                 &qemu() { return qemu_; }
+    av::ScriptedRendererPeer &peer() { return peer_; }
+    RendererContextPlane     &plane() { return plane_; }
+
+    Status start()
+    {
+        const Status configured = plane_.configure(renderer_path, executor_path);
+        return configured == Status::ok ? plane_.start(uuid, capset()) : configured;
+    }
+    std::uint64_t key_at(std::uint32_t index) const
+    {
+        av::ExportImageMessage message;
+        if (peer_.kind_at(index) != av::RendererMessageHeader::Kind::export_image ||
+            message.decode(peer_.body_at(index), peer_.body_length_at(index), 0u) != Status::ok)
+            return 0u;
+        return message.key();
+    }
+    void answer_export(std::uint64_t sequence, bool fresh, std::uint32_t slot, std::uint32_t width,
+                       std::uint32_t descriptors)
+    {
+        std::uint8_t datagram[av::RendererMessageHeader::encoded_size + av::ExportedImageMessage::encoded_size] = {};
+        CHECK_STATUS(av::RendererMessageHeader(av::RendererMessageHeader::Kind::exported_image,
+                                               av::ExportedImageMessage::encoded_size, sequence)
+                         .encode(datagram, sizeof datagram),
+                     Status::ok);
+        CHECK_STATUS(av::ExportedImageMessage(fresh, slot, width, 32u, width * 4u, 0u, 0x34325258u, 0u)
+                         .encode(datagram + av::RendererMessageHeader::encoded_size,
+                                 av::ExportedImageMessage::encoded_size),
+                     Status::ok);
+        peer_.queue(datagram, sizeof datagram, descriptors);
+    }
+
+private:
+    MockHost                 qemu_;
+    av::ScriptedRendererPeer peer_;
+    av::BlobTable            blobs_;
+    av::FenceInterrupts      interrupts_;
+    RendererContextPlane     plane_;
+    alignas(4096) std::uint8_t region_[0x1000];
+};
+
+}
+
+TEST(renderer_context_plane_post_export, one_export_per_head_is_in_flight_and_the_newest_key_asked_meanwhile_follows_its_answer)
+{ PostingPlane rig;
+  CHECK_STATUS(rig.start(), Status::ok);
+  const std::uint32_t sent = rig.peer().delivered();
+  CHECK(rig.plane().post_export(uuid, 0u, 0x10u));
+  CHECK_EQ(rig.peer().delivered(), sent + 1u);
+  CHECK_EQ(rig.key_at(sent), 0x10u);
+  CHECK_EQ(rig.qemu().armed_renderer_deadline(), started_at + RendererContextPlane::answer_patience_ns);
+  CHECK_EQ(RendererContextPlane::answer_patience_ns, std::uint64_t{av::GpuResponse::patience_ms} * 1000000u);
+  CHECK(rig.plane().post_export(uuid, 0u, 0x11u));
+  CHECK(rig.plane().post_export(uuid, 0u, 0x12u));
+  CHECK_EQ(rig.peer().delivered(), sent + 1u);
+  CHECK(rig.plane().post_export(uuid, 1u, 0x20u));
+  CHECK_EQ(rig.peer().delivered(), sent + 2u);
+  CHECK_EQ(rig.key_at(sent + 1u), 0x20u);
+  rig.answer_export(rig.peer().sequence_at(sent), true, 0u, 64u, 1u);
+  rig.plane().take_answers();
+  CHECK_EQ(rig.qemu().images_shown(0u), 1u);
+  CHECK_EQ(rig.qemu().last_image(0u).width, 64u);
+  CHECK_EQ(rig.qemu().last_image(0u).slot, 0u);
+  CHECK_EQ(rig.qemu().images_shown(1u), 0u);
+  CHECK_EQ(rig.peer().delivered(), sent + 3u);
+  CHECK_EQ(rig.key_at(sent + 2u), 0x12u);
+  rig.plane().take_answers();
+  CHECK_EQ(rig.peer().delivered(), sent + 3u);
+  rig.answer_export(rig.peer().sequence_at(sent + 1u), true, 1u, 96u, 1u);
+  rig.answer_export(rig.peer().sequence_at(sent + 2u), false, 0u, 64u, 0u);
+  rig.plane().take_answers();
+  CHECK_EQ(rig.qemu().images_shown(1u), 1u);
+  CHECK_EQ(rig.qemu().last_image(1u).width, 96u);
+  CHECK_EQ(rig.qemu().images_shown(0u), 2u);
+  CHECK_EQ(rig.peer().delivered(), sent + 3u);
+  CHECK_EQ(rig.qemu().live_descriptors(), 2u);
+  CHECK_EQ(rig.qemu().renderer_kills(), 0u);
+  CHECK(rig.plane().invariants_hold()); }
+
+TEST(renderer_context_plane_post_export, an_export_unanswered_for_as_long_as_the_guest_waits_ends_the_renderer)
+{ PostingPlane rig;
+  CHECK_STATUS(rig.start(), Status::ok);
+  CHECK(rig.plane().post_export(uuid, 0u, 0x10u));
+  rig.qemu().set_clock(started_at + 2000u);
+  CHECK(rig.plane().post_export(uuid, 1u, 0x20u));
+  CHECK_EQ(rig.qemu().armed_renderer_deadline(), started_at + RendererContextPlane::answer_patience_ns);
+  rig.qemu().set_clock(started_at + RendererContextPlane::answer_patience_ns - 1u);
+  rig.plane().take_answers();
+  CHECK_EQ(rig.qemu().renderer_kills(), 0u);
+  CHECK_EQ(rig.qemu().armed_renderer_deadline(), started_at + RendererContextPlane::answer_patience_ns);
+  rig.qemu().set_clock(started_at + RendererContextPlane::answer_patience_ns);
+  rig.plane().take_answers();
+  CHECK_EQ(rig.qemu().renderer_kills(), 1u);
+  CHECK(rig.plane().alive());
+  CHECK_EQ(rig.plane().epoch(), 2u);
+  CHECK(rig.plane().invariants_hold());
+  const std::uint32_t sent = rig.peer().delivered();
+  CHECK(rig.plane().post_export(uuid, 0u, 0x11u));
+  CHECK_EQ(rig.peer().delivered(), sent + 1u);
+  CHECK_EQ(rig.key_at(sent), 0x11u); }
+
+TEST(renderer_context_plane_post_export, the_deadline_follows_the_oldest_export_still_out)
+{ PostingPlane rig;
+  CHECK_STATUS(rig.start(), Status::ok);
+  const std::uint32_t sent = rig.peer().delivered();
+  CHECK(rig.plane().post_export(uuid, 0u, 0x10u));
+  rig.qemu().set_clock(started_at + 2000u);
+  CHECK(rig.plane().post_export(uuid, 1u, 0x20u));
+  rig.answer_export(rig.peer().sequence_at(sent), true, 0u, 64u, 1u);
+  rig.plane().take_answers();
+  CHECK_EQ(rig.qemu().armed_renderer_deadline(), started_at + 2000u + RendererContextPlane::answer_patience_ns);
+  rig.qemu().set_clock(started_at + 3000u);
+  CHECK(rig.plane().post_export(uuid, 0u, 0x11u));
+  CHECK_EQ(rig.qemu().armed_renderer_deadline(), started_at + 2000u + RendererContextPlane::answer_patience_ns);
+  rig.answer_export(rig.peer().sequence_at(sent + 1u), true, 1u, 64u, 1u);
+  rig.plane().take_answers();
+  CHECK_EQ(rig.qemu().armed_renderer_deadline(), started_at + 3000u + RendererContextPlane::answer_patience_ns);
+  CHECK_EQ(rig.qemu().renderer_kills(), 0u); }
+
+TEST(renderer_context_plane_post_export, an_answer_arriving_while_a_request_waits_is_taken_and_the_wait_goes_on)
+{ PostingPlane rig;
+  CHECK_STATUS(rig.start(), Status::ok);
+  const std::uint32_t sent = rig.peer().delivered();
+  CHECK(rig.plane().post_export(uuid, 0u, 0x10u));
+  CHECK(rig.plane().post_export(uuid, 0u, 0x12u));
+  rig.answer_export(rig.peer().sequence_at(sent), true, 0u, 64u, 1u);
+  CHECK_STATUS(rig.plane().create(3u, "waiting"), Status::ok);
+  CHECK(rig.plane().holds(3u));
+  CHECK_EQ(rig.qemu().images_shown(0u), 1u);
+  CHECK(rig.peer().kind_at(sent + 1u) == av::RendererMessageHeader::Kind::create_context);
+  CHECK_EQ(rig.key_at(sent + 2u), 0x12u);
+  CHECK_EQ(rig.qemu().renderer_kills(), 0u);
+  CHECK(rig.plane().invariants_hold()); }
+
+TEST(renderer_context_plane_post_export, a_garbled_answer_ends_the_renderer_whether_a_request_waits_or_not)
+{ { PostingPlane rig;
+    CHECK_STATUS(rig.start(), Status::ok);
+    const std::uint32_t sent = rig.peer().delivered();
+    CHECK(rig.plane().post_export(uuid, 0u, 0x10u));
+    rig.answer_export(rig.peer().sequence_at(sent), true, 0u, 64u, 0u);
+    rig.plane().take_answers();
+    CHECK_EQ(rig.qemu().renderer_kills(), 1u);
+    CHECK_EQ(rig.qemu().images_shown(0u), 0u);
+    CHECK(rig.plane().invariants_hold()); }
+  PostingPlane rig;
+  CHECK_STATUS(rig.start(), Status::ok);
+  const std::uint32_t sent = rig.peer().delivered();
+  CHECK(rig.plane().post_export(uuid, 0u, 0x10u));
+  rig.answer_export(rig.peer().sequence_at(sent), false, 0u, 64u, 2u);
+  CHECK_STATUS(rig.plane().create(3u, "waiting"), Status::invalid_state);
+  CHECK_EQ(rig.qemu().renderer_kills(), 1u);
+  CHECK_EQ(rig.qemu().live_descriptors(), 0u); }
+
+TEST(renderer_context_plane_post_export, after_a_reset_an_answer_is_kept_but_not_shown_and_the_key_asked_meanwhile_is_dropped)
+{ PostingPlane rig;
+  CHECK_STATUS(rig.start(), Status::ok);
+  const std::uint32_t sent = rig.peer().delivered();
+  CHECK(rig.plane().post_export(uuid, 0u, 0x10u));
+  CHECK(rig.plane().post_export(uuid, 0u, 0x12u));
+  rig.plane().destroy_all();
+  rig.answer_export(rig.peer().sequence_at(sent), true, 0u, 64u, 1u);
+  rig.plane().take_answers();
+  CHECK_EQ(rig.qemu().images_shown(0u), 0u);
+  CHECK_EQ(rig.peer().delivered(), sent + 1u);
+  CHECK_EQ(rig.qemu().live_descriptors(), 1u);
+  CHECK(rig.plane().post_export(uuid, 0u, 0x13u));
+  rig.answer_export(rig.peer().sequence_at(sent + 1u), false, 0u, 64u, 0u);
+  rig.plane().take_answers();
+  CHECK_EQ(rig.qemu().images_shown(0u), 1u);
+  CHECK(rig.plane().post_export(uuid, 0u, 0x14u));
+  std::uint8_t nothing[av::RendererMessageHeader::encoded_size + av::ExportedImageMessage::encoded_size] = {};
+  CHECK_STATUS(av::RendererMessageHeader(av::RendererMessageHeader::Kind::exported_image,
+                                         av::ExportedImageMessage::encoded_size, rig.peer().sequence_at(sent + 2u))
+                   .encode(nothing, sizeof nothing),
+               Status::ok);
+  CHECK_STATUS(av::ExportedImageMessage().encode(nothing + av::RendererMessageHeader::encoded_size,
+                                                 av::ExportedImageMessage::encoded_size),
+               Status::ok);
+  rig.peer().queue(nothing, sizeof nothing, 0u);
+  rig.plane().take_answers();
+  CHECK_EQ(rig.qemu().images_shown(0u), 1u);
+  CHECK_EQ(rig.qemu().renderer_kills(), 0u);
+  CHECK(rig.plane().invariants_hold()); }
+
+TEST(renderer_context_plane_post_export, an_answer_out_at_a_reset_is_never_shown_and_a_key_posted_after_it_still_is)
+{ PostingPlane rig;
+  CHECK_STATUS(rig.start(), Status::ok);
+  const std::uint32_t sent = rig.peer().delivered();
+  CHECK(rig.plane().post_export(uuid, 0u, 0x10u));
+  rig.plane().destroy_all();
+  CHECK(rig.plane().post_export(uuid, 0u, 0x13u));
+  CHECK_EQ(rig.peer().delivered(), sent + 1u);
+  rig.answer_export(rig.peer().sequence_at(sent), true, 0u, 64u, 1u);
+  rig.plane().take_answers();
+  CHECK_EQ(rig.qemu().images_shown(0u), 0u);
+  CHECK_EQ(rig.qemu().live_descriptors(), 1u);
+  CHECK_EQ(rig.peer().delivered(), sent + 2u);
+  CHECK_EQ(rig.key_at(sent + 1u), 0x13u);
+  rig.answer_export(rig.peer().sequence_at(sent + 1u), true, 1u, 96u, 1u);
+  rig.plane().take_answers();
+  CHECK_EQ(rig.qemu().images_shown(0u), 1u);
+  CHECK_EQ(rig.qemu().last_image(0u).width, 96u);
+  CHECK_EQ(rig.qemu().last_image(0u).slot, 1u);
+  CHECK_EQ(rig.qemu().live_descriptors(), 2u);
+  CHECK_EQ(rig.qemu().renderer_kills(), 0u);
+  CHECK(rig.plane().invariants_hold()); }
+
+TEST(renderer_context_plane_post_export, an_answer_for_a_disabled_scanout_ends_nothing_and_its_slot_serves_the_next)
+{ PostingPlane rig;
+  CHECK_STATUS(rig.start(), Status::ok);
+  const std::uint32_t sent = rig.peer().delivered();
+  CHECK(rig.plane().post_export(uuid, 1u, 0x20u));
+  CHECK(rig.plane().post_export(uuid, 1u, 0x21u));
+  rig.qemu().add_display_heads(1u);
+  rig.answer_export(rig.peer().sequence_at(sent), true, 0u, 64u, 1u);
+  rig.plane().take_answers();
+  CHECK_EQ(rig.qemu().images_shown(1u), 0u);
+  CHECK_EQ(rig.qemu().live_descriptors(), 1u);
+  CHECK_EQ(rig.qemu().renderer_kills(), 0u);
+  CHECK_EQ(rig.peer().delivered(), sent + 2u);
+  CHECK_EQ(rig.key_at(sent + 1u), 0x21u);
+  rig.qemu().add_display_heads(2u);
+  rig.answer_export(rig.peer().sequence_at(sent + 1u), false, 0u, 64u, 0u);
+  rig.plane().take_answers();
+  CHECK_EQ(rig.qemu().images_shown(1u), 1u);
+  CHECK_EQ(rig.qemu().last_image(1u).width, 64u);
+  CHECK(rig.qemu().last_image(1u).fd >= 0);
+  CHECK_EQ(rig.qemu().live_descriptors(), 1u);
+  CHECK_EQ(rig.qemu().renderer_kills(), 0u);
+  CHECK(rig.plane().invariants_hold()); }
+
+TEST(renderer_context_plane_post_export, is_refused_with_no_renderer_or_head_and_a_send_that_fails_ends_the_renderer)
+{ PostingPlane rig;
+  CHECK(!rig.plane().post_export(uuid, 0u, 0x10u));
+  rig.plane().take_answers();
+  CHECK_STATUS(rig.start(), Status::ok);
+  const std::uint32_t sent = rig.peer().delivered();
+  CHECK(!rig.plane().post_export(uuid, RendererContextPlane::max_heads, 0x10u));
+  CHECK_EQ(rig.peer().delivered(), sent);
+  rig.answer_export(77u, true, 0u, 64u, 1u);
+  rig.plane().take_answers();
+  CHECK_EQ(rig.qemu().images_shown(0u), 0u);
+  CHECK_EQ(rig.qemu().live_descriptors(), 0u);
+  rig.qemu().fail_renderer_send_at(1u);
+  CHECK(!rig.plane().post_export(uuid, 0u, 0x10u));
+  CHECK_EQ(rig.qemu().renderer_kills(), 1u);
+  CHECK(rig.plane().alive());
+  rig.qemu().renderer_gone();
+  rig.plane().take_answers();
+  CHECK_EQ(rig.qemu().renderer_kills(), 2u); }
+
+TEST(renderer_context_plane_post_export, a_newest_key_the_renderer_cannot_be_sent_ends_it)
+{ PostingPlane rig;
+  CHECK_STATUS(rig.start(), Status::ok);
+  const std::uint32_t sent = rig.peer().delivered();
+  CHECK(rig.plane().post_export(uuid, 0u, 0x10u));
+  CHECK(rig.plane().post_export(uuid, 0u, 0x12u));
+  rig.answer_export(rig.peer().sequence_at(sent), true, 0u, 64u, 1u);
+  rig.qemu().fail_renderer_send_at(1u);
+  rig.plane().take_answers();
+  CHECK_EQ(rig.qemu().images_shown(0u), 1u);
+  CHECK_EQ(rig.qemu().renderer_kills(), 1u);
+  CHECK(rig.plane().alive());
+  CHECK(rig.plane().invariants_hold()); }
+
+TEST(renderer_context_plane_invariants, an_export_out_or_asked_for_with_no_renderer_is_seen)
+{ { PostingPlane rig;
+    CHECK_STATUS(rig.start(), Status::ok);
+    RendererContextPlaneProbe::post_while_lost(rig.plane(), false);
+    CHECK(!rig.plane().invariants_hold()); }
+  PostingPlane rig;
+  CHECK_STATUS(rig.start(), Status::ok);
+  RendererContextPlaneProbe::post_while_lost(rig.plane(), true);
+  CHECK(!rig.plane().invariants_hold()); }

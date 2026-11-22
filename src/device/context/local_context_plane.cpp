@@ -200,6 +200,17 @@ bool LocalContextPlane::exports_off_main_loop() const
     return true;
 }
 
+bool LocalContextPlane::post_export(const uint8_t *, uint32_t, uint64_t)
+{
+    AV_SCOPE("LocalContextPlane::post_export");
+    return false;
+}
+
+void LocalContextPlane::take_answers()
+{
+    AV_SCOPE("LocalContextPlane::take_answers");
+}
+
 bool LocalContextPlane::composes() const
 {
     AV_SCOPE("LocalContextPlane::composes");

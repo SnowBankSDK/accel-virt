@@ -2,12 +2,15 @@
 
 #include "core/trace/function_scope.hpp"
 #include "device/host/host.hpp"
+#include "device/isolation/late_answers.hpp"
+#include "device/isolation/renderer_answer.hpp"
 #include "proto/renderer/ready_message.hpp"
 #include "proto/renderer/reply_message.hpp"
 
 namespace av {
 
-RendererLink::RendererLink(Host &host) : host_(host), sequence_(0u), framed_(0u), datagram_{}
+RendererLink::RendererLink(Host &host, LateAnswers &answers)
+    : host_(host), answers_(answers), sequence_(0u), framed_(0u), datagram_{}
 {
     AV_SCOPE("RendererLink::RendererLink");
 }
@@ -91,6 +94,45 @@ Status RendererLink::exchange(RendererMessageHeader::Kind kind, const uint8_t *b
     return await(answered, sequence, request_timeout_ms, answer, answer_length, descriptors, capacity, count);
 }
 
+Status RendererLink::ask(RendererMessageHeader::Kind kind, const uint8_t *body, uint32_t length, uint64_t &sequence)
+{
+    AV_SCOPE("RendererLink::ask");
+    host_.require_main_loop("RendererLink::ask");
+    const Status framed = frame(kind, body, length, sequence);
+    if (framed != Status::ok) return framed;
+    return host_.send_renderer(datagram_, framed_, nullptr, 0u);
+}
+
+Status RendererLink::drain()
+{
+    AV_SCOPE("RendererLink::drain");
+    host_.require_main_loop("RendererLink::drain");
+    for (uint32_t drained = 0u; drained < max_drained; drained++) {
+        int          descriptors[max_descriptors] = {};
+        uint32_t     arrived = 0u;
+        size_t       received = 0u;
+        const Status status =
+            host_.receive_renderer(datagram_, sizeof datagram_, received, descriptors, max_descriptors, arrived, 0u);
+        if (status == Status::invalid_state) return Status::ok;
+        if (status != Status::ok) return status;
+        const Status taken = hand_on(received, descriptors, arrived);
+        if (taken != Status::ok) return taken;
+    }
+    return Status::ok;
+}
+
+Status RendererLink::hand_on(size_t received, int *descriptors, uint32_t count)
+{
+    AV_SCOPE("RendererLink::hand_on");
+    RendererMessageHeader header;
+    const bool            framed = header.decode(datagram_, received) == Status::ok;
+    const RendererAnswer  answer(host_, header, datagram_ + RendererMessageHeader::encoded_size, descriptors, count);
+    const Status          taken = framed ? answers_.take(answer) : Status::not_found;
+    if (taken != Status::not_found) return taken;
+    answer.close();
+    return Status::ok;
+}
+
 Status RendererLink::await(RendererMessageHeader::Kind expected, uint64_t sequence, uint32_t timeout_ms,
                            const uint8_t *&body, uint32_t &length, int *kept, uint32_t capacity, uint32_t &count)
 {
@@ -112,11 +154,15 @@ Status RendererLink::await(RendererMessageHeader::Kind expected, uint64_t sequen
         RendererMessageHeader header;
         const bool            awaited = header.decode(datagram_, received) == Status::ok && header.kind() == expected &&
                              header.sequence() == sequence;
+        if (!awaited) {
+            const Status taken = hand_on(received, descriptors, arrived);
+            if (taken != Status::ok) return taken;
+            continue;
+        }
         for (uint32_t index = 0u; index < arrived; index++) {
-            if (awaited && kept != nullptr && count < capacity) kept[count++] = descriptors[index];
+            if (kept != nullptr && count < capacity) kept[count++] = descriptors[index];
             else host_.close_descriptor(descriptors[index]);
         }
-        if (!awaited) continue;
         body = datagram_ + RendererMessageHeader::encoded_size;
         length = header.body_length();
         return Status::ok;

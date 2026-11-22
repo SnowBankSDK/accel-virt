@@ -3,6 +3,7 @@
 #include "qemu/error-report.h"
 #include "qemu/main-loop.h"
 #include "qemu/rcu.h"
+#include "qemu/timer.h"
 #include "system/ramblock.h"
 #include "system/ramlist.h"
 #include "hw/virtio/virtio-gpu-av.h"
@@ -28,12 +29,23 @@
 #define AV_RENDERER_TIMED_OUT 1
 #define AV_RENDERER_GONE 2
 
+static void av_renderer_due(void *opaque)
+{
+    VirtIOGPUAv *r = opaque;
+
+    if (r->core) {
+        av_device_renderer_due(r->core);
+    }
+}
+
 void virtio_gpu_av_renderer_init(VirtIOGPUAv *r)
 {
     r->process.pid = -1;
     r->process.pidfd = -1;
     r->process.socket = -1;
     r->process.hangup = 0;
+    r->process.readable = 0;
+    r->process.deadline = timer_new_ns(QEMU_CLOCK_REALTIME, av_renderer_due, r);
     r->process.region_count = 0;
 }
 
@@ -50,6 +62,11 @@ static bool av_renderer_end(VirtIOGPUAv *r)
         g_source_remove(p->hangup);
         p->hangup = 0;
     }
+    if (p->readable) {
+        g_source_remove(p->readable);
+        p->readable = 0;
+    }
+    timer_del(p->deadline);
     syscall(SYS_pidfd_send_signal, p->pidfd, SIGKILL, NULL, 0);
     if (waitid(P_PIDFD, p->pidfd, &info, WEXITED) < 0) {
         warn_report("virtio-gpu-av: renderer %d could not be reaped: %s", (int)p->pid, strerror(errno));
@@ -87,9 +104,17 @@ static gboolean av_renderer_hung_up(gint fd, GIOCondition condition, gpointer op
     return G_SOURCE_REMOVE;
 }
 
+static gboolean av_renderer_readable(gint fd, GIOCondition condition, gpointer opaque)
+{
+    av_renderer_due(opaque);
+    return G_SOURCE_CONTINUE;
+}
+
 void virtio_gpu_av_renderer_finish(VirtIOGPUAv *r)
 {
     (void)av_renderer_end(r);
+    timer_free(r->process.deadline);
+    r->process.deadline = NULL;
 }
 
 static void av_renderer_size_buffers(int fd)
@@ -173,6 +198,7 @@ static int av_start_renderer(void *opaque, const char *path)
     p->socket = ends[0];
     qemu_set_fd_handler(p->pidfd, av_renderer_exited, NULL, r);
     p->hangup = g_unix_fd_add(p->socket, G_IO_HUP | G_IO_ERR, av_renderer_hung_up, r);
+    p->readable = g_unix_fd_add(p->socket, G_IO_IN, av_renderer_readable, r);
     return 0;
 }
 
@@ -295,6 +321,13 @@ static void av_kill_renderer(void *opaque)
     (void)av_renderer_end(opaque);
 }
 
+static void av_renderer_deadline(void *opaque, uint64_t deadline)
+{
+    VirtIOGPUAv *r = opaque;
+
+    timer_mod(r->process.deadline, (int64_t)deadline);
+}
+
 typedef struct VirtIOGPUAvRegionSearch {
     void *host;
     int descriptor;
@@ -394,4 +427,5 @@ void virtio_gpu_av_renderer_ops(AvHostOps *ops)
     ops->send_renderer = av_send_renderer;
     ops->receive_renderer = av_receive_renderer;
     ops->kill_renderer = av_kill_renderer;
+    ops->renderer_deadline = av_renderer_deadline;
 }

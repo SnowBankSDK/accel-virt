@@ -105,6 +105,7 @@ public:
                                                   uint32_t capacity_descriptors, uint32_t &count,
                                                   uint32_t timeout_ms) = 0;
     virtual void                 kill_renderer() = 0;
+    virtual void                 renderer_deadline(uint64_t deadline) = 0;
 
     [[nodiscard]] virtual Status receive_export(int connection, uint8_t *buffer, size_t capacity, size_t &length) = 0;
     [[nodiscard]] virtual Status send_export(int connection, const uint8_t *bytes, size_t length, int descriptor) = 0;

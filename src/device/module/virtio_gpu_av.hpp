@@ -72,6 +72,7 @@ public:
     uint32_t             reaping() const;
     uint32_t             outstanding() const;
     void                 renderer_lost();
+    void                 renderer_due();
     bool                 export_accepted(int connection, bool same_user);
     bool                 realized() const;
     uint32_t             gpu_index() const;
@@ -82,6 +83,7 @@ public:
 private:
     [[nodiscard]] Status start_recording(const AvRecordingOptions *recording, TextBuffer &message);
     void                 attach_exports();
+    bool                 post_head(uint32_t head, uint64_t key);
 
     Host              &host_;
     GpuBinding         binding_;

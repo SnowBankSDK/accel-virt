@@ -598,6 +598,8 @@ TEST(table_host_renderer, starts_sends_receives_and_kills_the_renderer_through_t
                Status::too_large);
   CHECK(!mock.descriptor_open(excess));
 
+  host.renderer_deadline(0x123456789u);
+  CHECK_EQ(mock.armed_renderer_deadline(), 0x123456789u);
   host.kill_renderer();
   CHECK_EQ(mock.renderer_kills(), 1u);
   CHECK_STATUS(host.send_renderer(datagram, sizeof datagram, nullptr, 0u), Status::not_found);
@@ -620,6 +622,7 @@ TEST(table_host_renderer, a_table_from_before_renderer_mode_offers_none_of_it)
   older.send_renderer = nullptr;
   older.receive_renderer = nullptr;
   older.kill_renderer = nullptr;
+  older.renderer_deadline = nullptr;
   TableHost before(older);
   std::uint8_t ram[0x1000] = {};
   mock.add_guest_region(0u, ram, sizeof ram);
@@ -647,6 +650,8 @@ TEST(table_host_renderer, a_table_from_before_renderer_mode_offers_none_of_it)
   CHECK_EQ(count, 0u);
   before.kill_renderer();
   CHECK_EQ(mock.renderer_kills(), 0u);
+  before.renderer_deadline(77u);
+  CHECK_EQ(mock.armed_renderer_deadline(), 0u);
   mock.disconnect_fence_interrupts(); }
 
 TEST(table_host, a_directory_is_listed_through_the_glue_or_not_at_all)
