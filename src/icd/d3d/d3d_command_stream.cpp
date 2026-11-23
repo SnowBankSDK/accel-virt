@@ -116,6 +116,12 @@ uint64_t D3dCommandStream::recorded_total() const
     return recorded_;
 }
 
+uint64_t D3dCommandStream::batches() const
+{
+    AV_SCOPE("D3dCommandStream::batches");
+    return batches_;
+}
+
 Status D3dCommandStream::append_recorded(const uint8_t *bytes, size_t length)
 {
     AV_SCOPE("D3dCommandStream::append_recorded");

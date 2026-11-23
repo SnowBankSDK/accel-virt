@@ -38,6 +38,7 @@ public:
     [[nodiscard]] Status take_recorded(uint8_t *out, size_t capacity, size_t &length);
     size_t               recorded_bytes() const;
     uint64_t             recorded_total() const;
+    uint64_t             batches() const;
     [[nodiscard]] Status append_recorded(const uint8_t *bytes, size_t length);
     [[nodiscard]] bool   speak_as(uint32_t device);
     void                 selected(uint32_t device);

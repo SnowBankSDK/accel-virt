@@ -38,7 +38,7 @@ D3d11Device::D3d11Device(d3d::D3dSession &session, BlockSource &memory, KeyedLog
     : session_(session), memory_(memory), shadows_(memory), maps_(memory), lines_(log), refused_(lines_), loss_(lines_), caps_(caps), runtime_{}, core_layer_{}, kernel_(), lender_(session), clock_(), allocations_(kernel_, lines_, clock_),
       core_(nullptr), dxgi_(nullptr), channel_(), slices_(), parent_(nullptr), watermark_(), recording_lock_(), caller_(), call_mutex_(), calls_(call_mutex_, caller_), recording_(),
       recorded_(), context_(nullptr), present_order_(), lane_(), feature_level_(0u),
-      guest_surfaces_(memory, Pool::paged), guest_lock_refused_(), pages_read_refused_(), pages_read_late_(), present_refused_(), present_flags_(~0u), follow_refused_(), token_refused_(), frame_(1u), geometry_binding_{}, geometry_passthrough_(false), geometry_sent_(0u), topology_(0u), query_short_noted_(false),
+      guest_surfaces_(memory, Pool::paged), guest_lock_refused_(), pages_read_refused_(), pages_read_late_(), present_refused_(), present_flags_(~0u), follow_refused_(), token_refused_(), frame_(1u), geometry_binding_{}, geometry_passthrough_(false), geometry_sent_(0u), topology_(0u), query_short_noted_(false), amortized_batches_(0u),
       trace_(trace), rows_(rows), context_number_(trace.number_context())
 {
     AV_SCOPE("D3d11Device::D3d11Device");
@@ -224,7 +224,11 @@ void D3d11Device::lock_calls()
 void D3d11Device::unlock_calls()
 {
     AV_SCOPE("D3d11Device::unlock_calls");
+    const bool submitted = parent_ == nullptr && channel_.constructed() && wire().batches() != amortized_batches_;
+    if (submitted) amortized_batches_ = wire().batches();
     calls_.release();
+    if (submitted && core_ != nullptr && core_->pfnPerformAmortizedProcessingCb != nullptr)
+        core_->pfnPerformAmortizedProcessingCb(core_layer_);
 }
 
 void D3d11Device::retire()

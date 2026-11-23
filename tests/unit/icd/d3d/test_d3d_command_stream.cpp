@@ -144,7 +144,9 @@ TEST(d3d_command_stream, an_application_flush_asks_the_host_once_and_sends_the_b
   CHECK(av_d3d_Draw(fixture.stream(), 3u, 0u));
   const std::uint64_t drawn = fixture.stream().recorded_total();
   CHECK(drawn != 0u);
+  CHECK_EQ(fixture.stream().batches(), 0u);
   CHECK_STATUS(fixture.stream().application_flush(), Status::ok);
+  CHECK_EQ(fixture.stream().batches(), 1u);
   CHECK_EQ(fixture.commands(), 2u);
   CHECK_EQ(fixture.id(0u), kCmd_Draw);
   CHECK_EQ(fixture.id(1u), kCmd_Flush11);
@@ -154,6 +156,7 @@ TEST(d3d_command_stream, an_application_flush_asks_the_host_once_and_sends_the_b
   CHECK_STATUS(fixture.stream().application_flush(), Status::ok);
   CHECK_EQ(fixture.commands(), 2u);
   CHECK_EQ(fixture.submits(), submits);
+  CHECK_EQ(fixture.stream().batches(), 1u);
   CHECK(fixture.stream().invariants_hold()); }
 
 TEST(d3d_command_stream, an_application_flush_sends_its_batch_while_the_host_is_behind)
