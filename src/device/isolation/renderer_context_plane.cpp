@@ -29,8 +29,9 @@ namespace av {
 RendererContextPlane::RendererContextPlane(Host &host, BlobTable &blobs, FenceInterrupts &interrupts)
     : host_(host), blobs_(blobs), interrupts_(interrupts), link_(host, *this), renderer_{}, executor_{},
       executor_length_(0u), gpu_uuid_(), capset_{}, capset_length_(0u), ready_(), configured_(false), alive_(false),
-      interrupts_on_(false), taking_(false), doomed_(false), epoch_(0u), losses_{}, loss_count_(0u), images_{},
-      posted_{}, asked_(host, Pool::paged), mirrored_(host, Pool::paged), slots_{}, extents_{}, body_{}
+      interrupts_on_(false), taking_(false), doomed_(false), epoch_(0u), losses_{}, loss_count_(0u),
+      images_{}, posted_{}, asked_(host, Pool::paged),
+      mirrored_(host, Pool::paged), slots_{}, extents_{}, body_{}
 {
     AV_SCOPE("RendererContextPlane::RendererContextPlane");
     for (int &image : images_) image = -1;
@@ -594,7 +595,8 @@ void RendererContextPlane::watch()
 }
 
 RendererContextPlane::PostedExport::PostedExport()
-    : sent_(false), stale_(false), queued_(false), sequence_(0u), deadline_(0u), queued_key_(0u)
+    : sent_(false), stale_(false), queued_(false), sequence_(0u), deadline_(0u), queued_key_(0u), behind_(0u),
+      replaced_(0u)
 {
     AV_SCOPE("RendererContextPlane::PostedExport::PostedExport");
 }
@@ -603,6 +605,8 @@ bool RendererContextPlane::PostedExport::post(uint64_t key)
 {
     AV_SCOPE("RendererContextPlane::PostedExport::post");
     if (!sent_) return true;
+    if (queued_) replaced_++;
+    behind_++;
     queued_ = true;
     queued_key_ = key;
     return false;
@@ -644,6 +648,13 @@ void RendererContextPlane::PostedExport::reset()
     AV_SCOPE("RendererContextPlane::PostedExport::reset");
     stale_ = sent_;
     queued_ = false;
+}
+
+void RendererContextPlane::PostedExport::count(uint64_t &behind, uint64_t &replaced) const
+{
+    AV_SCOPE("RendererContextPlane::PostedExport::count");
+    behind += behind_;
+    replaced += replaced_;
 }
 
 void RendererContextPlane::PostedExport::earlier(uint64_t &deadline) const
@@ -823,6 +834,11 @@ void RendererContextPlane::report(StateWriter &writer)
     writer.number("losses", loss_count_);
     writer.number("blobs", mirrored_.size());
     writer.number("contexts", live());
+    uint64_t behind = 0u;
+    uint64_t replaced = 0u;
+    for (const PostedExport &posted : posted_) posted.count(behind, replaced);
+    writer.number("exports_behind_export", behind);
+    writer.number("exports_replaced", replaced);
     writer.close();
     writer.open("contexts", 0u);
     writer.number("live", live());

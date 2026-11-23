@@ -204,9 +204,13 @@ MockExecutorOps::MockExecutorOps(std::uint32_t sub_apis)
         mock_of(opaque).last_domain_ = domain;
         return AV_UNKNOWN;
     };
-    table_.export_image = [](void *opaque, std::uint32_t domain, std::uint64_t, AvExportedImage *) -> std::uint32_t {
-        mock_of(opaque).last_domain_ = domain;
-        return AV_UNKNOWN;
+    table_.export_image = [](void *opaque, std::uint32_t domain, std::uint64_t, AvExportedImage *image) -> std::uint32_t {
+        MockExecutorOps &mock = mock_of(opaque);
+        Lock             lock(mock.lock_);
+        mock.last_domain_ = domain;
+        if (!mock.exporting_ || image == nullptr) return AV_UNKNOWN;
+        *image = mock.exported_;
+        return AV_EXECUTED;
     };
     table_.map_frame = [](void *opaque, std::uint32_t domain, std::uint64_t surface, std::uint32_t point,
                           std::uint32_t, AvFrameView *view) -> std::uint32_t {
@@ -428,6 +432,7 @@ MockExecutorOps::Executor *MockExecutorOps::executor_of(AvExecutor *handle)
 
 const AvExecutorOps &MockExecutorOps::table() const { return table_; }
 AvExecutorOps       &MockExecutorOps::editable() { return table_; }
+void MockExecutorOps::export_as(const AvExportedImage &image) { Lock lock(lock_); exported_ = image; exporting_ = true; }
 
 void          MockExecutorOps::fail_create_at(std::uint32_t nth) { Lock lock(lock_); fail_create_ = nth; }
 void MockExecutorOps::hold_creates()

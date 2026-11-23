@@ -872,7 +872,7 @@ TEST(renderer_context_plane, reports_its_renderer_and_what_it_holds)
   char            bytes[256];
   av::StateWriter writer(bytes, sizeof bytes);
   fixture.plane().report(writer);
-  CHECK(std::strcmp(writer.dump(), "renderer/0 alive=true epoch=2 losses=1 blobs=1 contexts=1\n"
+  CHECK(std::strcmp(writer.dump(), "renderer/0 alive=true epoch=2 losses=1 blobs=1 contexts=1 exports_behind_export=0 exports_replaced=0\n"
                                   "contexts/0 live=1\n"
                                   "contexts/0/context/3 name=test") == 0); }
 
@@ -1181,6 +1181,11 @@ TEST(renderer_context_plane_post_export, one_export_per_head_is_in_flight_and_th
   CHECK_EQ(rig.peer().delivered(), sent + 3u);
   CHECK_EQ(rig.qemu().live_descriptors(), 2u);
   CHECK_EQ(rig.qemu().renderer_kills(), 0u);
+  char            bytes[512];
+  av::StateWriter writer(bytes, sizeof bytes);
+  rig.plane().report(writer);
+  CHECK(std::strstr(writer.dump(), "exports_behind_export=2") != nullptr);
+  CHECK(std::strstr(writer.dump(), "exports_replaced=1") != nullptr);
   CHECK(rig.plane().invariants_hold()); }
 
 TEST(renderer_context_plane_post_export, an_export_unanswered_for_as_long_as_the_guest_waits_ends_the_renderer)

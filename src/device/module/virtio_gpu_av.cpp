@@ -349,7 +349,10 @@ bool VirtioGpuAv::post_frame(uint32_t head, uint32_t frame, uint64_t key)
     AV_SCOPE("VirtioGpuAv::post_frame");
     host_.require_main_loop("VirtioGpuAv::post_frame");
     if (frame == 0u || !clock_.latches(head) || !host_.display_takes_dmabuf(head)) return false;
-    clock_.post(head, frame, key);
+    if (post_head(head, key))
+        clock_.post_exported(head, frame, key);
+    else
+        clock_.post(head, frame, key);
     return true;
 }
 
@@ -439,6 +442,7 @@ void VirtioGpuAv::report(StateWriter &writer)
         writer.flag("driver_ok", (status_.value() & DriverStatus::driver_ok) != 0u);
     }
     heads_.report(writer);
+    clock_.report(writer);
     host_blobs_.report(writer);
     window_stats_.report(writer);
     contexts_->report(writer);
