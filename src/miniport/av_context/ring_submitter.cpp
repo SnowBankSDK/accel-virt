@@ -90,6 +90,7 @@ Status RingSubmitter::submit(const SubmissionDescriptor &submission)
         return Status::invalid_parameter;
     if (judge_head(published) != Status::ok) return Status::invalid_state;
     if (shared_tail_ && submission.end() <= device_.head()) {
+        if (fences_.record_submission(submission.fence_id()) != Status::ok) return Status::invalid_parameter;
         tail_ = submission.end();
         return Status::ok;
     }

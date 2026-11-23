@@ -266,7 +266,7 @@ TEST(ring_submitter_submit, a_batch_the_device_already_took_is_not_published_aga
   CHECK_EQ(fixture.doorbells().rings(5u), 1u);
   CHECK_EQ(fixture.published_tail(), 128u);
   CHECK(fixture.submitter().tail() == 128u);
-  CHECK(fixture.fences().highest_submitted() == 1u);
+  CHECK(fixture.fences().highest_submitted() == 2u);
 
   fixture.publish_tail(192u);
   CHECK_STATUS(fixture.submit(3u, 128u, 192u), Status::ok);
@@ -294,3 +294,26 @@ TEST(ring_submitter_submit, a_batch_already_published_that_the_scheduler_submits
       CHECK_STATUS(fixture.submit(3u, 64u, 128u), Status::invalid_parameter);
       CHECK(fixture.submitter().invariants_hold());
   } }
+
+TEST(ring_submitter_submit, a_batch_the_device_took_before_its_packet_is_taken_again_when_the_scheduler_resubmits_it)
+{ Fixture fixture;
+  CHECK_STATUS(fixture.attach(), Status::ok);
+  CHECK_STATUS(fixture.submit(1u, 0u, 64u), Status::ok);
+  fixture.user_mode_publishes();
+  fixture.publish_tail(192u);
+  fixture.device_consumes(192u);
+  CHECK_STATUS(fixture.submit(2u, 64u, 128u), Status::ok);
+  CHECK_STATUS(fixture.submit(3u, 128u, 192u), Status::ok);
+  const std::uint32_t rings = fixture.doorbells().rings(5u);
+  CHECK_STATUS(fixture.submit(2u, 64u, 128u), Status::ok);
+  CHECK_STATUS(fixture.submit(3u, 128u, 192u), Status::ok);
+  CHECK(fixture.submitter().tail() == 192u);
+  CHECK(fixture.fences().highest_submitted() == 3u);
+  CHECK_EQ(fixture.doorbells().rings(5u), rings);
+  CHECK_EQ(fixture.published_tail(), 192u);
+
+  fixture.publish_tail(256u);
+  fixture.device_consumes(256u);
+  CHECK_STATUS(fixture.submit(3u, 192u, 256u), Status::invalid_parameter);
+  CHECK(fixture.submitter().tail() == 192u);
+  CHECK(fixture.submitter().invariants_hold()); }
