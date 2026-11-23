@@ -288,7 +288,8 @@ struct Caps11 {
     uint32_t extended_nv12_shared_texture;
     uint32_t shared_resource_tier;
     uint32_t max_buffer_mebibytes;
-    uint32_t reserved[5];
+    uint32_t max_gpu_va_bits_per_resource;
+    uint32_t reserved[4];
 };
 static_assert(sizeof(Caps11) == 156, "Caps11 crosses as 156 bytes");
 static_assert(__is_trivially_copyable(Caps11), "Caps11 is plain data");

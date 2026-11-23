@@ -287,6 +287,11 @@ TEST(d3d_backend_device, a_tile_mapped_and_filled_reads_back_through_a_copy_to_a
     static FormatCaps formats[256];
     std::uint64_t answered = 0u;
     CHECK(av_d3d_QueryCaps11(wire, &caps, formats, sizeof(formats), &answered));
+    CHECK(caps.max_gpu_va_bits_per_resource >= 31u && caps.max_gpu_va_bits_per_resource <= 64u);
+    constexpr std::uint32_t format_b8g8r8a8_unorm = 87u;
+    constexpr std::uint32_t four_samples = 1u;
+    CHECK(answered / sizeof(formats[0]) > format_b8g8r8a8_unorm);
+    CHECK(formats[format_b8g8r8a8_unorm].quality_levels[four_samples] >= 1u);
     if (caps.tiled_resources_tier == 0u) {
         std::fprintf(stderr, "this GPU has no sparse binding under DXVK: nothing judged\n");
         backend.shut_down();

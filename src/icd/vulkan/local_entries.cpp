@@ -408,6 +408,14 @@ VKAPI_ATTR void VKAPI_CALL local_vkGetPhysicalDeviceExternalBufferProperties(
     icd_binding.root().external_buffer_properties(physicalDevice, pExternalBufferInfo, pExternalBufferProperties);
 }
 
+VKAPI_ATTR VkResult VKAPI_CALL local_vkGetPhysicalDeviceImageFormatProperties2(
+    VkPhysicalDevice physicalDevice, const VkPhysicalDeviceImageFormatInfo2 *pImageFormatInfo,
+    VkImageFormatProperties2 *pImageFormatProperties)
+{
+    AV_SCOPE("local_vkGetPhysicalDeviceImageFormatProperties2");
+    return icd_binding.root().image_format_properties2(physicalDevice, pImageFormatInfo, pImageFormatProperties);
+}
+
 VKAPI_ATTR void VKAPI_CALL local_vkGetPhysicalDeviceExternalSemaphoreProperties(
     VkPhysicalDevice physicalDevice, const VkPhysicalDeviceExternalSemaphoreInfo *pExternalSemaphoreInfo,
     VkExternalSemaphoreProperties *pExternalSemaphoreProperties)

@@ -145,6 +145,8 @@ public:
     void     external_buffer_properties(VkPhysicalDevice physical_device,
                                         const VkPhysicalDeviceExternalBufferInfo *info,
                                         VkExternalBufferProperties               *properties);
+    VkResult image_format_properties2(VkPhysicalDevice physical_device, const VkPhysicalDeviceImageFormatInfo2 *info,
+                                      VkImageFormatProperties2 *properties);
     void     external_semaphore_properties(VkPhysicalDevice physical_device,
                                            const VkPhysicalDeviceExternalSemaphoreInfo *info,
                                            VkExternalSemaphoreProperties               *properties);

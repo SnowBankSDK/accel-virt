@@ -209,7 +209,8 @@ TEST(icd_root, an_instance_it_made_answers_every_entry_point_with_its_own_rows_f
       "vkInvalidateMappedMemoryRanges", "vkGetQueryPoolResults",
       "vkCreateDescriptorUpdateTemplate", "vkCreateDescriptorUpdateTemplateKHR",
       "vkDestroyDescriptorUpdateTemplate", "vkDestroyDescriptorUpdateTemplateKHR", "vkCreateImage", "vkDestroyImage",
-      "vkCreateSemaphore", "vkDestroySemaphore", "vkGetPhysicalDeviceExternalBufferProperties",
+      "vkCreateSemaphore", "vkDestroySemaphore", "vkGetPhysicalDeviceImageFormatProperties2",
+      "vkGetPhysicalDeviceImageFormatProperties2KHR", "vkGetPhysicalDeviceExternalBufferProperties",
       "vkGetPhysicalDeviceExternalBufferPropertiesKHR", "vkGetPhysicalDeviceExternalSemaphoreProperties",
       "vkGetPhysicalDeviceExternalSemaphorePropertiesKHR",
       "vkEnumeratePhysicalDevices", "vkEnumeratePhysicalDeviceGroups", "vkEnumeratePhysicalDeviceGroupsKHR"};

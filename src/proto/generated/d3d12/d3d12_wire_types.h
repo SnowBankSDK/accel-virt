@@ -522,8 +522,13 @@ struct Caps12 {
     uint32_t programmable_sample_positions_tier;
     uint32_t render_pass_tier;
     uint32_t raytracing_tier;
+    uint32_t max_sampler_heap_size;
+    uint32_t max_sampler_heap_size_with_static_samplers;
+    uint32_t max_view_heap_size;
+    uint32_t no_output_sample_counts;
+    uint32_t execute_indirect_tier;
 };
-static_assert(sizeof(Caps12) == 196, "Caps12 crosses as 196 bytes");
+static_assert(sizeof(Caps12) == 216, "Caps12 crosses as 216 bytes");
 static_assert(__is_trivially_copyable(Caps12), "Caps12 is plain data");
 
 }  // namespace av::d3d12proto

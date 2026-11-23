@@ -571,7 +571,7 @@ TEST(vram_budget, a_refused_system_allocation_is_refunded_and_the_device_local_h
   budget.refund(0u, 2 * gib);
   CHECK_EQ(ledger.used(), std::uint64_t{0}); }
 
-TEST(vram_budget, the_guest_is_told_the_host_ram_budget_for_system_heaps_and_what_the_vm_has_used)
+TEST(vram_budget, a_system_heap_reports_the_sessions_own_usage_and_a_budget_of_it_plus_the_host_ram_left)
 { av::FailingBlocks blocks;
   VramLedger ledger;
   HostRamLedger host;
@@ -588,12 +588,19 @@ TEST(vram_budget, the_guest_is_told_the_host_ram_budget_for_system_heaps_and_wha
   CHECK_EQ(answer.memoryHeaps[1].size, 12 * gib);
   VkPhysicalDeviceMemoryBudgetPropertiesEXT report = {};
   budget.report(report);
-  CHECK_EQ(report.heapBudget[1], 12 * gib);
-  CHECK_EQ(report.heapUsage[1], 3 * gib);
+  CHECK_EQ(report.heapUsage[1], std::uint64_t{0});
+  CHECK_EQ(report.heapBudget[1], 9 * gib);
   CHECK_EQ(report.heapBudget[0], 7 * gib);
+  CHECK(budget.admit(1u, gib));
+  budget.report(report);
+  CHECK_EQ(report.heapUsage[1], gib);
+  CHECK_EQ(report.heapBudget[1], 9 * gib);
+  budget.refund(1u, gib);
+  budget.report(report);
+  CHECK_EQ(report.heapUsage[1], std::uint64_t{0});
   host.budget(2 * gib);
   budget.report(report);
-  CHECK_EQ(report.heapBudget[1], 3 * gib); }
+  CHECK_EQ(report.heapBudget[1], std::uint64_t{0}); }
 
 TEST(vram_budget, closing_returns_the_host_ram_the_backend_held)
 { av::FailingBlocks blocks;

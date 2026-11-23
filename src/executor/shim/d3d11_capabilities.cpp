@@ -85,6 +85,9 @@ void D3d11Capabilities::measure_options(ID3D11Device5 &device)
         caps_.standard_swizzle = 0u;
         caps_.unified_memory_architecture = 0u;
     }
+    D3D11_FEATURE_DATA_GPU_VIRTUAL_ADDRESS_SUPPORT address = {};
+    if (SUCCEEDED(device.CheckFeatureSupport(D3D11_FEATURE_GPU_VIRTUAL_ADDRESS_SUPPORT, &address, sizeof(address))))
+        caps_.max_gpu_va_bits_per_resource = static_cast<uint32_t>(address.MaxGPUVirtualAddressBitsPerResource);
     D3D11_FEATURE_DATA_D3D11_OPTIONS3 options3 = {};
     if (SUCCEEDED(device.CheckFeatureSupport(D3D11_FEATURE_D3D11_OPTIONS3, &options3, sizeof(options3))))
         caps_.vp_and_rt_array_index_from_any_shader = static_cast<uint32_t>(options3.VPAndRTArrayIndexFromAnyShaderFeedingRasterizer);
@@ -104,17 +107,15 @@ void D3d11Capabilities::measure_formats(ID3D11Device5 &device)
         support2.InFormat = static_cast<DXGI_FORMAT>(format);
         if (SUCCEEDED(device.CheckFeatureSupport(D3D11_FEATURE_FORMAT_SUPPORT2, &support2, sizeof(support2))))
             row.support2 = support2.OutFormatSupport2;
-        uint32_t counts = 0u, most = 0u;
+        uint32_t counts = 0u;
         for (uint32_t step = 0u; step < sample_count_steps; step++) {
             UINT levels = 0u;
             if (FAILED(device.CheckMultisampleQualityLevels(static_cast<DXGI_FORMAT>(format), 1u << step, &levels)) ||
                 levels == 0u)
                 continue;
             counts |= 1u << step;
-            if (levels > most) most = levels;
+            if (step >= 1u && step - 1u < multisample_counts) row.quality_levels[step - 1u] = levels;
         }
-        for (uint32_t step = 0u; step < multisample_counts; step++)
-            row.quality_levels[step] = (counts & (2u << step)) != 0u ? most : 0u;
         if ((counts & ~1u) == 0u)
             row.support &= ~static_cast<uint32_t>(D3D11_FORMAT_SUPPORT_MULTISAMPLE_RESOLVE |
                                                   D3D11_FORMAT_SUPPORT_MULTISAMPLE_RENDERTARGET |

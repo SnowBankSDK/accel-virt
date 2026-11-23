@@ -11,10 +11,11 @@ namespace av {
 namespace {
 
 constexpr uint32_t level_12_2 = 0xc200u;
-constexpr uint32_t shader_model_6_8 = 0x68u;
+constexpr uint32_t highest_known_shader_model = 0x69u;
 constexpr int      feature_options9 = 37;
 constexpr int      feature_options11 = 40;
 constexpr int      feature_options14 = 43;
+constexpr int      feature_options19 = 48;
 constexpr int      feature_options21 = 53;
 constexpr uint32_t descriptor_heap_types = 4u;
 constexpr uint32_t queue_list_direct = 1u;
@@ -42,6 +43,19 @@ struct Options14 {
     BOOL advanced_texture_ops;
     BOOL writeable_msaa_textures;
     BOOL independent_front_and_back_stencil_ref_mask;
+};
+
+struct Options19 {
+    BOOL mismatching_output_dimensions;
+    UINT sample_counts_with_no_outputs;
+    BOOL point_sampling_addresses_never_round_up;
+    BOOL rasterizer_desc2;
+    BOOL narrow_quadrilateral_lines;
+    BOOL aniso_filter_with_point_mip;
+    UINT max_sampler_heap_size;
+    UINT max_sampler_heap_size_with_static_samplers;
+    UINT max_view_heap_size;
+    BOOL compute_only_custom_heap;
 };
 
 struct Options21 {
@@ -92,7 +106,7 @@ void D3d12Capabilities::measure_options(ID3D12Device &device)
     if (SUCCEEDED(device.CheckFeatureSupport(D3D12_FEATURE_FEATURE_LEVELS, &levels, sizeof(levels))))
         caps_.feature_level = static_cast<uint32_t>(levels.MaxSupportedFeatureLevel);
     D3D12_FEATURE_DATA_SHADER_MODEL model = {};
-    model.HighestShaderModel = static_cast<D3D_SHADER_MODEL>(shader_model_6_8);
+    model.HighestShaderModel = static_cast<D3D_SHADER_MODEL>(highest_known_shader_model);
     if (SUCCEEDED(device.CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &model, sizeof(model))))
         caps_.shader_model = static_cast<uint32_t>(model.HighestShaderModel);
     D3D12_FEATURE_DATA_D3D12_OPTIONS options = {};
@@ -166,10 +180,18 @@ void D3d12Capabilities::measure_options(ID3D12Device &device)
         caps_.advanced_texture_ops = options14.advanced_texture_ops ? 1u : 0u;
         caps_.writeable_msaa_textures = options14.writeable_msaa_textures ? 1u : 0u;
     }
+    Options19 options19;
+    if (ask(device, feature_options19, options19)) {
+        caps_.no_output_sample_counts = options19.sample_counts_with_no_outputs;
+        caps_.max_sampler_heap_size = options19.max_sampler_heap_size;
+        caps_.max_sampler_heap_size_with_static_samplers = options19.max_sampler_heap_size_with_static_samplers;
+        caps_.max_view_heap_size = options19.max_view_heap_size;
+    }
     Options21 options21;
     if (ask(device, feature_options21, options21)) {
         caps_.sample_cmp_gradient_bias = options21.sample_cmp_gradient_and_bias ? 1u : 0u;
         caps_.extended_command_info = options21.extended_command_info ? 1u : 0u;
+        caps_.execute_indirect_tier = static_cast<uint32_t>(options21.execute_indirect_tier);
     }
     D3D12_FEATURE_DATA_D3D12_OPTIONS1 waves = {};
     if (SUCCEEDED(device.CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS1, &waves, sizeof(waves)))) {

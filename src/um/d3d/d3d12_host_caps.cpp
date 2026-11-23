@@ -5,6 +5,7 @@
 #include "icd/d3d/caps_reply.hpp"
 #include "proto/client/client_transport.hpp"
 #include "proto/d3d/caps12_layout.hpp"
+#include "proto/d3d/descriptor_heap_rules.hpp"
 #include "proto/generated/d3d/d3d_wire_types.h"
 #include "proto/generated/d3d12/d3d12_dispatch_client.h"
 #include "icd/d3d/feature_level_gate.hpp"
@@ -26,12 +27,8 @@ constexpr uint32_t api_model_6_8 = 0x68u;
 constexpr uint32_t ddi_model_5_1 = 0x50015u;
 constexpr uint32_t ddi_model_6_0 = 0x60005u;
 constexpr uint32_t ddi_model_step = 0x10u;
-constexpr uint32_t address_bits = 40u;
 constexpr UINT16   row_major_element = 16u;
 constexpr UINT16   row_major_alignment = 256u;
-constexpr UINT     view_heap_ceiling = 1000000u;
-constexpr UINT     sampler_heap_ceiling = 4000u;
-constexpr UINT     no_output_sample_counts = 0x1fu;
 
 }
 
@@ -219,7 +216,7 @@ HRESULT D3d12HostCaps::answer(const D3D12DDIARG_GETCAPS &args) const
     case D3D12DDICAPS_TYPE_SHADER: return shader(args.pData, bytes);
     case D3D12DDICAPS_TYPE_0011_SHADER_MODELS: return shader_models(args.pData, bytes);
     case D3D12DDICAPS_TYPE_GPUVA_CAPS: {
-        const D3D12DDI_GPUVA_CAPS_0004 answer = {address_bits};
+        const D3D12DDI_GPUVA_CAPS_0004 answer = {caps_.max_gpu_va_bits_per_resource};
         return fill(args.pData, bytes, &answer, sizeof(answer));
     }
     case D3D12DDICAPS_TYPE_MEMORY_ARCHITECTURE: {
@@ -244,15 +241,19 @@ HRESULT D3d12HostCaps::answer(const D3D12DDIARG_GETCAPS &args) const
         return fill(args.pData, bytes, nullptr, 0u);
     case D3D12DDICAPS_TYPE_OPTIONS_0102: {
         D3D12DDI_OPTIONS_DATA_0102 answer = {};
-        answer.SupportedSampleCountsWithNoOutputs = no_output_sample_counts;
-        answer.MaxSamplerDescriptorHeapSize = sampler_heap_ceiling;
-        answer.MaxSamplerDescriptorHeapSizeWithStaticSamplers = sampler_heap_ceiling;
-        answer.MaxViewDescriptorHeapSize = view_heap_ceiling;
+        answer.SupportedSampleCountsWithNoOutputs = caps_.no_output_sample_counts;
+        answer.MaxSamplerDescriptorHeapSize = caps_.max_sampler_heap_size;
+        answer.MaxSamplerDescriptorHeapSizeWithStaticSamplers = caps_.max_sampler_heap_size_with_static_samplers;
+        answer.MaxViewDescriptorHeapSize = caps_.max_view_heap_size < DescriptorHeapRules::most_descriptors
+                                               ? caps_.max_view_heap_size
+                                               : DescriptorHeapRules::most_descriptors;
         return fill(args.pData, bytes, &answer, sizeof(answer));
     }
     case D3D12DDICAPS_TYPE_OPTIONS_0110: {
         D3D12DDI_OPTIONS_DATA_0110 answer = {};
-        answer.ExecuteIndirectTier = D3D12DDI_EXECUTE_INDIRECT_TIER_1_0;
+        answer.ExecuteIndirectTier = caps_.execute_indirect_tier >= D3D12DDI_EXECUTE_INDIRECT_TIER_1_1
+                                         ? D3D12DDI_EXECUTE_INDIRECT_TIER_1_1
+                                         : D3D12DDI_EXECUTE_INDIRECT_TIER_1_0;
         return fill(args.pData, bytes, &answer, sizeof(answer));
     }
     default: return answer_later(args);

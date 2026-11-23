@@ -15,7 +15,7 @@ public:
 
     bool    answers(VkFlags asked) const;
     VkFlags host_type() const;
-    VkFlags reported(VkFlags host_types) const;
+    VkFlags reported(VkFlags host_types, VkFlags asked_host_type) const;
 
     bool invariants_hold() const;
 

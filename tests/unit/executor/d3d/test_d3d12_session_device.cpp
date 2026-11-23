@@ -188,6 +188,12 @@ void make_frame(av::D3dLoopback &wire, bool native = false)
     CHECK(caps.feature_level >= 0xb000u);
     CHECK(caps.descriptor_sizes[descriptors_rtv] != 0u);
     CHECK(formats_size != 0u);
+    CHECK(caps.max_gpu_va_bits_per_resource >= 31u && caps.max_gpu_va_bits_per_resource <= 64u);
+    CHECK(caps.max_view_heap_size >= 1000000u);
+    CHECK(caps.max_sampler_heap_size >= 2048u);
+    CHECK(caps.max_sampler_heap_size_with_static_samplers >= 2048u);
+    CHECK((caps.no_output_sample_counts & 1u) != 0u);
+    CHECK(caps.execute_indirect_tier >= 10u);
     CHECK(av_d3d12_CreateCommandQueue12(wire, queue, 0u, 0u, 0u));
     CHECK(av_d3d12_CreateCommandAllocator12(wire, allocator, 0u));
     CHECK(av_d3d12_CreateCommandList12(wire, list, allocator, 0u, 0u));

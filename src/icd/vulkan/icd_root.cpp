@@ -24,6 +24,7 @@
 #include "icd/vulkan/icd_binding.hpp"
 #include "icd/vulkan/local_entries.hpp"
 #include "core/log/keyed_log.hpp"
+#include "icd/vulkan/image_format_chain.hpp"
 #include "icd/vulkan/memory_allocate_chain.hpp"
 #include "icd/vulkan/semaphore_create_chain.hpp"
 #include "icd/vulkan/memory_type_table.hpp"
@@ -122,6 +123,12 @@ const Entry        local_rows[] = {
             reinterpret_cast<PFN_vkVoidFunction>(&local_vkImportSemaphoreWin32HandleKHR), Level::device},
     {"vkCreateSemaphore", reinterpret_cast<PFN_vkVoidFunction>(&local_vkCreateSemaphore), Level::device},
     {"vkDestroySemaphore", reinterpret_cast<PFN_vkVoidFunction>(&local_vkDestroySemaphore), Level::device},
+    {"vkGetPhysicalDeviceImageFormatProperties2",
+            reinterpret_cast<PFN_vkVoidFunction>(&local_vkGetPhysicalDeviceImageFormatProperties2),
+            Level::physical_device},
+    {"vkGetPhysicalDeviceImageFormatProperties2KHR",
+            reinterpret_cast<PFN_vkVoidFunction>(&local_vkGetPhysicalDeviceImageFormatProperties2),
+            Level::physical_device},
     {"vkGetPhysicalDeviceExternalBufferProperties",
             reinterpret_cast<PFN_vkVoidFunction>(&local_vkGetPhysicalDeviceExternalBufferProperties),
             Level::physical_device},
@@ -991,7 +998,28 @@ void IcdRoot::external_buffer_properties(VkPhysicalDevice physical_device,
         answered.externalMemoryProperties.externalMemoryFeatures;
     properties->externalMemoryProperties.exportFromImportedHandleTypes = 0u;
     properties->externalMemoryProperties.compatibleHandleTypes =
-        memory_handles_.reported(answered.externalMemoryProperties.compatibleHandleTypes);
+        memory_handles_.reported(answered.externalMemoryProperties.compatibleHandleTypes, asked.handleType);
+}
+
+VkResult IcdRoot::image_format_properties2(VkPhysicalDevice physical_device, const VkPhysicalDeviceImageFormatInfo2 *info,
+                                           VkImageFormatProperties2 *properties)
+{
+    AV_SCOPE("IcdRoot::image_format_properties2");
+    if (info == nullptr || properties == nullptr) return VK_ERROR_FORMAT_NOT_SUPPORTED;
+    Connection *const connection = connection_of(physical_device, LoaderHandle::Kind::physical_device);
+    if (connection == nullptr) return VK_ERROR_INITIALIZATION_FAILED;
+    ImageFormatChain chain;
+    switch (chain.take(*info, memory_handles_, memory_share_type(*connection))) {
+    case ImageFormatChain::Outcome::refused: return VK_ERROR_FORMAT_NOT_SUPPORTED;
+    case ImageFormatChain::Outcome::untouched:
+        return vkproto::av_vkGetPhysicalDeviceImageFormatProperties2(connection->transport(), translation_,
+                                                                     physical_device, info, properties);
+    case ImageFormatChain::Outcome::translated: break;
+    }
+    const VkResult answered = vkproto::av_vkGetPhysicalDeviceImageFormatProperties2(
+        connection->transport(), translation_, physical_device, chain.forwarded(), properties);
+    if (answered == VK_SUCCESS) chain.report(*properties, memory_handles_);
+    return answered;
 }
 
 void IcdRoot::external_semaphore_properties(VkPhysicalDevice physical_device,
@@ -1017,8 +1045,8 @@ void IcdRoot::external_semaphore_properties(VkPhysicalDevice physical_device,
                                                                 &answered);
     properties->externalSemaphoreFeatures = answered.externalSemaphoreFeatures;
     properties->exportFromImportedHandleTypes =
-        semaphore_handles_.reported(answered.exportFromImportedHandleTypes);
-    properties->compatibleHandleTypes = semaphore_handles_.reported(answered.compatibleHandleTypes);
+        semaphore_handles_.reported(answered.exportFromImportedHandleTypes, asked.handleType);
+    properties->compatibleHandleTypes = semaphore_handles_.reported(answered.compatibleHandleTypes, asked.handleType);
 }
 
 bool IcdRoot::shares_semaphore(const void *chain) const

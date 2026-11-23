@@ -19,10 +19,22 @@ TEST(win32_handle_kind, the_opaque_win32_type_is_asked_about_as_an_opaque_fd)
                         VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT));
 
   CHECK_EQ(memory.reported(VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT |
+                               VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+                           VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT),
+           static_cast<VkFlags>(VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT));
+  CHECK_EQ(memory.reported(VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT),
+           0u);
+  CHECK_EQ(memory.reported(0u, VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT), 0u); }
+
+TEST(win32_handle_kind, a_host_asked_about_dma_bufs_that_can_share_them_offers_the_opaque_win32_type)
+{ Win32HandleKind memory(VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT,
+                         VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT);
+  CHECK_EQ(memory.reported(VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
                            VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT),
            static_cast<VkFlags>(VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT));
-  CHECK_EQ(memory.reported(VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT), 0u);
-  CHECK_EQ(memory.reported(0u), 0u); }
+  CHECK_EQ(memory.reported(VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT),
+           0u);
+  CHECK_EQ(memory.reported(VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, 0u), 0u); }
 
 TEST(win32_handle_kind, a_semaphore_kind_is_the_same_arithmetic_on_its_own_bits)
 { Win32HandleKind semaphore(VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT,
@@ -32,9 +44,11 @@ TEST(win32_handle_kind, a_semaphore_kind_is_the_same_arithmetic_on_its_own_bits)
   CHECK(!semaphore.answers(VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_D3D12_FENCE_BIT));
   CHECK(!semaphore.answers(VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT));
   CHECK_EQ(semaphore.reported(VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT |
-                              VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT),
+                                  VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT,
+                              VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT),
            static_cast<VkFlags>(VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT));
-  CHECK_EQ(semaphore.reported(VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT), 0u); }
+  CHECK_EQ(semaphore.reported(VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT, VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT),
+           0u); }
 
 TEST(win32_handle_kind, a_kind_of_two_bits_or_one_bit_twice_is_named)
 { Win32HandleKind twice(VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT,

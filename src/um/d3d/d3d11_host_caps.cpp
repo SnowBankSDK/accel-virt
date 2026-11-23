@@ -139,7 +139,10 @@ HRESULT D3d11HostCaps::answer(const D3D10_2DDIARG_GETCAPS &args) const
         memory.CacheCoherent = FALSE;
         return reply.give_whole(&memory, sizeof memory) ? S_OK : E_INVALIDARG;
     }
-    case D3DWDDM2_0DDICAPS_GPUVA_CAPS: word = 40u; break;
+    case D3DWDDM2_0DDICAPS_GPUVA_CAPS:
+        if (caps_.max_gpu_va_bits_per_resource == 0u) return reply.give_none() ? S_OK : E_INVALIDARG;
+        word = caps_.max_gpu_va_bits_per_resource;
+        break;
     case D3DWDDM2_2DDICAPS_SHADERCACHE: word = FALSE; break;
     default:
         return reply.give_none() ? S_OK : E_INVALIDARG;

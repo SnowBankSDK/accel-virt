@@ -21,10 +21,10 @@ VkFlags Win32HandleKind::host_type() const
     return fd_bit_;
 }
 
-VkFlags Win32HandleKind::reported(VkFlags host_types) const
+VkFlags Win32HandleKind::reported(VkFlags host_types, VkFlags asked_host_type) const
 {
     AV_SCOPE("Win32HandleKind::reported");
-    return (host_types & fd_bit_) != 0u ? win32_bit_ : 0u;
+    return asked_host_type != 0u && (host_types & asked_host_type) == asked_host_type ? win32_bit_ : 0u;
 }
 
 bool Win32HandleKind::invariants_hold() const
