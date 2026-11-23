@@ -11,6 +11,7 @@
 #include "executor/sharing/shared_image_shape.hpp"
 #include "executor/shim/gl_display.hpp"
 #include "harness/framework/test_registry.hpp"
+#include "harness/memory/udmabuf.hpp"
 #include "harness/icd/recording_log.hpp"
 #include "proto/generated/opengl/gl_protocol_ids.h"
 #include "proto/submission/gl_error_word.hpp"
@@ -31,7 +32,6 @@
 
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
-#include <linux/udmabuf.h>
 
 extern "C" const char *__asan_default_options(void);
 extern "C" const char *__asan_default_options(void)
@@ -70,6 +70,7 @@ struct OpenGlBackendProbe {
 
 using av::OpenGlBackend;
 using av::OpenGlBackendProbe;
+using av::Udmabuf;
 
 namespace {
 
@@ -481,60 +482,6 @@ TEST(opengl_backend_software, a_negative_count_reaches_the_gl_error_state_and_th
   CHECK(Command(av::glproto::kCmd_glGenTextures).varint(1u).pod8(1u).varint(4u).run(backend));
   CHECK(Command(av::glproto::kCmd_glFlush).run(backend));
   backend.shut_down(); }
-
-namespace {
-
-class Udmabuf {
-public:
-    Udmabuf(std::uint64_t bytes) : memfd_(-1), fd_(-1), bytes_(bytes), mapped_(nullptr)
-    {
-        const int device = open("/dev/udmabuf", O_RDWR | O_CLOEXEC);
-        if (device < 0) return;
-        memfd_ = memfd_create("av-udmabuf", MFD_ALLOW_SEALING | MFD_CLOEXEC);
-        if (memfd_ >= 0 && ftruncate(memfd_, static_cast<off_t>(bytes)) == 0 &&
-            fcntl(memfd_, F_ADD_SEALS, F_SEAL_SHRINK) == 0) {
-            udmabuf_create create = {};
-            create.memfd = static_cast<std::uint32_t>(memfd_);
-            create.size = bytes;
-            fd_ = ioctl(device, UDMABUF_CREATE, &create);
-        }
-        close(device);
-        if (fd_ >= 0) {
-            void *const map = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_SHARED, fd_, 0);
-            mapped_ = map == MAP_FAILED ? nullptr : static_cast<std::uint32_t *>(map);
-        }
-    }
-    ~Udmabuf()
-    {
-        if (mapped_ != nullptr) munmap(mapped_, bytes_);
-        if (fd_ >= 0) close(fd_);
-        if (memfd_ >= 0) close(memfd_);
-    }
-    Udmabuf(const Udmabuf &) = delete;
-    Udmabuf &operator=(const Udmabuf &) = delete;
-
-    bool           made() const { return mapped_ != nullptr; }
-    int            fd() const { return fd_; }
-    std::uint32_t *pixels() const { return mapped_; }
-
-    void let_go()
-    {
-        if (mapped_ != nullptr) munmap(mapped_, bytes_);
-        if (fd_ >= 0) close(fd_);
-        if (memfd_ >= 0) close(memfd_);
-        mapped_ = nullptr;
-        fd_ = -1;
-        memfd_ = -1;
-    }
-
-private:
-    int            memfd_;
-    int            fd_;
-    std::uint64_t  bytes_;
-    std::uint32_t *mapped_;
-};
-
-}
 
 TEST(opengl_backend_software, a_linear_dma_buf_is_placed_under_a_texture_as_an_egl_image_with_its_offset_pitch_and_modifier)
 { if (skipped()) return;

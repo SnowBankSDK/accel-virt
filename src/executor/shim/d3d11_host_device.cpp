@@ -12,6 +12,7 @@
 #include "core/log/log_line.hpp"
 #include "core/support/bgra_rows.hpp"
 #include "core/trace/function_scope.hpp"
+#include "executor/owned_fd.hpp"
 #include "executor/shim/d3d12_host_device.hpp"
 #include "executor/shim/d3d_headers.hpp"
 #include "core/platform/poll_budget.hpp"
@@ -26,7 +27,7 @@ namespace av {
 
 
 D3d11HostDevice::D3d11HostDevice(DriverLog &lines)
-    : runtime_(nullptr), uuid_(), tenant_heap_(), renewal_(tenant_heap_, lines), device_(nullptr), device12_(nullptr), compositor_(nullptr), context_(nullptr), active_(nullptr), feature_level_(0u), capabilities_(), shares_(nullptr), vulkan_(*this), slices_(nullptr), exports_(vulkan_), composer_(), images_(vulkan_, lines), copies_(), converter_(), frames_(*this), staging_(nullptr), read_(nullptr), read_mapped_(false), lock_(), owner_(0u), waiting_(0u), taken_(0u), lines_(lines), clock_(), carry_heap_(), carried_(carry_heap_)
+    : runtime_(nullptr), uuid_(), tenant_heap_(), renewal_(tenant_heap_, lines), device_(nullptr), device12_(nullptr), compositor_(nullptr), context_(nullptr), active_(nullptr), feature_level_(0u), capabilities_(), shares_(nullptr), vulkan_(*this), slices_(nullptr), exports_(vulkan_), fence_(lines), composer_(), images_(vulkan_, lines), copies_(), converter_(), frames_(*this), staging_(nullptr), read_(nullptr), read_mapped_(false), lock_(), owner_(0u), waiting_(0u), taken_(0u), lines_(lines), clock_(), carry_heap_(), carried_(carry_heap_)
 {
     AV_SCOPE("D3d11HostDevice::D3d11HostDevice");
 }
@@ -133,10 +134,30 @@ bool D3d11HostDevice::export_image(uint32_t domain, uint64_t id, AvExportedImage
     ID3D11Texture2D *const texture = usable() ? presented_texture(domain, id) : nullptr;
     uint32_t               slot = 0u;
     const bool             staged = texture != nullptr && exports_.stage(device_, context_, texture, slot);
+    const bool             fence = staged && fenced(slot);
     if (texture != nullptr) texture->Release();
     unlock();
-    if (!staged || !exported(slot)) return false;
-    return exports_.describe(slot, image);
+    return staged && (fence || exported(slot)) && hand_over(slot, image);
+}
+
+bool D3d11HostDevice::fenced(uint32_t slot)
+{
+    AV_SCOPE("D3d11HostDevice::fenced");
+    const int image = exports_.descriptor(slot);
+    int       copy = -1;
+    if (image < 0 || !vulkan_.sync_file(copy)) return false;
+    const OwnedFd held(copy);
+    return fence_.attach(image, held.fd());
+}
+
+bool D3d11HostDevice::hand_over(uint32_t slot, AvExportedImage &image)
+{
+    AV_SCOPE("D3d11HostDevice::hand_over");
+    if (!exports_.describe(slot, image)) return false;
+    lock(nullptr);
+    exports_.handed(slot);
+    unlock();
+    return true;
 }
 
 bool D3d11HostDevice::exported(uint32_t slot)
@@ -174,9 +195,9 @@ bool D3d11HostDevice::compose_planes(uint32_t domain, const AvScanoutPlane *plan
         if (texture != nullptr) texture->Release();
     uint32_t   slot = 0u;
     const bool staged = composed != nullptr && exports_.stage(device_, context_, composed, slot);
+    const bool fence = staged && fenced(slot);
     unlock();
-    if (!staged || !exported(slot)) return false;
-    return exports_.describe(slot, image);
+    return staged && (fence || exported(slot)) && hand_over(slot, image);
 }
 
 bool D3d11HostDevice::export_surface(uint32_t domain, uint64_t surface, uint32_t flags, AvExportedImage &image)
