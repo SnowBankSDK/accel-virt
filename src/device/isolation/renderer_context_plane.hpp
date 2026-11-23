@@ -133,6 +133,7 @@ private:
         bool next(uint64_t &key);
         void reset();
         void earlier(uint64_t &deadline) const;
+        void count(uint64_t &behind, uint64_t &replaced) const;
         bool idle() const;
 
     private:
@@ -142,6 +143,8 @@ private:
         uint64_t sequence_;
         uint64_t deadline_;
         uint64_t queued_key_;
+        uint64_t behind_;
+        uint64_t replaced_;
 
         friend struct RendererContextPlaneProbe;
     };
