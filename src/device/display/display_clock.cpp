@@ -1,6 +1,7 @@
 #include "device/display/display_clock.hpp"
 
 #include "core/trace/function_scope.hpp"
+#include "core/trace/state_writer.hpp"
 #include "device/abi/entry_points.hpp"
 #include "device/fence/fence_interrupts.hpp"
 #include "proto/pages/vblank_record.hpp"
@@ -156,6 +157,16 @@ void DisplayClock::post(uint32_t head, uint32_t frame, uint64_t key)
     host_.unlock_mutex(lock_);
 }
 
+void DisplayClock::post_exported(uint32_t head, uint32_t frame, uint64_t key)
+{
+    AV_SCOPE("DisplayClock::post_exported");
+    host_.require_main_loop("DisplayClock::post_exported");
+    if (!latches(head)) return;
+    host_.lock_mutex(lock_);
+    latches_[head].post_exported(frame, key);
+    host_.unlock_mutex(lock_);
+}
+
 void DisplayClock::showing()
 {
     AV_SCOPE("DisplayClock::showing");
@@ -190,7 +201,7 @@ bool DisplayClock::pass(uint32_t head, uint64_t now)
     const uint64_t  before = schedule.sequence();
     if (schedule.advance(now) == 0u) return false;
     FrameLatch &latch = latches_[head];
-    if (latch.latch() && !show_queued_) {
+    if (latch.latch_to_show() && !show_queued_) {
         show_queued_ = true;
         host_.run_on_main_loop(show_, show_context_);
     }
@@ -217,6 +228,27 @@ bool DisplayClock::tick(uint64_t now, uint64_t &next)
     host_.unlock_mutex(lock_);
     if (raise) interrupts_.raise(FenceInterrupts::display_line);
     return true;
+}
+
+void DisplayClock::report(StateWriter &writer) const
+{
+    AV_SCOPE("DisplayClock::report");
+    if (lock_ == nullptr) return;
+    uint64_t posts = 0u;
+    uint64_t exported = 0u;
+    uint64_t dropped = 0u;
+    host_.lock_mutex(lock_);
+    for (const FrameLatch &latch : latches_) {
+        posts += latch.posts();
+        exported += latch.posts_exported_on_post();
+        dropped += latch.posts_dropped();
+    }
+    host_.unlock_mutex(lock_);
+    writer.open("display_clock", 0u);
+    writer.number("posts", posts);
+    writer.number("posts_exported_on_post", exported);
+    writer.number("posts_dropped", dropped);
+    writer.close();
 }
 
 bool DisplayClock::invariants_hold() const
