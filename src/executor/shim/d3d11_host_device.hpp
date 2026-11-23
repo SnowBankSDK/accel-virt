@@ -14,6 +14,7 @@
 #include "executor/shim/d3d11_frame_pool.hpp"
 #include "executor/shim/dxvk_vulkan_device.hpp"
 #include "executor/shim/exportable_images.hpp"
+#include "executor/shim/fence_wait.hpp"
 #include "executor/shim/host_image_export.hpp"
 #include "executor/shim/host_format_converter.hpp"
 #include "executor/shim/host_surface_copy.hpp"
@@ -132,7 +133,8 @@ private:
     uint32_t           restore_shares();
     bool               usable();
     ID3D11Texture2D   *presented_texture(uint32_t domain, uint64_t id);
-    [[nodiscard]] bool exported(uint32_t slot);
+    [[nodiscard]] bool exported(ID3D11Fence *copy, uint64_t value);
+    [[nodiscard]] bool hand_over(uint32_t slot, AvExportedImage &image);
     ID3D11Texture2D   *view_of(ID3D12Resource *resource);
     ID3D11Texture2D   *shared_texture(uint32_t domain, uint64_t id);
     IUnknown          *viewed(uint32_t domain, uint64_t id, IUnknown *found);
@@ -159,6 +161,7 @@ private:
     DxvkVulkanDevice        vulkan_;
     ID3D11VkExtContext2    *slices_;
     HostImageExport         exports_;
+    FenceWait               export_waits_;
     PlaneComposer           composer_;
     ExportableImages        images_;
     HostSurfaceCopy         copies_;
