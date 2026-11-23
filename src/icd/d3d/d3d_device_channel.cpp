@@ -43,6 +43,12 @@ bool D3dDeviceChannel::speaks_on(const D3dCommandStream &stream) const
     return stream_ == &stream;
 }
 
+uint64_t D3dDeviceChannel::batches() const
+{
+    AV_SCOPE("D3dDeviceChannel::batches");
+    return stream_->batches();
+}
+
 bool D3dDeviceChannel::open(uint32_t feature_level, uint32_t &hresult, uint32_t &level)
 {
     AV_SCOPE("D3dDeviceChannel::open");

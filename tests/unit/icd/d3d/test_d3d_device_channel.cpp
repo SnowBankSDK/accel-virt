@@ -244,6 +244,16 @@ TEST(d3d_device_channel, closing_destroys_the_device_and_the_next_speaker_is_sel
   CHECK_EQ(selected[3], device_a);
   CHECK(!fixture.lock().held()); }
 
+TEST(d3d_device_channel, both_devices_on_one_stream_count_the_batches_it_sent)
+{ Fixture fixture;
+  CHECK_EQ(fixture.a().batches(), 0u);
+  CHECK(av_d3d_Draw(fixture.a(), 3u, 0u));
+  CHECK_EQ(fixture.a().batches(), 0u);
+  CHECK_STATUS(fixture.a().flush(), Status::ok);
+  CHECK_EQ(fixture.a().batches(), 1u);
+  CHECK_EQ(fixture.b().batches(), 1u);
+  CHECK(!fixture.lock().held()); }
+
 TEST(d3d_device_channel, a_failed_stream_fails_the_command_and_keeps_no_lock)
 { Fixture fixture;
   fixture.kmt().fail_at(MockKmt::Call::submit, 1u, 0xC0000001u);
