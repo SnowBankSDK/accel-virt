@@ -52,5 +52,5 @@ jobs:
       - name: Checks
         run: >
           ctest --test-dir build --output-on-failure -j4
-          -R "^(tools_test_|generated_|extension_policy|layer_requirements|cts_subset|check_spirv)"
+          -R "^(tools_test_|generated_|extension_policy|check_spirv)"
           -E "^(tools_test_check_design|tools_test_check_symbol_tests|tools_test_cl_lent_bytes|tools_test_kernel_build|tools_test_run_guest_suite_2|tools_test_run_guest_suite_4|tools_test_run_guest_suite_14|tools_test_scope_marks)$"

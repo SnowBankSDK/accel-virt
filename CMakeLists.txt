@@ -761,12 +761,6 @@ add_test(NAME shared_headers
 add_test(NAME extension_policy
          COMMAND python3 -B ${CMAKE_SOURCE_DIR}/tools/check_extension_policy.py ${CMAKE_SOURCE_DIR})
 
-add_test(NAME layer_requirements
-         COMMAND python3 -B ${CMAKE_SOURCE_DIR}/tools/check_layer_requirements.py ${CMAKE_SOURCE_DIR})
-
-add_test(NAME cts_subset
-         COMMAND python3 -B ${CMAKE_SOURCE_DIR}/tools/check_cts_subset.py ${CMAKE_SOURCE_DIR})
-
 add_test(NAME design_rules
          COMMAND python3 -B ${CMAKE_SOURCE_DIR}/tools/check_design.py ${CMAKE_SOURCE_DIR})
 add_test(NAME symbol_tests

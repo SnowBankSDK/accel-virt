@@ -40,14 +40,9 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from cts_results import CtsRatchet, QpaResults, SuiteComparison  # noqa: E402
 from recording_cost import RecordingCost  # noqa: E402
 from submit_ratchet import SubmitRatchet  # noqa: E402
-from cts_shards import CtsShards  # noqa: E402
-from cts_subset import CtsSubset  # noqa: E402
-from fetch_cts import CtsFetch, CtsPins  # noqa: E402
 from frame_reference import FrameReference  # noqa: E402
-from fetch_layers import LayerFetch, LayerPins, Refused as LayerRefused  # noqa: E402
 from fetch_vulkan_runtime import Refused, pins_from, problems_on_disk  # noqa: E402
 from fetch_opencl_loader import Refused as ClRefused, pins_from as cl_pins_from  # noqa: E402
 from fetch_opencl_loader import problems_on_disk as cl_problems_on_disk  # noqa: E402
@@ -114,8 +109,6 @@ D3D_LAYERS = {"9": "dxvk", "11": "dxvk", "12": "vkd3d-proton"}
 D3D_PICTURES = ("d3d9-clear", "d3d9-wpf", "d3d11-clear", "d3d12-clear")
 HEAP_CHECKS = re.compile(r"^heapchecks: (\d+)\r?$", re.M)
 HEAP_EVENT = re.compile(r"^heapcheck: (\d+) (.*?)\r?$", re.M)
-CTS_DIRECTORY = GUEST_DIRECTORY + "\\cts"
-CTS_CASES = CTS_DIRECTORY + "\\cases.txt"
 REFERENCES = ROOT / "tests" / "references" / "vulkan"
 VULKANINFO_DEVICE = re.compile(r"^[ \t]*GPU(\d+):[ \t]*\r?$", re.M)
 VULKANINFO_LUID = re.compile(r"deviceLUID[ \t]*[=:][ \t]*\"?([0-9A-Fa-f][0-9A-Fa-f :-]*)")
@@ -284,28 +277,8 @@ def arguments():
     parser.add_argument("--loss-layer", default=str(ROOT / "build" / "gpu_fault"),
                         help="the directory holding VK_LAYER_AV_device_loss's manifest (tests/gpu_fault)")
     parser.add_argument("--d3d", action="store_true",
-                        help="run the three D3D probes through the pinned DXVK and vkd3d-proton beside them, on "
-                             "the host GPU, instead of the suite; needs the fetched layers, the fetched Vulkan "
-                             "runtime and --executor naming the real library (feature 047)")
-    parser.add_argument("--cts", action="store_true",
-                        help="run the pinned Vulkan CTS subset in the guest on the host GPU instead of the "
-                             "suite, shard by shard; needs the fetched CTS and --executor naming the real "
-                             "library (feature 048)")
-    parser.add_argument("--cts-dir", default=str(ROOT / "third_party" / "vulkan-cts"),
-                        help="where tools/fetch_cts.py put the CTS build")
-    parser.add_argument("--cts-pins", default=str(ROOT / "tools" / "cts_pins.txt"))
-    parser.add_argument("--cts-subset", default=str(ROOT / "tools" / "cts_subset.txt"),
-                        help="the patterns whose cases this runs (tools/check_cts_subset.py holds them to "
-                             "what the ICD reports)")
-    parser.add_argument("--cts-shard", type=int, default=200,
-                        help="cases per guest step: a shard is one step, so a shard that runs past "
-                             "--step-timeout fails the run rather than reporting")
-    parser.add_argument("--cts-restarts", type=int, default=2,
-                        help="how many times a shard that died in a case is picked up after it")
-    parser.add_argument("--cts-host", default=None,
-                        help="a .qpa of the same subset run natively on the host GPU; the verdict is the "
-                             "comparison with it (FR-002)")
-    parser.add_argument("--cts-ratchet", default=str(ROOT / "tools" / "cts_ratchet.txt"))
+                        help="run the three D3D probes on the host GPU instead of the suite; needs --executor "
+                             "naming the real library")
     parser.add_argument("--submit-ratchet", default=str(ROOT / "tools" / "submit_ratchet.txt"))
     parser.add_argument("--frames", action="store_true",
                         help="capture the device's scanout after each application run and compare it with the "
@@ -320,10 +293,6 @@ def arguments():
     parser.add_argument("--d3d9-probe", default=str(ROOT / "build" / "guest" / "avd3d9probe.exe"))
     parser.add_argument("--d3d11-probe", default=str(ROOT / "build" / "guest" / "avd3d11probe.exe"))
     parser.add_argument("--d3d12-probe", default=str(ROOT / "build" / "guest" / "avd3d12probe.exe"))
-    parser.add_argument("--layers", default=str(ROOT / "third_party"),
-                        help="where tools/fetch_layers.py put dxvk/ and vkd3d-proton/")
-    parser.add_argument("--layer-pins", default=str(ROOT / "tools"),
-                        help="where the layers' pins files are: <layer>_pins.txt each")
     parser.add_argument("--vulkan-runtime", default=str(ROOT / "third_party" / "vulkan-runtime"),
                         help="where tools/fetch_vulkan_runtime.py put vulkan-1.dll and vulkaninfo.exe")
     parser.add_argument("--vulkan-pins", default=str(ROOT / "tools" / "vulkan_runtime_pins.txt"))
@@ -637,8 +606,6 @@ class GuestRun:
         self.heads = 0
         self.unexpected_dump = None
         self.sleep_states = None
-        self.cts_files = []
-        self.layer_files = {}
         self.host_gpus = []
 
     def say(self, line):
@@ -675,13 +642,8 @@ class GuestRun:
             self.vulkan_runtime()
         if self.args.opencl:
             self.opencl_loader()
-        if self.args.cts:
-            self.cts_build()
         if self.args.page_heap and not self.args.d3d:
             raise StepFailed("prepare", "--page-heap is what the D3D probes run under: it needs --d3d")
-        if self.args.d3d:
-            self.vulkan_runtime()
-            self.layer_files = self.d3d_layers()
         if self.args.all_gpus:
             self.host_gpus = self.every_host_gpu()
         for stale in ("overlay.qcow2", "vars.fd", "agent.sock", "qmp.sock", "avgpu.log", "avgpu-rescue.log",
@@ -732,41 +694,6 @@ class GuestRun:
             listed = ", ".join(f"{name} {problem}" for name, problem in sorted(problems.items()))
             raise StepFailed("prepare", f"--opencl needs the pinned OpenCL loader in {into} ({listed}): "
                                         "run tools/fetch_opencl_loader.py")
-
-    def d3d_layers(self):
-        pushed = {}
-        for layer in sorted(set(D3D_LAYERS.values())):
-            pins = LayerPins(pathlib.Path(self.args.layer_pins) / f"{layer.replace('-', '_')}_pins.txt")
-            try:
-                pins.read()
-            except LayerRefused as refused:
-                raise StepFailed("prepare", f"--d3d: {layer}: {refused}: run tools/fetch_layers.py {layer}")
-            if not pins.files:
-                raise StepFailed("prepare", f"--d3d: {layer}: its pins name no files: "
-                                            f"run tools/fetch_layers.py {layer}")
-            into = pathlib.Path(self.args.layers) / layer
-            problems = LayerFetch(layer, pins, into, into).problems()
-            problems.pop("source", None)
-            if problems:
-                listed = ", ".join(f"{name} {problem}" for name, problem in sorted(problems.items()))
-                raise StepFailed("prepare", f"--d3d needs the pinned {layer} in {into} ({listed}): "
-                                            f"run tools/fetch_layers.py {layer}")
-            pushed[layer] = [(into / name, name) for name in sorted(pins.files)]
-        return pushed
-
-    def cts_build(self):
-        pins = CtsPins(pathlib.Path(self.args.cts_pins))
-        try:
-            pins.read()
-        except LayerRefused as refused:
-            raise StepFailed("prepare", f"--cts: {refused}: run tools/fetch_cts.py")
-        into = pathlib.Path(self.args.cts_dir)
-        problems = CtsFetch(pins, into, into).problems()
-        if problems:
-            listed = ", ".join(f"{name} {problem}" for name, problem in sorted(problems.items()))
-            raise StepFailed("prepare", f"--cts needs the pinned CTS in {into} ({listed}): "
-                                        "run tools/fetch_cts.py")
-        self.cts_files = [(into / name, name) for name in sorted(pins.files)]
 
     def every_host_gpu(self):
         if self.args.vulkaninfo:
@@ -900,23 +827,13 @@ class GuestRun:
             files += [(self.opencl_loader_dll(), GUEST_DIRECTORY + "\\OpenCL.dll"),
                       (self.args.cl_probe, GUEST_DIRECTORY + "\\avclprobe.exe")]
 
-        if self.args.cts:
-            runtime = pathlib.Path(self.args.vulkan_runtime)
-            files.append((runtime / "vulkan-1.dll", CTS_DIRECTORY + "\\vulkan-1.dll"))
-            files += [(local, CTS_DIRECTORY + "\\" + name) for local, name in self.cts_files]
-
         if self.args.d3d:
-            runtime = pathlib.Path(self.args.vulkan_runtime)
-            files.append((runtime / "vulkan-1.dll", GUEST_DIRECTORY + "\\vulkan-1.dll"))
-            for _layer, pushed in sorted(self.layer_files.items()):
-                files += [(local, GUEST_DIRECTORY + "\\" + name) for local, name in pushed]
             files += [(self.args.d3d9_probe, GUEST_DIRECTORY + "\\avd3d9probe.exe"),
                       (self.args.d3d11_probe, GUEST_DIRECTORY + "\\avd3d11probe.exe"),
                       (self.args.d3d12_probe, GUEST_DIRECTORY + "\\avd3d12probe.exe")]
 
         def send():
-            directories = PACKAGE_DIRECTORY + (f",{CTS_DIRECTORY}" if self.args.cts else "")
-            make = f"New-Item -ItemType Directory -Force -Path {directories}"
+            make = f"New-Item -ItemType Directory -Force -Path {PACKAGE_DIRECTORY}"
             code, _, error = self.agent.run(POWERSHELL, ["-NoProfile", "-Command", make], self.args.step_timeout)
             if code != 0:
                 raise AgentError(f"cannot create {PACKAGE_DIRECTORY}: {error.decode(errors='replace')}")
@@ -1549,98 +1466,6 @@ class GuestRun:
         self.say(f"d3d{api} ok: {int(summary.group(2))} passed through {D3D_LAYERS[api]}")
         return steps
 
-    def cts(self):
-        cases = self.cts_cases()
-        shards = CtsShards(self.work / "cts" / "cases.txt", max(1, self.args.cts_shard))
-        logs = []
-        for number, shard in enumerate(shards.shards()):
-            logs += self.cts_shard(number, shards, shard)
-        self.say(f"cts: {len(cases)} case(s) in {len(shards.shards())} shard(s), {len(logs)} log(s)")
-        return self.cts_verdict(logs)
-
-    def cts_cases(self):
-        printed = f"{CTS_DIRECTORY}\\caselist.txt"
-        command = f"{CTS_DIRECTORY}\\deqp-vk.exe --deqp-runmode=stdout-caselist > {printed} 2>&1"
-        self.step("cts.caselist", lambda: self.agent.run(CMD, ["/c", command], self.args.step_timeout))
-        (self.work / "cts").mkdir(exist_ok=True)
-        self.step("cts.caselist.pull", lambda: self.agent.pull(printed, self.work / "cts" / "caselist.txt"))
-        listed = []
-        for line in (self.work / "cts" / "caselist.txt").read_text(errors="replace").splitlines():
-            if line.startswith("TEST: "):
-                listed.append(line[len("TEST: "):].strip())
-        subset = CtsSubset(pathlib.Path(self.args.cts_subset))
-        try:
-            cases = subset.matching(listed)
-        except ValueError as refused:
-            raise StepFailed("cts.caselist", str(refused))
-        if not cases:
-            raise StepFailed("cts.caselist", f"the subset matched none of the {len(listed)} case(s) the CTS "
-                                             "listed; see cts/caselist.txt")
-        (self.work / "cts" / "cases.txt").write_text("".join(f"{name}\n" for name in cases))
-        return cases
-
-    def cts_shard(self, number, shards, shard):
-        logs = []
-        remaining = shard
-        for attempt in range(self.args.cts_restarts + 1):
-            name = f"shard{number}" if attempt == 0 else f"shard{number}.r{attempt}"
-            log = self.cts_run(name, remaining)
-            logs.append(log)
-            results = QpaResults(log)
-            if results.unfinished is None:
-                return logs
-            self.say(f"cts: {name} died in {results.unfinished}")
-            remaining = shards.after(remaining, results.unfinished)
-            if not remaining:
-                return logs
-            if self.panicked_while_booting() is not None:
-                self.reach_guest(True)
-        raise StepFailed(f"cts.shard{number}", f"died in a case {self.args.cts_restarts + 1} time(s) with "
-                                               f"{len(remaining)} case(s) unrun; see cts/shard{number}*.qpa")
-
-    def cts_run(self, name, cases):
-        listed = f"{CTS_DIRECTORY}\\{name}.cases.txt"
-        self.step(f"cts.{name}.cases",
-                  lambda: self.agent.push("".join(f"{case}\n" for case in cases).encode(), listed))
-        log = f"{CTS_DIRECTORY}\\{name}.qpa"
-        console = ConsoleProgram(self.agent, self.args.step_timeout)
-        command = (f"{CTS_DIRECTORY}\\deqp-vk.exe --deqp-caselist-file={listed} "
-                   f"--deqp-log-filename={log} --deqp-log-images=disable")
-        code = self.step(f"cts.{name}", lambda: console.run(command, f"{CTS_DIRECTORY}\\{name}.txt", name))
-        self.say(f"cts: {name} exited {code}")
-        local = self.work / "cts" / f"{name}.qpa"
-        self.step(f"cts.{name}.pull", lambda: self.agent.pull(log, local))
-        return local
-
-    def cts_verdict(self, logs):
-        whole = self.work / "cts" / "guest.qpa"
-        whole.write_text("".join(log.read_text(errors="replace") for log in logs))
-        results = QpaResults(whole)
-        self.say(f"cts: {len(results.cases)} case(s) answered, {len(results.passing())} passed")
-        record = CtsRatchet(pathlib.Path(self.args.cts_ratchet))
-        lost = record.lost(results)
-        for name in lost:
-            self.say(f"cts: {name} passed before and does not now")
-        if lost:
-            raise StepFailed("cts.ratchet", f"{len(lost)} case(s) lost of {len(record.names)} recorded")
-        gained = record.gained(results)
-        self.say(f"cts.ratchet ok: {len(record.names)} kept, {len(gained)} gained")
-        if self.args.cts_host is None:
-            return results
-        host = QpaResults(pathlib.Path(self.args.cts_host))
-        compared = SuiteComparison(results, host)
-        for name in compared.guest_only_failures:
-            self.say(f"cts: {name} passes on the host and does not in the guest")
-        if compared.unjudged:
-            raise StepFailed("cts.compare", f"{len(compared.unjudged)} case(s) ran on one side only; "
-                                            "the two runs are not the same subset")
-        if compared.guest_only_failures:
-            raise StepFailed("cts.compare", f"{len(compared.guest_only_failures)} guest-only failure(s) of "
-                                            f"{compared.compared} compared")
-        self.say(f"cts ok: {compared.compared} compared, 0 guest-only failures, "
-                 f"{len(compared.matching_failures)} matching failure(s)")
-        return results
-
     def frame(self, name):
         if not self.args.frames:
             return None
@@ -1695,8 +1520,7 @@ class GuestRun:
                                                         (self.args.av, self.av), (self.args.vulkan, self.vulkan),
                                                         (self.args.opengl, self.opengl),
                                                         (self.args.opencl, self.opencl),
-                                                        (self.args.d3d, self.d3d),
-                                                        (self.args.cts, self.cts)) if chosen]
+                                                        (self.args.d3d, self.d3d)) if chosen]
         if scenarios:
             self.real_executor(scenarios)
             return

@@ -382,8 +382,6 @@ Optional fetches, for the guest side of the flow:
 ```bash
 tools/fetch_vulkan_runtime.py         # the Windows Vulkan loader and vulkaninfo.exe
 tools/fetch_opencl_loader.py          # the Khronos OpenCL loader's source; the build then makes OpenCL.dll
-tools/fetch_layers.py                 # the Windows DXVK and vkd3d-proton releases the ICD is held to
-tools/fetch_cts.py                    # the Vulkan CTS, for --cts runs
 tools/fetch_dxc.sh                    # Microsoft's DXC, for the D3D12 samples
 ```
 
@@ -850,7 +848,7 @@ tools/gate.sh                          # the full verdict: all configurations, a
 | coverage | `build-coverage/` (`-DAV_COVERAGE=ON`) | 100% of branches in `src/core`, `src/device`, `src/proto`, `src/guest` and `src/icd`; a line marked `AV_UNTESTABLE` is left out and named in the report |
 | fuzz | `build-fuzz/` (`-DAV_FUZZ=ON`) | every libFuzzer target, 60 s each (`AV_FUZZ_SECONDS`) |
 | qemu | `build-qemu/` (`-DAV_QEMU=ON`) | the device in real QEMU under qtest: the PCI function, realize failures, the virtio-gpu suites |
-| guest | `build-guest*/` | the package installed under Driver Verifier; `avtest.exe`'s scenarios; the Vulkan, OpenGL, OpenCL and D3D probes and the Vulkan CTS subset once their runtimes are fetched |
+| guest | `build-guest*/` | the package installed under Driver Verifier; `avtest.exe`'s scenarios; the Vulkan, OpenGL, OpenCL and D3D probes once their runtimes are fetched |
 
 The 32-bit build of every guest program is in `build/guest32`, for testing the
 drivers a WoW64 process loads. One part of it is 64-bit only by nature:
@@ -932,7 +930,7 @@ tools/                        gates, fetches, generators, reports, profilers
   re/                           symbol and binary fetching for reverse engineering
   dxbc-spirv-patches/  dxil-spirv-patches/   the shader compilers' changes until upstream has them
 cmake/                        the Windows kernel and user-mode cross toolchains (clang-cl, lld-link; user mode x64 or x86)
-third_party/                  fetched and pinned: windows-kit, khronos, qemu, dxvk and vkd3d-proton (accel-virt's forks), loaders, CTS
+third_party/                  fetched and pinned: windows-kit, khronos, qemu, dxvk and vkd3d-proton (accel-virt's forks), loaders
 docs/images/                  the diagrams in this README; architecture-*.svg come from tools/readme_diagram.py
 ```
 

@@ -901,34 +901,8 @@ class GuestSuiteRun(unittest.TestCase):
         self.script(outputs=outputs, avclprobe=code,
                     files=dict(GUEST_FILES, **{"C:\\ProgramData\\av\\avcl-4242.log": ""}))
 
-    def d3d_layers(self, files=("d3d9.dll", "d3d11.dll", "dxgi.dll"),
-                   vkd3d=("d3d12.dll", "d3d12core.dll"), missing=(), empty_pins=False, no_files=False):
-        layers = self.scratch / "layers"
-        tools = self.scratch / "tools"
-        tools.mkdir(exist_ok=True)
-        for layer, names in (("dxvk", files), ("vkd3d-proton", vkd3d)):
-            into = layers / layer
-            into.mkdir(parents=True, exist_ok=True)
-            (into / "source").mkdir(exist_ok=True)
-            (into / "source" / "device.c").write_text("/* what the requirement gate reads */\n")
-            pins = [f"source file:///nowhere/{layer}-source.tar.gz " + "0" * 64,
-                    f"release file:///nowhere/{layer}.tar.gz " + "1" * 64]
-            for name in names:
-                pinned = (layer + name).encode() * 40
-                pins.append(f"file {name} x64/{name} {hashlib.sha256(pinned).hexdigest()}")
-                if name in missing:
-                    (into / name).unlink(missing_ok=True)
-                else:
-                    (into / name).write_bytes(pinned)
-            if empty_pins:
-                text = "# empty on purpose\n"
-            elif no_files:
-                text = "\n".join(pins[:2]) + "\n"
-            else:
-                text = "\n".join(pins) + "\n"
-            (tools / f"{layer.replace('-', '_')}_pins.txt").write_text(text)
-        return ("--layers", layers, "--layer-pins", tools,
-                "--d3d9-probe", self.scratch / "avd3d9probe.exe",
+    def d3d_probes(self):
+        return ("--d3d9-probe", self.scratch / "avd3d9probe.exe",
                 "--d3d11-probe", self.scratch / "avd3d11probe.exe",
                 "--d3d12-probe", self.scratch / "avd3d12probe.exe")
 
@@ -943,13 +917,9 @@ class GuestSuiteRun(unittest.TestCase):
     def test_a_d3d_run_proves_every_step_of_all_three_layers(self):
         self.d3d_script()
         result = self.run_suite("--d3d", "--executor", "/nowhere/libav_executor.so",
-                                *self.vulkan_runtime(), *self.d3d_layers())
+                                *self.d3d_probes())
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         lines = self.journal_lines()
-        for name in ("d3d9.dll", "d3d11.dll", "dxgi.dll", "d3d12.dll", "d3d12core.dll"):
-            self.assertTrue(any(line.startswith(f"file C:\\av\\{name} ") for line in lines),
-                            f"{name} was not pushed: {lines}")
-        self.assertTrue(any(line.startswith("file C:\\av\\vulkan-1.dll ") for line in lines))
         for api in ("9", "11", "12"):
             self.assertTrue(any(line.startswith(f"file C:\\av\\avd3d{api}probe.exe ") for line in lines))
             self.assertIn(f"pull C:\\av\\d3d{api}.txt", lines)
@@ -974,7 +944,7 @@ class GuestSuiteRun(unittest.TestCase):
                                  "pageheap": "pageheap: avd3d9probe.exe on\r\n",
                                  "heapchecks": "heapchecks: 0\r\n"})
         result = self.run_suite("--d3d", "--page-heap", "--executor", "/nowhere/libav_executor.so",
-                                *self.vulkan_runtime(), *self.d3d_layers())
+                                *self.d3d_probes())
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("guest: pageheap on: 3 program(s)", result.stdout)
         self.assertIn("guest: heapchecks ok: no heap event under page heap", result.stdout)
@@ -996,7 +966,7 @@ class GuestSuiteRun(unittest.TestCase):
                                  "heapchecks": ("heapcheck: 1000 Faulting application avd3d11probe.exe "
                                                 "exception code 0xc0000374\r\nheapchecks: 1\r\n")})
         result = self.run_suite("--d3d", "--page-heap", "--executor", "/nowhere/libav_executor.so",
-                                *self.vulkan_runtime(), *self.d3d_layers())
+                                *self.d3d_probes())
         self.assertEqual(result.returncode, 1)
         self.assertIn("guest: heapcheck: event 1000: Faulting application avd3d11probe.exe", result.stdout)
         self.assertIn("heapchecks failed: 1 heap event(s) while the probes ran under page heap", result.stdout)
@@ -1009,38 +979,6 @@ class GuestSuiteRun(unittest.TestCase):
         result = self.run_suite("--page-heap", "--executor", "/nowhere/libav_executor.so")
         self.assertEqual(result.returncode, 1)
         self.assertIn("--page-heap is what the D3D probes run under: it needs --d3d", result.stdout)
-        self.assertEqual(self.journal_lines(), [])
-
-    def test_a_d3d_run_without_the_pinned_layers_is_refused_before_qemu(self):
-        self.d3d_script()
-        empty = self.run_suite("--d3d", "--executor", "/nowhere/libav_executor.so",
-                               *self.vulkan_runtime(), *self.d3d_layers(empty_pins=True))
-        self.assertEqual(empty.returncode, 1)
-        self.assertIn("no source pin: run tools/fetch_layers.py dxvk", empty.stdout)
-        self.assertEqual(self.journal_lines(), [])
-
-        self.d3d_script()
-        nameless = self.run_suite("--d3d", "--executor", "/nowhere/libav_executor.so",
-                                  *self.vulkan_runtime(), *self.d3d_layers(no_files=True))
-        self.assertEqual(nameless.returncode, 1)
-        self.assertIn("its pins name no files: run tools/fetch_layers.py dxvk", nameless.stdout)
-        self.assertEqual(self.journal_lines(), [])
-
-        self.d3d_script()
-        gone = self.run_suite("--d3d", "--executor", "/nowhere/libav_executor.so",
-                              *self.vulkan_runtime(), *self.d3d_layers(missing=("d3d11.dll",)))
-        self.assertEqual(gone.returncode, 1)
-        self.assertIn("--d3d needs the pinned dxvk", gone.stdout)
-        self.assertIn("d3d11.dll missing", gone.stdout)
-        self.assertEqual(self.journal_lines(), [])
-
-        self.d3d_script()
-        layers = self.d3d_layers()
-        (self.scratch / "layers" / "dxvk" / "d3d9.dll").write_bytes(b"something else")
-        tampered = self.run_suite("--d3d", "--executor", "/nowhere/libav_executor.so",
-                                  *self.vulkan_runtime(), *layers)
-        self.assertEqual(tampered.returncode, 1)
-        self.assertIn("d3d9.dll sha256", tampered.stdout)
         self.assertEqual(self.journal_lines(), [])
 
     def test_a_d3d_run_fails_a_failed_missing_or_unsummarised_step(self):
@@ -1063,143 +1001,9 @@ class GuestSuiteRun(unittest.TestCase):
             with self.subTest(case):
                 self.d3d_script(outputs=outputs)
                 result = self.run_suite("--d3d", "--executor", "/nowhere/libav_executor.so",
-                                        *self.vulkan_runtime(), *self.d3d_layers())
+                                        *self.d3d_probes())
                 self.assertEqual(result.returncode, 1)
                 self.assertIn(reason, result.stdout)
-
-    def cts_build(self, files=("deqp-vk.exe",), missing=(), empty_pins=False):
-        build = self.scratch / "vulkan-cts"
-        build.mkdir(exist_ok=True)
-        pins = [f"archive file:///nowhere/cts.zip {'0' * 64}"]
-        for name in files:
-            pinned = name.encode() * 30
-            pins.append(f"file {name} inside/{name} {hashlib.sha256(pinned).hexdigest()}")
-            if name in missing:
-                (build / name).unlink(missing_ok=True)
-            else:
-                (build / name).write_bytes(pinned)
-        text = "# empty on purpose\n" if empty_pins else "\n".join(pins) + "\n"
-        (self.scratch / "cts_pins.txt").write_text(text)
-        (self.scratch / "cts_ratchet.txt").write_text("")
-        return ("--cts-dir", build, "--cts-pins", self.scratch / "cts_pins.txt",
-                "--cts-ratchet", self.scratch / "cts_ratchet.txt",
-                "--cts-subset", ROOT / "tools" / "cts_subset.txt")
-
-    def cts_script(self, logs=None, **behaviour):
-        outputs = {"check": ONE_MONITOR + "device: PCI\\VEN_1AF4 status=OK problem=0 service=avgpu\n",
-                   "deqp-vk": CTS_CASELIST, "collect": COLLECTED}
-        outputs.update(behaviour.pop("outputs", {}))
-        files = dict(logs or {"C:\\av\\cts\\shard0.qpa": qpa(("dEQP-VK.api.smoke.triangle", "Pass"),
-                                                              ("dEQP-VK.api.smoke.create_sampler", "Pass"),
-                                                              ("dEQP-VK.info.device_memory_budget", "Pass"))})
-        files.update(behaviour.pop("files", {}))
-        self.script(outputs=outputs, files=dict(GUEST_FILES, **files), **behaviour)
-
-    def run_cts(self, *extra, **kwargs):
-        return self.run_suite("--cts", "--executor", "/nowhere/libav_executor.so",
-                              *self.vulkan_runtime(), *self.cts_build(**kwargs), *extra)
-
-    def test_a_cts_run_runs_what_the_subset_names_of_what_the_cts_listed(self):
-        self.cts_script()
-        result = self.run_cts("--cts-shard", "8")
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        lines = self.journal_lines()
-        self.assertTrue(any(line.startswith("file C:\\av\\cts\\deqp-vk.exe ") for line in lines))
-        self.assertTrue(any(line.startswith("file C:\\av\\cts\\vulkan-1.dll ") for line in lines))
-        self.assertTrue(any("--deqp-runmode=stdout-caselist" in line for line in lines))
-        self.assertIn("pull C:\\av\\cts\\caselist.txt", lines)
-        cases = (self.work / "cts" / "cases.txt").read_text()
-        self.assertIn("dEQP-VK.api.smoke.triangle", cases)
-        self.assertIn("dEQP-VK.info.device_memory_budget", cases)
-        self.assertNotIn("dEQP-VK.pipeline.enormous.case", cases)
-        self.assertIn("guest: cts: 3 case(s) in 1 shard(s), 1 log(s)", result.stdout)
-        self.assertIn("guest: cts: 3 case(s) answered, 3 passed", result.stdout)
-        self.assertIn("guest: cts.ratchet ok: 0 kept, 3 gained", result.stdout)
-        self.assertTrue((self.work / "cts" / "guest.qpa").exists())
-        self.assert_clean()
-
-    def test_a_shard_that_died_in_a_case_is_picked_up_after_it(self):
-        self.cts_script(logs={
-            "C:\\av\\cts\\shard0.qpa": qpa(("dEQP-VK.api.smoke.triangle", "Pass"), ended=False) +
-                                        "#beginTestCaseResult dEQP-VK.api.smoke.create_sampler\r\n",
-            "C:\\av\\cts\\shard0.r1.qpa": qpa(("dEQP-VK.info.device_memory_budget", "Pass")),
-        })
-        result = self.run_cts("--cts-shard", "8")
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("guest: cts: shard0 died in dEQP-VK.api.smoke.create_sampler", result.stdout)
-        lines = self.journal_lines()
-        self.assertTrue(any(line.startswith("file C:\\av\\cts\\shard0.r1.cases.txt ") for line in lines),
-                        lines)
-        resumed = (self.work / "cts" / "shard0.r1.qpa").read_text()
-        self.assertIn("dEQP-VK.info.device_memory_budget", resumed)
-        self.assertIn("guest: cts: 3 case(s) answered, 2 passed", result.stdout)
-        whole = (self.work / "cts" / "guest.qpa").read_text()
-        self.assertIn("dEQP-VK.api.smoke.create_sampler", whole)
-
-    def test_a_shard_with_no_restarts_left_fails_naming_what_went_unrun(self):
-        dying = qpa(ended=False) + "#beginTestCaseResult dEQP-VK.api.smoke.triangle\r\n"
-        self.cts_script(logs={"C:\\av\\cts\\shard0.qpa": dying})
-        result = self.run_cts("--cts-shard", "8", "--cts-restarts", "0")
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("cts.shard0 failed: died in a case 1 time(s) with 2 case(s) unrun", result.stdout)
-
-    def test_a_run_that_lost_a_case_the_guest_used_to_pass_fails(self):
-        self.cts_script(logs={"C:\\av\\cts\\shard0.qpa": qpa(("dEQP-VK.api.smoke.triangle", "Pass"),
-                                                              ("dEQP-VK.api.smoke.create_sampler", "Fail"),
-                                                              ("dEQP-VK.info.device_memory_budget", "Pass"))})
-        extra = self.cts_build()
-        (self.scratch / "cts_ratchet.txt").write_text("dEQP-VK.api.smoke.create_sampler\n")
-        result = self.run_suite("--cts", "--executor", "/nowhere/libav_executor.so",
-                                *self.vulkan_runtime(), *extra, "--cts-shard", "8")
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("guest: cts: dEQP-VK.api.smoke.create_sampler passed before and does not now",
-                      result.stdout)
-        self.assertIn("cts.ratchet failed: 1 case(s) lost of 1 recorded", result.stdout)
-
-    def test_the_verdict_is_the_comparison_with_the_hosts_run(self):
-        self.cts_script(logs={"C:\\av\\cts\\shard0.qpa": qpa(("dEQP-VK.api.smoke.triangle", "Pass"),
-                                                              ("dEQP-VK.api.smoke.create_sampler", "Fail"),
-                                                              ("dEQP-VK.info.device_memory_budget", "Fail"))})
-        host = self.scratch / "host.qpa"
-        host.write_text(qpa(("dEQP-VK.api.smoke.triangle", "Pass"),
-                            ("dEQP-VK.api.smoke.create_sampler", "Pass"),
-                            ("dEQP-VK.info.device_memory_budget", "Fail")))
-        failed = self.run_cts("--cts-shard", "8", "--cts-host", host)
-        self.assertEqual(failed.returncode, 1)
-        self.assertIn("guest: cts: dEQP-VK.api.smoke.create_sampler passes on the host and does not in the "
-                      "guest", failed.stdout)
-        self.assertIn("cts.compare failed: 1 guest-only failure(s) of 3 compared", failed.stdout)
-
-        host.write_text(qpa(("dEQP-VK.api.smoke.triangle", "Pass"),
-                            ("dEQP-VK.api.smoke.create_sampler", "Fail"),
-                            ("dEQP-VK.info.device_memory_budget", "Fail")))
-        self.cts_script(logs={"C:\\av\\cts\\shard0.qpa": qpa(("dEQP-VK.api.smoke.triangle", "Pass"),
-                                                              ("dEQP-VK.api.smoke.create_sampler", "Fail"),
-                                                              ("dEQP-VK.info.device_memory_budget", "Fail"))})
-        passed = self.run_cts("--cts-shard", "8", "--cts-host", host)
-        self.assertEqual(passed.returncode, 0, passed.stdout + passed.stderr)
-        self.assertIn("guest: cts ok: 3 compared, 0 guest-only failures, 2 matching failure(s)", passed.stdout)
-
-    def test_a_cts_run_without_the_pinned_build_is_refused_before_qemu(self):
-        self.cts_script()
-        empty = self.run_cts(empty_pins=True)
-        self.assertEqual(empty.returncode, 1)
-        self.assertIn("--cts: ", empty.stdout)
-        self.assertIn("run tools/fetch_cts.py", empty.stdout)
-        self.assertEqual(self.journal_lines(), [])
-
-        self.cts_script()
-        gone = self.run_cts(missing=("deqp-vk.exe",))
-        self.assertEqual(gone.returncode, 1)
-        self.assertIn("--cts needs the pinned CTS", gone.stdout)
-        self.assertIn("deqp-vk.exe missing", gone.stdout)
-        self.assertEqual(self.journal_lines(), [])
-
-    def test_a_subset_that_matches_nothing_the_cts_listed_is_a_failure(self):
-        self.cts_script(outputs={"deqp-vk": "TEST: dEQP-VK.nothing.this.names\r\n"})
-        result = self.run_cts()
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("the subset matched none of the", result.stdout)
 
     def test_a_frame_with_no_reference_is_kept_and_said_so(self):
         self.vulkan_script()

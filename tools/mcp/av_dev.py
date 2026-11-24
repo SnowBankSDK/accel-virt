@@ -23,7 +23,7 @@ AREAS = {
     "unit": ("default", ["-LE", "tools|fuzz"]),
     "tools": ("default", ["-L", "tools"]),
     "gates": ("default", ["-R", "^(design_rules|symbol_tests|scope_marks|generated_|self_contained|extension_policy"
-                                "|layer_requirements|cts_subset|check_spirv)"]),
+                                "|check_spirv)"]),
     "images": ("default", ["-R", "_image$"]),
     "gpu": ("default", ["-R", "_device$|^test_fullstack_"]),
     "fuzz": ("fuzz", ["-L", "fuzz"]),
@@ -37,7 +37,7 @@ CHECKS = {
     "generated": ["python3", "tools/check_generated.py"],
     "self_contained": ["python3", "tools/check_self_contained.py"],
 }
-FETCHERS = ["fetch_vulkan_runtime.py", "fetch_opencl_loader.py", "fetch_cts.py"]
+FETCHERS = ["fetch_vulkan_runtime.py", "fetch_opencl_loader.py"]
 FORKS = {"dxvk": "subprojects/dxbc-spirv", "vkd3d-proton": "subprojects/dxil-spirv"}
 SERIES = {"dxvk": "tools/dxbc-spirv-patches", "vkd3d-proton": "tools/dxil-spirv-patches"}
 
