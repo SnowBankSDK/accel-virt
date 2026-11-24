@@ -7,8 +7,10 @@ namespace av {
 
 class LayerEnvironment {
 public:
-    virtual ~LayerEnvironment() = default;
     virtual const char *value(const char *name) const = 0;
+
+protected:
+    ~LayerEnvironment() = default;
 };
 
 class VulkanLayerFilter {
