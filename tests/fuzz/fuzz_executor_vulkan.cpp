@@ -1,6 +1,10 @@
 #include "harness/executor/generous_budget.hpp"
+#include "harness/icd/recording_log.hpp"
+#include "core/log/driver_log.hpp"
 #include "device/abi/av_executor.h"
 #include "executor/context_session.hpp"
+#include "executor/executor_root.hpp"
+#include "executor/host_ram_ledger.hpp"
 #include "executor/vulkan/vulkan_backend.hpp"
 
 #include <cstddef>
@@ -92,9 +96,14 @@ void run_one(av::ContextSession &session, std::uint32_t command, const std::uint
 
 extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size)
 {
-    av::VulkanBackend  backend;
-    av::ContextSession session;
+    av::RecordingLog   sink;
+    av::DriverLog      lines(sink, "vulkan: ");
+    av::HostRamLedger  host_ram;
+    av::VulkanBackend  backend(lines);
+    av::ContextSession session(lines);
     if (session.initialize(backend, block, sizeof block) != av::Status::ok) return 0;
+    session.use_host_ram(&host_ram, av::ExecutorRoot::session_host_bytes);
+    backend.use_host_ram(&host_ram, av::ExecutorRoot::session_host_bytes);
 
     AnsweredHandles answered;
     std::size_t offset = 0u;

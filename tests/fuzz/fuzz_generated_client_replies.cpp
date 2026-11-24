@@ -2,6 +2,7 @@
 #include "harness/transport/mock_transport.hpp"
 #include "proto/generated/opencl/cl_dispatch_client.h"
 #include "proto/generated/vulkan/vk_dispatch_client.h"
+#include "proto/generated/vulkan/vk_handle_translation.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -109,7 +110,7 @@ private:
     {
         Output<std::uint64_t> devices(room_);
         std::uint32_t         count = room_;
-        (void)av::vkproto::av_vkEnumeratePhysicalDevices(transport_, handle<VkInstance>(), &count,
+        (void)av::vkproto::av_vkEnumeratePhysicalDevices(transport_, identity_, handle<VkInstance>(), &count,
                                                           given_or_null(devices));
         judge_counted(devices, count);
     }
@@ -118,8 +119,8 @@ private:
     {
         Output<VkQueueFamilyProperties> families(room_);
         std::uint32_t                   count = room_;
-        av::vkproto::av_vkGetPhysicalDeviceQueueFamilyProperties(transport_, handle<VkPhysicalDevice>(), &count,
-                                                                  given_or_null(families));
+        av::vkproto::av_vkGetPhysicalDeviceQueueFamilyProperties(transport_, identity_, handle<VkPhysicalDevice>(),
+                                                                  &count, given_or_null(families));
         judge_counted(families, count);
     }
 
@@ -129,8 +130,8 @@ private:
         for (std::uint32_t index = 0u; index < room_; index++)
             families.get()[index].sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2;
         std::uint32_t count = room_;
-        av::vkproto::av_vkGetPhysicalDeviceQueueFamilyProperties2(transport_, handle<VkPhysicalDevice>(), &count,
-                                                                   given_or_null(families));
+        av::vkproto::av_vkGetPhysicalDeviceQueueFamilyProperties2(transport_, identity_, handle<VkPhysicalDevice>(),
+                                                                   &count, given_or_null(families));
         judge_counted(families, count);
         for (std::uint32_t index = 0u; index < room_; index++) require(families.get()[index].pNext == nullptr);
     }
@@ -140,7 +141,7 @@ private:
         Output<VkExtensionProperties> extensions(room_);
         std::uint32_t                 count = room_;
         const VkResult answered = av::vkproto::av_vkEnumerateDeviceExtensionProperties(
-            transport_, handle<VkPhysicalDevice>(), nullptr, &count, given_or_null(extensions));
+            transport_, identity_, handle<VkPhysicalDevice>(), nullptr, &count, given_or_null(extensions));
         judge_counted(extensions, count);
         if (!given() || answered < 0) return;
         for (std::uint32_t index = 0u; index < count; index++)
@@ -153,8 +154,8 @@ private:
         for (std::uint32_t index = 0u; index < room_; index++)
             groups.get()[index].sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GROUP_PROPERTIES;
         std::uint32_t  count = room_;
-        const VkResult answered = av::vkproto::av_vkEnumeratePhysicalDeviceGroups(transport_, handle<VkInstance>(),
-                                                                                   &count, given_or_null(groups));
+        const VkResult answered = av::vkproto::av_vkEnumeratePhysicalDeviceGroups(
+            transport_, identity_, handle<VkInstance>(), &count, given_or_null(groups));
         judge_counted(groups, count);
         if (!given() || answered < 0) return;
         for (std::uint32_t index = 0u; index < count; index++)
@@ -166,7 +167,7 @@ private:
         VkInstanceCreateInfo create = {};
         create.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
         Output<std::uint64_t> instance(1u);
-        (void)av::vkproto::av_vkCreateInstance(transport_, &create, nullptr, instance.get());
+        (void)av::vkproto::av_vkCreateInstance(transport_, identity_, &create, nullptr, instance.get());
         require(instance.intact());
     }
 
@@ -176,14 +177,14 @@ private:
         create.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
         create.size = some_handle;
         Output<VkBuffer> buffer(1u);
-        (void)av::vkproto::av_vkCreateBuffer(transport_, handle<VkDevice>(), &create, nullptr, buffer.get());
+        (void)av::vkproto::av_vkCreateBuffer(transport_, identity_, handle<VkDevice>(), &create, nullptr, buffer.get());
         require(buffer.intact());
     }
 
     void vk_memory_requirements()
     {
         Output<VkMemoryRequirements> requirements(1u);
-        av::vkproto::av_vkGetBufferMemoryRequirements(transport_, handle<VkDevice>(), handle<VkBuffer>(),
+        av::vkproto::av_vkGetBufferMemoryRequirements(transport_, identity_, handle<VkDevice>(), handle<VkBuffer>(),
                                                        requirements.get());
         require(requirements.intact());
     }
@@ -191,7 +192,8 @@ private:
     void vk_memory_properties()
     {
         Output<VkPhysicalDeviceMemoryProperties> properties(1u, 0u);
-        av::vkproto::av_vkGetPhysicalDeviceMemoryProperties(transport_, handle<VkPhysicalDevice>(), properties.get());
+        av::vkproto::av_vkGetPhysicalDeviceMemoryProperties(transport_, identity_, handle<VkPhysicalDevice>(),
+                                                             properties.get());
         require(properties.intact());
         require(properties.get()->memoryTypeCount <= VK_MAX_MEMORY_TYPES);
         require(properties.get()->memoryHeapCount <= VK_MAX_MEMORY_HEAPS);
@@ -207,7 +209,7 @@ private:
         binaries.get()->sType = VK_STRUCTURE_TYPE_PIPELINE_BINARY_HANDLES_INFO_KHR;
         binaries.get()->pipelineBinaryCount = room_;
         binaries.get()->pPipelineBinaries = caller_array;
-        (void)av::vkproto::av_vkCreatePipelineBinariesKHR(transport_, handle<VkDevice>(), &create, nullptr,
+        (void)av::vkproto::av_vkCreatePipelineBinariesKHR(transport_, identity_, handle<VkDevice>(), &create, nullptr,
                                                            binaries.get());
         require(binaries.intact());
         require(binaries.get()->pPipelineBinaries == caller_array);
@@ -235,7 +237,8 @@ private:
         layered.get()->pLayeredApis = given_or_null(apis);
         properties.get()->sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
         properties.get()->pNext = asked() ? copy.get() : nullptr;
-        av::vkproto::av_vkGetPhysicalDeviceProperties2(transport_, handle<VkPhysicalDevice>(), properties.get());
+        av::vkproto::av_vkGetPhysicalDeviceProperties2(transport_, identity_, handle<VkPhysicalDevice>(),
+                                                        properties.get());
         require(properties.intact() && copy.intact() && layered.intact());
         require(properties.get()->pNext == (asked() ? copy.get() : nullptr));
         require(copy.get()->pNext == layered.get() && layered.get()->pNext == nullptr);
@@ -258,7 +261,7 @@ private:
         list.get()->pDrmFormatModifierProperties = given_or_null(modifiers);
         properties.get()->sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2;
         properties.get()->pNext = asked() ? list.get() : nullptr;
-        av::vkproto::av_vkGetPhysicalDeviceFormatProperties2(transport_, handle<VkPhysicalDevice>(),
+        av::vkproto::av_vkGetPhysicalDeviceFormatProperties2(transport_, identity_, handle<VkPhysicalDevice>(),
                                                               VK_FORMAT_R8G8B8A8_UNORM, properties.get());
         require(properties.intact() && list.intact());
         require(properties.get()->pNext == (asked() ? list.get() : nullptr));
@@ -350,9 +353,10 @@ private:
         require(kernels.intact() && total.intact());
     }
 
-    av::MockTransport   transport_;
-    const std::uint32_t room_;
-    const std::uint8_t  flags_;
+    av::MockTransport           transport_;
+    av::vkproto::HandleIdentity identity_;
+    const std::uint32_t         room_;
+    const std::uint8_t          flags_;
 };
 
 }

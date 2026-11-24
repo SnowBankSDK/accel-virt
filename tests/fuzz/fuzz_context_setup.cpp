@@ -28,8 +28,8 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size
     if (setup.ring_resource() == 0u || setup.fence_resource() == 0u || setup.ring_resource() == setup.fence_resource())
         __builtin_trap();
     if (setup.ring_order() < 12u || setup.ring_order() > 24u) __builtin_trap();
-    if (setup.sub_api() == av::SubApi::opencl && !setup.options().shares_only()) __builtin_trap();
-    if (setup.sub_api() != av::SubApi::opengl && setup.sub_api() != av::SubApi::opencl && !setup.options().defaults())
-        __builtin_trap();
+    const bool shares = setup.sub_api() == av::SubApi::opencl || setup.sub_api() == av::SubApi::d3d;
+    if (shares && !setup.options().shares_only()) __builtin_trap();
+    if (setup.sub_api() != av::SubApi::opengl && !shares && !setup.options().defaults()) __builtin_trap();
     return 0;
 }

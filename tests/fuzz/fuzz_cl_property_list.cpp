@@ -11,7 +11,7 @@ namespace {
 using av::clicd::ClPropertyList;
 
 constexpr std::size_t   words = ClPropertyList::max_pairs * 2u + 1u;
-constexpr std::size_t   guard_words = 64u;
+constexpr std::size_t   guard_words = ClPropertyList::max_pairs * 2u + ClPropertyList::most_list_values + 1u;
 constexpr std::uint64_t canary = 0xDEADBEEFCAFEF00Dull;
 
 void require(bool holds)
@@ -36,10 +36,14 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size
         require(read.pairs() == 0u);
     } else {
         require(read.pairs() <= ClPropertyList::max_pairs);
+        std::size_t at = 0u;
         for (std::uint32_t index = 0u; index < read.pairs(); index++) {
-            require(read.name_at(index) == list[index * 2u]);
-            require(read.value_at(index) == list[index * 2u + 1u]);
+            require(read.name_at(index) == list[at]);
+            require(read.value_at(index) == list[at + 1u]);
             require(read.name_at(index) != 0u);
+            at += 2u;
+            if (read.name_at(index) == ClPropertyList::device_handle_list)
+                while (list[at - 1u] != 0u) at++;
             std::uint64_t value = canary;
             require(read.names(read.name_at(index), value));
             std::uint32_t first = 0u;
@@ -47,8 +51,8 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size
             require(value == read.value_at(first));
             require(read.repeated() || first == index);
         }
-        require(read.pairs() * 2u < words + guard_words);
-        require(list[read.pairs() * 2u] == 0u);
+        require(at < words + guard_words);
+        require(list[at] == 0u);
     }
     for (std::size_t at = (given > words ? words : given); at < words + guard_words; at++)
         require(list[at] == canary);

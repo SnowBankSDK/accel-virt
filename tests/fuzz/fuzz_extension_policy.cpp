@@ -1,4 +1,4 @@
-#include "icd/common/extension_policy.hpp"
+#include "icd/vulkan/extension_policy.hpp"
 
 #include <cstddef>
 #include <cstdint>

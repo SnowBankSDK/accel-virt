@@ -1,8 +1,14 @@
+#include "harness/guest/scripted_host.hpp"
+#include "harness/icd/counted_wake_signal.hpp"
 #include "harness/icd/open_connection.hpp"
+#include "harness/icd/recording_thread_lock.hpp"
+#include "harness/icd/scripted_thread.hpp"
 #include "harness/icd/scripted_vulkan_device.hpp"
 #include "harness/icd/scripted_window_chains.hpp"
 #include "harness/icd/scripted_window_surface.hpp"
 #include "harness/platform/mock_platform.hpp"
+#include "icd/common/window_present_queue.hpp"
+#include "icd/vulkan/fence_ready.hpp"
 #include "icd/vulkan/surface_properties.hpp"
 #include "icd/vulkan/swapchain.hpp"
 
@@ -35,7 +41,15 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size
     av::ScriptedVulkanDevice  host;
     av::ScriptedWindowSurface windows;
     av::ScriptedWindowChains  chains;
+    av::ScriptedThread        thread;
+    av::CountedWakeSignal     handed;
+    av::CountedWakeSignal     shown;
+    av::RecordingThreadLock   present_lock(open.trace(), 'P');
+    av::icd::FenceReady       ready(host);
+    av::icd::VkPresentQueue   presents(memory, thread, handed, shown, present_lock, ready, windows, chains,
+                                       open.lines());
     void *const               window = reinterpret_cast<void *>(0x10u);
+    thread.refuse_start();
     windows.add_dc(reinterpret_cast<void *>(0x20u), window, width, height);
 
     VkSwapchainCreateInfoKHR info = {};
@@ -57,8 +71,8 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size
     if (refused != nullptr) host.refuse(refused, 1u + (data[41u] % 2u), VK_ERROR_OUT_OF_DEVICE_MEMORY);
     if ((data[42u] & 1u) != 0u) memory.fail_allocation_at(1u);
 
-    av::icd::Swapchain chain(memory, windows, chains, host, host.device(), host.physical(), open.kmt(), open.log(),
-                             open.connection());
+    av::icd::Swapchain chain(windows, chains, host, host.device(), av::ScriptedHost::vk_device, host.physical(),
+                             open.kmt(), open.lines(), open.connection(), presents);
     av::icd::SurfaceProperties properties(windows, window);
     const VkResult made = chain.initialize(info, window, properties);
     if (!chain.invariants_hold()) __builtin_trap();

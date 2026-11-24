@@ -1,4 +1,5 @@
 #include "device/control/control_request.hpp"
+#include "device/control/held_requests.hpp"
 #include "device/control/present_engine_commands.hpp"
 #include "device/fence/fence_interrupts.hpp"
 #include "device/present/present_engine.hpp"
@@ -61,22 +62,25 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size
     std::uint8_t *const memory = host.guest_ram(ram);
     for (std::size_t at = 0u; at < ram_bytes; at++) memory[at] = static_cast<std::uint8_t>(at * 13u + 5u);
 
-    av::FenceInterrupts interrupts(host);
-    av::PresentEngine   engine(host, interrupts);
-    const av::PresentFrames none;
-    if (engine.initialize() != av::Status::ok || engine.attach(page, none) != av::Status::ok) __builtin_trap();
     std::uint32_t response = 0u;
     {
-        av::MockRequest    mock(data, size);
-        av::ControlRequest request(host, &mock);
-        av::PresentEngineCommands commands(host, engine, none);
-        if (!commands.answer(request, av::QueuedPresentRequest::type) || !mock.answered()) __builtin_trap();
-        response = mock.response_type();
+        av::FenceInterrupts interrupts(host);
+        av::HeldRequests    held(host);
+        av::PresentEngine   engine(host, interrupts, held);
+        const av::PresentFrames none;
+        if (engine.initialize() != av::Status::ok || engine.attach(page, none) != av::Status::ok) __builtin_trap();
+        {
+            av::MockRequest    mock(data, size);
+            av::ControlRequest request(host, &mock);
+            av::PresentEngineCommands commands(host, engine, none, held);
+            if (!commands.answer(request, av::QueuedPresentRequest::type) || !mock.answered()) __builtin_trap();
+            response = mock.response_type();
+        }
+        av::PresentProgress progress;
+        if (!completes(host, 1u, progress) || progress.completed() != 1u || progress.refused() > 1u) __builtin_trap();
+        if (response != ok_nodata && progress.refused() != 1u) __builtin_trap();
+        engine.detach();
     }
-    av::PresentProgress progress;
-    if (!completes(host, 1u, progress) || progress.completed() != 1u || progress.refused() > 1u) __builtin_trap();
-    if (response != ok_nodata && progress.refused() != 1u) __builtin_trap();
-    engine.detach();
     if (host.live_guest_mappings() != 0u || host.live_threads() != 0u) __builtin_trap();
 
     av::WireReader           reader(data, size);
