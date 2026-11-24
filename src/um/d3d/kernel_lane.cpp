@@ -1,6 +1,7 @@
 #include "um/d3d/kernel_lane.hpp"
 
 #include "core/log/keyed_log.hpp"
+#include "core/log/log_line.hpp"
 #include "core/platform/block_source.hpp"
 #include "core/platform/thread_lock_hold.hpp"
 #include "core/trace/function_scope.hpp"
@@ -12,7 +13,7 @@ namespace av::d3d {
 KernelLane::KernelLane(const D3DDDI_DEVICECALLBACKS &kernel, HANDLE device, HANDLE context, D3dSession &session,
                        KeyedLog &lines)
     : kernel_(kernel), device_(device), context_(context), session_(session), lines_(lines), transport_(),
-      arena_(), stream_(), staging_(nullptr), batch_(nullptr), written_(0u), tried_(false)
+      arena_(), stream_(), staging_(nullptr), batch_(nullptr), written_(0u), declared_(0u), refused_(0u), tried_(false)
 {
     AV_SCOPE("KernelLane::KernelLane");
 }
@@ -24,6 +25,13 @@ KernelLane::~KernelLane()
         close();
         return;
     }
+    if (refused_ != 0u)
+        LogLine(lines_)
+            .text("a lane declared ")
+            .number(declared_)
+            .text(" presented allocations written; the kernel refused ")
+            .number(refused_)
+            .write();
     uint64_t newest = 0u;
     {
         const ThreadLockHold held(session_.lock());
@@ -147,9 +155,31 @@ Status KernelLane::release(const uint8_t *record, uint32_t size)
     }
     submit.pPrivateDriverData = const_cast<uint8_t *>(record);
     submit.PrivateDriverDataSize = size;
-    if (SUCCEEDED(kernel_.pfnSubmitCommandCb(device_, &submit))) return Status::ok;
+    const HRESULT submitted = kernel_.pfnSubmitCommandCb(device_, &submit);
+    if (written_ != 0u) declared_++;
+    if (SUCCEEDED(submitted)) return Status::ok;
+    if (submit.NumPrimaries != 0u) {
+        refused_++;
+        if (lines_.first("a lane's batch that writes a primary", submitted))
+            LogLine(lines_)
+                .text("the kernel refused a lane's batch that writes primary ")
+                .hex(written_, 8u)
+                .text(" (")
+                .hex(static_cast<uint32_t>(submitted), 8u)
+                .text("); it goes without the primary")
+                .write();
+        submit.NumPrimaries = 0u;
+        submit.WrittenPrimaries[0] = 0u;
+        if (SUCCEEDED(kernel_.pfnSubmitCommandCb(device_, &submit))) return Status::ok;
+    }
     lines_.once("the kernel refused the packet that releases a lane's batch");
     return Status::invalid_state;
+}
+
+HANDLE KernelLane::context() const
+{
+    AV_SCOPE("KernelLane::context");
+    return context_;
 }
 
 void KernelLane::waited_long()

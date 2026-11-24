@@ -160,7 +160,10 @@ private:
     bool begin_pages_read(const ResourceRecord &resource, uint64_t &writes);
     uint64_t end_pages_read(const ResourceRecord &resource, uint64_t begun);
     void forget_guest_surface(const ResourceRecord &resource);
+    bool    flips(const ResourceRecord &source) const;
     HRESULT show_flip(const ResourceRecord &source, uint32_t subresource);
+    bool    flushed_writing(const ResourceRecord &source);
+    uint32_t working_contexts(HANDLE (&contexts)[2]) const;
     HRESULT stage_plane(ResourceRecord &source, uint32_t subresource);
     template <typename Plane>
     HRESULT stage_planes(const Plane *planes, UINT count, D3DKMT_HANDLE *allocations, bool &flipped);

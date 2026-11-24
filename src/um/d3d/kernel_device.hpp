@@ -3,6 +3,8 @@
 
 #include "um/d3d/d3d11_ddi.hpp"
 
+#include <stdint.h>
+
 namespace av::d3d {
 
 class KernelHeap;
@@ -27,8 +29,8 @@ public:
     void   *lock_to_write(D3DKMT_HANDLE allocation);
     void   *lock_to_read(D3DKMT_HANDLE allocation);
     void    unlock(D3DKMT_HANDLE allocation);
-    HRESULT acquire(HANDLE token, HANDLE context);
-    HRESULT release(HANDLE token, HANDLE context);
+    HRESULT acquire(HANDLE token, HANDLE *contexts, uint32_t count);
+    HRESULT release(HANDLE token, HANDLE *contexts, uint32_t count);
     HRESULT present(D3DDDICB_PRESENT &present);
     HRESULT set_display_mode(D3DDDICB_SETDISPLAYMODE &mode);
 

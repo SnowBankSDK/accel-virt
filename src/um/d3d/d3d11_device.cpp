@@ -495,7 +495,8 @@ VOID D3d11Device::acquire_resource(D3D10DDI_HRESOURCE, HANDLE token)
 {
     AV_SCOPE("D3d11Device::acquire_resource");
     if (token == nullptr || context_ == nullptr) return;
-    const HRESULT queued = kernel_.acquire(token, context_);
+    HANDLE        contexts[2] = {context_, nullptr};
+    const HRESULT queued = kernel_.acquire(token, contexts, working_contexts(contexts));
     if (SUCCEEDED(queued) || !token_refused_.first()) return;
     LogLine(lines_).text("the kernel refused a buffer's sync token ").hex(static_cast<uint32_t>(queued), 8u).write();
 }
@@ -508,9 +509,18 @@ VOID D3d11Device::release_resource(D3D10DDI_HRESOURCE, HANDLE token)
         lost(__func__);
         return;
     }
-    const HRESULT queued = kernel_.release(token, context_);
+    HANDLE        contexts[2] = {context_, nullptr};
+    const HRESULT queued = kernel_.release(token, contexts, working_contexts(contexts));
     if (SUCCEEDED(queued) || !token_refused_.first()) return;
     LogLine(lines_).text("the kernel refused a buffer's sync token ").hex(static_cast<uint32_t>(queued), 8u).write();
+}
+
+uint32_t D3d11Device::working_contexts(HANDLE (&contexts)[2]) const
+{
+    AV_SCOPE("D3d11Device::working_contexts");
+    if (!lane_.constructed() || !lane_.object().opened()) return 1u;
+    contexts[1] = lane_.object().context();
+    return 2u;
 }
 
 HRESULT D3d11Device::retrieve_shader_comment(D3D10DDI_HSHADER, WCHAR *, SIZE_T *)

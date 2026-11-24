@@ -39,6 +39,7 @@ public:
 
     [[nodiscard]] bool open();
     bool               opened() const;
+    HANDLE             context() const;
     D3dCommandStream  &stream();
     bool               ran(uint64_t fence) const override;
     void               publish(uint64_t fence) override;
@@ -62,6 +63,8 @@ private:
     uint8_t                        *staging_;
     uint8_t                        *batch_;
     D3DKMT_HANDLE                   written_;
+    uint32_t                        declared_;
+    uint32_t                        refused_;
     bool                            tried_;
 };
 

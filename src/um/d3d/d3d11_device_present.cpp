@@ -74,7 +74,7 @@ HRESULT D3d11Device::present_surface(ResourceRecord &source, uint32_t subresourc
     AV_SCOPE("D3d11Device::present_surface");
     slices_.trim();
     if (source.shared_key == 0u) return present_pages(source, subresource, destination, dxgi_context);
-    if (FAILED(show_flip(source, subresource)) || wire().flush() != Status::ok) {
+    if (FAILED(show_flip(source, subresource)) || !flushed_writing(source)) {
         return lost(__func__);
     }
     switch (source.present_model) {
@@ -87,14 +87,32 @@ HRESULT D3d11Device::present_surface(ResourceRecord &source, uint32_t subresourc
     return present_to_kernel(source, destination, dxgi_context, 0u);
 }
 
+bool D3d11Device::flips(const ResourceRecord &source) const
+{
+    AV_SCOPE("D3d11Device::flips");
+    const bool flip = source.present_model == d3d::SwapChainBuffer::Model::flip &&
+                      (source.bind & D3D10_DDI_BIND_PRESENT) != 0u;
+    return flip || source.present_model == d3d::SwapChainBuffer::Model::scanout;
+}
+
 HRESULT D3d11Device::show_flip(const ResourceRecord &source, uint32_t subresource)
 {
     AV_SCOPE("D3d11Device::show_flip");
-    const bool flip = source.present_model == d3d::SwapChainBuffer::Model::flip &&
-                      (source.bind & D3D10_DDI_BIND_PRESENT) != 0u;
-    if (!flip && source.present_model != d3d::SwapChainBuffer::Model::scanout) return S_OK;
+    if (!flips(source)) return S_OK;
+    engage();
     if (d3dproto::av_d3d_PresentPoint(wire(), source.stamp.id(), subresource, 0u)) return S_OK;
     return lost(__func__);
+}
+
+bool D3d11Device::flushed_writing(const ResourceRecord &source)
+{
+    AV_SCOPE("D3d11Device::flushed_writing");
+    const bool laned = source.present_model == d3d::SwapChainBuffer::Model::scanout && lane_.constructed() &&
+                       lane_.object().opened();
+    if (laned) lane_.object().writing(static_cast<D3DKMT_HANDLE>(source.allocation));
+    const bool flushed = wire().flush() == Status::ok;
+    if (laned) lane_.object().writing(0u);
+    return flushed;
 }
 
 HRESULT D3d11Device::present_pages(ResourceRecord &source, uint32_t subresource, ResourceRecord *destination,

@@ -35,25 +35,25 @@ HRESULT KernelDevice::make_context(HANDLE &context)
     return made;
 }
 
-HRESULT KernelDevice::acquire(HANDLE token, HANDLE context)
+HRESULT KernelDevice::acquire(HANDLE token, HANDLE *contexts, uint32_t count)
 {
     AV_SCOPE("KernelDevice::acquire");
     if (callbacks_ == nullptr || callbacks_->pfnAcquireResourceCb == nullptr) return E_NOTIMPL;
     D3DDDICB_SYNCTOKEN acquire = {};
     acquire.hSyncToken = token;
-    acquire.BroadcastContextCount = 1u;
-    acquire.BroadcastContextArray = &context;
+    acquire.BroadcastContextCount = count;
+    acquire.BroadcastContextArray = contexts;
     return callbacks_->pfnAcquireResourceCb(runtime_, &acquire);
 }
 
-HRESULT KernelDevice::release(HANDLE token, HANDLE context)
+HRESULT KernelDevice::release(HANDLE token, HANDLE *contexts, uint32_t count)
 {
     AV_SCOPE("KernelDevice::release");
     if (callbacks_ == nullptr || callbacks_->pfnReleaseResourceCb == nullptr) return E_NOTIMPL;
     D3DDDICB_SYNCTOKEN release = {};
     release.hSyncToken = token;
-    release.BroadcastContextCount = 1u;
-    release.BroadcastContextArray = &context;
+    release.BroadcastContextCount = count;
+    release.BroadcastContextArray = contexts;
     return callbacks_->pfnReleaseResourceCb(runtime_, &release);
 }
 
