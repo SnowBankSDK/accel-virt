@@ -1,0 +1,75 @@
+From: accel-virt
+Subject: [PATCH] Rasterizer-ordered views are accessed volatile, so the interlocked reads see the previous fragment's write on RADV with descriptor heaps
+
+RADV drops the coherent access of an image bound through a descriptor heap
+(Mesa 26.2.6): the same SPIR-V compiles to coherent image loads and stores with
+descriptor sets and to plain ones with a heap, so a fragment inside the
+interlock read the pixel from a cache that still held the value before the
+previous fragment's write, and blends through a rasterizer-ordered view lost
+whole layers. A volatile access survives the heap path and bypasses those
+caches. Image and buffer accesses of a rasterizer-ordered UAV are now volatile.
+---
+diff --git a/spirv/spirv_builder.cpp b/spirv/spirv_builder.cpp
+index 61d9b56..106f1d1 100644
+--- a/spirv/spirv_builder.cpp
++++ b/spirv/spirv_builder.cpp
+@@ -1508,6 +1508,9 @@ void SpirvBuilder::emitBufferLoad(const ir::Op& op) {
+       if (getUavCoherentScope(uavFlags) != spv::ScopeInvocation)
+         memoryOperands.flags |= spv::MemoryAccessNonPrivatePointerMask;
+ 
++      if (uavFlags & ir::UavFlag::eRasterizerOrdered)
++        memoryOperands.flags |= spv::MemoryAccessVolatileMask;
++
+       if (!(uavFlags & ir::UavFlag::eReadOnly) && (op.getFlags() & ir::OpFlag::ePrecise))
+         memoryOperands.flags |= spv::MemoryAccessVolatileMask;
+     }
+@@ -1617,6 +1620,9 @@ void SpirvBuilder::emitBufferStore(const ir::Op& op) {
+     if (getUavCoherentScope(uavFlags) != spv::ScopeInvocation)
+       memoryOperands.flags |= spv::MemoryAccessNonPrivatePointerMask;
+ 
++    if (uavFlags & ir::UavFlag::eRasterizerOrdered)
++      memoryOperands.flags |= spv::MemoryAccessVolatileMask;
++
+     /* Pairs of scalarized access chains and values to store */
+     util::small_vector<std::pair<uint32_t, uint32_t>, 4u> storeIds;
+ 
+@@ -1760,6 +1766,9 @@ void SpirvBuilder::emitMemoryLoad(const ir::Op& op) {
+   if (getUavCoherentScope(ptrFlags) != spv::ScopeInvocation)
+     memoryOperands.flags |= spv::MemoryAccessNonPrivatePointerMask;
+ 
++  if (ptrFlags & ir::UavFlag::eRasterizerOrdered)
++    memoryOperands.flags |= spv::MemoryAccessVolatileMask;
++
+   /* Emit access chain */
+   bool hasWrapperStruct = !ptrOp.getType().isStructType();
+ 
+@@ -1796,6 +1805,9 @@ void SpirvBuilder::emitMemoryStore(const ir::Op& op) {
+   if (getUavCoherentScope(ptrFlags) != spv::ScopeInvocation)
+     memoryOperands.flags |= spv::MemoryAccessNonPrivatePointerMask;
+ 
++  if (ptrFlags & ir::UavFlag::eRasterizerOrdered)
++    memoryOperands.flags |= spv::MemoryAccessVolatileMask;
++
+   /* Emit access chain */
+   bool hasWrapperStruct = !ptrOp.getType().isStructType();
+ 
+@@ -5059,6 +5071,9 @@ void SpirvBuilder::setUavImageReadOperands(SpirvImageOperands& operands, const i
+   if (getUavCoherentScope(uavFlags) != spv::ScopeInvocation)
+     operands.flags |= spv::ImageOperandsNonPrivateTexelMask;
+ 
++  if (uavFlags & ir::UavFlag::eRasterizerOrdered)
++    operands.flags |= spv::ImageOperandsVolatileTexelMask;
++
+   /* If the UAV is not read-only and the load is marked as precise,
+    * we need to mark the load as volatile. */
+   if (!(uavFlags & ir::UavFlag::eReadOnly) && (loadOp.getFlags() & ir::OpFlag::ePrecise))
+@@ -5073,6 +5088,9 @@ void SpirvBuilder::setUavImageWriteOperands(SpirvImageOperands& operands, const
+ 
+   if (getUavCoherentScope(uavFlags) != spv::ScopeInvocation)
+     operands.flags |= spv::ImageOperandsNonPrivateTexelMask;
++
++  if (uavFlags & ir::UavFlag::eRasterizerOrdered)
++    operands.flags |= spv::ImageOperandsVolatileTexelMask;
+ }
+ 
+ 
