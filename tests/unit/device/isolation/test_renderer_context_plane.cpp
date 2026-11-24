@@ -1257,6 +1257,30 @@ TEST(renderer_context_plane_post_export, a_garbled_answer_ends_the_renderer_whet
   CHECK_EQ(rig.qemu().renderer_kills(), 1u);
   CHECK_EQ(rig.qemu().live_descriptors(), 0u); }
 
+TEST(renderer_context_plane_post_export, a_descriptor_with_an_answer_that_uses_none_is_closed_and_ends_the_renderer)
+{ const av::ExportedImageMessage unused[] = {av::ExportedImageMessage(),
+                                             av::ExportedImageMessage(false, 0u, 64u, 32u, 256u, 0u, 0x34325258u, 0u)};
+  for (const av::ExportedImageMessage &exported : unused) {
+      PostingPlane rig;
+      CHECK_STATUS(rig.start(), Status::ok);
+      const std::uint32_t sent = rig.peer().delivered();
+      CHECK(rig.plane().post_export(uuid, 0u, 0x10u));
+      std::uint8_t datagram[av::RendererMessageHeader::encoded_size + av::ExportedImageMessage::encoded_size] = {};
+      CHECK_STATUS(av::RendererMessageHeader(av::RendererMessageHeader::Kind::exported_image,
+                                             av::ExportedImageMessage::encoded_size, rig.peer().sequence_at(sent))
+                       .encode(datagram, sizeof datagram),
+                   Status::ok);
+      CHECK_STATUS(exported.encode(datagram + av::RendererMessageHeader::encoded_size,
+                                   av::ExportedImageMessage::encoded_size),
+                   Status::ok);
+      rig.peer().queue(datagram, sizeof datagram, 1u);
+      rig.plane().take_answers();
+      CHECK_EQ(rig.qemu().images_shown(0u), 0u);
+      CHECK_EQ(rig.qemu().renderer_kills(), 1u);
+      CHECK_EQ(rig.qemu().live_descriptors(), 0u);
+      CHECK(rig.plane().invariants_hold());
+  } }
+
 TEST(renderer_context_plane_post_export, after_a_reset_an_answer_is_kept_but_not_shown_and_the_key_asked_meanwhile_is_dropped)
 { PostingPlane rig;
   CHECK_STATUS(rig.start(), Status::ok);
@@ -1583,6 +1607,30 @@ TEST(renderer_context_plane_memory, a_garbled_answer_closes_what_came_with_it_fa
                    .encode(datagram, sizeof datagram),
                Status::ok);
   rig.peer().queue(datagram, sizeof datagram, 2u);
+  rig.peer().speak_again();
+  rig.plane().take_answers();
+  CHECK_STATUS(answer_of(request), Status::no_memory);
+  CHECK_EQ(rig.qemu().renderer_kills(), 1u);
+  CHECK_EQ(memory.table().live(), 0u);
+  CHECK_EQ(rig.qemu().live_descriptors(), 0u); }
+
+TEST(renderer_context_plane_memory, a_descriptor_with_memory_not_given_is_closed_fails_the_blob_and_ends_the_renderer)
+{ PostingPlane rig;
+  CHECK_STATUS(rig.start(), Status::ok);
+  BlobMemory memory(rig.qemu(), rig.plane());
+  rig.peer().fall_silent();
+  av::MockRequest request(empty_request, sizeof empty_request);
+  const std::uint32_t sent = rig.peer().delivered();
+  CHECK_STATUS(memory.ask(request, blob_id, 0x1000u), Status::ok);
+  std::uint8_t datagram[av::RendererMessageHeader::encoded_size + av::AllocatedMemoryMessage::encoded_size] = {};
+  CHECK_STATUS(av::RendererMessageHeader(av::RendererMessageHeader::Kind::allocated_memory,
+                                         av::AllocatedMemoryMessage::encoded_size, rig.peer().sequence_at(sent))
+                   .encode(datagram, sizeof datagram),
+               Status::ok);
+  CHECK_STATUS(av::AllocatedMemoryMessage().encode(datagram + av::RendererMessageHeader::encoded_size,
+                                                   av::AllocatedMemoryMessage::encoded_size),
+               Status::ok);
+  rig.peer().queue(datagram, sizeof datagram, 1u);
   rig.peer().speak_again();
   rig.plane().take_answers();
   CHECK_STATUS(answer_of(request), Status::no_memory);
