@@ -525,6 +525,7 @@ static bool decode_clCreateContext(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_context_properties>(static_cast<size_t>(wire_count) + 2);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -558,6 +559,7 @@ static bool decode_clCreateContext(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_device_id>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -604,6 +606,7 @@ static bool decode_clCreateContextFromType(ServerDispatch& s, ::av::WireReader& 
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_context_properties>(static_cast<size_t>(wire_count) + 2);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -819,6 +822,7 @@ static bool decode_clCreateCommandQueueWithProperties(ServerDispatch& s, ::av::W
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_queue_properties>(static_cast<size_t>(wire_count) + 2);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -1016,6 +1020,7 @@ static bool decode_clCreateBuffer(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_bytes = arena.allocate<uint8_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_bytes == nullptr) return false;
             if (wire_count != 0 && !r.read(wire_bytes, static_cast<size_t>(wire_count))) return false;
@@ -1199,6 +1204,7 @@ static bool decode_clCreateImage(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_bytes = arena.allocate<uint8_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_bytes == nullptr) return false;
             if (wire_count != 0 && !r.read(wire_bytes, static_cast<size_t>(wire_count))) return false;
@@ -1531,6 +1537,7 @@ static bool decode_clEnqueueReadBuffer(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_event>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -1634,6 +1641,7 @@ static bool decode_clEnqueueWriteBuffer(ServerDispatch& s, ::av::WireReader& r,
         } else if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_bytes = arena.allocate<uint8_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_bytes == nullptr) return false;
             if (wire_count != 0 && !r.read(wire_bytes, static_cast<size_t>(wire_count))) return false;
@@ -1652,6 +1660,7 @@ static bool decode_clEnqueueWriteBuffer(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_event>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -1743,6 +1752,7 @@ static bool decode_clEnqueueCopyBuffer(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_event>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -1808,6 +1818,7 @@ static bool decode_clEnqueueFillBuffer(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_bytes = arena.allocate<uint8_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_bytes == nullptr) return false;
             if (wire_count != 0 && !r.read(wire_bytes, static_cast<size_t>(wire_count))) return false;
@@ -1841,6 +1852,7 @@ static bool decode_clEnqueueFillBuffer(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_event>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -1917,6 +1929,7 @@ static bool decode_clEnqueueReadImage(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<size_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -1934,6 +1947,7 @@ static bool decode_clEnqueueReadImage(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<size_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -1982,6 +1996,7 @@ static bool decode_clEnqueueReadImage(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_event>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -2077,6 +2092,7 @@ static bool decode_clEnqueueWriteImage(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<size_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -2094,6 +2110,7 @@ static bool decode_clEnqueueWriteImage(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<size_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -2129,6 +2146,7 @@ static bool decode_clEnqueueWriteImage(ServerDispatch& s, ::av::WireReader& r,
         } else if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_bytes = arena.allocate<uint8_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_bytes == nullptr) return false;
             if (wire_count != 0 && !r.read(wire_bytes, static_cast<size_t>(wire_count))) return false;
@@ -2147,6 +2165,7 @@ static bool decode_clEnqueueWriteImage(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_event>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -2227,6 +2246,7 @@ static bool decode_clEnqueueCopyImage(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<size_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -2244,6 +2264,7 @@ static bool decode_clEnqueueCopyImage(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<size_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -2261,6 +2282,7 @@ static bool decode_clEnqueueCopyImage(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<size_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -2283,6 +2305,7 @@ static bool decode_clEnqueueCopyImage(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_event>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -2358,6 +2381,7 @@ static bool decode_clEnqueueCopyImageToBuffer(ServerDispatch& s, ::av::WireReade
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<size_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -2375,6 +2399,7 @@ static bool decode_clEnqueueCopyImageToBuffer(ServerDispatch& s, ::av::WireReade
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<size_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -2402,6 +2427,7 @@ static bool decode_clEnqueueCopyImageToBuffer(ServerDispatch& s, ::av::WireReade
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_event>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -2481,6 +2507,7 @@ static bool decode_clEnqueueCopyBufferToImage(ServerDispatch& s, ::av::WireReade
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<size_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -2498,6 +2525,7 @@ static bool decode_clEnqueueCopyBufferToImage(ServerDispatch& s, ::av::WireReade
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<size_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -2520,6 +2548,7 @@ static bool decode_clEnqueueCopyBufferToImage(ServerDispatch& s, ::av::WireReade
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_event>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -2582,6 +2611,7 @@ static bool decode_clCreateProgramWithSource(ServerDispatch& s, ::av::WireReader
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto** wire_items = arena.allocate<const char*>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             auto* wire_lengths = arena.allocate<size_t>(static_cast<size_t>(wire_count) + 1);
@@ -2589,6 +2619,7 @@ static bool decode_clCreateProgramWithSource(ServerDispatch& s, ::av::WireReader
             for (uint64_t i = 0; i < wire_count; ++i) {
                 uint64_t wire_len = 0;
                 if (!r.read_varint(wire_len)) return false;
+                if (wire_len > r.remaining()) return false;
                 char* wire_text = arena.allocate_chars(static_cast<size_t>(wire_len) + 1);
                 if (wire_text == nullptr) return false;
                 if (wire_len != 0 && !r.read(wire_text, static_cast<size_t>(wire_len))) return false;
@@ -2654,6 +2685,7 @@ static bool decode_clCreateProgramWithBinary(ServerDispatch& s, ::av::WireReader
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_device_id>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -2672,6 +2704,7 @@ static bool decode_clCreateProgramWithBinary(ServerDispatch& s, ::av::WireReader
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto** wire_items = arena.allocate<const unsigned char*>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             auto* wire_lengths = arena.allocate<size_t>(static_cast<size_t>(wire_count) + 1);
@@ -2679,6 +2712,7 @@ static bool decode_clCreateProgramWithBinary(ServerDispatch& s, ::av::WireReader
             for (uint64_t i = 0; i < wire_count; ++i) {
                 uint64_t wire_len = 0;
                 if (!r.read_varint(wire_len)) return false;
+                if (wire_len > r.remaining()) return false;
                 char* wire_text = arena.allocate_chars(static_cast<size_t>(wire_len) + 1);
                 if (wire_text == nullptr) return false;
                 if (wire_len != 0 && !r.read(wire_text, static_cast<size_t>(wire_len))) return false;
@@ -2788,6 +2822,7 @@ static bool decode_clBuildProgram(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_device_id>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -2806,6 +2841,7 @@ static bool decode_clBuildProgram(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_len = 0;
             if (!r.read_varint(wire_len)) return false;
+            if (wire_len > r.remaining()) return false;
             char* wire_text = arena.allocate_chars(static_cast<size_t>(wire_len) + 1);
             if (wire_text == nullptr) return false;
             if (wire_len != 0 && !r.read(wire_text, static_cast<size_t>(wire_len))) return false;
@@ -2985,6 +3021,7 @@ static bool decode_clCreateKernel(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_len = 0;
             if (!r.read_varint(wire_len)) return false;
+            if (wire_len > r.remaining()) return false;
             char* wire_text = arena.allocate_chars(static_cast<size_t>(wire_len) + 1);
             if (wire_text == nullptr) return false;
             if (wire_len != 0 && !r.read(wire_text, static_cast<size_t>(wire_len))) return false;
@@ -3137,6 +3174,7 @@ static bool decode_clSetKernelArg(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_bytes = arena.allocate<uint8_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_bytes == nullptr) return false;
             if (wire_count != 0 && !r.read(wire_bytes, static_cast<size_t>(wire_count))) return false;
@@ -3388,6 +3426,7 @@ static bool decode_clEnqueueNDRangeKernel(ServerDispatch& s, ::av::WireReader& r
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<size_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -3405,6 +3444,7 @@ static bool decode_clEnqueueNDRangeKernel(ServerDispatch& s, ::av::WireReader& r
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<size_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -3422,6 +3462,7 @@ static bool decode_clEnqueueNDRangeKernel(ServerDispatch& s, ::av::WireReader& r
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<size_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -3444,6 +3485,7 @@ static bool decode_clEnqueueNDRangeKernel(ServerDispatch& s, ::av::WireReader& r
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_event>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -3505,6 +3547,7 @@ static bool decode_clEnqueueMarkerWithWaitList(ServerDispatch& s, ::av::WireRead
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_event>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -3563,6 +3606,7 @@ static bool decode_clEnqueueBarrierWithWaitList(ServerDispatch& s, ::av::WireRea
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_event>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -3613,6 +3657,7 @@ static bool decode_clWaitForEvents(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_event>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -4229,6 +4274,7 @@ static bool decode_clEnqueueAcquireGLObjects(ServerDispatch& s, ::av::WireReader
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_mem>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -4252,6 +4298,7 @@ static bool decode_clEnqueueAcquireGLObjects(ServerDispatch& s, ::av::WireReader
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_event>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -4314,6 +4361,7 @@ static bool decode_clEnqueueReleaseGLObjects(ServerDispatch& s, ::av::WireReader
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_mem>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -4337,6 +4385,7 @@ static bool decode_clEnqueueReleaseGLObjects(ServerDispatch& s, ::av::WireReader
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_event>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -4385,6 +4434,7 @@ static bool decode_clGetGLContextInfoKHR(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_context_properties>(static_cast<size_t>(wire_count) + 2);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -4510,6 +4560,7 @@ static bool decode_clCreateSubDevices(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_device_partition_property>(static_cast<size_t>(wire_count) + 2);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -4597,6 +4648,7 @@ static bool decode_clEnqueueTask(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_event>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -4703,6 +4755,7 @@ static bool decode_clEnqueueWaitForEvents(ServerDispatch& s, ::av::WireReader& r
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_event>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -4753,6 +4806,7 @@ static bool decode_clEnqueueMigrateMemObjects(ServerDispatch& s, ::av::WireReade
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_mem>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -4781,6 +4835,7 @@ static bool decode_clEnqueueMigrateMemObjects(ServerDispatch& s, ::av::WireReade
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_event>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -4861,6 +4916,7 @@ static bool decode_clEnqueueReadBufferRect(ServerDispatch& s, ::av::WireReader& 
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<size_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -4878,6 +4934,7 @@ static bool decode_clEnqueueReadBufferRect(ServerDispatch& s, ::av::WireReader& 
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<size_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -4895,6 +4952,7 @@ static bool decode_clEnqueueReadBufferRect(ServerDispatch& s, ::av::WireReader& 
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<size_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -4953,6 +5011,7 @@ static bool decode_clEnqueueReadBufferRect(ServerDispatch& s, ::av::WireReader& 
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_event>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -5053,6 +5112,7 @@ static bool decode_clEnqueueWriteBufferRect(ServerDispatch& s, ::av::WireReader&
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<size_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -5070,6 +5130,7 @@ static bool decode_clEnqueueWriteBufferRect(ServerDispatch& s, ::av::WireReader&
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<size_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -5087,6 +5148,7 @@ static bool decode_clEnqueueWriteBufferRect(ServerDispatch& s, ::av::WireReader&
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<size_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -5132,6 +5194,7 @@ static bool decode_clEnqueueWriteBufferRect(ServerDispatch& s, ::av::WireReader&
         } else if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_bytes = arena.allocate<uint8_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_bytes == nullptr) return false;
             if (wire_count != 0 && !r.read(wire_bytes, static_cast<size_t>(wire_count))) return false;
@@ -5150,6 +5213,7 @@ static bool decode_clEnqueueWriteBufferRect(ServerDispatch& s, ::av::WireReader&
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_event>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -5235,6 +5299,7 @@ static bool decode_clEnqueueCopyBufferRect(ServerDispatch& s, ::av::WireReader& 
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<size_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -5252,6 +5317,7 @@ static bool decode_clEnqueueCopyBufferRect(ServerDispatch& s, ::av::WireReader& 
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<size_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -5269,6 +5335,7 @@ static bool decode_clEnqueueCopyBufferRect(ServerDispatch& s, ::av::WireReader& 
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<size_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -5311,6 +5378,7 @@ static bool decode_clEnqueueCopyBufferRect(ServerDispatch& s, ::av::WireReader& 
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_event>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -5380,6 +5448,7 @@ static bool decode_clEnqueueFillImage(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_bytes = arena.allocate<uint8_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_bytes == nullptr) return false;
             if (wire_count != 0 && !r.read(wire_bytes, static_cast<size_t>(wire_count))) return false;
@@ -5393,6 +5462,7 @@ static bool decode_clEnqueueFillImage(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<size_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -5410,6 +5480,7 @@ static bool decode_clEnqueueFillImage(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<size_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -5432,6 +5503,7 @@ static bool decode_clEnqueueFillImage(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_event>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -5523,6 +5595,7 @@ static bool decode_clCreateImage2D(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_bytes = arena.allocate<uint8_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_bytes == nullptr) return false;
             if (wire_count != 0 && !r.read(wire_bytes, static_cast<size_t>(wire_count))) return false;
@@ -5625,6 +5698,7 @@ static bool decode_clCreateImage3D(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_bytes = arena.allocate<uint8_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_bytes == nullptr) return false;
             if (wire_count != 0 && !r.read(wire_bytes, static_cast<size_t>(wire_count))) return false;
@@ -5732,6 +5806,7 @@ static bool decode_clCreateProgramWithIL(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_bytes = arena.allocate<uint8_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_bytes == nullptr) return false;
             if (wire_count != 0 && !r.read(wire_bytes, static_cast<size_t>(wire_count))) return false;
@@ -5796,6 +5871,7 @@ static bool decode_clCompileProgram(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_device_id>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -5814,6 +5890,7 @@ static bool decode_clCompileProgram(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_len = 0;
             if (!r.read_varint(wire_len)) return false;
+            if (wire_len > r.remaining()) return false;
             char* wire_text = arena.allocate_chars(static_cast<size_t>(wire_len) + 1);
             if (wire_text == nullptr) return false;
             if (wire_len != 0 && !r.read(wire_text, static_cast<size_t>(wire_len))) return false;
@@ -5832,6 +5909,7 @@ static bool decode_clCompileProgram(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_program>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -5850,11 +5928,13 @@ static bool decode_clCompileProgram(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto** wire_items = arena.allocate<const char*>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
                 uint64_t wire_len = 0;
                 if (!r.read_varint(wire_len)) return false;
+                if (wire_len > r.remaining()) return false;
                 char* wire_text = arena.allocate_chars(static_cast<size_t>(wire_len) + 1);
                 if (wire_text == nullptr) return false;
                 if (wire_len != 0 && !r.read(wire_text, static_cast<size_t>(wire_len))) return false;
@@ -5907,6 +5987,7 @@ static bool decode_clLinkProgram(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_device_id>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -5925,6 +6006,7 @@ static bool decode_clLinkProgram(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_len = 0;
             if (!r.read_varint(wire_len)) return false;
+            if (wire_len > r.remaining()) return false;
             char* wire_text = arena.allocate_chars(static_cast<size_t>(wire_len) + 1);
             if (wire_text == nullptr) return false;
             if (wire_len != 0 && !r.read(wire_text, static_cast<size_t>(wire_len))) return false;
@@ -5943,6 +6025,7 @@ static bool decode_clLinkProgram(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_program>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -6008,6 +6091,7 @@ static bool decode_clSetProgramSpecializationConstant(ServerDispatch& s, ::av::W
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_bytes = arena.allocate<uint8_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_bytes == nullptr) return false;
             if (wire_count != 0 && !r.read(wire_bytes, static_cast<size_t>(wire_count))) return false;
@@ -6086,6 +6170,7 @@ static bool decode_clSetKernelExecInfo(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_bytes = arena.allocate<uint8_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_bytes == nullptr) return false;
             if (wire_count != 0 && !r.read(wire_bytes, static_cast<size_t>(wire_count))) return false;
@@ -6146,6 +6231,7 @@ static bool decode_clGetKernelSubGroupInfo(ServerDispatch& s, ::av::WireReader& 
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<size_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -6289,6 +6375,7 @@ static bool decode_clCreateBufferWithProperties(ServerDispatch& s, ::av::WireRea
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_mem_properties>(static_cast<size_t>(wire_count) + 2);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -6320,6 +6407,7 @@ static bool decode_clCreateBufferWithProperties(ServerDispatch& s, ::av::WireRea
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_bytes = arena.allocate<uint8_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_bytes == nullptr) return false;
             if (wire_count != 0 && !r.read(wire_bytes, static_cast<size_t>(wire_count))) return false;
@@ -6373,6 +6461,7 @@ static bool decode_clCreateImageWithProperties(ServerDispatch& s, ::av::WireRead
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_mem_properties>(static_cast<size_t>(wire_count) + 2);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -6461,6 +6550,7 @@ static bool decode_clCreateImageWithProperties(ServerDispatch& s, ::av::WireRead
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_bytes = arena.allocate<uint8_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_bytes == nullptr) return false;
             if (wire_count != 0 && !r.read(wire_bytes, static_cast<size_t>(wire_count))) return false;
@@ -6514,6 +6604,7 @@ static bool decode_clCreateSamplerWithProperties(ServerDispatch& s, ::av::WireRe
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_sampler_properties>(static_cast<size_t>(wire_count) + 2);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -6762,6 +6853,7 @@ static bool decode_clCreatePipe(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_pipe_properties>(static_cast<size_t>(wire_count) + 2);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -6880,6 +6972,7 @@ static bool decode_clCreateProgramWithBuiltInKernels(ServerDispatch& s, ::av::Wi
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_device_id>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -6898,6 +6991,7 @@ static bool decode_clCreateProgramWithBuiltInKernels(ServerDispatch& s, ::av::Wi
         if (wire_present != 0) {
             uint64_t wire_len = 0;
             if (!r.read_varint(wire_len)) return false;
+            if (wire_len > r.remaining()) return false;
             char* wire_text = arena.allocate_chars(static_cast<size_t>(wire_len) + 1);
             if (wire_text == nullptr) return false;
             if (wire_len != 0 && !r.read(wire_text, static_cast<size_t>(wire_len))) return false;
@@ -6984,6 +7078,7 @@ static bool decode_clEnqueueMapBuffer(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_event>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -7064,6 +7159,7 @@ static bool decode_clEnqueueUnmapMemObject(ServerDispatch& s, ::av::WireReader& 
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_event>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -7207,6 +7303,7 @@ static bool decode_clEnqueueSVMMap(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_event>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -7272,6 +7369,7 @@ static bool decode_clEnqueueSVMUnmap(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_event>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -7352,6 +7450,7 @@ static bool decode_clEnqueueSVMMemcpy(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_event>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
@@ -7420,6 +7519,7 @@ static bool decode_clEnqueueSVMMemFill(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_bytes = arena.allocate<uint8_t>(static_cast<size_t>(wire_count) + 1);
             if (wire_bytes == nullptr) return false;
             if (wire_count != 0 && !r.read(wire_bytes, static_cast<size_t>(wire_count))) return false;
@@ -7448,6 +7548,7 @@ static bool decode_clEnqueueSVMMemFill(ServerDispatch& s, ::av::WireReader& r,
         if (wire_present != 0) {
             uint64_t wire_count = 0;
             if (!r.read_varint(wire_count)) return false;
+            if (wire_count > r.remaining()) return false;
             auto* wire_items = arena.allocate<cl_event>(static_cast<size_t>(wire_count) + 1);
             if (wire_items == nullptr) return false;
             for (uint64_t i = 0; i < wire_count; ++i) {
