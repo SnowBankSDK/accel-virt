@@ -4747,7 +4747,6 @@ bool dispatch_command(ServerDispatch& s, uint32_t cmd_id, ::av::WireReader& r, :
         }
         {
             const uint32_t av_n_outer = static_cast<uint32_t>(infoCount);
-            if (av_n_outer > r.remaining()) return false;
             auto** av_ptrs = arena.allocate<const VkAccelerationStructureBuildRangeInfoKHR*>(av_n_outer);
             if (av_ptrs == nullptr) { return false; }
             for (uint32_t av_i = 0; av_i < av_n_outer; ++av_i) {
@@ -4950,7 +4949,6 @@ bool dispatch_command(ServerDispatch& s, uint32_t cmd_id, ::av::WireReader& r, :
         }
         {
             const uint32_t av_n_outer = static_cast<uint32_t>(infoCount);
-            if (av_n_outer > r.remaining()) return false;
             auto** av_ptrs = arena.allocate<const uint32_t*>(av_n_outer);
             if (av_ptrs == nullptr) { return false; }
             for (uint32_t av_i = 0; av_i < av_n_outer; ++av_i) {
@@ -4989,7 +4987,6 @@ bool dispatch_command(ServerDispatch& s, uint32_t cmd_id, ::av::WireReader& r, :
         }
         {
             const uint32_t av_n_outer = static_cast<uint32_t>(infoCount);
-            if (av_n_outer > r.remaining()) return false;
             auto** av_ptrs = arena.allocate<const VkAccelerationStructureBuildRangeInfoKHR*>(av_n_outer);
             if (av_ptrs == nullptr) { return false; }
             for (uint32_t av_i = 0; av_i < av_n_outer; ++av_i) {
