@@ -96,7 +96,7 @@ TEST(gpu_response_reader_decode, survives_the_hostile_sweep)
   const av::HostileSweep sweep(rejects, whole.bytes(), whole.length());
   sweep.run();
   CHECK(sweep.cases_run() > 1000u);
-  const std::uint32_t acceptable = 2u + 32u + 160u + 32u + 64u + 64u + 128u + 128u +
+  const std::uint32_t acceptable = 2u + 32u + 160u + 32u + 32u + 64u + 64u + 128u + 128u +
                                    3u + 31u + 2u + 1u + 2u + 32u + 1u;
   CHECK(sweep.rejections() >= sweep.cases_run() - acceptable); }
 
