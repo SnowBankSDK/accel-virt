@@ -1800,3 +1800,147 @@ TEST(d3d_backend_device, a_texture_or_view_the_host_refuses_to_make_never_remove
 
     backend.shut_down();
 }
+
+namespace {
+
+SamplerDesc linear_sampler()
+{
+    SamplerDesc desc = {};
+    desc.filter = 0x15u;
+    desc.address_u = 1u;
+    desc.address_v = 1u;
+    desc.address_w = 1u;
+    desc.max_anisotropy = 1u;
+    desc.comparison = 1u;
+    desc.max_lod = 3.402823466e+38f;
+    return desc;
+}
+
+void draw_with_sampler(av::D3dLoopback &wire, std::uint32_t sampler)
+{
+    CHECK(av_d3d_SetSamplers(wire, 4u, 0u, 1u, &sampler));
+    CHECK(av_d3d_Draw(wire, 3u, 0u));
+}
+
+void open_sampling_session(av::D3dLoopback &wire, const SamplerDesc &desc)
+{
+    std::uint32_t hresult = 1u, level = 0u;
+    CHECK(av_d3d_CreateDevice11(wire, 1u, 0u, 0u, &hresult, &level));
+    CHECK_EQ(hresult, 0u);
+    make_triangle(wire);
+    bind_triangle(wire);
+    CHECK(av_d3d_CreateSampler(wire, 30u, desc));
+    CHECK(av_d3d_CreateSampler(wire, 31u, desc));
+    draw_with_sampler(wire, 30u);
+}
+
+}
+
+TEST(d3d_backend_device, a_sampler_two_sessions_make_alike_lives_until_the_last_of_them_lets_it_go)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice *const device = host_device(apis);
+    if (device == nullptr) return;
+    HeldBackend       first(first_backend, rig.log);
+    HeldBackend       second(second_backend, rig.log);
+    av::SessionShares first_shares, second_shares;
+    CHECK(first.backend().initialize(first_shares, rig.imports, device));
+    CHECK(second.backend().initialize(second_shares, rig.imports, device));
+    av::D3dLoopback first_wire(first.backend(), rig.imports);
+    av::D3dLoopback second_wire(second.backend(), rig.imports);
+    const SamplerDesc desc = linear_sampler();
+    open_sampling_session(first_wire, desc);
+    open_sampling_session(second_wire, desc);
+
+    CHECK(av_d3d_DestroyObject(first_wire, 30u));
+    CHECK(av_d3d_Draw(first_wire, 3u, 0u));
+    draw_with_sampler(second_wire, 30u);
+    draw_with_sampler(first_wire, 31u);
+    std::uint32_t hresult = 1u, level = 0u, removed = 1u;
+    CHECK(av_d3d_CreateDevice11(first_wire, 2u, 0u, 0u, &hresult, &level));
+    bind_triangle(first_wire);
+    draw_with_sampler(first_wire, 31u);
+    CHECK(av_d3d_DestroyDevice11(first_wire, 2u));
+    CHECK(av_d3d_SelectDevice11(first_wire, 1u));
+    draw_with_sampler(second_wire, 31u);
+    CHECK(av_d3d_DestroyObject(second_wire, 31u));
+    first.backend().shut_down();
+    draw_with_sampler(second_wire, 30u);
+    CHECK(av_d3d_Finish11(second_wire, &removed));
+    CHECK_EQ(removed, 0u);
+    CHECK_EQ(second_wire.refused(), 0u);
+    second.backend().shut_down();
+}
+
+TEST(d3d_backend_device, a_sampler_bound_in_a_session_shut_down_first_outlives_it_in_the_session_still_drawing)
+{
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice *const device = host_device(apis);
+    if (device == nullptr) return;
+    HeldBackend       first(first_backend, rig.log);
+    HeldBackend       second(second_backend, rig.log);
+    av::SessionShares first_shares, second_shares;
+    CHECK(first.backend().initialize(first_shares, rig.imports, device));
+    CHECK(second.backend().initialize(second_shares, rig.imports, device));
+    av::D3dLoopback first_wire(first.backend(), rig.imports);
+    av::D3dLoopback second_wire(second.backend(), rig.imports);
+    const SamplerDesc desc = linear_sampler();
+    open_sampling_session(first_wire, desc);
+    open_sampling_session(second_wire, desc);
+    draw_with_sampler(first_wire, 31u);
+    first.backend().shut_down();
+    std::uint32_t removed = 1u;
+    draw_with_sampler(second_wire, 30u);
+    CHECK(av_d3d_DestroyObject(second_wire, 30u));
+    draw_with_sampler(second_wire, 31u);
+    CHECK(av_d3d_Finish11(second_wire, &removed));
+    CHECK_EQ(removed, 0u);
+    second.backend().shut_down();
+}
+
+namespace {
+
+constexpr std::uint32_t shader_stages = 6u;
+constexpr std::uint32_t sampler_slots = 16u;
+
+void bind_everywhere(av::D3dLoopback &wire, std::uint32_t sampler)
+{
+    std::uint32_t ids[sampler_slots] = {};
+    for (std::uint32_t slot = 0u; slot < sampler_slots; slot++) ids[slot] = sampler;
+    for (std::uint32_t stage = 0u; stage < shader_stages; stage++)
+        CHECK(av_d3d_SetSamplers(wire, stage, 0u, sampler_slots, ids));
+}
+
+}
+
+TEST(d3d_backend_device, a_sampler_bound_in_every_slot_of_hundreds_of_devices_lives_while_any_of_them_holds_it)
+{
+    constexpr std::uint32_t devices = 720u;
+    av::ExecutorLogRig rig;
+    av::LoaderHostApis apis(rig.log);
+    av::D3d11HostDevice *const device = host_device(apis);
+    if (device == nullptr) return;
+    HeldBackend       held(first_backend, rig.log);
+    av::SessionShares shares;
+    CHECK(held.backend().initialize(shares, rig.imports, device));
+    av::D3dLoopback wire(held.backend(), rig.imports);
+    open_sampling_session(wire, linear_sampler());
+    std::uint32_t hresult = 1u, level = 0u, removed = 1u;
+    for (std::uint32_t made = 2u; made < devices + 2u; made++) {
+        CHECK(av_d3d_CreateDevice11(wire, made, 0u, 0u, &hresult, &level));
+        CHECK_EQ(hresult, 0u);
+        bind_everywhere(wire, 30u);
+    }
+    for (std::uint32_t made = 2u; made < devices + 2u; made++) {
+        CHECK(av_d3d_SelectDevice11(wire, made));
+        bind_everywhere(wire, 0u);
+    }
+    CHECK(av_d3d_SelectDevice11(wire, 1u));
+    draw_with_sampler(wire, 30u);
+    CHECK(av_d3d_Finish11(wire, &removed));
+    CHECK_EQ(removed, 0u);
+    CHECK_EQ(wire.refused(), 0u);
+    held.backend().shut_down();
+}
