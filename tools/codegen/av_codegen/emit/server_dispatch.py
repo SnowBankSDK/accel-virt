@@ -340,7 +340,6 @@ def _emit_case(reg: Registry, cmd: Command) -> list[str]:  # noqa: PLR0915
             decode_lines.append(f"    {{")
             decode_lines.append(
                 f"        const uint32_t av_n_outer = static_cast<uint32_t>({srv_outer});")
-            decode_lines.append("        if (av_n_outer > r.remaining()) return false;")
             decode_lines.append(
                 f"        auto** av_ptrs = arena.allocate<const {elem}*>(av_n_outer);")
             decode_lines.append("        for (uint32_t av_i = 0; av_i < av_n_outer; ++av_i) {")

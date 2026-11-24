@@ -270,6 +270,11 @@ TEST(generated_vulkan, a_count_the_frame_cannot_hold_is_refused_before_the_arena
   av::vkproto::serialize_VkInstanceCreateInfo(writer, handles, sent);
   CHECK_STATUS(writer.status(), av::Status::ok);
   const std::size_t length = writer.offset();
+  { std::uint8_t untouched_block[arena_bytes];
+    WireArena untouched_arena(untouched_block, sizeof untouched_block);
+    WireReader untouched(frame, length);
+    VkInstanceCreateInfo decoded_whole = {};
+    CHECK(av::vkproto::deserialize_VkInstanceCreateInfo(untouched, handles, &decoded_whole, untouched_arena)); }
   const std::uint32_t count = 0xFFFFFFFFu;
   std::memcpy(frame + length - sizeof count - 1u, &count, sizeof count);
   frame[length - 1u] = 1u;
