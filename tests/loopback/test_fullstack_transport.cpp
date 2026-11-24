@@ -11,7 +11,6 @@
 #include "harness/fullstack/full_stack_rig.hpp"
 #include "proto/client/client_transport.hpp"
 #include "proto/context/sub_api.hpp"
-#include "proto/context/vram_policy.hpp"
 #include "proto/escape/host_window_record.hpp"
 #include "proto/resources/host_memory_request.hpp"
 #include "proto/wire/wire_reader.hpp"
@@ -42,7 +41,6 @@ using av::MockExecutorOps;
 using av::Status;
 using av::SubApi;
 using av::TransportResult;
-using av::VramPolicy;
 using av::WireReader;
 using av::WireWriter;
 
@@ -92,8 +90,7 @@ TEST(fullstack_adapter, starts_on_the_real_device_core_with_its_capset_and_doorb
   CHECK(rig.platform().described_device() != nullptr);
   CHECK(rig.platform().device_description_is("mock gpu"));
   CHECK(rig.platform().driver_text_is("HardwareInformation.AdapterString", "mock gpu"));
-  CHECK_EQ(rig.platform().driver_number("HardwareInformation.qwMemorySize"),
-           VramPolicy().cap_for(rig.device().host().gpu_identity(0u).local_memory()));
+  CHECK_EQ(rig.platform().driver_number("HardwareInformation.qwMemorySize"), std::uint64_t{21} << 30);
   CHECK(rig.platform().logged_line("avgpu: host window status 0x00000000"));
   CHECK_EQ(rig.device().device().blobs(), 0u);
   CHECK(rig.bridge().answered_by_core() >= 2u);
@@ -117,7 +114,7 @@ TEST(fullstack_adapter, the_luid_and_the_video_memory_budgets_are_the_drivers_se
   std::uint64_t budget = 0u;
   std::uint64_t usage = 1u;
   CHECK_STATUS(kmt.query_video_memory(adapter, av::MemorySegmentGroup::local, budget, usage), Status::ok);
-  CHECK_EQ(budget, VramPolicy().cap_for(rig.device().host().gpu_identity(0u).local_memory()));
+  CHECK_EQ(budget, std::uint64_t{21} << 30);
   CHECK_EQ(usage, 0u);
   CHECK_STATUS(kmt.query_video_memory(adapter, av::MemorySegmentGroup::non_local, budget, usage), Status::ok);
   CHECK_EQ(budget, std::uint64_t{8} << 30u);
