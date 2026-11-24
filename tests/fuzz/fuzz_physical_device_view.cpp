@@ -34,7 +34,8 @@ public:
     void run(std::uint8_t flags, const std::uint8_t *reply, std::size_t length)
     {
         transport_.set_reply(reply, length);
-        av::icd::PhysicalDeviceView view(transport_, av::IcdRig::adapter_luid, "", vulkan_1_3, rig_.log());
+        av::icd::PhysicalDeviceView view(transport_, rig_.root().wire_handles(), av::IcdRig::adapter_luid, "", vulkan_1_3,
+                                         rig_.lines());
         if ((flags & first_form) != 0u) {
             VkPhysicalDeviceProperties properties = {};
             view.properties(physical_device_, &properties);

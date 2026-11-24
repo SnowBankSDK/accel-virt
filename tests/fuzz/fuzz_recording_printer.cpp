@@ -1,4 +1,5 @@
 #include "core/support/status.hpp"
+#include "device/host/process_block_source.hpp"
 #include "device/replay/recording_filter.hpp"
 #include "device/replay/recording_printer.hpp"
 #include "device/replay/recording_reader.hpp"
@@ -11,8 +12,9 @@ namespace {
 void printed(const std::uint8_t *data, std::size_t size, const av::RecordingFilter &filter,
              std::uint32_t payload_bytes)
 {
-    av::RecordingReader  reader(data, size);
-    av::RecordingPrinter printer(reader, filter, payload_bytes);
+    av::ProcessBlockSource memory;
+    av::RecordingReader    reader(data, size);
+    av::RecordingPrinter   printer(reader, filter, payload_bytes, memory);
     if (!printer.invariants_hold()) __builtin_trap();
     const std::uint64_t most = size + 2u;
     for (std::uint64_t lines = 0u;; lines++) {

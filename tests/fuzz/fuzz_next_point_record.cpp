@@ -14,6 +14,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size
     std::uint8_t again[av::NextPointRecord::encoded_size] = {};
     if (record.encode(again, sizeof again) != av::Status::ok) __builtin_trap();
     if (std::memcmp(again, data, sizeof again) != 0) __builtin_trap();
-    if (record.surface() == 0u || record.point() == 0u) __builtin_trap();
+    const bool pages = record.action() == av::NextPointRecord::Action::pages;
+    if (record.surface() == 0u || (pages ? record.point() != 0u : record.point() == 0u)) __builtin_trap();
     return 0;
 }

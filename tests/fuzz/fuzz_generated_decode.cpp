@@ -55,12 +55,14 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size
             __builtin_trap();
     }
     decode_one<VkApplicationInfo>(data, size, [](av::WireReader &r, VkApplicationInfo *out, av::WireArena &a) {
-        const bool accepted = av::vkproto::deserialize_VkApplicationInfo(r, out, a);
+        const av::vkproto::HandleIdentity handles;
+        const bool accepted = av::vkproto::deserialize_VkApplicationInfo(r, handles, out, a);
         if (accepted && out->pApplicationName != nullptr && a.used() == 0u) __builtin_trap();
         return accepted;
     });
     decode_one<VkInstanceCreateInfo>(data, size, [](av::WireReader &r, VkInstanceCreateInfo *out, av::WireArena &a) {
-        return av::vkproto::deserialize_VkInstanceCreateInfo(r, out, a);
+        const av::vkproto::HandleIdentity handles;
+        return av::vkproto::deserialize_VkInstanceCreateInfo(r, handles, out, a);
     });
     {
         alignas(16) unsigned char block[arena_bytes];

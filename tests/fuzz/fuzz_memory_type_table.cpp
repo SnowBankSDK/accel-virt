@@ -14,6 +14,7 @@ namespace {
 
 constexpr std::uint64_t local_budget = 64u << 20u;
 constexpr std::uint64_t shared_budget = 8ull << 30u;
+constexpr std::uint64_t shared_segment = 4ull << 30u;
 
 void require(bool holds)
 {
@@ -43,8 +44,9 @@ void check_held(const av::icd::MemoryTypeTable &table, const VkPhysicalDeviceMem
                 (held && (expected.propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0u));
     }
     for (std::uint32_t heap = 0u; heap < host.memoryHeapCount; heap++) {
-        const bool local = (host.memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0u;
-        require(answer.memoryHeaps[heap].size == (local ? host.memoryHeaps[heap].size : shared_budget));
+        const bool          local = (host.memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0u;
+        const std::uint64_t size = host.memoryHeaps[heap].size;
+        require(answer.memoryHeaps[heap].size == (local || size < shared_segment ? size : shared_segment));
         require(answer.memoryHeaps[heap].flags == host.memoryHeaps[heap].flags);
     }
 }
@@ -68,6 +70,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size
     kmt.add_adapter(av::PciIdentity(), 3200u);
     kmt.set_video_memory(av::MemorySegmentGroup::local, local_budget, 1u);
     kmt.set_video_memory(av::MemorySegmentGroup::non_local, shared_budget, 2u);
+    kmt.set_segment_sizes(local_budget, 0u, shared_segment);
     std::uint32_t adapter = 0u;
     std::uint32_t count = 0u;
     require(kmt.enumerate_adapters(&adapter, 1u, count) == av::Status::ok);
