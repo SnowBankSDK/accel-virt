@@ -18,6 +18,7 @@ constexpr std::uint32_t resource = 0x00100045u;
 constexpr std::uint64_t address = 0x00007FF000010000ull;
 const HostMemoryRequest memory(HostMemoryRequest::Kind::vulkan, 5u);
 const HostMemoryRequest none;
+constexpr std::uint32_t past_the_last_kind = static_cast<std::uint32_t>(HostMemoryRequest::Kind::placed_heap) + 1u;
 
 class Bytes {
 public:
@@ -99,7 +100,7 @@ TEST(host_window_record, every_field_is_judged)
       {"an open turned adoption, of no address", Operation::open, 6u, 2u, 3u},
       {"open with a resource already", Operation::open, 8u, 4u, resource},
       {"open of no memory", Operation::open, 12u, 4u, 0u},
-      {"open of a memory kind there is none of", Operation::open, 12u, 4u, 5u},
+      {"open of a memory kind there is none of", Operation::open, 12u, 4u, past_the_last_kind},
       {"open of a Vulkan type past the last", Operation::open, 12u, 4u, 0x2003u},
       {"open of a class naming a type", Operation::open, 12u, 4u, 0x0101u},
       {"open of no bytes", Operation::open, 16u, 8u, 0u},
