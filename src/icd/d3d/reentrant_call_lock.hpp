@@ -20,6 +20,7 @@ public:
 
     void acquire();
     void release();
+    bool outermost() const;
     bool invariants_hold() const;
 
 private:

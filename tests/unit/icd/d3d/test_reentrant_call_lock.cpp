@@ -72,3 +72,13 @@ TEST(reentrant_call_lock, a_released_lock_is_taken_afresh_by_whichever_thread_co
   rig.reentrant.release();
   CHECK(!rig.lock.held());
   CHECK(rig.reentrant.invariants_hold()); }
+
+TEST(reentrant_call_lock, only_the_owners_first_level_is_outermost)
+{ Rig rig;
+  rig.reentrant.acquire();
+  CHECK(rig.reentrant.outermost());
+  rig.reentrant.acquire();
+  CHECK(!rig.reentrant.outermost());
+  rig.reentrant.release();
+  CHECK(rig.reentrant.outermost());
+  rig.reentrant.release(); }
