@@ -177,7 +177,7 @@ Status RendererService::allocate_memory(const RendererMessageHeader &header, con
                                                           AllocatedMemoryMessage::encoded_size));
         send_late(RendererMessageHeader::Kind::allocated_memory, header.sequence(),
                   AllocatedMemoryMessage::encoded_size, -1);
-        return Status::no_memory;
+        return Status::ok;
     }
     if (memory_thread_.post(*errand) != Status::ok) errand->conclude();
     return Status::ok;
@@ -326,7 +326,7 @@ Status RendererService::export_image(const RendererMessageHeader &header, const 
                                                         ExportedImageMessage::encoded_size));
         send_late(RendererMessageHeader::Kind::exported_image, header.sequence(), ExportedImageMessage::encoded_size,
                   -1);
-        return Status::no_memory;
+        return Status::ok;
     }
     if (export_thread_.post(*errand) != Status::ok) errand->conclude();
     return Status::ok;

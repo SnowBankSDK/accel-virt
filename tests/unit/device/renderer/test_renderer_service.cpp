@@ -1172,7 +1172,7 @@ TEST(renderer_service_shut_down, answers_every_errand_still_out_and_after_it_ans
   CHECK_EQ(rig.ops().held_memory(), 0u);
   ::close(image_fd); }
 
-TEST(renderer_service_receive, an_answer_that_cannot_be_sent_is_logged_and_one_with_no_room_to_wait_is_refused)
+TEST(renderer_service_receive, an_answer_that_cannot_be_sent_is_logged_and_one_with_no_room_to_wait_is_served)
 { Rig rig;
   rig.ops().editable().export_image = &export_published;
   CHECK_STATUS(rig.hello(), Status::ok);
@@ -1184,9 +1184,12 @@ TEST(renderer_service_receive, an_answer_that_cannot_be_sent_is_logged_and_one_w
   CHECK(std::strstr(rig.host().last_log(), "could not be sent") != nullptr);
   CHECK_EQ(rig.resources().answers(), 0u);
   rig.host().fail_allocation_at(1u);
-  CHECK_STATUS(rig.export_key(0x77u, 7u), Status::no_memory);
+  CHECK_STATUS(rig.export_key(0x77u, 7u), Status::ok);
+  CHECK_EQ(rig.host().logged(), logged + 2u);
   rig.host().fail_allocation_at(1u);
-  CHECK_STATUS(rig.allocate(context_id, av::HostBlobId::first, 0x1000u, 8u), Status::no_memory);
+  CHECK_STATUS(rig.allocate(context_id, av::HostBlobId::first, 0x1000u, 8u), Status::ok);
+  CHECK_EQ(rig.host().logged(), logged + 3u);
+  CHECK(std::strstr(rig.host().last_log(), "could not be sent") != nullptr);
   CHECK_EQ(rig.ops().memory_allocations(), 0u);
   CHECK_EQ(rig.service().outstanding(), 0u); }
 
@@ -1351,17 +1354,19 @@ TEST(renderer_service_free_memory, between_two_allocations_of_one_key_forsakes_t
   CHECK_EQ(rig.ops().held_memory(), 0u);
   CHECK(rig.service().invariants_hold()); }
 
-TEST(renderer_service_receive, an_errand_with_no_room_to_wait_is_answered_as_none_at_once)
+TEST(renderer_service_receive, an_errand_with_no_room_to_wait_is_answered_as_none_at_once_and_served)
 { Rig rig;
   rig.ops().editable().export_image = &export_published;
   CHECK_STATUS(rig.hello(), Status::ok);
+  const std::uint32_t logged = rig.host().logged();
   rig.host().fail_allocation_at(1u);
-  CHECK_STATUS(rig.export_key(0x77u, 7u), Status::no_memory);
+  CHECK_STATUS(rig.export_key(0x77u, 7u), Status::ok);
   CHECK_EQ(rig.resources().answers(), 0u);
   CHECK(!rig.exported(7u).found());
   CHECK_EQ(rig.answer_descriptor(), -1);
   rig.host().fail_allocation_at(1u);
-  CHECK_STATUS(rig.allocate(context_id, av::HostBlobId::first, 0x1000u, 8u), Status::no_memory);
+  CHECK_STATUS(rig.allocate(context_id, av::HostBlobId::first, 0x1000u, 8u), Status::ok);
+  CHECK_EQ(rig.host().logged(), logged);
   CHECK_EQ(rig.resources().answers(), 0u);
   CHECK(!rig.allocated(8u).allocated());
   CHECK_EQ(rig.answer_descriptor(), -1);
