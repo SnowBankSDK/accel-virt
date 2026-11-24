@@ -44,7 +44,7 @@ dEQP-VK.api.info.get_physical_device_properties2.*  for: VK_KHR_get_physical_dev
 # get_physical_device_properties2 above queries; each group below is the
 # behaviour behind one extension, a few hundred cases at most so a run stays a
 # run. Every pattern in this file was checked against the CTS's main mustpass
-# list on 2026-10-14: each keeps at least one case.
+# list on 2026-11-24: each keeps at least one case.
 dEQP-VK.api.buffer_marker.*  for: VK_AMD_buffer_marker
 dEQP-VK.api.device_init.create_device_unsupported_features.coherent_memory_features_amd  for: VK_AMD_device_coherent_memory
 dEQP-VK.api.info.get_physical_device_properties2.properties.basic  for: VK_AMD_shader_core_properties, VK_AMD_shader_core_properties2
@@ -52,33 +52,52 @@ dEQP-VK.draw.renderpass.explicit_vertex_parameter.*  for: VK_AMD_shader_explicit
 dEQP-VK.pipeline.monolithic.multisample.shader_fragment_mask.*  for: VK_AMD_shader_fragment_mask
 dEQP-VK.pipeline.monolithic.sampler.view_type.2d.format.a4?4?4?4_unorm_pack16.*  for: VK_EXT_4444_formats
 dEQP-VK.pipeline.monolithic.attachment_feedback_loop_layout.sampler.attachment_feedback_loop_optimal.sampled_image.*  for: VK_EXT_attachment_feedback_loop_layout
+dEQP-VK.pipeline.monolithic.blend_operation_advanced.msaa.*  for: VK_EXT_blend_operation_advanced
 dEQP-VK.pipeline.monolithic.sampler.border_swizzle.r8g8b8a8_unorm.rgba.*  for: VK_EXT_border_color_swizzle
+dEQP-VK.pipeline.monolithic.color_write_enable.all_channels.*  for: VK_EXT_color_write_enable
 dEQP-VK.conditional_rendering.draw.*  for: VK_EXT_conditional_rendering
 dEQP-VK.rasterization.conservative.*  for: VK_EXT_conservative_rasterization
 dEQP-VK.pipeline.monolithic.sampler.view_type.2d.format.r8g8b8a8_unorm.address_modes.*border_custom*  for: VK_EXT_custom_border_color
 dEQP-VK.rasterization.depth_bias_control.d32_sfloat.float_exact.*  for: VK_EXT_depth_bias_control
+dEQP-VK.pipeline.monolithic.depth.depth_clamp_zero_one.*  for: VK_EXT_depth_clamp_zero_one
+dEQP-VK.pipeline.monolithic.depth.depth_clip_control.*  for: VK_EXT_depth_clip_control
+dEQP-VK.pipeline.monolithic.depth_range_unrestricted.viewport.*  for: VK_EXT_depth_range_unrestricted
 dEQP-VK.pipeline.monolithic.extended_dynamic_state.cmd_buffer_start.*  for: VK_EXT_extended_dynamic_state, VK_EXT_extended_dynamic_state2, VK_EXT_extended_dynamic_state3, VK_EXT_depth_clip_enable
 dEQP-VK.renderpasses.dynamic_rendering.primary_cmd_buff.unused_attachments.extra_*  for: VK_EXT_dynamic_rendering_unused_attachments
 dEQP-VK.fragment_shader_interlock.basic.*  for: VK_EXT_fragment_shader_interlock
 dEQP-VK.pipeline.fast_linked_library.misc.*  for: VK_EXT_graphics_pipeline_library, VK_KHR_pipeline_library
+dEQP-VK.image.host_image_copy.simple.r8g8b8a8_unorm.*  for: VK_EXT_host_image_copy
+dEQP-VK.pipeline.monolithic.image_2d_view_3d_image.*  for: VK_EXT_image_2d_view_of_3d
 dEQP-VK.api.image_compression_control.create_image.explicit.*  for: VK_EXT_image_compression_control
 dEQP-VK.pipeline.monolithic.sliced_view_of_3d_image.*  for: VK_EXT_image_sliced_view_of_3d
 dEQP-VK.texture.mipmap.*.image_view_min_lod.*  for: VK_EXT_image_view_min_lod
 dEQP-VK.rasterization.primitives.static_stipple.*  for: VK_EXT_line_rasterization
 dEQP-VK.memory.binding.priority.*  for: VK_EXT_memory_priority
 dEQP-VK.mesh_shader.ext.smoke.*  for: VK_EXT_mesh_shader
+dEQP-VK.draw.renderpass.multi_draw.mosaic.*.16_draws.*.vert_only.single_view.*  for: VK_EXT_multi_draw
 dEQP-VK.binding_model.mutable_descriptor.misc.*  for: VK_EXT_mutable_descriptor_type
 dEQP-VK.texture.filtering.cube.combinations.*non_seamless*  for: VK_EXT_non_seamless_cube_map
 dEQP-VK.memory.pageable_allocation.*  for: VK_EXT_pageable_device_local_memory
+dEQP-VK.ray_tracing_pipeline.pipeline_library.configurations.*_check_group_handles  for: VK_EXT_pipeline_library_group_handles
+dEQP-VK.pipeline.monolithic.multisample.*post_depth_coverage*  for: VK_EXT_post_depth_coverage
+dEQP-VK.pipeline.monolithic.input_assembly.primitive_restart.*_list  for: VK_EXT_primitive_topology_list_restart
+dEQP-VK.transform_feedback.primitives_generated_query.get.queue_reset.32bit.vert.no_xfb.*.triangle_list.*  for: VK_EXT_primitives_generated_query
+dEQP-VK.rasterization.provoking_vertex.*  for: VK_EXT_provoking_vertex
 dEQP-VK.robustness.robustness2.push.template.rgba32ui.dontunroll.nonvolatile.*  for: VK_EXT_robustness2
 dEQP-VK.pipeline.monolithic.multisample.sample_locations_ext.verify_*  for: VK_EXT_sample_locations
+dEQP-VK.glsl.atomic_operations.add_float32_*  for: VK_EXT_shader_atomic_float
+dEQP-VK.glsl.atomic_operations.m??_float32_*  for: VK_EXT_shader_atomic_float2
 dEQP-VK.image.atomic_operations.*.2d.*r64*  for: VK_EXT_shader_image_atomic_int64
 dEQP-VK.pipeline.monolithic.shader_module_identifier.pipeline_from_id.compute.*  for: VK_EXT_shader_module_identifier
+dEQP-VK.shader_object.create.*  for: VK_EXT_shader_object
 dEQP-VK.pipeline.monolithic.shader_stencil_export.*  for: VK_EXT_shader_stencil_export
 dEQP-VK.transform_feedback.simple.basic_*  for: VK_EXT_transform_feedback
 dEQP-VK.draw.renderpass.vertex_attribute_divisor.*  for: VK_EXT_vertex_attribute_divisor
+dEQP-VK.pipeline.monolithic.extended_dynamic_state.*.vertex_input*  for: VK_EXT_vertex_input_dynamic_state
+dEQP-VK.ray_tracing_pipeline.acceleration_structures.operations.*  for: VK_KHR_acceleration_structure
 dEQP-VK.spirv_assembly.instruction.compute.compute_shader_derivatives.compute.*  for: VK_KHR_compute_shader_derivatives
 dEQP-VK.compute.pipeline.cooperative_matrix.khr_c.*  for: VK_KHR_cooperative_matrix
+dEQP-VK.ray_tracing_pipeline.pipeline_library.configurations.multithreaded_compilation_dho.*  for: VK_KHR_deferred_host_operations
 dEQP-VK.renderpasses.dynamic_rendering.primary_cmd_buff.basic.*  for: VK_KHR_dynamic_rendering
 dEQP-VK.renderpasses.dynamic_rendering.primary_cmd_buff.local_read.*  for: VK_KHR_dynamic_rendering_local_read
 dEQP-VK.fragment_shading_barycentric.weights.*  for: VK_KHR_fragment_shader_barycentric
@@ -90,9 +109,17 @@ dEQP-VK.memory.binding.maintenance6.*  for: VK_KHR_maintenance6
 dEQP-VK.api.maintenance6_check.*  for: VK_KHR_maintenance6
 dEQP-VK.api.maintenance7.*  for: VK_KHR_maintenance7
 dEQP-VK.spirv_assembly.instruction.compute.maintenance8.*  for: VK_KHR_maintenance8
+dEQP-VK.pipeline.monolithic.pipeline_binary.*  for: VK_KHR_pipeline_binary
+dEQP-VK.ray_query.traversal_control.*  for: VK_KHR_ray_query
+dEQP-VK.ray_tracing_pipeline.trace_rays_cmds_maintenance_1.*  for: VK_KHR_ray_tracing_maintenance1
+dEQP-VK.ray_tracing_pipeline.trace_rays_cmds.*  for: VK_KHR_ray_tracing_pipeline
+dEQP-VK.ray_tracing_pipeline.position_fetch.*  for: VK_KHR_ray_tracing_position_fetch
+dEQP-VK.glsl.shader_clock.*  for: VK_KHR_shader_clock
 dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp32.*  for: VK_KHR_shader_float_controls2
 dEQP-VK.reconvergence.maximal.compute.nesting2.*  for: VK_KHR_shader_maximal_reconvergence
+dEQP-VK.spirv_assembly.instruction.compute.non_semantic_info.*  for: VK_KHR_shader_non_semantic_info
 dEQP-VK.subgroups.shader_quad_control.*  for: VK_KHR_shader_quad_control
+dEQP-VK.spirv_assembly.instruction.compute.relaxed_with_forward_reference.*  for: VK_KHR_shader_relaxed_extended_instruction
 dEQP-VK.subgroups.subgroup_uniform_control_flow.*  for: VK_KHR_shader_subgroup_uniform_control_flow
 dEQP-VK.synchronization2.basic.*  for: VK_KHR_synchronization2
 dEQP-VK.api.device_init.create_device_unsupported_features.image_alignment_control_features_mesa  for: VK_MESA_image_alignment_control
