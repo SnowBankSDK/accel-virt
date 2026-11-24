@@ -53,6 +53,16 @@ struct DeviceContextTableProbe {
 
 }
 
+namespace {
+
+void tear_down(MockHost &host, DeviceContextTable &table)
+{
+    table.destroy_all();
+    static_cast<void>(host.run_main_loop());
+}
+
+}
+
 TEST(device_context_table_create, each_context_gets_its_own_running_worker)
 { MockHost host; BlobTable blobs(host); av::HostBlobTable owners(host); FenceInterrupts interrupts(host); ExecutorLibrary library; av::WireRecorder recorder(host);
   DeviceContextTable table(host, blobs, owners, interrupts, library, recorder);
@@ -72,7 +82,8 @@ TEST(device_context_table_create, each_context_gets_its_own_running_worker)
   CHECK(host.wait_for_main_loop_work(1u, 5000u));
   CHECK_EQ(host.run_main_loop(), 1u);
   CHECK_EQ(ran.load(), 1u);
-  CHECK(table.find(2u) == nullptr); }
+  CHECK(table.find(2u) == nullptr);
+  tear_down(host, table); }
 
 TEST(device_context_table_report, writes_each_context_and_its_worker)
 { MockHost host; BlobTable blobs(host); av::HostBlobTable owners(host); FenceInterrupts interrupts(host); ExecutorLibrary library; av::WireRecorder recorder(host);
@@ -94,7 +105,7 @@ TEST(device_context_table_report, writes_each_context_and_its_worker)
       "contexts/0/context/7/worker/0 running=true pending=0 stopping=false";
   CHECK(std::strcmp(two.dump(), expected) == 0);
   CHECK(two.invariants_hold());
-  table.destroy_all(); }
+  tear_down(host, table); }
 
 TEST(device_context_table_create, refuses_id_zero_a_live_id_and_a_full_table)
 { MockHost host; BlobTable blobs(host); av::HostBlobTable owners(host); FenceInterrupts interrupts(host); ExecutorLibrary library; av::WireRecorder recorder(host);
@@ -106,7 +117,7 @@ TEST(device_context_table_create, refuses_id_zero_a_live_id_and_a_full_table)
       CHECK_STATUS(table.create(id, "test"), Status::ok);
   CHECK_STATUS(table.create(9999u, "test"), Status::no_space);
   CHECK(table.invariants_hold());
-  table.destroy_all();
+  tear_down(host, table);
   CHECK_EQ(table.live(), 0u);
   CHECK_EQ(host.live_threads(), 0u); }
 
@@ -117,7 +128,8 @@ TEST(device_context_table_create, a_worker_that_cannot_start_leaves_no_context)
   CHECK_STATUS(table.create(5u, "test"), Status::no_memory);
   CHECK_EQ(table.live(), 0u);
   CHECK(table.invariants_hold());
-  CHECK_STATUS(table.create(5u, "test"), Status::ok); }
+  CHECK_STATUS(table.create(5u, "test"), Status::ok);
+  tear_down(host, table); }
 
 TEST(device_context_table_destroy, stops_the_worker_once)
 { MockHost host; BlobTable blobs(host); av::HostBlobTable owners(host); FenceInterrupts interrupts(host); ExecutorLibrary library; av::WireRecorder recorder(host);
@@ -157,7 +169,8 @@ TEST(device_context_table_holds_doorbell, only_a_bound_context_holds_its_doorbel
   CHECK_STATUS(table.destroy(2u), Status::ok);
   CHECK(!table.holds_doorbell(5u));
   CHECK(host.wait_for_main_loop_work(1u, 5000u));
-  CHECK_EQ(host.run_main_loop(), 1u); }
+  CHECK_EQ(host.run_main_loop(), 1u);
+  tear_down(host, table); }
 
 namespace {
 
@@ -219,7 +232,7 @@ TEST(device_context_table_destroy, a_busy_context_is_destroyed_at_once_and_its_p
   CHECK_STATUS(blobs.release(2u), Status::ok);
   CHECK_EQ(table.live(), 1u);
   CHECK(table.invariants_hold());
-  table.destroy_all();
+  tear_down(host, table);
   host.destroy_event(gate.event); }
 
 TEST(device_context_table_destroy_all, a_worker_stuck_past_the_budget_is_left_running_with_its_slot_and_pins_and_reaped_when_it_ends)
@@ -248,12 +261,13 @@ TEST(device_context_table_destroy_all, a_worker_stuck_past_the_budget_is_left_ru
                                              nullptr, &gate)),
                Status::ok);
   while (table.find(2u)->worker().pending() != 0u) sched_yield();
-  std::atomic<bool> torn{false};
-  std::thread clock([&] {
-      while (!torn.load()) {
-          host.set_clock(host.monotonic_nanoseconds() + DeviceContextTable::teardown_budget_nanoseconds);
-          std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      }
+  const std::uint64_t budget_ends = host.peek_clock() + DeviceContextTable::teardown_budget_nanoseconds;
+  std::atomic<bool>   torn{false};
+  std::thread         clock([&] {
+      std::uint64_t deadline = 0u;
+      while (!torn.load() && !(host.next_deadline(deadline) && deadline >= budget_ends && host.live_threads() == 2u))
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      if (!torn.load()) host.set_clock(deadline);
   });
   const std::uint32_t logged = host.logged();
   table.destroy_all();
@@ -273,7 +287,7 @@ TEST(device_context_table_destroy_all, a_worker_stuck_past_the_budget_is_left_ru
   CHECK_EQ(table.reaping(), 0u);
   CHECK(!table.retiring_pins(1u));
   CHECK(table.invariants_hold());
-  table.destroy_all();
+  tear_down(host, table);
   CHECK_EQ(table.live(), 0u);
   host.destroy_event(gate.event); }
 
@@ -311,7 +325,10 @@ TEST(device_context_table_invariants, a_duplicate_id_a_zero_id_or_a_stopped_work
   CHECK(!zero.invariants_hold());
   DeviceContextTable stopped(host, blobs, owners, interrupts, library, recorder);
   av::DeviceContextTableProbe::place(stopped, 9u, false);
-  CHECK(!stopped.invariants_hold()); }
+  CHECK(!stopped.invariants_hold());
+  tear_down(host, duplicate);
+  tear_down(host, zero);
+  tear_down(host, stopped); }
 
 TEST(device_context_table_settle_d3d, a_table_with_no_direct3d_stream_does_not_wait)
 { MockHost host; BlobTable blobs(host); av::HostBlobTable owners(host); FenceInterrupts interrupts(host); ExecutorLibrary library; av::WireRecorder recorder(host);
@@ -325,4 +342,5 @@ TEST(device_context_table_settle_d3d, a_table_with_no_direct3d_stream_does_not_w
   CHECK_EQ(host.mutex_locks(), before + 1u);
   CHECK_STATUS(table.create(3u, "test"), Status::ok);
   CHECK_EQ(table.live(), 1u);
-  CHECK(table.invariants_hold()); }
+  CHECK(table.invariants_hold());
+  tear_down(host, table); }
