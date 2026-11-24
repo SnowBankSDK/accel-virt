@@ -1,0 +1,23 @@
+From: accel-virt
+Subject: [PATCH] Rasterizer-ordered views are coherent between the fragments they order
+
+A rasterizer-ordered UAV in a pixel shader got the invocation scope, so under
+the Vulkan memory model its image reads and writes were private and the
+interlock's barriers did not make one fragment's write visible to the next
+fragment of the same pixel. Blends through an ROV came out in a different order
+from run to run. A rasterizer-ordered UAV now gets the queue family scope, the
+same as a globally coherent one, so its accesses are non-private texels.
+---
+diff --git a/spirv/spirv_builder.cpp b/spirv/spirv_builder.cpp
+index 020430d..61d9b56 100644
+--- a/spirv/spirv_builder.cpp
++++ b/spirv/spirv_builder.cpp
+@@ -4683,7 +4683,7 @@ spv::Scope SpirvBuilder::getUavCoherentScope(ir::UavFlags flags) {
+   if (flags & (ir::UavFlag::eReadOnly | ir::UavFlag::eWriteOnly))
+     return spv::ScopeInvocation;
+ 
+-  if (flags & ir::UavFlag::eCoherent)
++  if (flags & (ir::UavFlag::eCoherent | ir::UavFlag::eRasterizerOrdered))
+     return spv::ScopeQueueFamily;
+ 
+   if (m_stage == ir::ShaderStage::eCompute)
