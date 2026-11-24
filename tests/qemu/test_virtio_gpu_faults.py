@@ -44,7 +44,7 @@ class Context:
         self.fence = 0
         ring_id, fence_id, reply_id = self.ids
         for request in (create_context(self.context),
-                        submit(self.context, setup(ring_id, fence_id, 12, self.doorbell)[:-4] + struct.pack("<I", reply_id))):
+                        submit(self.context, setup(ring_id, fence_id, 12, self.doorbell, reply=reply_id))):
             self.test.assertEqual(hex(response_type(self.gpu.control(request))), hex(RESP_OK_NODATA))
 
     def destroy(self):

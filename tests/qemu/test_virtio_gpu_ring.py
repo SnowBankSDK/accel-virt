@@ -4,8 +4,9 @@ import time
 import unittest
 
 import virtio_qtest
-from av_context import (BATCH_HEADER, DOORBELL_SHM_ID, DOORBELLS, FEATURE_CONTEXT_INIT, PAGE,
-                         RESP_ERR_INVALID_PARAMETER, RESP_OK_MAP_INFO, RESP_OK_NODATA, GuestRing, batch_header,
+from av_context import (BATCH_HEADER, DOORBELL_SHM_ID, DOORBELLS, FEATURE_CONTEXT_INIT, HOST_BLOB_FIRST, PAGE,
+                         RESP_ERR_INVALID_PARAMETER, RESP_ERR_INVALID_RESOURCE_ID, RESP_OK_MAP_INFO, RESP_OK_NODATA,
+                         GuestRing, batch_header,
                          create_context, destroy_context, guest_blob, host_blob, map_blob, response_type, ring_header,
                          av_device, setup, submit, unref)
 
@@ -37,7 +38,7 @@ class VirtioGpuRing(unittest.TestCase):
         ring = GuestRing(gpu.qtest, address, order)
         self.expect(gpu, create_context(context), RESP_OK_NODATA)
         self.expect(gpu, guest_blob(ring_id, address, ring.blob_size), RESP_OK_NODATA)
-        self.expect(gpu, host_blob(ring_id + 1, PAGE), RESP_OK_NODATA)
+        self.expect(gpu, guest_blob(ring_id + 1, gpu.device.memory.allocate(PAGE), PAGE), RESP_OK_NODATA)
         self.expect(gpu, submit(context, setup(ring_id, ring_id + 1, order, doorbell)), RESP_OK_NODATA)
         return ring
 
@@ -49,11 +50,17 @@ class VirtioGpuRing(unittest.TestCase):
         ring.publish()
         self.ring_doorbell(gpu, doorbell)
         self.assertTrue(ring.wait_head(ring.tail))
-        deadline = time.monotonic() + 10
-        while ring.awake() and time.monotonic() < deadline:
-            time.sleep(0.001)
-        self.assertFalse(ring.awake())
+        self.assertTrue(self.asleep(ring))
         time.sleep(SETTLE)
+        self.assertTrue(self.asleep(ring))
+
+    def asleep(self, ring):
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if not ring.awake():
+                return True
+            time.sleep(0.001)
+        return False
 
     def stays(self, ring, head):
         time.sleep(QUIET)
@@ -175,7 +182,7 @@ class VirtioGpuRing(unittest.TestCase):
         self.expect(gpu, create_context(2), RESP_OK_NODATA)
         address = gpu.device.memory.allocate(2 * PAGE)
         self.expect(gpu, guest_blob(50, address, 2 * PAGE), RESP_OK_NODATA)
-        self.expect(gpu, host_blob(51, PAGE), RESP_OK_NODATA)
+        self.expect(gpu, guest_blob(51, gpu.device.memory.allocate(PAGE), PAGE), RESP_OK_NODATA)
         headers = (
             ("malformed", struct.pack("<I", 0x12345678) + ring_header(12)[4:]),
             ("another order", ring_header(13)),
@@ -213,15 +220,21 @@ class VirtioGpuRing(unittest.TestCase):
         self.ring_doorbell(again, 9)
         self.assertTrue(ring.wait_head(BATCH_HEADER))
 
-    def test_a_host_visible_ring_is_consumed_through_its_mapping(self):
+    def test_a_ring_or_fence_in_a_host_blob_binds_nothing(self):
         gpu = self.open()
         hostmem = gpu.device.shared_memory[SHM_ID_HOST_VISIBLE][0]
+        host_id = HOST_BLOB_FIRST + 20
         self.expect(gpu, create_context(1), RESP_OK_NODATA)
-        self.expect(gpu, host_blob(20, 2 * PAGE), RESP_OK_NODATA)
-        self.assertEqual(hex(response_type(gpu.control(map_blob(20, 4 * PAGE), 32))), hex(RESP_OK_MAP_INFO))
-        ring = GuestRing(gpu.qtest, hostmem + 4 * PAGE)
-        self.expect(gpu, host_blob(21, PAGE), RESP_OK_NODATA)
-        self.expect(gpu, submit(1, setup(20, 21, 12, 4)), RESP_OK_NODATA)
+        self.expect(gpu, host_blob(host_id, 2 * PAGE, 1), RESP_OK_NODATA)
+        self.assertEqual(hex(response_type(gpu.control(map_blob(host_id, 4 * PAGE), 32))), hex(RESP_OK_MAP_INFO))
+        GuestRing(gpu.qtest, hostmem + 4 * PAGE)
+        address = gpu.device.memory.allocate(2 * PAGE)
+        ring = GuestRing(gpu.qtest, address)
+        self.expect(gpu, guest_blob(21, address, 2 * PAGE), RESP_OK_NODATA)
+        self.expect(gpu, guest_blob(22, gpu.device.memory.allocate(PAGE), PAGE), RESP_OK_NODATA)
+        self.expect(gpu, submit(1, setup(host_id, 22, 12, 4)), RESP_ERR_INVALID_RESOURCE_ID)
+        self.expect(gpu, submit(1, setup(21, host_id, 12, 4)), RESP_ERR_INVALID_RESOURCE_ID)
+        self.expect(gpu, submit(1, setup(21, 22, 12, 4)), RESP_OK_NODATA)
         ring.write_batch(1, 1000)
         ring.publish()
         self.ring_doorbell(gpu, 4)
