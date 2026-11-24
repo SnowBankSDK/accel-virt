@@ -139,8 +139,8 @@ class VirtioGpuExport(unittest.TestCase):
             self.assertEqual(struct.unpack_from("<Q", pixels)[0], 5)
         answer = consumer.ask(SYNC, 5, 3)
         self.expect(answer, SYNC, OK, 5, 3, descriptors=1)
-        self.assertEqual(struct.unpack_from("<Q", answer.body)[0], 10)
-        self.assertEqual(answer.body[8:], bytes(24))
+        self.assertEqual(struct.unpack_from("<QI", answer.body), (10, 60000000))
+        self.assertEqual(answer.body[12:], bytes(20))
         self.assertTrue(select.select([answer.descriptors[0]], [], [], 5)[0])
         self.expect(consumer.ask(RELEASE, 5, 4), RELEASE, OK, 5, 4)
         self.expect(consumer.ask(SYNC, 5, 5), SYNC, NOT_FOUND, 5, 5)
@@ -177,7 +177,7 @@ class VirtioGpuExport(unittest.TestCase):
             return struct.unpack("<IQQIII", fields)
 
         _, sequence, vblank, period, refresh, _ = head_record()
-        self.assertEqual((refresh, period), (60000, 16666667))
+        self.assertEqual((refresh, period), (60000, 16666666))
         time.sleep(0.2)
         _, later_sequence, later_vblank, _, _, _ = head_record()
         blanks = later_sequence - sequence

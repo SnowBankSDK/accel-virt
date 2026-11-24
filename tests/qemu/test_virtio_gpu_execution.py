@@ -4,7 +4,8 @@ import time
 import unittest
 
 import virtio_qtest
-from av_context import (COUNT, DOORBELL_SHM_ID, ECHO, EXECUTOR, FEATURE_CONTEXT_INIT, GENERATE_REPLY, batch_header,
+from av_context import (COUNT, DOORBELL_SHM_ID, ECHO, EXECUTOR, FEATURE_CONTEXT_INIT, GENERATE_REPLY, HOST_BLOB_FIRST,
+                         HOST_MEMORY_UPLOAD, batch_header,
                          IMPORT_BLOB, LOSE_DEVICE, NOP, PAGE, PEEK, POKE, REAL_EXECUTOR, RELEASE_BLOB,
                          SUB_API_OPENGL, SUB_API_VULKAN, setup_with_options,
                          RESP_ERR_INVALID_PARAMETER, RESP_ERR_INVALID_RESOURCE_ID, RESP_OK_NODATA, UNDECODABLE,
@@ -20,7 +21,8 @@ WANTED = virtio_qtest.FEATURE_VERSION_1 | virtio_qtest.FEATURE_EDID | FEATURE_CO
 REPLY_MAGIC = 0x00595641
 STATUS_OK, STATUS_TOO_LARGE = 0, 1
 HANDLE_BIT = 0x4000000000000000
-IMPORTED, REFUSED_REQUEST, UNKNOWN_RESOURCE, OUTSIDE_BLOB, UNMAPPABLE_PAGES, EXECUTOR_REFUSED = range(6)
+IMPORTED, REFUSED_REQUEST, UNKNOWN_RESOURCE = range(3)
+PLAIN, ARENA_SEGMENT = range(2)
 
 
 def wait_for(condition, seconds=10.0):
@@ -35,6 +37,7 @@ def wait_for(condition, seconds=10.0):
 class Context:
     def __init__(self, test, gpu, context, doorbell, reply_bytes=PAGE, options=None, answer=RESP_OK_NODATA):
         self.ring_resource = 200 + 3 * context
+        self.id = context
         self.test = test
         self.gpu = gpu
         self.doorbell = doorbell
@@ -44,12 +47,12 @@ class Context:
         self.reply = memory.allocate(PAGE) if reply_bytes else 0
         ids = [200 + 3 * context, 201 + 3 * context, 202 + 3 * context if reply_bytes else 0]
         requests = [create_context(context), guest_blob(ids[0], ring_address, 2 * PAGE),
-                    host_blob(ids[1], PAGE)]
+                    guest_blob(ids[1], memory.allocate(PAGE), PAGE)]
         if reply_bytes:
             gpu.qtest.write_bytes(self.reply, b"\xEE" * 64)
             requests.append(guest_blob(ids[2], self.reply, reply_bytes))
         if options is None:
-            bound = setup(ids[0], ids[1], 12, doorbell)[:-4] + struct.pack("<I", ids[2])
+            bound = setup(ids[0], ids[1], 12, doorbell, reply=ids[2])
         else:
             bound = setup_with_options(ids[0], ids[1], doorbell, ids[2], *options)
         for request in requests:
@@ -71,8 +74,8 @@ class Context:
         return header[1:5], self.gpu.qtest.read_bytes(self.reply + 32, header[3]) if header[3] else b""
 
 
-def import_body(resource, offset, size, memory_type=0, reserved=0):
-    return struct.pack("<IIQQII", resource, reserved, offset, size, memory_type, 0)
+def import_body(resource, role=PLAIN, base=0):
+    return struct.pack("<IIQ", resource, role, base)
 
 
 def peek_body(handle, offset, count):
@@ -156,7 +159,7 @@ class VirtioGpuExecution(unittest.TestCase):
         gpu = self.open()
         context = Context(self, gpu, 1, 2)
         self.assertTrue(context.run(command(ECHO, b"1"), command(0x10099), command(0x20001, b"cl"),
-                                    command(0x00007), command(ECHO), command(COUNT, b"", GENERATE_REPLY)))
+                                    command(0x000FF), command(ECHO), command(COUNT, b"", GENERATE_REPLY)))
         (status, _, size, _), answer = context.answer()
         self.assertEqual((status, size), (STATUS_OK, 12))
         self.assertEqual(struct.unpack("<QI", answer), (2, 1))
@@ -243,13 +246,14 @@ class VirtioGpuExecution(unittest.TestCase):
         ring = gpu.device.memory.allocate(2 * PAGE)
         GuestRing(gpu.qtest, ring)
         small = gpu.device.memory.allocate(PAGE)
-        for request in (create_context(1), guest_blob(10, ring, 2 * PAGE), host_blob(11, PAGE),
+        fence = gpu.device.memory.allocate(PAGE)
+        for request in (create_context(1), guest_blob(10, ring, 2 * PAGE), guest_blob(11, fence, PAGE),
                         guest_blob(12, small, 63)):
             self.expect(gpu, request, RESP_OK_NODATA)
         for reply, answer in ((99, RESP_ERR_INVALID_RESOURCE_ID), (12, RESP_ERR_INVALID_PARAMETER),
                               (10, RESP_ERR_INVALID_PARAMETER), (11, RESP_ERR_INVALID_PARAMETER)):
             with self.subTest(reply=reply):
-                self.expect(gpu, submit(1, setup(10, 11, 12, 0)[:-4] + struct.pack("<I", reply)), answer)
+                self.expect(gpu, submit(1, setup(10, 11, 12, 0, reply=reply)), answer)
         self.expect(gpu, submit(1, setup(10, 11, 12, 0)), RESP_OK_NODATA)
 
 
@@ -269,33 +273,9 @@ class VirtioGpuExecution(unittest.TestCase):
         self.assertEqual(reserved, 0)
         return code, handle
 
-    def test_a_guest_chunk_imports_as_one_pointer_over_the_guests_own_pages(self):
-        gpu = self.open(shared_ram=True)
-        context = Context(self, gpu, 1, 9)
-        resource, addresses = self.chunk(gpu, context, 3)
-        self.assertEqual(self.imported(context, resource, PAGE, 2 * PAGE, 5), (IMPORTED, 1 | HANDLE_BIT))
-        handle = 1 | HANDLE_BIT
-        self.assertTrue(context.run(command(PEEK, peek_body(handle, PAGE - 4, 8), GENERATE_REPLY)))
-        memory_type, live, size = struct.unpack("<IIQ", context.answer()[1][:16])
-        self.assertEqual((memory_type, live, size), (5, 1, 2 * PAGE))
-        self.assertEqual(context.answer()[1][16:], bytes([0xA1]) * 4 + bytes([0xA2]) * 4)
-        self.assertTrue(context.run(command(POKE, struct.pack("<QQ", handle, PAGE + 3) + b"host gpu", GENERATE_REPLY)))
-        self.assertEqual(context.answer()[1], struct.pack("<I", 1))
-        self.assertEqual(gpu.qtest.read_bytes(addresses[2] + 3, 8), b"host gpu")
-        self.assertEqual(self.imported(context, resource, 0, PAGE, 1), (IMPORTED, 2 | HANDLE_BIT))
-        self.expect(gpu, unref(resource), RESP_ERR_INVALID_PARAMETER)
-        self.assertTrue(context.run(command(RELEASE_BLOB, struct.pack("<Q", handle), GENERATE_REPLY)))
-        self.assertEqual(context.answer()[0][2], 0)
-        self.assertTrue(context.run(command(PEEK, peek_body(handle, 0, 1), GENERATE_REPLY)))
-        self.assertEqual(context.answer()[1], bytes(16))
-        self.assertTrue(context.run(command(RELEASE_BLOB, struct.pack("<Q", 2 | HANDLE_BIT)),
-                                    command(RELEASE_BLOB, struct.pack("<Q", 0x1234))))
-        self.expect(gpu, unref(resource), RESP_OK_NODATA)
-        self.assertNotIn("context faulted", gpu.qtest.printed())
-
     def host_chunk(self, gpu, context, pages, offset):
-        resource = context.ring_resource + 3
-        self.expect(gpu, host_blob(resource, pages * PAGE), RESP_OK_NODATA)
+        resource = HOST_BLOB_FIRST + context.ring_resource + 3
+        self.expect(gpu, host_blob(resource, pages * PAGE, context.id), RESP_OK_NODATA)
         self.assertEqual(hex(response_type(gpu.control(map_blob(resource, offset), 32))), hex(RESP_OK_MAP_INFO))
         address, length = gpu.device.shared_memory[SHM_ID_HOST_VISIBLE]
         self.assertEqual(length, HOSTMEM)
@@ -308,17 +288,16 @@ class VirtioGpuExecution(unittest.TestCase):
         resource, window = self.host_chunk(gpu, context, 3, 5 * PAGE)
         gpu.qtest.write_bytes(window + PAGE, bytes([0xB1]) * PAGE)
         gpu.qtest.write_bytes(window + 2 * PAGE, bytes([0xB2]) * PAGE)
-        self.assertEqual(self.imported(context, resource, PAGE, 2 * PAGE, 3), (IMPORTED, 1 | HANDLE_BIT))
-        handle = 1 | HANDLE_BIT
-        self.assertTrue(context.run(command(PEEK, peek_body(handle, PAGE - 4, 8), GENERATE_REPLY)))
+        handle = HANDLE_BIT | context.id << 32 | 1
+        self.assertEqual(self.imported(context, resource), (IMPORTED, handle))
+        self.assertTrue(context.run(command(PEEK, peek_body(handle, 2 * PAGE - 4, 8), GENERATE_REPLY)))
         memory_type, live, size = struct.unpack("<IIQ", context.answer()[1][:16])
-        self.assertEqual((memory_type, live, size), (3, 1, 2 * PAGE))
+        self.assertEqual((memory_type, live, size), (HOST_MEMORY_UPLOAD, 1, 3 * PAGE))
         self.assertEqual(context.answer()[1][16:], bytes([0xB1]) * 4 + bytes([0xB2]) * 4)
-        self.assertTrue(context.run(command(POKE, struct.pack("<QQ", handle, PAGE + 3) + b"host gpu", GENERATE_REPLY)))
+        self.assertTrue(context.run(command(POKE, struct.pack("<QQ", handle, 2 * PAGE + 3) + b"host gpu",
+                                            GENERATE_REPLY)))
         self.assertEqual(context.answer()[1], struct.pack("<I", 1))
         self.assertEqual(gpu.qtest.read_bytes(window + 2 * PAGE + 3, 8), b"host gpu")
-        if not renderer:
-            self.expect(gpu, unref(resource), RESP_ERR_INVALID_PARAMETER)
         self.assertTrue(context.run(command(RELEASE_BLOB, struct.pack("<Q", handle), GENERATE_REPLY)))
         self.assertEqual(context.answer()[0][2], 0)
         self.expect(gpu, header(CMD_RESOURCE_UNMAP_BLOB) + struct.pack("<I4x", resource), RESP_OK_NODATA)
@@ -335,39 +314,36 @@ class VirtioGpuExecution(unittest.TestCase):
     def test_every_refused_import_is_an_answer_and_the_context_runs_on(self):
         gpu = self.open(shared_ram=True)
         context = Context(self, gpu, 1, 10)
+        other = Context(self, gpu, 3, 11)
         resource, _ = self.chunk(gpu, context, 2)
-        self.expect(gpu, host_blob(resource + 1, PAGE), RESP_OK_NODATA)
+        host = HOST_BLOB_FIRST + resource + 1
+        self.expect(gpu, host_blob(host, PAGE, context.id), RESP_OK_NODATA)
+        self.expect(gpu, host_blob(host + 1, PAGE, other.id), RESP_OK_NODATA)
         refusals = {
-            "a reserved field": ((resource, 0, PAGE, 0, 1), REFUSED_REQUEST),
-            "an offset inside a page": ((resource, 1, PAGE), REFUSED_REQUEST),
-            "no size": ((resource, 0, 0), REFUSED_REQUEST),
-            "the ring": ((context.ring_resource, 0, PAGE), UNKNOWN_RESOURCE),
-            "the reply slot": ((context.ring_resource + 2, 0, PAGE), UNKNOWN_RESOURCE),
-            "past the last chunk slot": ((context.ring_resource + 67, 0, PAGE), UNKNOWN_RESOURCE),
-            "a page past a host blob in a chunk slot": ((resource + 1, PAGE, PAGE), OUTSIDE_BLOB),
-            "past the blob": ((resource, PAGE, 2 * PAGE), OUTSIDE_BLOB),
+            "no resource": ((0,), REFUSED_REQUEST),
+            "a role there is none of": ((host, ARENA_SEGMENT + 1), REFUSED_REQUEST),
+            "a plain blob with a base": ((host, PLAIN, PAGE), REFUSED_REQUEST),
+            "an arena segment off its slot": ((host, ARENA_SEGMENT, 1), REFUSED_REQUEST),
+            "the ring": ((context.ring_resource,), UNKNOWN_RESOURCE),
+            "the reply slot": ((context.ring_resource + 2,), UNKNOWN_RESOURCE),
+            "a guest blob": ((resource,), UNKNOWN_RESOURCE),
+            "another context's host blob": ((host + 1,), UNKNOWN_RESOURCE),
+            "a host blob that does not exist": ((host + 2,), UNKNOWN_RESOURCE),
         }
         for name, (arguments, expected) in refusals.items():
             with self.subTest(name):
                 self.assertEqual(self.imported(context, *arguments), (expected, 0))
-        self.assertEqual(self.imported(context, resource, 0, 2 * PAGE)[0], IMPORTED)
+        self.assertEqual(self.imported(context, host)[0], IMPORTED)
         self.assertNotIn("context faulted", gpu.qtest.printed())
 
     def test_blob_commands_framed_with_the_wrong_body_fault_the_context(self):
-        for name, framed in {"a short import": command(IMPORT_BLOB, bytes(24), GENERATE_REPLY),
+        for name, framed in {"a short import": command(IMPORT_BLOB, bytes(8), GENERATE_REPLY),
                              "a long release": command(RELEASE_BLOB, bytes(16))}.items():
             with self.subTest(name):
                 gpu = self.open(shared_ram=True)
                 context = Context(self, gpu, 1, 11)
                 self.assertFalse(context.run(framed))
                 self.assertTrue(wait_for(lambda: "context faulted" in gpu.qtest.printed()))
-
-    def test_guest_ram_with_no_file_behind_it_cannot_be_imported(self):
-        gpu = self.open()
-        context = Context(self, gpu, 1, 12)
-        resource, _ = self.chunk(gpu, context, 1)
-        self.assertEqual(self.imported(context, resource, 0, PAGE), (UNMAPPABLE_PAGES, 0))
-        self.expect(gpu, unref(resource), RESP_OK_NODATA)
 
 
 if __name__ == "__main__":

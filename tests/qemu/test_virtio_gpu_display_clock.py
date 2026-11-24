@@ -4,14 +4,14 @@ import time
 import unittest
 
 import virtio_qtest
-from av_context import FEATURE_CONTEXT_INIT, PAGE, RESP_OK_NODATA, response_type, av_device
+from av_context import DOORBELLS, FEATURE_CONTEXT_INIT, PAGE, RESP_OK_NODATA, response_type, av_device
 
 BUILD = os.environ.get("AV_QEMU_BUILD", "")
 WANTED = virtio_qtest.FEATURE_VERSION_1 | virtio_qtest.FEATURE_EDID | FEATURE_CONTEXT_INIT
 CLOCK_MAGIC = 0x00435641
 DISPLAY_CLOCK = 0x02F4
 DISPLAY_TIMING = 0x02F5
-DISPLAY_QUEUE = 66
+DISPLAY_QUEUE = 2 + DOORBELLS
 RESP_ERR_INVALID_PARAMETER = 0x1205
 QUIET = 0.3
 

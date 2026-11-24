@@ -103,8 +103,6 @@ def main():
     check(class_revision & 0xFF == revision, f"revision 0x{class_revision & 0xFF:02x}, want 0x{revision:02x}")
     check(subsystem == AV_SUBSYSTEM, f"subsystem 0x{subsystem:08x}, want 0x{AV_SUBSYSTEM:08x}")
     check(not complaints(stderr), f"a device realized on auto logged: {stderr}")
-    check(": probe exported memory: " in stderr and ": probe guest import: " in stderr,
-          f"a realize said nothing about its probes: {stderr}")
 
     for host_gpu, reason in (("not-a-uuid", "is neither auto nor a device UUID"),
                              ("00000000-0000-0000-0000-000000000001", "no host Vulkan device has UUID")):

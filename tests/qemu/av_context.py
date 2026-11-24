@@ -20,6 +20,8 @@ FEATURE_CONTEXT_INIT = 1 << 4
 BLOB_MEM_GUEST = 1
 BLOB_MEM_HOST3D = 2
 BLOB_FLAG_MAPPABLE = 1
+HOST_BLOB_FIRST = 0x01000000
+HOST_MEMORY_UPLOAD = 1
 
 CAPSET_ID = 0x72
 SETUP_MAGIC = 0x00435641
@@ -27,7 +29,7 @@ RING_MAGIC = 0x00525641
 BATCH_MAGIC = 0x00425641
 SUB_API_VULKAN = 1
 SUB_API_OPENGL = 2
-OPTIONS_MINOR = 1
+PROTOCOL_MAJOR = 2
 DOORBELL_SHM_ID = 0x72
 DOORBELLS = 256
 PAGE = 0x1000
@@ -59,12 +61,13 @@ def destroy_context(context):
     return header(CMD_CTX_DESTROY, context)
 
 
-def setup(ring, fence, order=12, doorbell=0, major=1, minor=0, sub_api=SUB_API_VULKAN):
-    return struct.pack("<IHHIIB3xIII", SETUP_MAGIC, major, minor, sub_api, ring, order, fence, doorbell, 0)
+def setup(ring, fence, order=12, doorbell=0, major=PROTOCOL_MAJOR, minor=0, sub_api=SUB_API_VULKAN, reply=0):
+    return struct.pack("<IHHIIB3xIII", SETUP_MAGIC, major, minor, sub_api, ring, order, fence, doorbell, reply) + \
+        bytes(16)
 
 
 def setup_with_options(ring, fence, doorbell, reply, sub_api, major=0, minor=0, profile=0, flags=0, share=0):
-    return struct.pack("<IHHIIB3xIII", SETUP_MAGIC, 1, OPTIONS_MINOR, sub_api, ring, 12, fence, doorbell, reply) + \
+    return struct.pack("<IHHIIB3xIII", SETUP_MAGIC, PROTOCOL_MAJOR, 0, sub_api, ring, 12, fence, doorbell, reply) + \
         struct.pack("<BBBBI8x", major, minor, profile, flags, share)
 
 
@@ -72,9 +75,9 @@ def submit(context, command, size=None):
     return header(CMD_SUBMIT_3D, context) + struct.pack("<I4x", len(command) if size is None else size) + command
 
 
-def host_blob(resource, size):
-    return header(CMD_RESOURCE_CREATE_BLOB) + struct.pack("<IIIIQQ", resource, BLOB_MEM_HOST3D,
-                                                          BLOB_FLAG_MAPPABLE, 0, 0, size)
+def host_blob(resource, size, context):
+    return header(CMD_RESOURCE_CREATE_BLOB, context) + struct.pack("<IIIIQQ", resource, BLOB_MEM_HOST3D,
+                                                                   BLOB_FLAG_MAPPABLE, 0, HOST_MEMORY_UPLOAD, size)
 
 
 def guest_blob(resource, address, size):

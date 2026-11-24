@@ -34,19 +34,25 @@ BLOB_FLAG_MAPPABLE = 1
 CONFIG_NUM_CAPSETS = 12
 
 CAPSET_ID = 0x72
-CAPSET_VERSION = 1
+CAPSET_VERSION = 2
 CAPSET_SIZE = 128
 CAPSET_MAGIC = 0x00315641
 SETUP_MAGIC = 0x00435641
 SUB_API_VULKAN = 1
 SUB_API_OPENGL = 2
-MAX_CONTEXTS = 64
+MAX_CONTEXTS = 256
+PROTOCOL_MAJOR = 2
 FEATURE_HOST_VISIBLE_MEMORY = 1
 FEATURE_GPU_EXPORTED_MEMORY = 2
 FEATURE_GUEST_MEMORY_IMPORT = 4
 PROBED_FEATURES = FEATURE_GPU_EXPORTED_MEMORY | FEATURE_GUEST_MEMORY_IMPORT
 FEATURE_PRESENT_ENGINE = 16
 FEATURE_PRESENT_FROM_IMAGE = 32
+FEATURE_RAISES = 64
+FEATURE_PRESENT_BETWEEN_SURFACES = 256
+FEATURE_PRESENT_FROM_SURFACE = 512
+ECHO_FEATURES = (FEATURE_PRESENT_ENGINE | FEATURE_PRESENT_FROM_IMAGE | FEATURE_RAISES |
+                 FEATURE_PRESENT_BETWEEN_SURFACES | FEATURE_PRESENT_FROM_SURFACE)
 DEVICE_TYPES = {"other": 0, "integrated": 1, "discrete": 2, "virtual": 3, "cpu": 4}
 
 HOSTMEM = 64 << 20
@@ -67,21 +73,21 @@ def create_context(context, context_init=CAPSET_ID, name=b"vulkan"):
     return header(CMD_CTX_CREATE, context) + struct.pack("<II", len(name), context_init) + padded
 
 
-def setup(ring=RING, fence=FENCE, order=12, major=1, minor=0, sub_api=SUB_API_VULKAN):
-    return struct.pack("<IHHIIB3xIQ", SETUP_MAGIC, major, minor, sub_api, ring, order, fence, 0)
+def setup(ring=RING, fence=FENCE, order=12, major=PROTOCOL_MAJOR, minor=0, sub_api=SUB_API_VULKAN):
+    return struct.pack("<IHHIIB3xIQ", SETUP_MAGIC, major, minor, sub_api, ring, order, fence, 0) + bytes(16)
 
 
 def submit(context, command, size=None):
     return header(CMD_SUBMIT_3D, context) + struct.pack("<I4x", len(command) if size is None else size) + command
 
 
-def host_blob(resource, size):
-    return header(CMD_RESOURCE_CREATE_BLOB) + struct.pack("<IIIIQQ", resource, BLOB_MEM_HOST3D,
-                                                          BLOB_FLAG_MAPPABLE, 0, 0, size)
-
-
 def unref(resource):
     return header(CMD_RESOURCE_UNREF) + struct.pack("<I4x", resource)
+
+
+def guest_local_memory(host_local):
+    reserve = max(host_local // 8, 1 << 30)
+    return max(host_local - reserve, host_local // 2)
 
 
 def last_host_gpu():
@@ -105,7 +111,7 @@ class VirtioGpuContexts(unittest.TestCase):
         address = gpu.device.memory.allocate(2 * PAGE)
         av_context.GuestRing(gpu.qtest, address)
         self.expect(gpu, av_context.guest_blob(RING, address, 2 * PAGE), RESP_OK_NODATA)
-        self.expect(gpu, host_blob(FENCE, PAGE), RESP_OK_NODATA)
+        self.expect(gpu, av_context.guest_blob(FENCE, gpu.device.memory.allocate(PAGE), PAGE), RESP_OK_NODATA)
 
     def test_without_an_executor_there_is_no_capset_and_no_context(self):
         qtest = virtio_qtest.Qtest(BUILD, "virtio-gpu-av-pci,host-gpu=auto")
@@ -147,18 +153,17 @@ class VirtioGpuContexts(unittest.TestCase):
         gpu = self.open(f"virtio-gpu-av-pci,host-gpu={host.uuid},executor={av_context.EXECUTOR},hostmem={HOSTMEM}")
         capset = self.capset(gpu)
         magic, major, minor, sub_apis, contexts, min_order, max_order = struct.unpack_from("<IHHIIBB", capset)
-        self.assertEqual((magic, major, minor), (CAPSET_MAGIC, 1, 1))
+        self.assertEqual((magic, major, minor), (CAPSET_MAGIC, PROTOCOL_MAJOR, 0))
         self.assertEqual((sub_apis, contexts, min_order, max_order), (SUB_API_VULKAN, MAX_CONTEXTS, 12, 24))
         self.assertEqual(capset[18:24], bytes(6))
         features = struct.unpack_from("<Q", capset, 24)[0]
-        self.assertEqual(features & ~PROBED_FEATURES,
-                         FEATURE_HOST_VISIBLE_MEMORY | FEATURE_PRESENT_ENGINE | FEATURE_PRESENT_FROM_IMAGE)
+        self.assertEqual(features & ~PROBED_FEATURES, FEATURE_HOST_VISIBLE_MEMORY | ECHO_FEATURES)
         vendor, device, device_type, reserved = struct.unpack_from("<IIII", capset, 32)
         self.assertEqual((vendor, device, device_type, reserved), (host.vendor, host.device,
                                                                    DEVICE_TYPES[host.kind], 0))
         self.assertEqual(capset[48:64], bytes.fromhex(host.uuid.replace("-", "")))
         local_memory, shared_memory = struct.unpack_from("<QQ", capset, 64)
-        self.assertEqual(local_memory, host.local_memory)
+        self.assertEqual(local_memory, guest_local_memory(host.local_memory))
         self.assertGreaterEqual(shared_memory, 0)
         name = capset[80:128]
         self.assertEqual(name.rstrip(b"\0"), host.adapter_name().encode())
@@ -167,12 +172,12 @@ class VirtioGpuContexts(unittest.TestCase):
     def test_host_visible_memory_is_offered_only_with_a_hostmem_region(self):
         gpu = self.open(av_context.av_device())
         features = struct.unpack_from("<Q", self.capset(gpu), 24)[0]
-        self.assertEqual(features & ~PROBED_FEATURES, FEATURE_PRESENT_ENGINE | FEATURE_PRESENT_FROM_IMAGE)
+        self.assertEqual(features & ~PROBED_FEATURES, ECHO_FEATURES)
         self.assertEqual(features & FEATURE_GPU_EXPORTED_MEMORY, 0)
 
     def test_get_capset_for_another_id_or_version_is_refused(self):
         gpu = self.open()
-        for capset_id, version in ((CAPSET_ID, 0), (CAPSET_ID, 2), (4, 1), (0, 0)):
+        for capset_id, version in ((CAPSET_ID, 0), (CAPSET_ID, CAPSET_VERSION + 1), (4, CAPSET_VERSION), (0, 0)):
             self.expect(gpu, header(CMD_GET_CAPSET) + struct.pack("<II", capset_id, version),
                         RESP_ERR_INVALID_PARAMETER, 24 + CAPSET_SIZE)
         self.expect(gpu, header(CMD_GET_CAPSET) + b"\x72", RESP_ERR_INVALID_PARAMETER, 24 + CAPSET_SIZE)
@@ -208,7 +213,7 @@ class VirtioGpuContexts(unittest.TestCase):
     def test_a_bound_context_keeps_its_blobs_until_it_is_destroyed(self):
         gpu = self.open()
         self.bindable(gpu)
-        self.expect(gpu, submit(1, setup(minor=7) + bytes(16)), RESP_OK_NODATA)
+        self.expect(gpu, submit(1, setup(minor=7)), RESP_OK_NODATA)
         self.expect(gpu, unref(RING), RESP_ERR_INVALID_PARAMETER)
         self.expect(gpu, unref(FENCE), RESP_ERR_INVALID_PARAMETER)
         self.expect(gpu, submit(1, setup()), RESP_ERR_INVALID_PARAMETER)
@@ -219,12 +224,13 @@ class VirtioGpuContexts(unittest.TestCase):
     def test_setups_the_capset_or_the_blobs_do_not_allow_leave_the_context_unbound(self):
         gpu = self.open()
         self.bindable(gpu)
-        self.expect(gpu, host_blob(SPARE, PAGE), RESP_OK_NODATA)
+        spare = gpu.device.memory.allocate(PAGE)
+        self.expect(gpu, av_context.guest_blob(SPARE, spare, PAGE), RESP_OK_NODATA)
         good = setup()
         corrupted = bytearray(good)
         corrupted[0] ^= 0xFF
         refused = (
-            (submit(1, setup(major=2)), RESP_ERR_INVALID_PARAMETER),
+            (submit(1, setup(major=PROTOCOL_MAJOR + 1)), RESP_ERR_INVALID_PARAMETER),
             (submit(1, setup(sub_api=SUB_API_OPENGL)), RESP_ERR_INVALID_PARAMETER),
             (submit(1, setup(sub_api=SUB_API_VULKAN | SUB_API_OPENGL)), RESP_ERR_INVALID_PARAMETER),
             (submit(1, setup(order=11)), RESP_ERR_INVALID_PARAMETER),
@@ -235,8 +241,8 @@ class VirtioGpuContexts(unittest.TestCase):
             (submit(1, setup(fence=99)), RESP_ERR_INVALID_RESOURCE_ID),
             (submit(1, setup(fence=RING)), RESP_ERR_INVALID_PARAMETER),
             (submit(1, bytes(corrupted)), RESP_ERR_INVALID_PARAMETER),
-            (submit(1, good, size=31), RESP_ERR_INVALID_PARAMETER),
-            (submit(1, good, size=33), RESP_ERR_INVALID_PARAMETER),
+            (submit(1, good, size=len(good) - 1), RESP_ERR_INVALID_PARAMETER),
+            (submit(1, good, size=len(good) + 1), RESP_ERR_INVALID_PARAMETER),
             (submit(1, good[:16]), RESP_ERR_INVALID_PARAMETER),
             (submit(2, good), RESP_ERR_INVALID_CONTEXT_ID),
             (submit(0, good), RESP_ERR_INVALID_CONTEXT_ID),
@@ -245,7 +251,7 @@ class VirtioGpuContexts(unittest.TestCase):
         for request, answer in refused:
             self.expect(gpu, request, answer)
             self.expect(gpu, unref(SPARE), RESP_OK_NODATA)
-            self.expect(gpu, host_blob(SPARE, PAGE), RESP_OK_NODATA)
+            self.expect(gpu, av_context.guest_blob(SPARE, spare, PAGE), RESP_OK_NODATA)
         self.expect(gpu, submit(1, good), RESP_OK_NODATA)
 
     def test_a_reset_destroys_every_context_before_releasing_its_blobs(self):
