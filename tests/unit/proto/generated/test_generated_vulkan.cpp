@@ -261,6 +261,27 @@ TEST(generated_vulkan, zeroes_past_the_arena_are_refused_instead_of_overrunning)
   VkWriteDescriptorSet received = {};
   CHECK(!decoded(av::vkproto::serialize_VkWriteDescriptorSet, av::vkproto::deserialize_VkWriteDescriptorSet, write, received, block)); }
 
+TEST(generated_vulkan, a_count_the_frame_cannot_hold_is_refused_before_the_arena_is_asked)
+{ av::vkproto::HandleIdentity handles;
+  std::uint8_t frame[512] = {};
+  WireWriter writer(frame, sizeof frame);
+  VkInstanceCreateInfo sent = {};
+  sent.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+  av::vkproto::serialize_VkInstanceCreateInfo(writer, handles, sent);
+  CHECK_STATUS(writer.status(), av::Status::ok);
+  const std::size_t length = writer.offset();
+  const std::uint32_t count = 0xFFFFFFFFu;
+  std::memcpy(frame + length - sizeof count - 1u, &count, sizeof count);
+  frame[length - 1u] = 1u;
+
+  std::uint8_t block[arena_bytes];
+  WireArena arena(block, sizeof block);
+  WireReader reader(frame, length);
+  VkInstanceCreateInfo received = {};
+  CHECK(!av::vkproto::deserialize_VkInstanceCreateInfo(reader, handles, &received, arena));
+  CHECK_EQ(arena.refusals(), 0u);
+  CHECK_EQ(arena.used(), 0u); }
+
 /* A handle the API requires in a structure, named null, is refused: the
  * driver dereferences a non-dispatchable handle as it would a pointer. */
 TEST(generated_vulkan, a_required_handle_named_null_is_refused)

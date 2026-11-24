@@ -403,6 +403,10 @@ def _refuse_absent(m: StructMember, length: str) -> list[str]:
     return [f"        if (!present && {_expr_to_cpp(length, "out->")} != 0) {{ return false; }}"]
 
 
+def _refuse_unsent(length: str) -> list[str]:
+    return [f"            if (static_cast<size_t>({_expr_to_cpp(length, "out->")}) > r.remaining()) {{ return false; }}"]
+
+
 def _zero_absent(m: StructMember, length: str, element: str) -> list[str]:
     if not m.conditional:
         return []
@@ -484,6 +488,7 @@ def _deserialize_member(reg: Registry, m: StructMember) -> list[str]:
             "            // length is the guest's and a host API will strcmp what it",
             "            // is handed. A fuzzer found this in vkCreateInstance",
             "            // (feature 042).",
+            "            if (n > r.remaining()) { return false; }",
             "            char* s = arena.allocate_chars(static_cast<size_t>(n) + 1u);",
             "            if (!r.read(s, static_cast<size_t>(n))) { return false; }",
             "            s[n] = '\\0';",
@@ -515,6 +520,7 @@ def _deserialize_member(reg: Registry, m: StructMember) -> list[str]:
             f"        if (!present || {_expr_to_cpp(count, "out->")} == 0) {{",
             f"            out->{m.name} = nullptr;",
             "        } else {",
+            *_refuse_unsent(count),
             f"            auto* arr = arena.allocate<{m.type.base}>(static_cast<size_t>({_expr_to_cpp(count, "out->")}));",
             f"            for (uint32_t i = 0; i < static_cast<uint32_t>({_expr_to_cpp(count, "out->")}); ++i) {{",
             f"                if (!{deserialize_call(reg, m.type.base, 'r', '&arr[i]', 'arena')}) {{ return false; }}",
@@ -551,6 +557,7 @@ def _deserialize_member(reg: Registry, m: StructMember) -> list[str]:
             f"        if (!present || {_expr_to_cpp(size, "out->")} == 0) {{",
             f"            out->{m.name} = nullptr;",
             "        } else {",
+            *_refuse_unsent(size),
             f"            char* blob = arena.allocate_chars(static_cast<size_t>({_expr_to_cpp(size, "out->")}));",
             f"            if (!r.read(blob, static_cast<size_t>({_expr_to_cpp(size, "out->")}))) {{ return false; }}",
             f"            out->{m.name} = blob;",
@@ -569,6 +576,7 @@ def _deserialize_member(reg: Registry, m: StructMember) -> list[str]:
             f"        if (!present || {_expr_to_cpp(count, "out->")} == 0) {{",
             f"            out->{m.name} = nullptr;",
             "        } else {",
+            *_refuse_unsent(count),
             f"            auto* arr = arena.allocate<{elem}>(static_cast<size_t>({_expr_to_cpp(count, "out->")}));",
             f"            for (uint32_t i = 0; i < static_cast<uint32_t>({_expr_to_cpp(count, "out->")}); ++i) {{",
             "                if (!r.read_pod(arr[i])) { return false; }",
@@ -589,6 +597,7 @@ def _deserialize_member(reg: Registry, m: StructMember) -> list[str]:
             f"        if (!present || {_expr_to_cpp(count, "out->")} == 0) {{",
             f"            out->{m.name} = nullptr;",
             "        } else {",
+            *_refuse_unsent(count),
             f"            auto* arr = arena.allocate<{elem}>(static_cast<size_t>({_expr_to_cpp(count, "out->")}));",
             f"            for (uint32_t i = 0; i < static_cast<uint32_t>({_expr_to_cpp(count, "out->")}); ++i) {{",
             f"                if (!{deserialize_call(reg, elem, 'r', 'arr[i]', 'arena')}) {{ return false; }}",
@@ -608,6 +617,7 @@ def _deserialize_member(reg: Registry, m: StructMember) -> list[str]:
             f"        if (!present || {_expr_to_cpp(count, "out->")} == 0) {{",
             f"            out->{m.name} = nullptr;",
             "        } else {",
+            *_refuse_unsent(count),
             f"            auto** arr = arena.allocate<const char*>(static_cast<size_t>({_expr_to_cpp(count, "out->")}));",
             f"            for (uint32_t i = 0; i < static_cast<uint32_t>({_expr_to_cpp(count, "out->")}); ++i) {{",
             "                uint64_t n = 0;",
@@ -623,6 +633,7 @@ def _deserialize_member(reg: Registry, m: StructMember) -> list[str]:
             "                    empty[0] = '\\0';",
             "                    arr[i] = empty;",
             "                } else {",
+            "                    if (n > r.remaining()) { return false; }",
             "                    char* s = arena.allocate_chars(static_cast<size_t>(n) + 1u);",
             "                    if (!r.read(s, static_cast<size_t>(n))) { return false; }",
             "                    s[n] = '\\0';",
@@ -874,6 +885,7 @@ BESPOKE_STRUCT_BODIES: dict[str, tuple[list[str], list[str]]] = {
             "    if (!deserialize_VkImage(r, handles, out->dstImage)) { return false; }",
             "    if (!r.read_pod(out->dstImageLayout)) { return false; }",
             "    if (!r.read_pod(out->regionCount)) { return false; }",
+            "    if (out->regionCount > r.remaining()) { return false; }",
             "    auto* regions = arena.allocate<VkMemoryToImageCopy>(out->regionCount);",
             "    for (uint32_t i = 0; i < out->regionCount; ++i) {",
             "        if (!deserialize_VkMemoryToImageCopy(r, handles, &regions[i], arena)) { return false; }",
@@ -885,6 +897,7 @@ BESPOKE_STRUCT_BODIES: dict[str, tuple[list[str], list[str]]] = {
             "|| n != expected) { return false; }",
             "        regions[i].pHostPointer = nullptr;",
             "        if (n == 0) { continue; }",
+            "        if (n > r.remaining()) { return false; }",
             "        char* blob = arena.allocate_chars(static_cast<size_t>(n));",
             "        if (blob == nullptr) { return false; }",
             "        if (!r.read(blob, static_cast<size_t>(n))) { return false; }",
@@ -914,6 +927,7 @@ BESPOKE_STRUCT_BODIES: dict[str, tuple[list[str], list[str]]] = {
             "    if (!deserialize_VkImage(r, handles, out->srcImage)) { return false; }",
             "    if (!r.read_pod(out->srcImageLayout)) { return false; }",
             "    if (!r.read_pod(out->regionCount)) { return false; }",
+            "    if (out->regionCount > r.remaining()) { return false; }",
             "    auto* regions = arena.allocate<VkImageToMemoryCopy>(out->regionCount);",
             "    for (uint32_t i = 0; i < out->regionCount; ++i) {",
             "        if (!deserialize_VkImageToMemoryCopy(r, handles, &regions[i], arena)) { return false; }",

@@ -20,10 +20,12 @@ def _storage_decls(name: str, elem: str) -> list[str]:
 
 
 def _storage_alloc(
-    pad: str, name: str, elem: str, count_expr: str, *, zero_fill: bool = True
+    pad: str, name: str, elem: str, count_expr: str, *, zero_fill: bool = True, sent: bool = False
 ) -> list[str]:
-    lines = [
-        f"{pad}{name}_count = static_cast<size_t>({count_expr});",
+    lines = [f"{pad}{name}_count = static_cast<size_t>({count_expr});"]
+    if sent:
+        lines.append(f"{pad}if ({name}_count > r.remaining()) return false;")
+    lines += [
         f"{pad}if ({name}_count != 0) {{",
         f"{pad}    {name} = arena.allocate<{elem}>({name}_count);",
         f"{pad}    if ({name} == nullptr) return false;",
@@ -260,6 +262,7 @@ def _emit_case(reg: Registry, cmd: Command) -> list[str]:  # noqa: PLR0915
             decode_lines.append("    {")
             decode_lines.append("        uint64_t n = 0;")
             decode_lines.append("        if (!r.read_varint(n)) return false;")
+            decode_lines.append("        if (n > r.remaining()) return false;")
             decode_lines.append("        if (n > 0) {")
             decode_lines.append(
                 "            char* tmp_str = arena.allocate_chars(static_cast<size_t>(n));"
@@ -303,7 +306,7 @@ def _emit_case(reg: Registry, cmd: Command) -> list[str]:  # noqa: PLR0915
                 decode_lines.append(f"    if ({p.name}_present) {{")
                 pad = "    "
             decode_lines.extend(
-                _storage_alloc(f"{pad}    ", f"{p.name}_storage", elem, srv_len)
+                _storage_alloc(f"{pad}    ", f"{p.name}_storage", elem, srv_len, sent=True)
             )
             decode_lines.append(
                 f"{pad}    for (size_t av_i = 0; "
@@ -337,11 +340,13 @@ def _emit_case(reg: Registry, cmd: Command) -> list[str]:  # noqa: PLR0915
             decode_lines.append(f"    {{")
             decode_lines.append(
                 f"        const uint32_t av_n_outer = static_cast<uint32_t>({srv_outer});")
+            decode_lines.append("        if (av_n_outer > r.remaining()) return false;")
             decode_lines.append(
                 f"        auto** av_ptrs = arena.allocate<const {elem}*>(av_n_outer);")
             decode_lines.append("        for (uint32_t av_i = 0; av_i < av_n_outer; ++av_i) {")
             decode_lines.append(
                 f"            const uint32_t av_n = static_cast<uint32_t>({sib}_storage[av_i].{member});")
+            decode_lines.append("            if (av_n > r.remaining()) return false;")
             decode_lines.append(f"            auto* av_inner = arena.allocate<{elem}>(av_n);")
             decode_lines.append("            for (uint32_t av_j = 0; av_j < av_n; ++av_j) {")
             if kind == "in_struct_array2":
@@ -364,7 +369,7 @@ def _emit_case(reg: Registry, cmd: Command) -> list[str]:  # noqa: PLR0915
                 f"    if (av_blob != s.template_bytes({handle})) return false;"
             )
             alloc = _storage_alloc(
-                "    ", f"{p.name}_storage", "uint8_t", "av_blob", zero_fill=False
+                "    ", f"{p.name}_storage", "uint8_t", "av_blob", zero_fill=False, sent=True
             )
             alloc.insert(
                 len(alloc) - 1,
@@ -377,7 +382,7 @@ def _emit_case(reg: Registry, cmd: Command) -> list[str]:  # noqa: PLR0915
             srv_len = classify.server_len_expr(cmd.params, p.len_expr)
             decl_lines.extend(_storage_decls(f"{p.name}_storage", "uint8_t"))
             alloc = _storage_alloc(
-                "    ", f"{p.name}_storage", "uint8_t", srv_len, zero_fill=False
+                "    ", f"{p.name}_storage", "uint8_t", srv_len, zero_fill=False, sent=True
             )
             alloc.insert(
                 len(alloc) - 1,
