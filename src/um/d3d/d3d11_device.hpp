@@ -242,6 +242,7 @@ private:
     uint32_t        topology_;
     bool            query_short_noted_;
     uint64_t        amortized_batches_;
+    uint32_t        amortizing_;
     d3d::D3dCallTrace &trace_;
     const d3d::SharedRowsRequest &rows_;
     uint32_t        context_number_;

@@ -33,6 +33,12 @@ void ReentrantCallLock::release()
     lock_.release();
 }
 
+bool ReentrantCallLock::outermost() const
+{
+    AV_SCOPE("ReentrantCallLock::outermost");
+    return depth_ == 1u;
+}
+
 bool ReentrantCallLock::invariants_hold() const
 {
     AV_SCOPE("ReentrantCallLock::invariants_hold");
