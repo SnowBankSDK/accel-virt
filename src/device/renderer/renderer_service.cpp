@@ -219,8 +219,11 @@ Status RendererService::free_memory(const uint8_t *body, uint32_t length, uint32
     FreeMemoryMessage message;
     if (message.decode(body, length, count) != Status::ok) return Status::malformed;
     if (message.key() <= UINT32_MAX) owners_.forget(static_cast<uint32_t>(message.key()));
-    const auto asked = [&message](const MemoryAllocation &allocation) {
-        return allocation.request().key() == message.key() && !allocation.forsaken();
+    const auto of_key = [&message](const MemoryAllocation &allocation) {
+        return allocation.request().key() == message.key();
+    };
+    const auto asked = [&of_key](const MemoryAllocation &allocation) {
+        return of_key(allocation) && !allocation.forsaken();
     };
     const Status handed = HostMemoryFree::hand_off(host_, plane_, memory_thread_, message.key());
     for (MemoryAllocation *allocation = allocations_.find_if(asked); allocation != nullptr;
@@ -228,7 +231,7 @@ Status RendererService::free_memory(const uint8_t *body, uint32_t length, uint32
         if (handed == Status::ok) allocation->forsake();
         else allocation->disown();
     }
-    if (handed != Status::ok) plane_.free_memory(message.key());
+    if (handed != Status::ok && allocations_.find_if(of_key) == nullptr) plane_.free_memory(message.key());
     return Status::ok;
 }
 

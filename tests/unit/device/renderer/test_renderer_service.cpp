@@ -167,6 +167,17 @@ std::uint32_t allocate_held(void *opaque, std::uint32_t domain, std::uint64_t ke
     return allocate_unheld(opaque, domain, key, size, request, memory);
 }
 
+std::uint32_t frees_asked = 0u;
+void (*free_uncounted)(void *, std::uint32_t, std::uint64_t) = nullptr;
+
+void free_counted(void *opaque, std::uint32_t domain, std::uint64_t key)
+{
+    __atomic_add_fetch(&frees_asked, 1u, __ATOMIC_ACQ_REL);
+    free_uncounted(opaque, domain, key);
+}
+
+std::uint32_t frees_so_far() { return __atomic_load_n(&frees_asked, __ATOMIC_ACQUIRE); }
+
 class Rig {
 public:
     Rig()
@@ -1298,17 +1309,24 @@ TEST(renderer_service_allocate_memory, is_answered_while_an_export_asked_before_
   CHECK_EQ(rig.service().outstanding(), 0u);
   ::close(image_fd); }
 
-TEST(renderer_service_free_memory, a_free_that_cannot_follow_the_key_frees_now_and_the_allocation_frees_its_own_memory)
+TEST(renderer_service_free_memory, a_free_that_cannot_follow_the_key_leaves_it_to_the_allocation_and_frees_now_only_with_none_out)
 { Rig rig;
   allocate_unheld = rig.ops().editable().allocate_memory;
   rig.ops().editable().allocate_memory = &allocate_held;
+  free_uncounted = rig.ops().editable().free_memory;
+  rig.ops().editable().free_memory = &free_counted;
+  __atomic_store_n(&frees_asked, 0u, __ATOMIC_RELEASE);
   CHECK_STATUS(rig.hello(), Status::ok);
   const std::uint32_t key = av::HostBlobId::first + 9u;
   hold(allocation_waits);
   rig.settle_answers(false);
   CHECK_STATUS(rig.allocate(context_id, key, 0x1000u, 5u), Status::ok);
   rig.host().fail_allocation_at(1u);
+  CHECK_STATUS(rig.free_memory(key + 1u), Status::ok);
+  CHECK_EQ(frees_so_far(), 1u);
+  rig.host().fail_allocation_at(1u);
   CHECK_STATUS(rig.free_memory(key), Status::ok);
+  CHECK_EQ(frees_so_far(), 1u);
   CHECK_EQ(rig.service().outstanding(), 1u);
   let_go(allocation_waits);
   rig.settle_answers(true);
@@ -1316,8 +1334,18 @@ TEST(renderer_service_free_memory, a_free_that_cannot_follow_the_key_frees_now_a
   rig.collect();
   CHECK(!rig.allocated(5u).allocated());
   CHECK_EQ(rig.answer_descriptor(), -1);
+  CHECK_EQ(frees_so_far(), 2u);
   CHECK_EQ(rig.ops().memory_allocations(), 1u);
   CHECK_EQ(rig.ops().memory_frees(), 1u);
+  CHECK_EQ(rig.ops().held_memory(), 0u);
+  CHECK(!RendererServiceProbe::owners(rig.service()).owns(context_id, key));
+  CHECK_STATUS(rig.allocate(context_id, key, 0x1000u, 7u), Status::ok);
+  CHECK(rig.allocated(7u).allocated());
+  CHECK_EQ(rig.ops().held_memory(), 1u);
+  rig.host().fail_allocation_at(1u);
+  CHECK_STATUS(rig.free_memory(key), Status::ok);
+  CHECK_EQ(frees_so_far(), 3u);
+  CHECK_EQ(rig.ops().memory_frees(), 2u);
   CHECK_EQ(rig.ops().held_memory(), 0u);
   CHECK(!RendererServiceProbe::owners(rig.service()).owns(context_id, key));
   CHECK(rig.service().invariants_hold()); }
