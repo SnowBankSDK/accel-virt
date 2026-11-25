@@ -15,7 +15,8 @@ constexpr uint64_t drm_format_mod_linear = 0u;
 }
 
 HostImageExport::HostImageExport(DxvkVulkanDevice &vulkan)
-    : vulkan_(vulkan), slots_{}, retired_(), turn_(), width_(0u), height_(0u), format_(0u), unavailable_(false)
+    : vulkan_(vulkan), slots_{}, retired_(), turn_(), fence_(nullptr), value_(0u), width_(0u), height_(0u), format_(0u),
+      unavailable_(false)
 {
     AV_SCOPE("HostImageExport::HostImageExport");
 }
@@ -26,7 +27,7 @@ HostImageExport::~HostImageExport()
     release();
 }
 
-bool HostImageExport::make_image(ID3D11Device5 *device, Image &image)
+bool HostImageExport::make_image(Image &image)
 {
     AV_SCOPE("HostImageExport::make_image");
     const uint64_t                                  linear = drm_format_mod_linear;
@@ -56,9 +57,16 @@ bool HostImageExport::make_image(ID3D11Device5 *device, Image &image)
     described.Format = static_cast<DXGI_FORMAT>(format_);
     described.SampleDesc = {1u, 0u};
     described.Usage = D3D11_USAGE_DEFAULT;
-    if (!vulkan_.wrap(described, image.image_.image(), image.texture_)) return false;
-    const D3D11_QUERY_DESC query = {D3D11_QUERY_EVENT, 0u};
-    return SUCCEEDED(device->CreateQuery(&query, &image.done_));
+    return vulkan_.wrap(described, image.image_.image(), image.texture_);
+}
+
+bool HostImageExport::arm(ID3D11Device5 *device)
+{
+    AV_SCOPE("HostImageExport::arm");
+    if (fence_ != nullptr) return true;
+    value_ = 0u;
+    return SUCCEEDED(device->CreateFence(0u, D3D11_FENCE_FLAG_NONE, __uuidof(ID3D11Fence),
+                                         reinterpret_cast<void **>(&fence_)));
 }
 
 bool HostImageExport::vacant(uint32_t slot) const
@@ -112,7 +120,7 @@ bool HostImageExport::free_slot(uint32_t &slot)
     return false;
 }
 
-bool HostImageExport::make(ID3D11Device5 *device, uint32_t width, uint32_t height, uint32_t format)
+bool HostImageExport::make(uint32_t width, uint32_t height, uint32_t format)
 {
     AV_SCOPE("HostImageExport::make");
     if (width == width_ && height == height_ && format == format_ && made()) return true;
@@ -126,7 +134,7 @@ bool HostImageExport::make(ID3D11Device5 *device, uint32_t width, uint32_t heigh
         uint32_t slot = 0u;
         if (!free_slot(slot)) return false;
         turn_.place(image, slot);
-        if (make_image(device, slots_[slot])) continue;
+        if (make_image(slots_[slot])) continue;
         drop(slots_[slot]);
         return false;
     }
@@ -134,22 +142,28 @@ bool HostImageExport::make(ID3D11Device5 *device, uint32_t width, uint32_t heigh
 }
 
 bool HostImageExport::stage(ID3D11Device5 *device, ID3D11DeviceContext4 *context, ID3D11Texture2D *source,
-                            uint32_t &slot)
+                            uint32_t &slot, ID3D11Fence *&fence, uint64_t &value)
 {
     AV_SCOPE("HostImageExport::stage");
+    fence = nullptr;
+    value = 0u;
     if (unavailable_) return false;
     D3D11_TEXTURE2D_DESC described = {};
     source->GetDesc(&described);
     if (!DxgiFormat(static_cast<uint32_t>(described.Format)).scanned_out() || described.SampleDesc.Count != 1u)
         return false;
-    if (!vulkan_.connected() || !make(device, described.Width, described.Height, static_cast<uint32_t>(described.Format))) {
+    if (!vulkan_.connected() || !make(described.Width, described.Height, static_cast<uint32_t>(described.Format))) {
         unavailable_ = true;
         return false;
     }
+    if (!arm(device)) return false;
     slot = turn_.next();
     context->CopySubresourceRegion(slots_[slot].texture_, 0u, 0u, 0u, 0u, source, 0u, nullptr);
-    context->End(slots_[slot].done_);
+    value = ++value_;
+    if (FAILED(context->Signal(fence_, value))) return false;
     context->Flush();
+    fence_->AddRef();
+    fence = fence_;
     return true;
 }
 
@@ -157,13 +171,6 @@ void HostImageExport::handed(uint32_t slot)
 {
     AV_SCOPE("HostImageExport::handed");
     turn_.handed(slot);
-}
-
-bool HostImageExport::copied(ID3D11DeviceContext4 *context, uint32_t slot) const
-{
-    AV_SCOPE("HostImageExport::copied");
-    BOOL done = FALSE;
-    return slots_[slot].done_ != nullptr && context->GetData(slots_[slot].done_, &done, sizeof done, D3D11_ASYNC_GETDATA_DONOTFLUSH) == S_OK && done;
 }
 
 bool HostImageExport::describe(uint32_t slot, AvExportedImage &image) const
@@ -175,18 +182,10 @@ bool HostImageExport::describe(uint32_t slot, AvExportedImage &image) const
         .describe(shown.fd_.fd(), image);
 }
 
-int HostImageExport::descriptor(uint32_t slot) const
-{
-    AV_SCOPE("HostImageExport::descriptor");
-    return slot < RetiredSlots::capacity ? slots_[slot].fd_.fd() : -1;
-}
-
 void HostImageExport::drop(Image &image)
 {
     AV_SCOPE("HostImageExport::drop");
-    if (image.done_ != nullptr) image.done_->Release();
     if (image.texture_ != nullptr) image.texture_->Release();
-    image.done_ = nullptr;
     image.texture_ = nullptr;
     image.fd_.close();
     image.image_.release();
@@ -202,6 +201,9 @@ void HostImageExport::release()
         drop(slots_[slot]);
         retired_.freed(slot);
     }
+    if (fence_ != nullptr) fence_->Release();
+    fence_ = nullptr;
+    value_ = 0u;
 }
 
 }

@@ -12,8 +12,8 @@
 
 struct ID3D11Device5;
 struct ID3D11DeviceContext4;
+struct ID3D11Fence;
 struct ID3D11Texture2D;
-struct ID3D11Query;
 
 namespace av {
 
@@ -27,23 +27,21 @@ public:
     HostImageExport &operator=(const HostImageExport &) = delete;
 
     [[nodiscard]] bool stage(ID3D11Device5 *device, ID3D11DeviceContext4 *context, ID3D11Texture2D *source,
-                             uint32_t &slot);
+                             uint32_t &slot, ID3D11Fence *&fence, uint64_t &value);
     void handed(uint32_t slot);
-    bool copied(ID3D11DeviceContext4 *context, uint32_t slot) const;
     [[nodiscard]] bool describe(uint32_t slot, AvExportedImage &image) const;
-    int  descriptor(uint32_t slot) const;
     void release();
 
 private:
     struct Image {
         VulkanImage      image_;
         ID3D11Texture2D *texture_;
-        ID3D11Query     *done_;
         OwnedFd          fd_;
     };
 
-    [[nodiscard]] bool make(ID3D11Device5 *device, uint32_t width, uint32_t height, uint32_t format);
-    [[nodiscard]] bool make_image(ID3D11Device5 *device, Image &image);
+    [[nodiscard]] bool make(uint32_t width, uint32_t height, uint32_t format);
+    [[nodiscard]] bool make_image(Image &image);
+    [[nodiscard]] bool arm(ID3D11Device5 *device);
     void               drop(Image &image);
     [[nodiscard]] bool made() const;
     void               retire_current();
@@ -55,6 +53,8 @@ private:
     Image                      slots_[RetiredSlots::capacity];
     RetiredSlots               retired_;
     ExportTurn                 turn_;
+    ID3D11Fence               *fence_;
+    uint64_t                   value_;
     uint32_t                   width_;
     uint32_t                   height_;
     uint32_t                   format_;

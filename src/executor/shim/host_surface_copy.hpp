@@ -2,9 +2,7 @@
 #define AV_HOST_SURFACE_COPY_HPP
 
 #include "device/abi/av_executor.h"
-#include "device/shim/posix_lock.hpp"
-#include "executor/monotonic_clock.hpp"
-#include "executor/owned_fd.hpp"
+#include "executor/shim/fence_wait.hpp"
 #include "executor/shim/host_format_converter.hpp"
 
 #include <stdint.h>
@@ -38,15 +36,12 @@ private:
                                  ID3D11Texture2D *destination, uint32_t &width, uint32_t &height);
     [[nodiscard]] bool fits(const AvCopyRegion &region, uint32_t width, uint32_t height) const;
     [[nodiscard]] bool arm(ID3D11Device5 *device);
-    void               drain();
 
     friend struct HostSurfaceCopyProbe;
 
-    ID3D11Fence   *fence_;
-    uint64_t       value_;
-    OwnedFd        event_;
-    PosixLock      waiting_;
-    MonotonicClock clock_;
+    ID3D11Fence        *fence_;
+    uint64_t            value_;
+    FenceWait           waits_;
     HostFormatConverter converter_;
 };
 

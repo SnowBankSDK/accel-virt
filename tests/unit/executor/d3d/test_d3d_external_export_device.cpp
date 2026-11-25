@@ -439,6 +439,40 @@ TEST(d3d_external_export_device, only_a_texture_asked_for_as_rows_is_opened_by_a
                  static_cast<unsigned long long>(image.modifier));
 }
 
+TEST(d3d_external_export_device, an_exported_image_holds_its_copy_when_the_export_answers_and_the_next_copy_goes_to_the_other_image)
+{
+    constexpr std::uint32_t across = 320u, down = 200u;
+    ExportRig rig;
+    if (!rig.usable()) return;
+    EglConsumer consumer(rig.display());
+    if (!consumer.usable()) {
+        std::fprintf(stderr, "EGL here imports no dma-buf: nothing judged\n");
+        return;
+    }
+    av::ExecutorRoot &root = rig.root();
+    CHECK(av_d3d_CreateResource(rig.wire(), 1u, texture(across, down, misc_shared), surface, 0u, 0u));
+    CHECK(av_d3d_CreateResource(rig.wire(), 2u, texture(across, down, 0u), 0u, 0u, 0u));
+    CHECK(av_d3d_CreateResource(rig.wire(), 3u, texture(across, down, 0u), 0u, 0u, 0u));
+    rig.fill(2u, across, down);
+    CHECK(av_d3d_CopyResource(rig.wire(), 1u, 2u));
+    AvExportedImage first = {};
+    CHECK(root.export_image(rig.domain(), surface, first));
+    CHECK_EQ(first.slot, 0u);
+    static std::uint8_t pixels[across * down * 4u];
+    CHECK(consumer.read(first, pixels));
+    CHECK_EQ(texels_wrong(pixels, across, down), 0u);
+
+    CHECK(av_d3d_CopyResource(rig.wire(), 1u, 3u));
+    AvExportedImage second = {};
+    CHECK(root.export_image(rig.domain(), surface, second));
+    CHECK_EQ(second.slot, 1u);
+    CHECK(second.fd != first.fd);
+    CHECK(consumer.read(second, pixels));
+    CHECK_EQ(texels_wrong(pixels, across, down), 64000u);
+    CHECK(consumer.read(first, pixels));
+    CHECK_EQ(texels_wrong(pixels, across, down), 0u);
+}
+
 TEST(d3d_external_export_device, the_direct_export_and_a_linear_copy_are_timed_at_a_desktop_s_size)
 {
     constexpr std::uint32_t across = 2560u, down = 1440u, frames = 240u;
