@@ -48,8 +48,8 @@ int av_device_control(AvDevice *device, void *request, uint32_t type)
 { return reinterpret_cast<av::DeviceInstance *>(device)->device().control(request, type) ? 1 : 0; }
 
 __attribute__((visibility("default")))
-int av_device_export_image(AvDevice *device, uint64_t key, AvExportedImage *image)
-{ return image != nullptr && reinterpret_cast<av::DeviceInstance *>(device)->device().export_image(key, *image) ? 1 : 0; }
+int av_device_export_image(AvDevice *device, uint32_t head, uint64_t key, AvExportedImage *image)
+{ return image != nullptr && reinterpret_cast<av::DeviceInstance *>(device)->device().export_image(head, key, *image) ? 1 : 0; }
 
 __attribute__((visibility("default")))
 int av_device_show_frame(AvDevice *device, uint32_t head, uint64_t key)

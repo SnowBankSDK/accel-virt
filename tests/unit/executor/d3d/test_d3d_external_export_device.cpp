@@ -456,7 +456,7 @@ TEST(d3d_external_export_device, an_exported_image_holds_its_copy_when_the_expor
     rig.fill(2u, across, down);
     CHECK(av_d3d_CopyResource(rig.wire(), 1u, 2u));
     AvExportedImage first = {};
-    CHECK(root.export_image(rig.domain(), surface, first));
+    CHECK(root.export_image(rig.domain(), 0u, surface, first));
     CHECK_EQ(first.slot, 0u);
     static std::uint8_t pixels[across * down * 4u];
     CHECK(consumer.read(first, pixels));
@@ -464,13 +464,51 @@ TEST(d3d_external_export_device, an_exported_image_holds_its_copy_when_the_expor
 
     CHECK(av_d3d_CopyResource(rig.wire(), 1u, 3u));
     AvExportedImage second = {};
-    CHECK(root.export_image(rig.domain(), surface, second));
+    CHECK(root.export_image(rig.domain(), 0u, surface, second));
     CHECK_EQ(second.slot, 1u);
     CHECK(second.fd != first.fd);
     CHECK(consumer.read(second, pixels));
     CHECK_EQ(texels_wrong(pixels, across, down), 64000u);
     CHECK(consumer.read(first, pixels));
     CHECK_EQ(texels_wrong(pixels, across, down), 0u);
+}
+
+TEST(d3d_external_export_device, each_head_copies_into_its_own_pair_of_images_so_one_head_s_export_leaves_the_other_s_image_alone)
+{
+    constexpr std::uint32_t across = 320u, down = 200u;
+    ExportRig rig;
+    if (!rig.usable()) return;
+    EglConsumer consumer(rig.display());
+    if (!consumer.usable()) {
+        std::fprintf(stderr, "EGL here imports no dma-buf: nothing judged\n");
+        return;
+    }
+    av::ExecutorRoot &root = rig.root();
+    CHECK(av_d3d_CreateResource(rig.wire(), 1u, texture(across, down, misc_shared), surface, 0u, 0u));
+    CHECK(av_d3d_CreateResource(rig.wire(), 2u, texture(across, down, misc_shared), surface + 1u, 0u, 0u));
+    CHECK(av_d3d_CreateResource(rig.wire(), 3u, texture(across, down, 0u), 0u, 0u, 0u));
+    rig.fill(1u, across, down);
+    AvExportedImage left = {};
+    CHECK(root.export_image(rig.domain(), 0u, surface, left));
+    CHECK_EQ(left.slot, 0u);
+    AvExportedImage right = {};
+    CHECK(root.export_image(rig.domain(), 1u, surface + 1u, right));
+    CHECK_EQ(right.slot, 0u);
+    CHECK(right.fd != left.fd);
+    static std::uint8_t pixels[across * down * 4u];
+    CHECK(consumer.read(right, pixels));
+    CHECK_EQ(texels_wrong(pixels, across, down), 64000u);
+    CHECK(consumer.read(left, pixels));
+    CHECK_EQ(texels_wrong(pixels, across, down), 0u);
+    AvExportedImage again = {};
+    CHECK(root.export_image(rig.domain(), 1u, surface + 1u, again));
+    CHECK_EQ(again.slot, 1u);
+    CHECK(consumer.read(left, pixels));
+    CHECK_EQ(texels_wrong(pixels, across, down), 0u);
+    AvExportedImage beyond = {};
+    CHECK(!root.export_image(rig.domain(), 16u, surface, beyond));
+    CHECK(root.export_image(rig.domain(), 15u, surface, beyond));
+    CHECK_EQ(beyond.slot, 0u);
 }
 
 TEST(d3d_external_export_device, the_direct_export_and_a_linear_copy_are_timed_at_a_desktop_s_size)
@@ -497,7 +535,7 @@ TEST(d3d_external_export_device, the_direct_export_and_a_linear_copy_are_timed_a
     for (std::uint32_t frame = 0u; frame < frames; frame++) {
         CHECK(av_d3d_CopyResource(rig.wire(), 1u, 2u));
         AvExportedImage linear = {};
-        CHECK(root.export_image(rig.domain(), surface, linear));
+        CHECK(root.export_image(rig.domain(), 0u, surface, linear));
     }
     const double copied = milliseconds_since(start) / frames;
     std::fprintf(stderr,

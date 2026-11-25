@@ -321,11 +321,11 @@ TEST(executor_library_images, are_asked_in_the_device_s_domain_and_nothing_witho
   CHECK_STATUS(library.accept(&ops.table()), Status::ok);
   AvExportedImage image = {};
   std::uint8_t    pixels[16] = {};
-  CHECK(!library.export_image(9u, image));
+  CHECK(!library.export_image(0u, 9u, image));
   CHECK(!library.read_image(9u, pixels, 8u, 2u, 2u));
   CHECK_EQ(ops.last_domain(), 0u);
   CHECK_STATUS(library.open_domain(some_gpu, 0u, 0u, 0u), Status::ok);
-  CHECK(!library.export_image(9u, image));
+  CHECK(!library.export_image(0u, 9u, image));
   CHECK_EQ(ops.last_domain(), library.domain());
   CHECK(!library.read_image(9u, pixels, 8u, 2u, 2u));
   ops.editable().read_image = [](void *, std::uint32_t domain, std::uint64_t key, void *into, std::uint32_t,
@@ -334,15 +334,16 @@ TEST(executor_library_images, are_asked_in_the_device_s_domain_and_nothing_witho
       static_cast<std::uint8_t *>(into)[0] = 0x5Au;
       return AV_EXECUTED;
   };
-  ops.editable().export_image = [](void *, std::uint32_t domain, std::uint64_t key,
+  ops.editable().export_image = [](void *, std::uint32_t domain, std::uint32_t head, std::uint64_t key,
                                    AvExportedImage *exported) -> std::uint32_t {
-      if (domain == 0u || key != 9u) return AV_UNKNOWN;
+      if (domain == 0u || key != 9u || head != 3u) return AV_UNKNOWN;
       exported->width = 64u;
       return AV_EXECUTED;
   };
   CHECK(library.read_image(9u, pixels, 8u, 2u, 2u));
   CHECK_EQ(pixels[0], 0x5Au);
-  CHECK(library.export_image(9u, image));
+  CHECK(!library.export_image(2u, 9u, image));
+  CHECK(library.export_image(3u, 9u, image));
   CHECK_EQ(image.width, 64u); }
 
 TEST(executor_library_frames, are_mapped_and_unmapped_in_the_device_s_domain)
@@ -393,10 +394,10 @@ TEST(executor_library_surfaces, are_exported_and_synced_in_the_device_s_domain)
 
 namespace {
 
-std::uint32_t composed(void *, std::uint32_t, const AvScanoutPlane *, std::uint32_t, std::uint32_t, std::uint32_t,
-                       AvExportedImage *)
+std::uint32_t composed(void *, std::uint32_t, std::uint32_t head, const AvScanoutPlane *, std::uint32_t,
+                       std::uint32_t, std::uint32_t, AvExportedImage *)
 {
-    return AV_EXECUTED;
+    return head == 2u ? AV_EXECUTED : AV_UNKNOWN;
 }
 
 }
@@ -411,13 +412,14 @@ TEST(executor_library_composes, only_a_library_whose_table_composes_planes_does)
   AvScanoutPlane plane = {};
   AvExportedImage image = {};
   CHECK(!library.composes());
-  CHECK(!library.compose_planes(&plane, 1u, 8u, 8u, image));
+  CHECK(!library.compose_planes(2u, &plane, 1u, 8u, 8u, image));
   ops.editable().compose_planes = composed;
   CHECK(library.composes());
-  CHECK(library.compose_planes(&plane, 1u, 8u, 8u, image));
+  CHECK(library.compose_planes(2u, &plane, 1u, 8u, 8u, image));
+  CHECK(!library.compose_planes(1u, &plane, 1u, 8u, 8u, image));
   library.close_domain();
   CHECK(library.composes());
-  CHECK(!library.compose_planes(&plane, 1u, 8u, 8u, image)); }
+  CHECK(!library.compose_planes(2u, &plane, 1u, 8u, 8u, image)); }
 
 namespace {
 
@@ -432,8 +434,8 @@ std::uint32_t unavailable_surface(void *, std::uint32_t, std::uint64_t, std::uin
     return AV_EXPORT_UNAVAILABLE;
 }
 
-std::uint32_t refused_composition(void *, std::uint32_t, const AvScanoutPlane *, std::uint32_t, std::uint32_t,
-                                  std::uint32_t, AvExportedImage *)
+std::uint32_t refused_composition(void *, std::uint32_t, std::uint32_t, const AvScanoutPlane *, std::uint32_t,
+                                  std::uint32_t, std::uint32_t, AvExportedImage *)
 {
     return AV_UNKNOWN;
 }
@@ -477,7 +479,7 @@ TEST(executor_library_composes, a_composition_the_library_does_not_execute_makes
   AvScanoutPlane  plane = {};
   AvExportedImage image = {};
   CHECK(opened.library.composes());
-  CHECK(!opened.library.compose_planes(&plane, 1u, 8u, 8u, image)); }
+  CHECK(!opened.library.compose_planes(0u, &plane, 1u, 8u, 8u, image)); }
 
 TEST(executor_library_surfaces, are_copied_in_the_device_s_domain_only_with_regions_and_a_domain)
 { MockExecutorOps ops(AV_EXECUTOR_SUB_API_D3D);

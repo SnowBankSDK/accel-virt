@@ -76,14 +76,14 @@ public:
     void interrupts_changed(bool connected) override;
     void renderer_lost() override;
 
-    bool export_image(const uint8_t *gpu_uuid, uint64_t key, AvExportedImage &image) override;
+    bool export_image(const uint8_t *gpu_uuid, uint32_t head, uint64_t key, AvExportedImage &image) override;
     bool exports_off_main_loop() const override;
     bool post_export(const uint8_t *gpu_uuid, uint32_t head, uint64_t key) override;
     void take_answers() override;
     void display_free() override;
     bool composes() const override;
-    bool compose_planes(const uint8_t *gpu_uuid, const AvScanoutPlane *planes, uint32_t count, uint32_t width,
-                        uint32_t height, AvExportedImage &image) override;
+    bool compose_planes(const uint8_t *gpu_uuid, uint32_t head, const AvScanoutPlane *planes, uint32_t count,
+                        uint32_t width, uint32_t height, AvExportedImage &image) override;
     bool read_image(const uint8_t *gpu_uuid, uint64_t key, void *pixels, uint32_t stride, uint32_t width,
                     uint32_t height) override;
     bool reads_frames() const override;
@@ -119,7 +119,8 @@ private:
     [[nodiscard]] Status take_export(const RendererAnswer &answer);
     [[nodiscard]] Status take_memory(const RendererAnswer &answer);
     void                 fail_asked_memory();
-    bool                 adopt_export(const ExportedImageMessage &exported, int received, AvExportedImage &image);
+    bool                 adopt_export(uint32_t head, const ExportedImageMessage &exported, int received,
+                                      AvExportedImage &image);
     uint64_t             earliest_deadline() const;
     void                 watch();
     ObjectStorage<RemoteContext> *slot_of(uint32_t id);
@@ -186,7 +187,7 @@ private:
     uint32_t         epoch_;
     uint64_t         losses_[max_losses];
     uint32_t         loss_count_;
-    int              images_[ExportedImageMessage::slots];
+    int              images_[max_heads][ExportedImageMessage::slots];
     PostedExport     posted_[max_heads];
     GrowableArray<AskedMemory> asked_;
     GrowableArray<uint32_t> mirrored_;

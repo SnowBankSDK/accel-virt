@@ -7,9 +7,9 @@
 namespace av {
 
 ImageExport::ImageExport(RendererService &service, ContextPlane &plane, const uint8_t *gpu_uuid, uint64_t sequence,
-                         uint64_t key)
-    : service_(service), plane_(plane), gpu_uuid_(gpu_uuid), sequence_(sequence), key_(key), found_(false),
-      image_{-1, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u}
+                         uint32_t head, uint64_t key)
+    : service_(service), plane_(plane), gpu_uuid_(gpu_uuid), sequence_(sequence), head_(head), key_(key),
+      found_(false), image_{-1, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u}
 {
     AV_SCOPE("ImageExport::ImageExport");
 }
@@ -17,7 +17,7 @@ ImageExport::ImageExport(RendererService &service, ContextPlane &plane, const ui
 void ImageExport::run()
 {
     AV_SCOPE("ImageExport::run");
-    found_ = plane_.export_image(gpu_uuid_, key_, image_);
+    found_ = plane_.export_image(gpu_uuid_, head_, key_, image_);
 }
 
 void ImageExport::finish(bool ran)
@@ -30,6 +30,12 @@ uint64_t ImageExport::sequence() const
 {
     AV_SCOPE("ImageExport::sequence");
     return sequence_;
+}
+
+uint32_t ImageExport::head() const
+{
+    AV_SCOPE("ImageExport::head");
+    return head_;
 }
 
 bool ImageExport::found() const

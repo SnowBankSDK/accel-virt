@@ -126,18 +126,19 @@ bool D3d11HostDevice::read_image(uint32_t domain, uint64_t id, void *pixels, uin
     return drain(wanted, static_cast<uint8_t *>(pixels), stride, width, height);
 }
 
-bool D3d11HostDevice::export_image(uint32_t domain, uint64_t id, AvExportedImage &image)
+bool D3d11HostDevice::export_image(uint32_t domain, uint32_t head, uint64_t id, AvExportedImage &image)
 {
     AV_SCOPE("D3d11HostDevice::export_image");
     lock(nullptr);
-    ID3D11Texture2D *const texture = usable() ? presented_texture(domain, id) : nullptr;
+    HostImageExport *const exports = exports_.of(head);
+    ID3D11Texture2D *const texture = exports != nullptr && usable() ? presented_texture(domain, id) : nullptr;
     uint32_t               slot = 0u;
     ID3D11Fence           *copy = nullptr;
     uint64_t               value = 0u;
-    const bool staged = texture != nullptr && exports_.stage(device_, context_, texture, slot, copy, value);
+    const bool staged = texture != nullptr && exports->stage(device_, context_, texture, slot, copy, value);
     if (texture != nullptr) texture->Release();
     unlock();
-    return staged && exported(copy, value) && hand_over(slot, image);
+    return staged && exported(copy, value) && hand_over(*exports, slot, image);
 }
 
 bool D3d11HostDevice::exported(ID3D11Fence *copy, uint64_t value)
@@ -147,24 +148,25 @@ bool D3d11HostDevice::exported(ID3D11Fence *copy, uint64_t value)
     return export_waits_.wait(copy, value, wait_ms);
 }
 
-bool D3d11HostDevice::hand_over(uint32_t slot, AvExportedImage &image)
+bool D3d11HostDevice::hand_over(HostImageExport &exports, uint32_t slot, AvExportedImage &image)
 {
     AV_SCOPE("D3d11HostDevice::hand_over");
     lock(nullptr);
-    const bool described = exports_.describe(slot, image);
-    if (described) exports_.handed(slot);
+    const bool described = exports.describe(slot, image);
+    if (described) exports.handed(slot);
     unlock();
     return described;
 }
 
-bool D3d11HostDevice::compose_planes(uint32_t domain, const AvScanoutPlane *planes, uint32_t count, uint32_t width,
-                                     uint32_t height, AvExportedImage &image)
+bool D3d11HostDevice::compose_planes(uint32_t domain, uint32_t head, const AvScanoutPlane *planes, uint32_t count,
+                                     uint32_t width, uint32_t height, AvExportedImage &image)
 {
     AV_SCOPE("D3d11HostDevice::compose_planes");
     if (count > PlaneComposer::max_planes || (count != 0u && planes == nullptr)) return false;
     lock(nullptr);
+    HostImageExport *const exports = exports_.of(head);
     ID3D11Texture2D *textures[PlaneComposer::max_planes] = {};
-    bool             found = usable();
+    bool             found = exports != nullptr && usable();
     for (uint32_t index = 0u; found && index < count; index++) {
         textures[index] = presented_texture(domain, planes[index].key);
         found = found && textures[index] != nullptr;
@@ -176,9 +178,9 @@ bool D3d11HostDevice::compose_planes(uint32_t domain, const AvScanoutPlane *plan
     uint32_t     slot = 0u;
     ID3D11Fence *copy = nullptr;
     uint64_t     value = 0u;
-    const bool   staged = composed != nullptr && exports_.stage(device_, context_, composed, slot, copy, value);
+    const bool   staged = composed != nullptr && exports->stage(device_, context_, composed, slot, copy, value);
     unlock();
-    return staged && exported(copy, value) && hand_over(slot, image);
+    return staged && exported(copy, value) && hand_over(*exports, slot, image);
 }
 
 bool D3d11HostDevice::export_surface(uint32_t domain, uint64_t surface, uint32_t flags, AvExportedImage &image)

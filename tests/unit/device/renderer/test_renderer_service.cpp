@@ -118,8 +118,11 @@ struct Published {
 };
 Published published = {};
 
-std::uint32_t export_published(void *, std::uint32_t, std::uint64_t key, AvExportedImage *image)
+std::uint32_t asked_head = 0u;
+
+std::uint32_t export_published(void *, std::uint32_t, std::uint32_t head, std::uint64_t key, AvExportedImage *image)
 {
+    asked_head = head;
     if (!published.found || key != 0x77u) return AV_UNKNOWN;
     *image = published.image;
     return AV_EXECUTED;
@@ -154,10 +157,11 @@ void wait_at(const bool &gate)
     while (__atomic_load_n(&gate, __ATOMIC_ACQUIRE)) sched_yield();
 }
 
-std::uint32_t export_held(void *opaque, std::uint32_t domain, std::uint64_t key, AvExportedImage *image)
+std::uint32_t export_held(void *opaque, std::uint32_t domain, std::uint32_t head, std::uint64_t key,
+                          AvExportedImage *image)
 {
     wait_at(export_waits);
-    return export_published(opaque, domain, key, image);
+    return export_published(opaque, domain, head, key, image);
 }
 
 std::uint32_t allocate_held(void *opaque, std::uint32_t domain, std::uint64_t key, std::uint64_t size,
@@ -244,7 +248,7 @@ public:
     Status export_key(std::uint64_t key, std::uint64_t sequence)
     {
         std::uint8_t body[av::ExportImageMessage::encoded_size] = {};
-        static_cast<void>(av::ExportImageMessage(key).encode(body, sizeof body));
+        static_cast<void>(av::ExportImageMessage(key, 0u).encode(body, sizeof body));
         return send(Kind::export_image, sequence, body, sizeof body);
     }
     av::ExportedImageMessage exported(std::uint64_t sequence)
@@ -867,7 +871,7 @@ TEST(renderer_service_export_image, sends_a_slots_dma_buf_only_when_the_image_ch
   const int image_fd = fresh_descriptor();
   published = Published{true, AvExportedImage{image_fd, 1u, 64u, 32u, 256u, 0u, 0x34325258u, 0u, 7u}};
   std::uint8_t body[av::ExportImageMessage::encoded_size] = {};
-  CHECK_STATUS(av::ExportImageMessage(0x77u).encode(body, sizeof body), Status::ok);
+  CHECK_STATUS(av::ExportImageMessage(0x77u, 0u).encode(body, sizeof body), Status::ok);
   const auto exported = [&rig](av::ExportedImageMessage &message, std::uint64_t &sequence) {
       RendererMessageHeader header;
       sequence = 0u;
@@ -934,6 +938,41 @@ TEST(renderer_service_export_image, sends_a_slots_dma_buf_only_when_the_image_ch
   CHECK_STATUS(rig.send(Kind::export_image, 65u, body, 7u), Status::malformed);
   CHECK_EQ(rig.answer_length(), 0u);
   CHECK(is_open(image_fd));
+  ::close(image_fd); }
+
+TEST(renderer_service_export_image, each_head_is_sent_its_own_dma_buf_for_a_slot)
+{ Rig rig;
+  rig.ops().editable().export_image = &export_published;
+  CHECK_STATUS(rig.hello(), Status::ok);
+  const int image_fd = fresh_descriptor();
+  published = Published{true, AvExportedImage{image_fd, 0u, 64u, 32u, 256u, 0u, 0x34325258u, 0u, 0u}};
+  const auto ask = [&rig](std::uint32_t head, std::uint64_t sequence, bool &fresh) {
+      std::uint8_t body[av::ExportImageMessage::encoded_size] = {};
+      static_cast<void>(av::ExportImageMessage(0x77u, head).encode(body, sizeof body));
+      RendererMessageHeader    header;
+      av::ExportedImageMessage message;
+      const bool answered = rig.send(Kind::export_image, sequence, body, sizeof body) == Status::ok &&
+                            header.decode(rig.answer(), rig.answer_length()) == Status::ok &&
+                            message.decode(rig.answer() + RendererMessageHeader::encoded_size, header.body_length(),
+                                           rig.answer_descriptor() >= 0 ? 1u : 0u) == Status::ok &&
+                            message.found();
+      fresh = message.fresh();
+      return answered;
+  };
+  bool fresh = false;
+  CHECK(ask(0u, 80u, fresh));
+  CHECK_EQ(asked_head, 0u);
+  CHECK(fresh);
+  CHECK(ask(0u, 81u, fresh));
+  CHECK(!fresh);
+  CHECK(ask(2u, 82u, fresh));
+  CHECK_EQ(asked_head, 2u);
+  CHECK(fresh);
+  CHECK_EQ(rig.answer_descriptor(), image_fd);
+  CHECK(ask(2u, 83u, fresh));
+  CHECK(!fresh);
+  CHECK(ask(0u, 84u, fresh));
+  CHECK(!fresh);
   ::close(image_fd); }
 
 TEST(renderer_service_shut_down, leaves_no_context_blob_line_or_offer)
@@ -1012,7 +1051,7 @@ TEST(renderer_service_export_image, is_answered_later_whatever_room_the_receive_
   CHECK_STATUS(RendererMessageHeader(Kind::export_image, av::ExportImageMessage::encoded_size, 60u)
                    .encode(datagram, sizeof datagram),
                Status::ok);
-  CHECK_STATUS(av::ExportImageMessage(0x77u).encode(datagram + RendererMessageHeader::encoded_size,
+  CHECK_STATUS(av::ExportImageMessage(0x77u, 0u).encode(datagram + RendererMessageHeader::encoded_size,
                                                     av::ExportImageMessage::encoded_size),
                Status::ok);
   std::size_t answered = 9u;
@@ -1221,8 +1260,9 @@ TEST(image_export, run_where_it_stands_answers_its_sequence_with_the_image_the_l
   CHECK_STATUS(rig.hello(), Status::ok);
   const int image_fd = fresh_descriptor();
   published = Published{true, AvExportedImage{image_fd, 1u, 64u, 32u, 256u, 0u, 0x34325258u, 0u, 7u}};
-  av::ImageExport errand(rig.service(), RendererServiceProbe::plane(rig.service()), uuid, 41u, 0x77u);
+  av::ImageExport errand(rig.service(), RendererServiceProbe::plane(rig.service()), uuid, 41u, 3u, 0x77u);
   CHECK_EQ(errand.sequence(), 41u);
+  CHECK_EQ(errand.head(), 3u);
   CHECK(!errand.found());
   CHECK_EQ(errand.image().fd, -1);
   errand.run_here();

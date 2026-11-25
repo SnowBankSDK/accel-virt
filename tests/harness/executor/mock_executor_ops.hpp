@@ -28,6 +28,7 @@ public:
     const AvExecutorOps &table() const;
     AvExecutorOps       &editable();
     void                 export_as(const AvExportedImage &image);
+    std::uint32_t        last_export_head();
 
     void          hold();
     void          release();
@@ -242,6 +243,7 @@ private:
     std::uint32_t              last_domain_ = 0u;
     bool                       exporting_ = false;
     AvExportedImage            exported_ = {};
+    std::uint32_t              last_export_head_ = 0u;
     std::uint64_t              frame_surface_ = 0u;
     std::uint32_t              frame_point_ = 0u;
     AvFrameView               frame_ = {};

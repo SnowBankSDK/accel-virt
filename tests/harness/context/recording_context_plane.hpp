@@ -65,7 +65,7 @@ public:
     }
     void          interrupts_changed(bool connected) override { connected_ = connected; changes_++; }
     void          renderer_lost() override { losses_++; }
-    bool export_image(const std::uint8_t *, std::uint64_t, AvExportedImage &) override { return false; }
+    bool export_image(const std::uint8_t *, std::uint32_t, std::uint64_t, AvExportedImage &) override { return false; }
     bool exports_off_main_loop() const override { return false; }
     bool post_export(const std::uint8_t *, std::uint32_t, std::uint64_t) override { return false; }
     void take_answers() override {}
@@ -76,9 +76,10 @@ public:
     ~RecordingContextPlane();
 
     bool composes() const override { return composes_; }
-    bool compose_planes(const std::uint8_t *, const AvScanoutPlane *planes, std::uint32_t count, std::uint32_t width,
-                        std::uint32_t height, AvExportedImage &image) override
+    bool compose_planes(const std::uint8_t *, std::uint32_t head, const AvScanoutPlane *planes, std::uint32_t count,
+                        std::uint32_t width, std::uint32_t height, AvExportedImage &image) override
     {
+        composed_head_ = head;
         composed_count_ = count;
         composed_width_ = width;
         composed_height_ = height;
@@ -92,6 +93,7 @@ public:
     void          compose_without_descriptor() { composed_with_descriptor_ = false; }
     void          report_exports_unavailable() { unavailable_ = true; }
     void          compose_as(const AvExportedImage &image) { composes_ = true; composed_image_ = image; }
+    std::uint32_t composed_head() const { return composed_head_; }
     std::uint32_t composed_count() const { return composed_count_; }
     std::uint32_t composed_width() const { return composed_width_; }
     int           composed_fd() const { return composed_fd_; }
@@ -243,6 +245,7 @@ private:
     bool            unavailable_ = false;
     AvExportedImage composed_image_ = {};
     int             composed_fd_ = -1;
+    std::uint32_t   composed_head_ = 0u;
     std::uint32_t   composed_count_ = 0u;
     std::uint32_t   composed_width_ = 0u;
     std::uint32_t   composed_height_ = 0u;

@@ -388,9 +388,9 @@ TEST(executor_root, a_surface_is_exported_only_through_the_domain_s_device)
   CHECK(!root.export_surface(on_nvidia, 7u, 0u, image));
   CHECK(!root.export_surface(on_intel, 7u, 0u, image));
   CHECK_EQ(image.fd, -1);
-  CHECK(!root.export_image(on_intel, 7u, image));
-  CHECK(!root.export_image(on_nvidia, 7u, image));
-  CHECK(!root.export_image(on_intel + 100u, 7u, image));
+  CHECK(!root.export_image(on_intel, 0u, 7u, image));
+  CHECK(!root.export_image(on_nvidia, 0u, 7u, image));
+  CHECK(!root.export_image(on_intel + 100u, 0u, 7u, image));
   std::uint8_t pixels[16] = {};
   CHECK(!root.read_image(on_intel, 7u, pixels, 8u, 2u, 2u));
   CHECK(!root.read_image(on_nvidia, 7u, pixels, 8u, 2u, 2u));

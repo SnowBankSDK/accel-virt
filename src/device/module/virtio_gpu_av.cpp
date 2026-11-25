@@ -332,23 +332,23 @@ bool VirtioGpuAv::realized() const
     return binding_.bound();
 }
 
-bool VirtioGpuAv::export_image(uint64_t key, AvExportedImage &image)
+bool VirtioGpuAv::export_image(uint32_t head, uint64_t key, AvExportedImage &image)
 {
     AV_SCOPE("VirtioGpuAv::export_image");
     if (!realized()) return false;
-    return contexts_->export_image(capset_.info().gpu().uuid(), key, image);
+    return contexts_->export_image(capset_.info().gpu().uuid(), head, key, image);
 }
 
 bool VirtioGpuAv::export_head(uint32_t head, uint64_t key, AvExportedImage &image)
 {
     AV_SCOPE("VirtioGpuAv::export_head");
     if (!realized()) return false;
-    if (!planes_.composed(head)) return key != 0u && export_image(key, image);
+    if (!planes_.composed(head)) return key != 0u && export_image(head, key, image);
     AvScanoutPlane planes[HeadPlanes::layers] = {};
     uint32_t       width = 0u;
     uint32_t       height = 0u;
     const uint32_t count = planes_.planes(head, planes, width, height);
-    return contexts_->compose_planes(capset_.info().gpu().uuid(), planes, count, width, height, image);
+    return contexts_->compose_planes(capset_.info().gpu().uuid(), head, planes, count, width, height, image);
 }
 
 bool VirtioGpuAv::post_frame(uint32_t head, uint32_t frame, uint64_t key)

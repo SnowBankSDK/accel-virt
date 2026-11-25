@@ -12,6 +12,7 @@
 #include "device/recording/wire_recorder.hpp"
 #include "device/threading/service_thread.hpp"
 #include "proto/context/capset_info.hpp"
+#include "proto/renderer/export_image_message.hpp"
 #include "proto/renderer/exported_image_message.hpp"
 #include "proto/renderer/guest_blob_message.hpp"
 #include "proto/renderer/renderer_extent.hpp"
@@ -32,6 +33,7 @@ class RendererService {
 public:
     static constexpr size_t answer_capacity = RendererMessageHeader::encoded_size + 64u;
     static constexpr uint32_t image_slots = ExportedImageMessage::slots;
+    static constexpr uint32_t image_heads = ExportImageMessage::heads;
 
     RendererService(Host &host, RendererResources &resources, GuestMemoryTable &memory, DoorbellOffers &doorbells);
     ~RendererService();
@@ -81,7 +83,7 @@ private:
     LocalContextPlane  plane_;
     CapsetInfo         capset_;
     bool               ready_;
-    AvExportedImage   sent_[image_slots];
+    AvExportedImage   sent_[image_heads][image_slots];
     RendererExtent     extents_[GuestBlobMessage::max_extents];
     uint8_t            entries_[GuestBlobMessage::max_extents * 16u];
     uint8_t            late_[answer_capacity];

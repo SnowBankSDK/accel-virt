@@ -306,7 +306,7 @@ TEST(local_context_plane, an_image_nothing_published_is_neither_exported_nor_rea
   CHECK_STATUS(fixture.plane().initialize(), Status::ok);
   CHECK_STATUS(fixture.plane().accept(&fixture.ops().table()), Status::ok);
   AvExportedImage image = {};
-  CHECK(!fixture.plane().export_image(uuid, 9u, image));
+  CHECK(!fixture.plane().export_image(uuid, 0u, 9u, image));
   std::uint32_t pixels[4] = {};
   CHECK(!fixture.plane().read_image(uuid, 9u, pixels, 8u, 2u, 2u)); }
 
@@ -373,8 +373,9 @@ TEST(local_context_plane, names_the_domain_its_library_opened_and_composes_as_th
   CHECK(fixture.plane().memory_domain() != 0u);
   CHECK_EQ(fixture.plane().memory_domain(), fixture.ops().last_opened_domain());
   CHECK(!fixture.plane().composes());
-  fixture.ops().editable().compose_planes = +[](void *, std::uint32_t, const AvScanoutPlane *, std::uint32_t,
-                                                std::uint32_t, std::uint32_t, AvExportedImage *) -> std::uint32_t {
+  fixture.ops().editable().compose_planes = +[](void *, std::uint32_t, std::uint32_t, const AvScanoutPlane *,
+                                                std::uint32_t, std::uint32_t, std::uint32_t,
+                                                AvExportedImage *) -> std::uint32_t {
       return AV_EXECUTED;
   };
   CHECK(fixture.plane().composes()); }

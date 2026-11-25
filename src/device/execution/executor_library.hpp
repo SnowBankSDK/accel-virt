@@ -61,9 +61,9 @@ public:
     void        close_object(AvExecutor *executor, uint64_t object_id, uint64_t wire_handle) const;
     void        release_shared(uint64_t object_id) const;
 
-    bool export_image(uint64_t key, AvExportedImage &image) const;
+    bool export_image(uint32_t head, uint64_t key, AvExportedImage &image) const;
     bool composes() const;
-    bool compose_planes(const AvScanoutPlane *planes, uint32_t count, uint32_t width, uint32_t height,
+    bool compose_planes(uint32_t head, const AvScanoutPlane *planes, uint32_t count, uint32_t width, uint32_t height,
                         AvExportedImage &image) const;
     bool read_image(uint64_t key, void *pixels, uint32_t stride, uint32_t width, uint32_t height) const;
     bool map_frame(const SurfacePoint &frame, uint32_t wait_ms, AvFrameView &view) const;

@@ -10,19 +10,22 @@ namespace av {
 
 class ExportImageMessage {
 public:
-    static constexpr size_t   encoded_size = 8u;
+    static constexpr size_t   encoded_size = 16u;
     static constexpr uint32_t descriptors = 0u;
+    static constexpr uint32_t heads = 16u;
 
     ExportImageMessage();
-    explicit ExportImageMessage(uint64_t key);
+    ExportImageMessage(uint64_t key, uint32_t head);
 
     uint64_t key() const;
+    uint32_t head() const;
 
     [[nodiscard]] Status encode(uint8_t *bytes, size_t capacity) const;
     [[nodiscard]] Status decode(const uint8_t *bytes, size_t length, uint32_t descriptor_count);
 
 private:
     uint64_t key_;
+    uint32_t head_;
 };
 
 }

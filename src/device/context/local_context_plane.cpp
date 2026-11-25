@@ -187,11 +187,11 @@ uint32_t LocalContextPlane::reaping() const
     return contexts_.reaping();
 }
 
-bool LocalContextPlane::export_image(const uint8_t *, uint64_t key, AvExportedImage &image)
+bool LocalContextPlane::export_image(const uint8_t *, uint32_t head, uint64_t key, AvExportedImage &image)
 {
     AV_SCOPE("LocalContextPlane::export_image");
     contexts_.settle_d3d();
-    return library_.export_image(key, image);
+    return library_.export_image(head, key, image);
 }
 
 bool LocalContextPlane::exports_off_main_loop() const
@@ -222,11 +222,11 @@ bool LocalContextPlane::composes() const
     return library_.composes();
 }
 
-bool LocalContextPlane::compose_planes(const uint8_t *, const AvScanoutPlane *planes, uint32_t count, uint32_t width,
-                                       uint32_t height, AvExportedImage &image)
+bool LocalContextPlane::compose_planes(const uint8_t *, uint32_t head, const AvScanoutPlane *planes, uint32_t count,
+                                       uint32_t width, uint32_t height, AvExportedImage &image)
 {
     AV_SCOPE("LocalContextPlane::compose_planes");
-    return library_.compose_planes(planes, count, width, height, image);
+    return library_.compose_planes(head, planes, count, width, height, image);
 }
 
 bool LocalContextPlane::read_image(const uint8_t *, uint64_t key, void *pixels, uint32_t stride, uint32_t width,
