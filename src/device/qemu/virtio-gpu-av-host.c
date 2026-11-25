@@ -618,6 +618,7 @@ bool virtio_gpu_av_show_image(VirtIOGPUAv *r, uint32_t head, const AvExportedIma
         if (r->showing[head] < 0) {
             fprintf(stderr, "virtio-gpu-av: head %u shows exported images\n", head);
         }
+        qemu_console_resize(con, image->width, image->height);
         qemu_console_gl_scanout_dmabuf(con, buffer);
         r->showing[head] = (int32_t)image->slot;
     }
