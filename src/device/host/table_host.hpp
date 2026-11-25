@@ -67,6 +67,7 @@ public:
     void     update_scanout(uint32_t head, uint32_t x, uint32_t y, uint32_t width, uint32_t height) override;
     void     hide_scanout(uint32_t head) override;
     Status   show_image(uint32_t head, const AvExportedImage &image) override;
+    bool     display_busy(uint32_t head) override;
     int      event_descriptor(void *event) override;
     int      fence_interrupt_descriptor(uint32_t line) override;
     uint32_t guest_region_count() override;

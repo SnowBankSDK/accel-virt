@@ -211,6 +211,11 @@ void LocalContextPlane::take_answers()
     AV_SCOPE("LocalContextPlane::take_answers");
 }
 
+void LocalContextPlane::display_free()
+{
+    AV_SCOPE("LocalContextPlane::display_free");
+}
+
 bool LocalContextPlane::composes() const
 {
     AV_SCOPE("LocalContextPlane::composes");

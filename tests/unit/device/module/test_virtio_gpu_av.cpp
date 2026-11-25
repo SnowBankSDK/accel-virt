@@ -1289,6 +1289,27 @@ TEST(virtio_gpu_av_display_clock, a_flip_whose_renderer_is_lost_before_it_answer
   CHECK_EQ(rig.host().images_shown(0u), 1u);
   CHECK(rig.device().invariants_hold()); }
 
+TEST(virtio_gpu_av_display_clock, a_flip_posted_while_the_display_still_holds_the_last_image_is_exported_when_the_display_lets_go)
+{ ClockedRenderer rig;
+  CHECK(rig.start());
+  rig.draw(64u);
+  const std::uint32_t before = rig.peer().delivered();
+  rig.host().hold_display(0u, true);
+  CHECK(rig.device().post_frame(0u, 5u, 0x51u));
+  CHECK(rig.device().post_frame(0u, 6u, 0x52u));
+  CHECK_EQ(rig.peer().delivered(), before);
+  av::VirtioGpuAvProbe::blank(rig.device(), first_blank);
+  CHECK_EQ(rig.host().run_main_loop(), 0u);
+  CHECK_EQ(rig.peer().delivered(), before);
+  rig.host().hold_display(0u, false);
+  rig.device().display_free();
+  CHECK_EQ(rig.peer().delivered(), before + 1u);
+  rig.answer();
+  CHECK_EQ(rig.host().images_shown(0u), 1u);
+  CHECK(rig.reports("exports_replaced=1 exports_held_for_display=2"));
+  CHECK(rig.reports("posts=2 posts_exported_on_post=2 posts_dropped=0"));
+  CHECK(rig.device().invariants_hold()); }
+
 TEST(virtio_gpu_av_display_clock, each_head_exports_its_own_flips_at_once)
 { ClockedRenderer rig;
   CHECK(rig.start());

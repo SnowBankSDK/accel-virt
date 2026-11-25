@@ -69,6 +69,7 @@ public:
     bool exports_off_main_loop() const override { return false; }
     bool post_export(const std::uint8_t *, std::uint32_t, std::uint64_t) override { return false; }
     void take_answers() override {}
+    void display_free() override {}
     RecordingContextPlane() = default;
     RecordingContextPlane(const RecordingContextPlane &) = delete;
     RecordingContextPlane &operator=(const RecordingContextPlane &) = delete;

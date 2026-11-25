@@ -872,7 +872,7 @@ TEST(renderer_context_plane, reports_its_renderer_and_what_it_holds)
   char            bytes[256];
   av::StateWriter writer(bytes, sizeof bytes);
   fixture.plane().report(writer);
-  CHECK(std::strcmp(writer.dump(), "renderer/0 alive=true epoch=2 losses=1 blobs=1 contexts=1 exports_behind_export=0 exports_replaced=0\n"
+  CHECK(std::strcmp(writer.dump(), "renderer/0 alive=true epoch=2 losses=1 blobs=1 contexts=1 exports_behind_export=0 exports_replaced=0 exports_held_for_display=0\n"
                                   "contexts/0 live=1\n"
                                   "contexts/0/context/3 name=test") == 0); }
 
@@ -1383,6 +1383,82 @@ TEST(renderer_context_plane_post_export, is_refused_with_no_renderer_or_head_and
   rig.qemu().renderer_gone();
   rig.plane().take_answers();
   CHECK_EQ(rig.qemu().renderer_kills(), 2u); }
+
+TEST(renderer_context_plane_post_export, a_key_posted_while_its_head_s_display_is_busy_waits_and_the_newest_goes_when_the_display_is_free)
+{ PostingPlane rig;
+  CHECK_STATUS(rig.start(), Status::ok);
+  const std::uint32_t sent = rig.peer().delivered();
+  rig.qemu().hold_display(0u, true);
+  CHECK(rig.plane().post_export(uuid, 0u, 0x10u));
+  CHECK(rig.plane().post_export(uuid, 0u, 0x11u));
+  CHECK_EQ(rig.peer().delivered(), sent);
+  CHECK(rig.plane().post_export(uuid, 1u, 0x20u));
+  CHECK_EQ(rig.peer().delivered(), sent + 1u);
+  CHECK_EQ(rig.key_at(sent), 0x20u);
+  rig.plane().display_free();
+  CHECK_EQ(rig.peer().delivered(), sent + 1u);
+  rig.qemu().hold_display(0u, false);
+  rig.plane().display_free();
+  CHECK_EQ(rig.peer().delivered(), sent + 2u);
+  CHECK_EQ(rig.key_at(sent + 1u), 0x11u);
+  rig.plane().display_free();
+  CHECK_EQ(rig.peer().delivered(), sent + 2u);
+  char            bytes[512];
+  av::StateWriter writer(bytes, sizeof bytes);
+  rig.plane().report(writer);
+  CHECK(std::strstr(writer.dump(), "exports_replaced=1 exports_held_for_display=2") != nullptr);
+  CHECK_EQ(rig.qemu().renderer_kills(), 0u);
+  CHECK(rig.plane().invariants_hold()); }
+
+TEST(renderer_context_plane_post_export, the_key_behind_an_answer_waits_while_the_display_is_still_busy_with_that_answer)
+{ PostingPlane rig;
+  CHECK_STATUS(rig.start(), Status::ok);
+  const std::uint32_t sent = rig.peer().delivered();
+  CHECK(rig.plane().post_export(uuid, 0u, 0x10u));
+  CHECK(rig.plane().post_export(uuid, 0u, 0x11u));
+  CHECK_EQ(rig.peer().delivered(), sent + 1u);
+  rig.qemu().hold_display(0u, true);
+  rig.answer_export(rig.peer().sequence_at(sent), true, 0u, 64u, 1u);
+  rig.plane().take_answers();
+  CHECK_EQ(rig.qemu().images_shown(0u), 1u);
+  CHECK_EQ(rig.peer().delivered(), sent + 1u);
+  rig.qemu().hold_display(0u, false);
+  rig.plane().display_free();
+  CHECK_EQ(rig.peer().delivered(), sent + 2u);
+  CHECK_EQ(rig.key_at(sent + 1u), 0x11u);
+  CHECK(rig.plane().invariants_hold()); }
+
+TEST(renderer_context_plane_post_export, a_key_posted_once_the_display_is_free_goes_at_once_and_the_key_it_replaced_never_follows)
+{ PostingPlane rig;
+  CHECK_STATUS(rig.start(), Status::ok);
+  const std::uint32_t sent = rig.peer().delivered();
+  rig.qemu().hold_display(0u, true);
+  CHECK(rig.plane().post_export(uuid, 0u, 0x10u));
+  rig.qemu().hold_display(0u, false);
+  CHECK(rig.plane().post_export(uuid, 0u, 0x11u));
+  CHECK_EQ(rig.peer().delivered(), sent + 1u);
+  CHECK_EQ(rig.key_at(sent), 0x11u);
+  rig.plane().display_free();
+  rig.answer_export(rig.peer().sequence_at(sent), true, 0u, 64u, 1u);
+  rig.plane().take_answers();
+  CHECK_EQ(rig.qemu().images_shown(0u), 1u);
+  CHECK_EQ(rig.peer().delivered(), sent + 1u);
+  CHECK(rig.plane().invariants_hold()); }
+
+TEST(renderer_context_plane_post_export, a_free_display_with_no_renderer_sends_nothing_and_a_held_key_that_cannot_be_sent_ends_the_renderer)
+{ PostingPlane rig;
+  rig.plane().display_free();
+  CHECK_EQ(rig.qemu().renderer_kills(), 0u);
+  CHECK_STATUS(rig.start(), Status::ok);
+  const std::uint32_t sent = rig.peer().delivered();
+  rig.qemu().hold_display(1u, true);
+  CHECK(rig.plane().post_export(uuid, 1u, 0x20u));
+  rig.qemu().hold_display(1u, false);
+  rig.qemu().fail_renderer_send_at(1u);
+  rig.plane().display_free();
+  CHECK_EQ(rig.qemu().renderer_kills(), 1u);
+  for (std::uint32_t index = sent; index < rig.peer().delivered(); index++) CHECK_EQ(rig.key_at(index), 0u);
+  CHECK(rig.plane().invariants_hold()); }
 
 TEST(renderer_context_plane_post_export, a_newest_key_the_renderer_cannot_be_sent_ends_it)
 { PostingPlane rig;

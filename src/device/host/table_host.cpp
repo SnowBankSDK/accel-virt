@@ -418,6 +418,12 @@ Status TableHost::show_image(uint32_t head, const AvExportedImage &image)
     return ops_.show_image(ops_.opaque, head, &image) == 0 ? Status::ok : Status::not_supported;
 }
 
+bool TableHost::display_busy(uint32_t head)
+{
+    AV_SCOPE("TableHost::display_busy");
+    return ops_.display_busy != nullptr && ops_.display_busy(ops_.opaque, head) != 0;
+}
+
 int TableHost::event_descriptor(void *event)
 {
     AV_SCOPE("TableHost::event_descriptor");

@@ -90,6 +90,7 @@ public:
     virtual void   update_scanout(uint32_t head, uint32_t x, uint32_t y, uint32_t width, uint32_t height) = 0;
     virtual void   hide_scanout(uint32_t head) = 0;
     [[nodiscard]] virtual Status show_image(uint32_t head, const AvExportedImage &image) = 0;
+    virtual bool   display_busy(uint32_t head) = 0;
 
     virtual int                  event_descriptor(void *event) = 0;
     virtual int                  fence_interrupt_descriptor(uint32_t line) = 0;

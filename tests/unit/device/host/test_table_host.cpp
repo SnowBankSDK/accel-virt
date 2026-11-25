@@ -713,6 +713,19 @@ TEST(table_host_scanout, show_image_goes_through_the_table_or_is_not_supported)
   CHECK_STATUS(old_host.show_image(0u, image), Status::not_supported);
   CHECK_EQ(mock.images_shown(0u), 1u); }
 
+TEST(table_host_scanout, a_head_s_display_is_busy_only_while_the_table_says_so_and_never_without_the_entry)
+{ MockHost mock; MockHostOps ops(mock); TableHost host(ops.table());
+  CHECK(!host.display_busy(1u));
+  mock.hold_display(1u, true);
+  CHECK(host.display_busy(1u));
+  CHECK(!host.display_busy(0u));
+  AvHostOps older = ops.table();
+  older.display_busy = nullptr;
+  TableHost old_host(older);
+  CHECK(!old_host.display_busy(1u));
+  mock.hold_display(1u, false);
+  CHECK(!host.display_busy(1u)); }
+
 TEST(table_host_export, a_connection_s_datagrams_cross_the_table_or_none_do)
 { MockHost mock; MockHostOps ops(mock); TableHost host(ops.table());
   int ends[2] = {-1, -1};

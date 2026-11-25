@@ -191,6 +191,13 @@ void VirtioGpuAv::renderer_due()
     contexts_->take_answers();
 }
 
+void VirtioGpuAv::display_free()
+{
+    AV_SCOPE("VirtioGpuAv::display_free");
+    host_.require_main_loop("VirtioGpuAv::display_free");
+    contexts_->display_free();
+}
+
 bool VirtioGpuAv::control(void *request, uint32_t type)
 {
     AV_SCOPE("VirtioGpuAv::control");

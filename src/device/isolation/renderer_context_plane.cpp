@@ -486,9 +486,33 @@ bool RendererContextPlane::post_export(const uint8_t *, uint32_t head, uint64_t 
     AV_SCOPE("RendererContextPlane::post_export");
     host_.require_main_loop("RendererContextPlane::post_export");
     if (!alive_ || head >= max_heads) return false;
-    if (!posted_[head].post(key) || send_export(head, key) == Status::ok) return true;
+    if (!posted_[head].post(key)) return true;
+    if (host_.display_busy(head)) {
+        posted_[head].hold(key);
+        return true;
+    }
+    if (send_export(head, key) == Status::ok) return true;
     give_up();
     return false;
+}
+
+void RendererContextPlane::display_free()
+{
+    AV_SCOPE("RendererContextPlane::display_free");
+    host_.require_main_loop("RendererContextPlane::display_free");
+    if (alive_ && send_held() != Status::ok) give_up();
+}
+
+Status RendererContextPlane::send_held()
+{
+    AV_SCOPE("RendererContextPlane::send_held");
+    for (uint32_t head = 0u; head < max_heads; head++) {
+        uint64_t key = 0u;
+        if (posted_[head].asked() || host_.display_busy(head) || !posted_[head].next(key)) continue;
+        const Status sent = send_export(head, key);
+        if (sent != Status::ok) return sent;
+    }
+    return Status::ok;
 }
 
 Status RendererContextPlane::send_export(uint32_t head, uint64_t key)
@@ -561,9 +585,7 @@ Status RendererContextPlane::take_export(const RendererAnswer &answer)
     }
     AvExportedImage image = {};
     if (adopt_export(exported, answer.descriptor(), image) && shown) static_cast<void>(host_.show_image(head, image));
-    uint64_t key = 0u;
-    if (!posted.next(key)) return Status::ok;
-    return send_export(head, key) == Status::ok ? Status::ok : Status::invalid_state;
+    return send_held() == Status::ok ? Status::ok : Status::invalid_state;
 }
 
 void RendererContextPlane::take_answers()
@@ -596,7 +618,7 @@ void RendererContextPlane::watch()
 
 RendererContextPlane::PostedExport::PostedExport()
     : sent_(false), stale_(false), queued_(false), sequence_(0u), deadline_(0u), queued_key_(0u), behind_(0u),
-      replaced_(0u)
+      replaced_(0u), held_(0u)
 {
     AV_SCOPE("RendererContextPlane::PostedExport::PostedExport");
 }
@@ -604,12 +626,29 @@ RendererContextPlane::PostedExport::PostedExport()
 bool RendererContextPlane::PostedExport::post(uint64_t key)
 {
     AV_SCOPE("RendererContextPlane::PostedExport::post");
-    if (!sent_) return true;
     if (queued_) replaced_++;
+    if (!sent_) {
+        queued_ = false;
+        return true;
+    }
     behind_++;
     queued_ = true;
     queued_key_ = key;
     return false;
+}
+
+void RendererContextPlane::PostedExport::hold(uint64_t key)
+{
+    AV_SCOPE("RendererContextPlane::PostedExport::hold");
+    held_++;
+    queued_ = true;
+    queued_key_ = key;
+}
+
+bool RendererContextPlane::PostedExport::asked() const
+{
+    AV_SCOPE("RendererContextPlane::PostedExport::asked");
+    return sent_;
 }
 
 void RendererContextPlane::PostedExport::sent(uint64_t sequence, uint64_t deadline)
@@ -650,11 +689,12 @@ void RendererContextPlane::PostedExport::reset()
     queued_ = false;
 }
 
-void RendererContextPlane::PostedExport::count(uint64_t &behind, uint64_t &replaced) const
+void RendererContextPlane::PostedExport::count(uint64_t &behind, uint64_t &replaced, uint64_t &held) const
 {
     AV_SCOPE("RendererContextPlane::PostedExport::count");
     behind += behind_;
     replaced += replaced_;
+    held += held_;
 }
 
 void RendererContextPlane::PostedExport::earlier(uint64_t &deadline) const
@@ -836,9 +876,11 @@ void RendererContextPlane::report(StateWriter &writer)
     writer.number("contexts", live());
     uint64_t behind = 0u;
     uint64_t replaced = 0u;
-    for (const PostedExport &posted : posted_) posted.count(behind, replaced);
+    uint64_t held = 0u;
+    for (const PostedExport &posted : posted_) posted.count(behind, replaced, held);
     writer.number("exports_behind_export", behind);
     writer.number("exports_replaced", replaced);
+    writer.number("exports_held_for_display", held);
     writer.close();
     writer.open("contexts", 0u);
     writer.number("live", live());
