@@ -575,6 +575,21 @@ static void av_drop_exported(VirtIOGPUAv *r, uint32_t head, uint32_t slot, QemuC
     g_clear_pointer(&r->exported[head][slot], qemu_dmabuf_free);
 }
 
+static void av_present_exported(VirtIOGPUAv *r, uint32_t head, QemuConsole *con, uint32_t slot, uint32_t width,
+                                uint32_t height)
+{
+    if (r->showing[head] != (int32_t)slot) {
+        VIRTIO_GPU_BASE(r)->enable = 1;
+        if (r->showing[head] < 0) {
+            fprintf(stderr, "virtio-gpu-av: head %u shows exported images\n", head);
+        }
+        qemu_console_resize(con, width, height);
+        qemu_console_gl_scanout_dmabuf(con, r->exported[head][slot]);
+        r->showing[head] = (int32_t)slot;
+    }
+    qemu_console_gl_update(con, 0, 0, width, height);
+}
+
 bool virtio_gpu_av_show_image(VirtIOGPUAv *r, uint32_t head, const AvExportedImage *image)
 {
     QemuConsole *con = av_head_console(r, head);
@@ -613,23 +628,38 @@ bool virtio_gpu_av_show_image(VirtIOGPUAv *r, uint32_t head, const AvExportedIma
         r->exported[head][image->slot] = buffer;
         r->exported_ino[head][image->slot] = identity.st_ino;
     }
-    if (r->showing[head] != (int32_t)image->slot) {
-        VIRTIO_GPU_BASE(r)->enable = 1;
-        if (r->showing[head] < 0) {
-            fprintf(stderr, "virtio-gpu-av: head %u shows exported images\n", head);
-        }
-        qemu_console_resize(con, image->width, image->height);
-        qemu_console_gl_scanout_dmabuf(con, buffer);
-        r->showing[head] = (int32_t)image->slot;
+    if (r->gl_blocked) {
+        r->gl_pending[head] = true;
+        r->gl_pending_slot[head] = image->slot;
+        r->gl_pending_width[head] = image->width;
+        r->gl_pending_height[head] = image->height;
+        return true;
     }
-    qemu_console_gl_update(con, 0, 0, image->width, image->height);
+    av_present_exported(r, head, con, image->slot, image->width, image->height);
     return true;
+}
+
+void virtio_gpu_av_gl_unblocked(VirtIOGPUAv *r)
+{
+    for (uint32_t head = 0; head < VIRTIO_GPU_MAX_SCANOUTS && !r->gl_blocked; head++) {
+        QemuConsole *con = av_head_console(r, head);
+
+        if (!r->gl_pending[head]) {
+            continue;
+        }
+        r->gl_pending[head] = false;
+        if (con && r->exported[head][r->gl_pending_slot[head]]) {
+            av_present_exported(r, head, con, r->gl_pending_slot[head], r->gl_pending_width[head],
+                                r->gl_pending_height[head]);
+        }
+    }
 }
 
 void virtio_gpu_av_show_surface(VirtIOGPUAv *r, uint32_t head)
 {
     QemuConsole *con = av_head_console(r, head);
 
+    r->gl_pending[head] = false;
     if (!con || r->showing[head] < 0) {
         return;
     }

@@ -67,6 +67,11 @@ struct VirtIOGPUAv {
     QemuDmaBuf *exported[VIRTIO_GPU_MAX_SCANOUTS][2];
     ino_t exported_ino[VIRTIO_GPU_MAX_SCANOUTS][2];
     int32_t showing[VIRTIO_GPU_MAX_SCANOUTS];
+    uint32_t gl_blocked;
+    bool gl_pending[VIRTIO_GPU_MAX_SCANOUTS];
+    uint32_t gl_pending_slot[VIRTIO_GPU_MAX_SCANOUTS];
+    uint32_t gl_pending_width[VIRTIO_GPU_MAX_SCANOUTS];
+    uint32_t gl_pending_height[VIRTIO_GPU_MAX_SCANOUTS];
 };
 
 void virtio_gpu_av_host_init(VirtIOGPUAv *r);
@@ -83,5 +88,6 @@ void virtio_gpu_av_export_finish(VirtIOGPUAv *r);
 
 bool virtio_gpu_av_show_image(VirtIOGPUAv *r, uint32_t head, const AvExportedImage *image);
 void virtio_gpu_av_show_surface(VirtIOGPUAv *r, uint32_t head);
+void virtio_gpu_av_gl_unblocked(VirtIOGPUAv *r);
 
 #endif

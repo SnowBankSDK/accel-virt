@@ -45,11 +45,28 @@ static void virtio_gpu_av_console_text(void *opaque, uint32_t *chardata)
 {
 }
 
+static void virtio_gpu_av_console_gl_block(void *opaque, bool block)
+{
+    VirtIOGPUAv *r = VIRTIO_GPU_AV(opaque);
+
+    if (block) {
+        r->gl_blocked++;
+        return;
+    }
+    if (r->gl_blocked == 0) {
+        return;
+    }
+    if (--r->gl_blocked == 0) {
+        virtio_gpu_av_gl_unblocked(r);
+    }
+}
+
 static const GraphicHwOps virtio_gpu_av_console_ops = {
     .get_flags = virtio_gpu_av_console_flags,
     .invalidate = virtio_gpu_av_console_invalidate,
     .gfx_update = virtio_gpu_av_console_update,
     .text_update = virtio_gpu_av_console_text,
+    .gl_block = virtio_gpu_av_console_gl_block,
 };
 
 static bool virtio_gpu_av_apply_modes(VirtIOGPUAv *r, const char *modes, Error **errp)
