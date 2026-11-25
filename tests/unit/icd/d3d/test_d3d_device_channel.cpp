@@ -254,6 +254,27 @@ TEST(d3d_device_channel, both_devices_on_one_stream_count_the_batches_it_sent)
   CHECK_EQ(fixture.b().batches(), 1u);
   CHECK(!fixture.lock().held()); }
 
+TEST(d3d_device_channel, a_recording_keeps_counting_the_bytes_recorded_after_its_list_is_taken)
+{ Fixture fixture;
+  av::MockPlatform platform;
+  av::d3d::CommandRecording recording(platform, block_bytes, block_bytes);
+  CHECK_STATUS(recording.initialize(), Status::ok);
+  fixture.stream().record(recording);
+  fixture.stream().selected(device_a);
+  CHECK_EQ(fixture.a().recorded_total(), 0u);
+  CHECK(av_d3d_Draw(fixture.a(), 3u, 0u));
+  CHECK_EQ(fixture.a().recorded_total(), 16u);
+  std::uint8_t out[256] = {};
+  std::size_t  length = 0u;
+  CHECK_STATUS(fixture.a().take_recorded(out, sizeof out, length), Status::ok);
+  CHECK_EQ(length, 16u);
+  CHECK_EQ(fixture.a().recorded_total(), 16u);
+  CHECK(av_d3d_Draw(fixture.a(), 3u, 0u));
+  CHECK_EQ(fixture.a().recorded_total(), 32u);
+  CHECK_EQ(fixture.a().recorded_bytes(), 16u);
+  CHECK_EQ(fixture.a().batches(), 0u);
+  CHECK(!fixture.lock().held()); }
+
 TEST(d3d_device_channel, a_failed_stream_fails_the_command_and_keeps_no_lock)
 { Fixture fixture;
   fixture.kmt().fail_at(MockKmt::Call::submit, 1u, 0xC0000001u);

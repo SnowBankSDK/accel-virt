@@ -10,6 +10,7 @@
 #include "icd/common/open_mappings.hpp"
 #include "icd/common/staged_mapping.hpp"
 #include "icd/common/written_runs.hpp"
+#include "icd/d3d/amortized_processing.hpp"
 #include "icd/d3d/command_recording.hpp"
 #include "icd/d3d/completion_watermark.hpp"
 #include "icd/d3d/context_slices.hpp"
@@ -218,6 +219,7 @@ private:
     d3d::ContextSlices                   slices_;
     static constexpr size_t recording_bytes = 4u << 20u;
     static constexpr size_t most_recording_bytes = 256u << 20u;
+    static constexpr size_t amortized_bytes = 256u << 10u;
     D3d11Device                          *parent_;
     d3d::CompletionWatermark              watermark_;
     SrwLock                               recording_lock_;
@@ -244,8 +246,7 @@ private:
     uint32_t        geometry_sent_;
     uint32_t        topology_;
     bool            query_short_noted_;
-    uint64_t        amortized_batches_;
-    uint32_t        amortizing_;
+    d3d::AmortizedProcessing amortized_;
     d3d::D3dCallTrace &trace_;
     const d3d::SharedRowsRequest &rows_;
     uint32_t        context_number_;

@@ -49,6 +49,12 @@ uint64_t D3dDeviceChannel::batches() const
     return stream_->batches();
 }
 
+uint64_t D3dDeviceChannel::recorded_total() const
+{
+    AV_SCOPE("D3dDeviceChannel::recorded_total");
+    return stream_->recorded_total();
+}
+
 bool D3dDeviceChannel::open(uint32_t feature_level, uint32_t &hresult, uint32_t &level)
 {
     AV_SCOPE("D3dDeviceChannel::open");

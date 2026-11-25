@@ -270,6 +270,25 @@ TEST(d3d_command_stream, a_recording_that_outgrows_the_block_is_refused_whole)
   CHECK_STATUS(fixture.stream().take_recorded(out, sizeof out, length), Status::ok);
   CHECK_EQ(length, draw); }
 
+TEST(d3d_command_stream, a_refused_recording_and_a_taken_one_keep_their_bytes_in_the_recorded_total)
+{ Fixture fixture;
+  Recorded recorded(block_bytes);
+  fixture.stream().record(recorded.recording());
+  for (std::size_t index = 0u; index < 16640u; index++) CHECK(av_d3d_Draw(fixture.stream(), 3u, 0u));
+  CHECK_EQ(fixture.stream().recorded_total(), 266240u);
+  CHECK(!av_d3d_Draw(fixture.stream(), 3u, 0u));
+  CHECK_EQ(fixture.stream().recorded_total(), 266240u);
+  static std::uint8_t out[block_bytes];
+  std::size_t length = 99u;
+  CHECK_STATUS(fixture.stream().take_recorded(out, sizeof out, length), Status::no_space);
+  CHECK_EQ(fixture.stream().recorded_total(), 266240u);
+  CHECK(av_d3d_Draw(fixture.stream(), 3u, 0u));
+  CHECK_EQ(fixture.stream().recorded_total(), 266256u);
+  CHECK_STATUS(fixture.stream().take_recorded(out, sizeof out, length), Status::ok);
+  CHECK_EQ(length, 16u);
+  CHECK_EQ(fixture.stream().recorded_total(), 266256u);
+  CHECK_EQ(fixture.stream().batches(), 0u); }
+
 TEST(d3d_command_stream, a_recording_grows_to_hold_what_is_recorded)
 { Fixture fixture;
   Recorded recorded(4u * block_bytes);
