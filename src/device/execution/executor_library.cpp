@@ -260,18 +260,18 @@ bool ExecutorLibrary::composes() const
     return ops_ != nullptr && ops_->compose_planes != nullptr;
 }
 
-bool ExecutorLibrary::compose_planes(const AvScanoutPlane *planes, uint32_t count, uint32_t width, uint32_t height,
-                                     AvExportedImage &image) const
+bool ExecutorLibrary::compose_planes(uint32_t head, const AvScanoutPlane *planes, uint32_t count, uint32_t width,
+                                     uint32_t height, AvExportedImage &image) const
 {
     AV_SCOPE("ExecutorLibrary::compose_planes");
     return domain_ != 0u && composes() &&
-           ops_->compose_planes(ops_->opaque, domain_, planes, count, width, height, &image) == AV_EXECUTED;
+           ops_->compose_planes(ops_->opaque, domain_, head, planes, count, width, height, &image) == AV_EXECUTED;
 }
 
-bool ExecutorLibrary::export_image(uint64_t key, AvExportedImage &image) const
+bool ExecutorLibrary::export_image(uint32_t head, uint64_t key, AvExportedImage &image) const
 {
     AV_SCOPE("ExecutorLibrary::export_image");
-    return domain_ != 0u && ops_->export_image(ops_->opaque, domain_, key, &image) == AV_EXECUTED;
+    return domain_ != 0u && ops_->export_image(ops_->opaque, domain_, head, key, &image) == AV_EXECUTED;
 }
 
 bool ExecutorLibrary::read_image(uint64_t key, void *pixels, uint32_t stride, uint32_t width, uint32_t height) const

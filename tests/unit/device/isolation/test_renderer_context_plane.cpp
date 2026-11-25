@@ -119,8 +119,11 @@ struct Published {
 };
 Published published = {};
 
-std::uint32_t export_published(void *, std::uint32_t, std::uint64_t key, AvExportedImage *image)
+std::uint32_t asked_head = 0u;
+
+std::uint32_t export_published(void *, std::uint32_t, std::uint32_t head, std::uint64_t key, AvExportedImage *image)
 {
+    asked_head = head;
     if (!published.found || key != 0x77u) return AV_UNKNOWN;
     *image = published.image;
     return AV_EXECUTED;
@@ -752,11 +755,11 @@ TEST(renderer_context_plane_export_image, keeps_each_slots_dma_buf_until_the_ima
 { Fixture fixture;
   fixture.ops().editable().export_image = &export_published;
   AvExportedImage image = {};
-  CHECK(!fixture.plane().export_image(uuid, 0x77u, image));
+  CHECK(!fixture.plane().export_image(uuid, 0u, 0x77u, image));
   CHECK_STATUS(fixture.start(), Status::ok);
   const int executor_image = fresh_descriptor();
   published = Published{true, AvExportedImage{executor_image, 0u, 64u, 32u, 256u, 16u, 0x34325258u, 0u, 5u}};
-  CHECK(fixture.plane().export_image(uuid, 0x77u, image));
+  CHECK(fixture.plane().export_image(uuid, 0u, 0x77u, image));
   CHECK(image.fd >= 0);
   CHECK(image.fd != executor_image);
   CHECK(fixture.qemu().descriptor_open(image.fd));
@@ -770,29 +773,61 @@ TEST(renderer_context_plane_export_image, keeps_each_slots_dma_buf_until_the_ima
   CHECK_EQ(fixture.qemu().live_descriptors(), 1u);
   const int held = image.fd;
   AvExportedImage again = {};
-  CHECK(fixture.plane().export_image(uuid, 0x77u, again));
+  CHECK(fixture.plane().export_image(uuid, 0u, 0x77u, again));
   CHECK_EQ(again.fd, held);
   CHECK_EQ(fixture.qemu().live_descriptors(), 1u);
   published.image.height = 48u;
-  CHECK(fixture.plane().export_image(uuid, 0x77u, again));
+  CHECK(fixture.plane().export_image(uuid, 0u, 0x77u, again));
   CHECK_EQ(again.height, 48u);
   CHECK(fixture.qemu().descriptor_open(again.fd));
   CHECK_EQ(fixture.qemu().live_descriptors(), 1u);
   published.image.slot = 1u;
-  CHECK(fixture.plane().export_image(uuid, 0x77u, again));
+  CHECK(fixture.plane().export_image(uuid, 0u, 0x77u, again));
   CHECK_EQ(again.slot, 1u);
   CHECK_EQ(fixture.qemu().live_descriptors(), 2u);
   published.found = false;
-  CHECK(!fixture.plane().export_image(uuid, 0x77u, again));
+  CHECK(!fixture.plane().export_image(uuid, 0u, 0x77u, again));
   CHECK_EQ(fixture.qemu().live_descriptors(), 2u);
   CHECK_EQ(fixture.qemu().renderer_kills(), 0u);
   fixture.qemu().renderer_gone();
   fixture.plane().renderer_lost();
   CHECK_EQ(fixture.qemu().live_descriptors(), 0u);
   fixture.peer().fall_silent();
-  CHECK(!fixture.plane().export_image(uuid, 0x77u, again));
+  CHECK(!fixture.plane().export_image(uuid, 0u, 0x77u, again));
   CHECK_EQ(fixture.qemu().renderer_kills(), 1u);
   CHECK_EQ(fixture.plane().epoch(), 3u);
+  ::close(executor_image);
+  CHECK(fixture.plane().invariants_hold()); }
+
+TEST(renderer_context_plane_export_image, each_head_keeps_its_own_dma_buf_for_a_slot_and_a_head_past_the_last_asks_nothing)
+{ Fixture fixture;
+  fixture.ops().editable().export_image = &export_published;
+  CHECK_STATUS(fixture.start(), Status::ok);
+  const int executor_image = fresh_descriptor();
+  published = Published{true, AvExportedImage{executor_image, 0u, 64u, 32u, 256u, 0u, 0x34325258u, 0u, 0u}};
+  AvExportedImage left = {};
+  CHECK(fixture.plane().export_image(uuid, 0u, 0x77u, left));
+  CHECK_EQ(asked_head, 0u);
+  CHECK_EQ(fixture.qemu().live_descriptors(), 1u);
+  AvExportedImage right = {};
+  CHECK(fixture.plane().export_image(uuid, 1u, 0x77u, right));
+  CHECK_EQ(asked_head, 1u);
+  CHECK_EQ(right.slot, 0u);
+  CHECK(right.fd != left.fd);
+  CHECK_EQ(fixture.qemu().live_descriptors(), 2u);
+  AvExportedImage again = {};
+  CHECK(fixture.plane().export_image(uuid, 1u, 0x77u, again));
+  CHECK_EQ(again.fd, right.fd);
+  CHECK_EQ(fixture.qemu().live_descriptors(), 2u);
+  const std::uint32_t sent = fixture.peer().delivered();
+  CHECK(!fixture.plane().export_image(uuid, RendererContextPlane::max_heads, 0x77u, again));
+  CHECK_EQ(fixture.peer().delivered(), sent);
+  CHECK(fixture.plane().export_image(uuid, RendererContextPlane::max_heads - 1u, 0x77u, again));
+  CHECK_EQ(asked_head, 15u);
+  CHECK_EQ(fixture.qemu().renderer_kills(), 0u);
+  fixture.qemu().renderer_gone();
+  fixture.plane().renderer_lost();
+  CHECK_EQ(fixture.qemu().live_descriptors(), 0u);
   ::close(executor_image);
   CHECK(fixture.plane().invariants_hold()); }
 
@@ -817,14 +852,14 @@ TEST(renderer_context_plane_export_image, a_garbled_answer_or_an_image_never_sen
                Status::ok);
   peer.queue(datagram, sizeof datagram, 0u);
   AvExportedImage image = {};
-  CHECK(!plane.export_image(uuid, 0x77u, image));
+  CHECK(!plane.export_image(uuid, 0u, 0x77u, image));
   CHECK_EQ(qemu.renderer_kills(), 0u);
   CHECK_STATUS(av::RendererMessageHeader(av::RendererMessageHeader::Kind::exported_image,
                                          av::ExportedImageMessage::encoded_size, 4u)
                    .encode(datagram, sizeof datagram),
                Status::ok);
   peer.queue(datagram, sizeof datagram, 1u);
-  CHECK(!plane.export_image(uuid, 0x77u, image));
+  CHECK(!plane.export_image(uuid, 0u, 0x77u, image));
   CHECK_EQ(qemu.renderer_kills(), 1u);
   CHECK_EQ(qemu.live_descriptors(), 0u);
   CHECK(plane.alive());
@@ -835,7 +870,7 @@ TEST(renderer_context_plane_export_image, a_garbled_answer_or_an_image_never_sen
                Status::ok);
   datagram[av::RendererMessageHeader::encoded_size] = 2u;
   peer.queue(datagram, sizeof datagram, 0u);
-  CHECK(!plane.export_image(uuid, 0x77u, image));
+  CHECK(!plane.export_image(uuid, 0u, 0x77u, image));
   CHECK_EQ(qemu.renderer_kills(), 2u);
   CHECK_EQ(qemu.live_descriptors(), 0u); }
 
@@ -1121,6 +1156,14 @@ public:
             return 0u;
         return message.key();
     }
+    std::uint32_t head_at(std::uint32_t index) const
+    {
+        av::ExportImageMessage message;
+        if (peer_.kind_at(index) != av::RendererMessageHeader::Kind::export_image ||
+            message.decode(peer_.body_at(index), peer_.body_length_at(index), 0u) != Status::ok)
+            return av::ExportImageMessage::heads;
+        return message.head();
+    }
     void answer_export(std::uint64_t sequence, bool fresh, std::uint32_t slot, std::uint32_t width,
                        std::uint32_t descriptors)
     {
@@ -1162,6 +1205,8 @@ TEST(renderer_context_plane_post_export, one_export_per_head_is_in_flight_and_th
   CHECK(rig.plane().post_export(uuid, 1u, 0x20u));
   CHECK_EQ(rig.peer().delivered(), sent + 2u);
   CHECK_EQ(rig.key_at(sent + 1u), 0x20u);
+  CHECK_EQ(rig.head_at(sent), 0u);
+  CHECK_EQ(rig.head_at(sent + 1u), 1u);
   rig.answer_export(rig.peer().sequence_at(sent), true, 0u, 64u, 1u);
   rig.plane().take_answers();
   CHECK_EQ(rig.qemu().images_shown(0u), 1u);

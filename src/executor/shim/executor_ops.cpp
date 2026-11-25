@@ -223,17 +223,17 @@ uint32_t read_image(void *, uint32_t domain, uint64_t key, void *pixels, uint32_
     return library.root().read_image(domain, key, pixels, stride, width, height) ? AV_EXECUTED : AV_UNKNOWN;
 }
 
-uint32_t export_image(void *, uint32_t domain, uint64_t key, AvExportedImage *image)
+uint32_t export_image(void *, uint32_t domain, uint32_t head, uint64_t key, AvExportedImage *image)
 {
     AV_SCOPE("export_image");
-    return image != nullptr && library.root().export_image(domain, key, *image) ? AV_EXECUTED : AV_UNKNOWN;
+    return image != nullptr && library.root().export_image(domain, head, key, *image) ? AV_EXECUTED : AV_UNKNOWN;
 }
 
-uint32_t compose_planes(void *, uint32_t domain, const AvScanoutPlane *planes, uint32_t count, uint32_t width,
-                        uint32_t height, AvExportedImage *image)
+uint32_t compose_planes(void *, uint32_t domain, uint32_t head, const AvScanoutPlane *planes, uint32_t count,
+                        uint32_t width, uint32_t height, AvExportedImage *image)
 {
     AV_SCOPE("compose_planes");
-    return image != nullptr && library.root().compose_planes(domain, planes, count, width, height, *image)
+    return image != nullptr && library.root().compose_planes(domain, head, planes, count, width, height, *image)
                ? AV_EXECUTED
                : AV_UNKNOWN;
 }

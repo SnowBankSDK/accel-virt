@@ -34,7 +34,8 @@ RendererContextPlane::RendererContextPlane(Host &host, BlobTable &blobs, FenceIn
       mirrored_(host, Pool::paged), slots_{}, extents_{}, body_{}
 {
     AV_SCOPE("RendererContextPlane::RendererContextPlane");
-    for (int &image : images_) image = -1;
+    for (int(&head)[ExportedImageMessage::slots] : images_)
+        for (int &image : head) image = -1;
 }
 
 RendererContextPlane::~RendererContextPlane()
@@ -462,10 +463,11 @@ void RendererContextPlane::renderer_lost()
 void RendererContextPlane::drop_images()
 {
     AV_SCOPE("RendererContextPlane::drop_images");
-    for (int &image : images_) {
-        if (image >= 0) host_.close_descriptor(image);
-        image = -1;
-    }
+    for (int(&head)[ExportedImageMessage::slots] : images_)
+        for (int &image : head) {
+            if (image >= 0) host_.close_descriptor(image);
+            image = -1;
+        }
     for (PostedExport &posted : posted_) posted = PostedExport{};
 }
 
@@ -520,7 +522,7 @@ Status RendererContextPlane::send_export(uint32_t head, uint64_t key)
     AV_SCOPE("RendererContextPlane::send_export");
     uint8_t  body[ExportImageMessage::encoded_size] = {};
     uint64_t sequence = 0u;
-    static_cast<void>(ExportImageMessage(key).encode(body, sizeof body));
+    static_cast<void>(ExportImageMessage(key, head).encode(body, sizeof body));
     const Status sent = link_.ask(RendererMessageHeader::Kind::export_image, body, sizeof body, sequence);
     if (sent != Status::ok) return sent;
     posted_[head].sent(sequence, host_.monotonic_nanoseconds() + answer_patience_ns);
@@ -584,7 +586,8 @@ Status RendererContextPlane::take_export(const RendererAnswer &answer)
         return Status::malformed;
     }
     AvExportedImage image = {};
-    if (adopt_export(exported, answer.descriptor(), image) && shown) static_cast<void>(host_.show_image(head, image));
+    if (adopt_export(head, exported, answer.descriptor(), image) && shown)
+        static_cast<void>(host_.show_image(head, image));
     return send_held() == Status::ok ? Status::ok : Status::invalid_state;
 }
 
@@ -733,20 +736,20 @@ void RendererContextPlane::AskedMemory::earlier(uint64_t &deadline) const
     if (deadline_ < deadline) deadline = deadline_;
 }
 
-bool RendererContextPlane::compose_planes(const uint8_t *, const AvScanoutPlane *, uint32_t, uint32_t, uint32_t,
-                                          AvExportedImage &)
+bool RendererContextPlane::compose_planes(const uint8_t *, uint32_t, const AvScanoutPlane *, uint32_t, uint32_t,
+                                          uint32_t, AvExportedImage &)
 {
     AV_SCOPE("RendererContextPlane::compose_planes");
     return false;
 }
 
-bool RendererContextPlane::export_image(const uint8_t *, uint64_t key, AvExportedImage &image)
+bool RendererContextPlane::export_image(const uint8_t *, uint32_t head, uint64_t key, AvExportedImage &image)
 {
     AV_SCOPE("RendererContextPlane::export_image");
     host_.require_main_loop("RendererContextPlane::export_image");
-    if (!alive_) return false;
+    if (!alive_ || head >= max_heads) return false;
     uint8_t body[ExportImageMessage::encoded_size] = {};
-    static_cast<void>(ExportImageMessage(key).encode(body, sizeof body));
+    static_cast<void>(ExportImageMessage(key, head).encode(body, sizeof body));
     const uint8_t *answer = nullptr;
     uint32_t       answer_length = 0u;
     int            received = -1;
@@ -764,14 +767,15 @@ bool RendererContextPlane::export_image(const uint8_t *, uint64_t key, AvExporte
         give_up();
         return false;
     }
-    return adopt_export(exported, received, image);
+    return adopt_export(head, exported, received, image);
 }
 
-bool RendererContextPlane::adopt_export(const ExportedImageMessage &exported, int received, AvExportedImage &image)
+bool RendererContextPlane::adopt_export(uint32_t head, const ExportedImageMessage &exported, int received,
+                                        AvExportedImage &image)
 {
     AV_SCOPE("RendererContextPlane::adopt_export");
     if (!exported.found()) return false;
-    int &held = images_[exported.slot()];
+    int &held = images_[head][exported.slot()];
     if (exported.fresh()) {
         if (held >= 0) host_.close_descriptor(held);
         held = received;

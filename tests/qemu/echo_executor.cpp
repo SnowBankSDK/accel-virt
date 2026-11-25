@@ -363,7 +363,7 @@ std::uint32_t read_image(void *, std::uint32_t, std::uint64_t, void *, std::uint
 {
     return AV_UNKNOWN;
 }
-std::uint32_t export_image(void *, std::uint32_t, std::uint64_t, AvExportedImage *) { return AV_UNKNOWN; }
+std::uint32_t export_image(void *, std::uint32_t, std::uint32_t, std::uint64_t, AvExportedImage *) { return AV_UNKNOWN; }
 std::uint32_t map_frame(void *, std::uint32_t, std::uint64_t, std::uint32_t, std::uint32_t, AvFrameView *)
 {
     return AV_UNKNOWN;

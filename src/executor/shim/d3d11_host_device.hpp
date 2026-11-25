@@ -15,6 +15,7 @@
 #include "executor/shim/dxvk_vulkan_device.hpp"
 #include "executor/shim/exportable_images.hpp"
 #include "executor/shim/fence_wait.hpp"
+#include "executor/shim/head_image_exports.hpp"
 #include "executor/shim/host_image_export.hpp"
 #include "executor/shim/host_format_converter.hpp"
 #include "executor/shim/host_surface_copy.hpp"
@@ -83,9 +84,9 @@ public:
 
     [[nodiscard]] bool read_image(uint32_t domain, uint64_t id, void *pixels, uint32_t stride, uint32_t width,
                                   uint32_t height);
-    [[nodiscard]] bool export_image(uint32_t domain, uint64_t id, AvExportedImage &image);
-    [[nodiscard]] bool compose_planes(uint32_t domain, const AvScanoutPlane *planes, uint32_t count, uint32_t width,
-                                      uint32_t height, AvExportedImage &image);
+    [[nodiscard]] bool export_image(uint32_t domain, uint32_t head, uint64_t id, AvExportedImage &image);
+    [[nodiscard]] bool compose_planes(uint32_t domain, uint32_t head, const AvScanoutPlane *planes, uint32_t count,
+                                      uint32_t width, uint32_t height, AvExportedImage &image);
     [[nodiscard]] bool export_surface(uint32_t domain, uint64_t surface, uint32_t flags, AvExportedImage &image);
     [[nodiscard]] bool map_surface(uint32_t domain, uint64_t surface, uint32_t wait_ms, AvFrameView &view);
     void               unmap_surface(uint64_t surface);
@@ -134,7 +135,7 @@ private:
     bool               usable();
     ID3D11Texture2D   *presented_texture(uint32_t domain, uint64_t id);
     [[nodiscard]] bool exported(ID3D11Fence *copy, uint64_t value);
-    [[nodiscard]] bool hand_over(uint32_t slot, AvExportedImage &image);
+    [[nodiscard]] bool hand_over(HostImageExport &exports, uint32_t slot, AvExportedImage &image);
     ID3D11Texture2D   *view_of(ID3D12Resource *resource);
     ID3D11Texture2D   *shared_texture(uint32_t domain, uint64_t id);
     IUnknown          *viewed(uint32_t domain, uint64_t id, IUnknown *found);
@@ -160,7 +161,7 @@ private:
     HostShares             *shares_;
     DxvkVulkanDevice        vulkan_;
     ID3D11VkExtContext2    *slices_;
-    HostImageExport         exports_;
+    HeadImageExports        exports_;
     FenceWait               export_waits_;
     PlaneComposer           composer_;
     ExportableImages        images_;

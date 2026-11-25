@@ -150,6 +150,7 @@ TEST(exported_gpu, a_head_goes_out_composed_beside_a_descriptor_of_its_own)
   CHECK_STATUS(answer.status(), Status::ok);
   CHECK_EQ(answer.layout().width(), 640u);
   CHECK_EQ(plane.composed_count(), 1u);
+  CHECK_EQ(plane.composed_head(), 2u);
   CHECK_EQ(plane.composed_width(), 640u);
   CHECK(descriptor >= 0);
   CHECK(descriptor != plane.composed_fd());

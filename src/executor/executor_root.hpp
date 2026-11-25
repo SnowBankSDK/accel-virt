@@ -64,9 +64,9 @@ public:
     void                 free_memory(uint32_t domain, uint64_t key);
     [[nodiscard]] Status alias_memory(uint32_t domain, uint64_t key, uint32_t from_domain, uint64_t from_key,
                                       AvHostMemory &memory);
-    bool     export_image(uint32_t domain, uint64_t id, AvExportedImage &image);
-    bool     compose_planes(uint32_t domain, const AvScanoutPlane *planes, uint32_t count, uint32_t width,
-                            uint32_t height, AvExportedImage &image);
+    bool     export_image(uint32_t domain, uint32_t head, uint64_t id, AvExportedImage &image);
+    bool     compose_planes(uint32_t domain, uint32_t head, const AvScanoutPlane *planes, uint32_t count,
+                            uint32_t width, uint32_t height, AvExportedImage &image);
     void     release_shared(uint32_t domain, uint64_t id);
     bool     read_image(uint32_t domain, uint64_t id, void *pixels, uint32_t stride, uint32_t width, uint32_t height);
     bool     map_frame(uint32_t domain, const SurfacePoint &frame, uint32_t wait_ms, AvFrameView &view);

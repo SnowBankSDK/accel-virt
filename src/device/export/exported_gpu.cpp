@@ -96,7 +96,7 @@ ExportAnswer ExportedGpu::export_head(const ExportRequest &request, int &descrip
     uint32_t       height = 0u;
     const uint32_t count = heads_->planes(request.head(), planes, width, height);
     AvExportedImage image = {-1, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u};
-    if (count == 0u || !contexts_->compose_planes(gpu_uuid_, planes, count, width, height, image))
+    if (count == 0u || !contexts_->compose_planes(gpu_uuid_, request.head(), planes, count, width, height, image))
         return ExportAnswer(request, Status::not_found);
     const ExportedLayout layout(image.width, image.height, image.fourcc, image.stride, image.offset, image.modifier);
     const int owned = image.fd >= 0 && layout.describes_a_picture() ? host_.duplicate_export(image.fd) : -1;

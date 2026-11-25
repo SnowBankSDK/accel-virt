@@ -204,21 +204,21 @@ void ExecutorRoot::free_memory(uint32_t domain, uint64_t key)
     if (source != nullptr) source->free(domain, key);
 }
 
-bool ExecutorRoot::export_image(uint32_t domain, uint64_t id, AvExportedImage &image)
+bool ExecutorRoot::export_image(uint32_t domain, uint32_t head, uint64_t id, AvExportedImage &image)
 {
     AV_SCOPE("ExecutorRoot::export_image");
     const HostGpu *const   gpu = gpu_of(domain);
     D3d11HostDevice *const device = gpu != nullptr ? apis_->d3d11_device(gpu->index()) : nullptr;
-    return device != nullptr && device->export_image(domain, id, image);
+    return device != nullptr && device->export_image(domain, head, id, image);
 }
 
-bool ExecutorRoot::compose_planes(uint32_t domain, const AvScanoutPlane *planes, uint32_t count, uint32_t width,
-                                  uint32_t height, AvExportedImage &image)
+bool ExecutorRoot::compose_planes(uint32_t domain, uint32_t head, const AvScanoutPlane *planes, uint32_t count,
+                                  uint32_t width, uint32_t height, AvExportedImage &image)
 {
     AV_SCOPE("ExecutorRoot::compose_planes");
     const HostGpu *const   gpu = gpu_of(domain);
     D3d11HostDevice *const device = gpu != nullptr ? apis_->d3d11_device(gpu->index()) : nullptr;
-    return device != nullptr && device->compose_planes(domain, planes, count, width, height, image);
+    return device != nullptr && device->compose_planes(domain, head, planes, count, width, height, image);
 }
 
 void ExecutorRoot::release_shared(uint32_t domain, uint64_t id)

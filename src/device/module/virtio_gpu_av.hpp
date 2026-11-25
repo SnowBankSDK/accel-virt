@@ -55,7 +55,7 @@ public:
     bool                 offer_refresh(uint32_t millihz);
     void                 offer_hybrid(uint32_t role);
     uint32_t             capsets() const;
-    bool                 export_image(uint64_t key, AvExportedImage &image);
+    bool                 export_image(uint32_t head, uint64_t key, AvExportedImage &image);
     bool                 export_head(uint32_t head, uint64_t key, AvExportedImage &image);
     bool                 read_image(uint64_t key, void *pixels, uint32_t stride, uint32_t width, uint32_t height);
     bool                 post_frame(uint32_t head, uint32_t frame, uint64_t key);

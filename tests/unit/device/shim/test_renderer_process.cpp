@@ -204,7 +204,7 @@ TEST(renderer_process, greets_serves_survives_refusals_and_leaves_when_qemu_does
   CHECK_STATUS(renderer.reply(4u), Status::conflict);
 
   std::uint8_t key[av::ExportImageMessage::encoded_size] = {};
-  CHECK_STATUS(av::ExportImageMessage(9u).encode(key, sizeof key), Status::ok);
+  CHECK_STATUS(av::ExportImageMessage(9u, 0u).encode(key, sizeof key), Status::ok);
   CHECK(renderer.send(Kind::export_image, 5u, key, sizeof key));
   CHECK(renderer.receive(header, answer, length, patience_ms));
   CHECK(header.kind() == Kind::exported_image);

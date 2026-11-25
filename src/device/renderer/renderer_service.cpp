@@ -40,7 +40,8 @@ RendererService::RendererService(Host &host, RendererResources &resources, Guest
       exports_(host), allocations_(host)
 {
     AV_SCOPE("RendererService::RendererService");
-    for (AvExportedImage &sent : sent_) sent.fd = -1;
+    for (AvExportedImage(&head)[image_slots] : sent_)
+        for (AvExportedImage &sent : head) sent.fd = -1;
 }
 
 RendererService::~RendererService()
@@ -324,7 +325,8 @@ Status RendererService::export_image(const RendererMessageHeader &header, const 
     ExportImageMessage request;
     if (request.decode(body, header.body_length(), count) != Status::ok) return Status::malformed;
     ImageExport *errand = nullptr;
-    if (exports_.create(errand, *this, plane_, capset_.gpu().uuid(), header.sequence(), request.key()) != Status::ok) {
+    if (exports_.create(errand, *this, plane_, capset_.gpu().uuid(), header.sequence(), request.head(), request.key()) !=
+        Status::ok) {
         static_cast<void>(ExportedImageMessage().encode(late_ + RendererMessageHeader::encoded_size,
                                                         ExportedImageMessage::encoded_size));
         send_late(RendererMessageHeader::Kind::exported_image, header.sequence(), ExportedImageMessage::encoded_size,
@@ -343,7 +345,7 @@ void RendererService::exported(ImageExport &errand, bool ran)
     ExportedImageMessage   exported;
     int                    descriptor = -1;
     if (ran && errand.found() && image.fd >= 0 && image.slot < image_slots) {
-        AvExportedImage &sent = sent_[image.slot];
+        AvExportedImage &sent = sent_[errand.head()][image.slot];
         const bool       fresh = sent.fd != image.fd || sent.width != image.width || sent.height != image.height ||
                            sent.stride != image.stride || sent.offset != image.offset || sent.fourcc != image.fourcc ||
                            sent.modifier != image.modifier;

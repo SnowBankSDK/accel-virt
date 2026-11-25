@@ -14,10 +14,11 @@ class RendererService;
 class ImageExport final : public Errand {
 public:
     ImageExport(RendererService &service, ContextPlane &plane, const uint8_t *gpu_uuid, uint64_t sequence,
-                uint64_t key);
+                uint32_t head, uint64_t key);
     ~ImageExport() = default;
 
     uint64_t               sequence() const;
+    uint32_t               head() const;
     bool                   found() const;
     const AvExportedImage &image() const;
 
@@ -30,6 +31,7 @@ private:
     ContextPlane    &plane_;
     const uint8_t   *gpu_uuid_;
     uint64_t         sequence_;
+    uint32_t         head_;
     uint64_t         key_;
     bool             found_;
     AvExportedImage  image_;

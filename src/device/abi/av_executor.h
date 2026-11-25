@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-#define AV_EXECUTOR_ABI_VERSION 35u
+#define AV_EXECUTOR_ABI_VERSION 36u
 #define AV_EXECUTOR_OPS_SYMBOL "av_executor_ops"
 
 #define AV_EXECUTOR_SUB_API_VULKAN 1u
@@ -148,7 +148,7 @@ typedef struct AvExecutorOps {
 
     uint32_t (*read_image)(void *opaque, uint32_t domain, uint64_t key, void *pixels, uint32_t stride,
                            uint32_t width, uint32_t height);
-    uint32_t (*export_image)(void *opaque, uint32_t domain, uint64_t key, AvExportedImage *image);
+    uint32_t (*export_image)(void *opaque, uint32_t domain, uint32_t head, uint64_t key, AvExportedImage *image);
     uint32_t (*map_frame)(void *opaque, uint32_t domain, uint64_t surface, uint32_t point, uint32_t wait_ms,
                           AvFrameView *view);
     void (*unmap_frame)(void *opaque, uint32_t domain, uint64_t surface, uint32_t point);
@@ -160,8 +160,8 @@ typedef struct AvExecutorOps {
                              const AvCopyRegion *regions, uint32_t count, uint32_t wait_ms);
     uint32_t (*map_surface)(void *opaque, uint32_t domain, uint64_t surface, uint32_t wait_ms, AvFrameView *view);
     void (*unmap_surface)(void *opaque, uint32_t domain, uint64_t surface);
-    uint32_t (*compose_planes)(void *opaque, uint32_t domain, const AvScanoutPlane *planes, uint32_t count,
-                               uint32_t width, uint32_t height, AvExportedImage *image);
+    uint32_t (*compose_planes)(void *opaque, uint32_t domain, uint32_t head, const AvScanoutPlane *planes,
+                               uint32_t count, uint32_t width, uint32_t height, AvExportedImage *image);
     uint32_t (*lose_device)(void *opaque, AvExecutor *executor);
     size_t (*answer_part)(void *opaque, AvExecutor *executor, uint64_t offset, uint8_t *out, size_t capacity,
                           uint64_t *length);

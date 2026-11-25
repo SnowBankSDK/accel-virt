@@ -53,14 +53,14 @@ public:
     virtual void interrupts_changed(bool connected) = 0;
     virtual void renderer_lost() = 0;
 
-    virtual bool export_image(const uint8_t *gpu_uuid, uint64_t key, AvExportedImage &image) = 0;
+    virtual bool export_image(const uint8_t *gpu_uuid, uint32_t head, uint64_t key, AvExportedImage &image) = 0;
     virtual bool exports_off_main_loop() const = 0;
     virtual bool post_export(const uint8_t *gpu_uuid, uint32_t head, uint64_t key) = 0;
     virtual void take_answers() = 0;
     virtual void display_free() = 0;
     virtual bool composes() const = 0;
-    virtual bool compose_planes(const uint8_t *gpu_uuid, const AvScanoutPlane *planes, uint32_t count, uint32_t width,
-                                uint32_t height, AvExportedImage &image) = 0;
+    virtual bool compose_planes(const uint8_t *gpu_uuid, uint32_t head, const AvScanoutPlane *planes, uint32_t count,
+                                uint32_t width, uint32_t height, AvExportedImage &image) = 0;
     virtual bool read_image(const uint8_t *gpu_uuid, uint64_t key, void *pixels, uint32_t stride, uint32_t width,
                             uint32_t height) = 0;
     virtual bool reads_frames() const = 0;

@@ -195,9 +195,9 @@ TEST(av_device_abi, av_device_control_answers_blob_requests_and_leaves_the_rest_
 
 namespace {
 
-std::uint32_t export_key_51(void *, std::uint32_t, std::uint64_t key, AvExportedImage *image)
+std::uint32_t export_key_51(void *, std::uint32_t, std::uint32_t head, std::uint64_t key, AvExportedImage *image)
 {
-    if (key != 0x51u) return AV_UNKNOWN;
+    if (key != 0x51u || head != 1u) return AV_UNKNOWN;
     image->fd = 12;
     image->width = 640u;
     image->height = 480u;
@@ -220,9 +220,10 @@ TEST(av_device_abi, av_device_export_image_hands_over_a_surface_only_for_a_key_t
   AvDevice *const device = av_device_create(&ops.table(), &executor.table(), "auto", 0, nullptr, nullptr, nullptr, 0u, 0u, error, sizeof error);
   CHECK(device != nullptr);
   AvExportedImage image = {};
-  CHECK_EQ(av_device_export_image(device, 0x51u, nullptr), 0);
-  CHECK_EQ(av_device_export_image(device, 0x52u, &image), 0);
-  CHECK_EQ(av_device_export_image(device, 0x51u, &image), 1);
+  CHECK_EQ(av_device_export_image(device, 1u, 0x51u, nullptr), 0);
+  CHECK_EQ(av_device_export_image(device, 1u, 0x52u, &image), 0);
+  CHECK_EQ(av_device_export_image(device, 0u, 0x51u, &image), 0);
+  CHECK_EQ(av_device_export_image(device, 1u, 0x51u, &image), 1);
   CHECK_EQ(image.fd, 12);
   CHECK_EQ(image.width, 640u);
   CHECK_EQ(av_device_show_frame(device, 0u, 0x51u), 0);

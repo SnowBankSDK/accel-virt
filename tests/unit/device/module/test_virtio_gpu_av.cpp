@@ -1075,9 +1075,9 @@ TEST(virtio_gpu_av_modes, the_refresh_is_in_the_mode_list_and_survives_a_change_
 
 namespace {
 
-std::uint32_t export_key_51(void *, std::uint32_t, std::uint64_t key, AvExportedImage *image)
+std::uint32_t export_key_51(void *, std::uint32_t, std::uint32_t head, std::uint64_t key, AvExportedImage *image)
 {
-    if (key != 0x51u) return AV_UNKNOWN;
+    if (key != 0x51u || head >= 2u) return AV_UNKNOWN;
     image->fd = 12;
     image->slot = 1u;
     image->width = 640u;
@@ -1445,10 +1445,10 @@ TEST(virtio_gpu_av_export, serves_the_bound_gpu_s_surfaces_and_revokes_them_at_a
 
 namespace {
 
-std::uint32_t compose_two(void *, std::uint32_t, const AvScanoutPlane *planes, std::uint32_t count,
+std::uint32_t compose_two(void *, std::uint32_t, std::uint32_t head, const AvScanoutPlane *planes, std::uint32_t count,
                           std::uint32_t width, std::uint32_t height, AvExportedImage *image)
 {
-    if (count != 2u || planes[1].key != 0x77u || width != 1280u || height != 800u) return AV_UNKNOWN;
+    if (head != 0u || count != 2u || planes[1].key != 0x77u || width != 1280u || height != 800u) return AV_UNKNOWN;
     *image = AvExportedImage{13, 0u, width, height, width * 4u, 0u, 0x34325241u, 0u, 0u};
     return AV_EXECUTED;
 }
@@ -1511,7 +1511,7 @@ TEST(virtio_gpu_av_export, an_unrealized_device_exports_composes_and_reads_nothi
   VirtioGpuAv device(host);
   AvExportedImage image = {};
   std::uint8_t    pixels[16] = {};
-  CHECK(!device.export_image(0x51u, image));
+  CHECK(!device.export_image(0u, 0x51u, image));
   CHECK(!device.export_head(0u, 0x51u, image));
   CHECK(!device.read_image(0x51u, pixels, 4u, 1u, 1u));
   CHECK(device.invariants_hold()); }
@@ -1581,7 +1581,7 @@ namespace {
 
 int renderer_image = -1;
 
-std::uint32_t export_renderer_image(void *, std::uint32_t, std::uint64_t key, AvExportedImage *image)
+std::uint32_t export_renderer_image(void *, std::uint32_t, std::uint32_t, std::uint64_t key, AvExportedImage *image)
 {
     if (key != 0x61u || renderer_image < 0) return AV_UNKNOWN;
     *image = AvExportedImage{renderer_image, 1u, 640u, 480u, 2560u, 0u, 0x34325258u, 0u, 0u};

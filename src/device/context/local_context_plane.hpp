@@ -56,14 +56,14 @@ public:
     void interrupts_changed(bool connected) override;
     void renderer_lost() override;
 
-    bool export_image(const uint8_t *gpu_uuid, uint64_t key, AvExportedImage &image) override;
+    bool export_image(const uint8_t *gpu_uuid, uint32_t head, uint64_t key, AvExportedImage &image) override;
     bool exports_off_main_loop() const override;
     bool post_export(const uint8_t *gpu_uuid, uint32_t head, uint64_t key) override;
     void take_answers() override;
     void display_free() override;
     bool composes() const override;
-    bool compose_planes(const uint8_t *gpu_uuid, const AvScanoutPlane *planes, uint32_t count, uint32_t width,
-                        uint32_t height, AvExportedImage &image) override;
+    bool compose_planes(const uint8_t *gpu_uuid, uint32_t head, const AvScanoutPlane *planes, uint32_t count,
+                        uint32_t width, uint32_t height, AvExportedImage &image) override;
     bool read_image(const uint8_t *gpu_uuid, uint64_t key, void *pixels, uint32_t stride, uint32_t width,
                     uint32_t height) override;
     bool reads_frames() const override;
