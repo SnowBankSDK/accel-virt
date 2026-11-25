@@ -73,6 +73,7 @@ public:
     uint32_t             outstanding() const;
     void                 renderer_lost();
     void                 renderer_due();
+    void                 display_free();
     bool                 export_accepted(int connection, bool same_user);
     bool                 realized() const;
     uint32_t             gpu_index() const;

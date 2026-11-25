@@ -415,6 +415,13 @@ static int av_show_image(void *opaque, uint32_t head, const AvExportedImage *ima
     return virtio_gpu_av_show_image(opaque, head, image) ? 0 : 1;
 }
 
+static int av_display_busy(void *opaque, uint32_t head)
+{
+    VirtIOGPUAv *r = opaque;
+
+    return r->gl_blocked != 0 || (head < VIRTIO_GPU_MAX_SCANOUTS && r->gl_pending[head]);
+}
+
 static void av_close_descriptor(void *opaque, int descriptor)
 {
     if (descriptor >= 0) {
@@ -1142,6 +1149,7 @@ void virtio_gpu_av_host_init(VirtIOGPUAv *r)
         .close_descriptor = av_close_descriptor,
         .wait_event_until = av_wait_event_until,
         .show_image = av_show_image,
+        .display_busy = av_display_busy,
         .receive_export = av_receive_export,
         .send_export = av_send_export,
         .shutdown_export = av_shutdown_export,

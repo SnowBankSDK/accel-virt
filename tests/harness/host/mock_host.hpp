@@ -92,6 +92,7 @@ public:
                             std::uint32_t height) override;
     void     hide_scanout(std::uint32_t head) override;
     Status   show_image(std::uint32_t head, const AvExportedImage &image) override;
+    bool     display_busy(std::uint32_t head) override;
     int      event_descriptor(void *event) override;
     int      fence_interrupt_descriptor(std::uint32_t line) override;
     std::uint32_t guest_region_count() override;
@@ -166,6 +167,7 @@ public:
     bool          wait_for_deadline_after(std::uint64_t after, std::uint32_t milliseconds);
     std::uint32_t    images_shown(std::uint32_t head) const;
     AvExportedImage last_image(std::uint32_t head) const;
+    void             hold_display(std::uint32_t head, bool busy);
     void empty_mapping_at(std::uint32_t nth);
     void fail_recording_create_at(std::uint32_t nth);
     void fail_recording_append_at(std::uint32_t nth);
@@ -438,6 +440,7 @@ private:
     Scanout         scanouts_[max_scanout_heads];
     std::uint32_t   images_shown_[max_scanout_heads];
     AvExportedImage last_images_[max_scanout_heads];
+    bool            displays_busy_[max_scanout_heads];
     std::uint32_t   update_rects_[max_scanout_heads][4];
     RendererRegion  renderer_regions_[max_renderer_regions];
     std::uint32_t   renderer_region_count_;

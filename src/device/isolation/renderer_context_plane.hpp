@@ -80,6 +80,7 @@ public:
     bool exports_off_main_loop() const override;
     bool post_export(const uint8_t *gpu_uuid, uint32_t head, uint64_t key) override;
     void take_answers() override;
+    void display_free() override;
     bool composes() const override;
     bool compose_planes(const uint8_t *gpu_uuid, const AvScanoutPlane *planes, uint32_t count, uint32_t width,
                         uint32_t height, AvExportedImage &image) override;
@@ -113,6 +114,7 @@ private:
     bool                 may_restart();
     void                 drop_images();
     [[nodiscard]] Status send_export(uint32_t head, uint64_t key);
+    [[nodiscard]] Status send_held();
     [[nodiscard]] Status take(const RendererAnswer &answer) override;
     [[nodiscard]] Status take_export(const RendererAnswer &answer);
     [[nodiscard]] Status take_memory(const RendererAnswer &answer);
@@ -127,13 +129,15 @@ private:
         PostedExport();
 
         bool post(uint64_t key);
+        void hold(uint64_t key);
+        bool asked() const;
         void sent(uint64_t sequence, uint64_t deadline);
         bool awaits(uint64_t sequence) const;
         bool answered();
         bool next(uint64_t &key);
         void reset();
         void earlier(uint64_t &deadline) const;
-        void count(uint64_t &behind, uint64_t &replaced) const;
+        void count(uint64_t &behind, uint64_t &replaced, uint64_t &held) const;
         bool idle() const;
 
     private:
@@ -145,6 +149,7 @@ private:
         uint64_t queued_key_;
         uint64_t behind_;
         uint64_t replaced_;
+        uint64_t held_;
 
         friend struct RendererContextPlaneProbe;
     };

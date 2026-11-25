@@ -50,7 +50,7 @@ MockHost::MockHost()
       placements_{}, placements_made_(0u), last_placement_{-1, 0u, 0u}, hostmem_size_(0u), resources_{}, resource_count_(0u), doorbells_{}, translate_(nullptr), translate_context_(nullptr), fence_connected_(false), fail_fence_connect_(0u), raised_{}, clock_(0u), clock_step_(0u), clock_hook_at_(0u), clock_hook_(nullptr), clock_hook_context_(nullptr), fail_bind_gpu_(0u), bound_gpu_(no_gpu), ranges_{},
       fail_reserve_(0u), fail_alias_(0u), counted_{},
       recordings_{}, fail_recording_create_(0u), fail_recording_append_(0u),
-      fail_recording_truncate_(0u), display_heads_(0u), refuse_scanout_(0u), scanouts_{}, images_shown_{}, last_images_{},
+      fail_recording_truncate_(0u), display_heads_(0u), refuse_scanout_(0u), scanouts_{}, images_shown_{}, last_images_{}, displays_busy_{},
       update_rects_{}, renderer_regions_{}, renderer_region_count_(0u), renderer_peer_(nullptr),
       renderer_running_(false), fail_renderer_start_(0u), fail_renderer_send_(0u), renderer_starts_(0u), renderer_kills_(0u),
       renderer_datagrams_(0u), renderer_deadline_(0u), receive_timeout_(0u), forward_requests_(false), fail_event_descriptor_(0u), started_renderer_{},
@@ -360,6 +360,19 @@ std::uint32_t MockHost::images_shown(std::uint32_t head) const
 AvExportedImage MockHost::last_image(std::uint32_t head) const
 {
     return head < max_scanout_heads ? last_images_[head] : AvExportedImage{};
+}
+
+bool MockHost::display_busy(std::uint32_t head)
+{
+    require_main_loop("MockHost::display_busy");
+    StateLock lock(state_);
+    return head < max_scanout_heads && displays_busy_[head];
+}
+
+void MockHost::hold_display(std::uint32_t head, bool busy)
+{
+    StateLock lock(state_);
+    if (head < max_scanout_heads) displays_busy_[head] = busy;
 }
 
 std::uint32_t MockHost::doorbell_of(void *event)

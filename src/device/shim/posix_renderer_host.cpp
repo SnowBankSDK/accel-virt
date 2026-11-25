@@ -616,6 +616,12 @@ Status PosixRendererHost::show_image(uint32_t, const AvExportedImage &)
     return Status::not_supported;
 }
 
+bool PosixRendererHost::display_busy(uint32_t)
+{
+    AV_SCOPE("PosixRendererHost::display_busy");
+    return false;
+}
+
 void PosixRendererHost::update_scanout(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t)
 {
     AV_SCOPE("PosixRendererHost::update_scanout");

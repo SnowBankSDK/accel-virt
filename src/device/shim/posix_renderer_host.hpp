@@ -106,6 +106,7 @@ public:
     bool                 display_takes_dmabuf(uint32_t head) override;
     [[nodiscard]] Status show_scanout(uint32_t head, const uint8_t *blob, const ScanoutFramebuffer &frame) override;
     [[nodiscard]] Status show_image(uint32_t head, const AvExportedImage &image) override;
+    bool                 display_busy(uint32_t head) override;
     void                 update_scanout(uint32_t head, uint32_t x, uint32_t y, uint32_t width,
                                         uint32_t height) override;
     void                 hide_scanout(uint32_t head) override;

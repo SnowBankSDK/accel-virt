@@ -59,6 +59,9 @@ static void virtio_gpu_av_console_gl_block(void *opaque, bool block)
     if (--r->gl_blocked == 0) {
         virtio_gpu_av_gl_unblocked(r);
     }
+    if (r->gl_blocked == 0 && r->core) {
+        av_device_display_free(r->core);
+    }
 }
 
 static const GraphicHwOps virtio_gpu_av_console_ops = {
