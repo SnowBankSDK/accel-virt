@@ -40,6 +40,7 @@ public:
     ScriptedThread       &present_thread();
     ScriptedThread       &wake_thread();
     RecordingThreadLock  &present_lock();
+    RecordingThreadLock  &tables_lock();
     CountedWakeSignal    &handed();
     CountedWakeSignal    &shown();
     ScriptedWindowSurface &windows();
@@ -70,6 +71,7 @@ private:
     ScriptedWindowSurface windows_;
     ScriptedWindowChains  chains_;
     RecordingThreadLock  present_lock_;
+    RecordingThreadLock  tables_lock_;
     ScriptedThread       present_thread_;
     ScriptedThread       wake_thread_;
     CountedWakeSignal    handed_;

@@ -107,7 +107,7 @@ class PresentationRig {
 public:
     PresentationRig()
         : wsi_(rig_.platform(), rig_.kmt(), rig_.windows(), rig_.chains(), rig_.lines(), rig_.root(), host_,
-               rig_.present_thread(), rig_.handed(), rig_.shown(), rig_.present_lock())
+               rig_.present_thread(), rig_.handed(), rig_.shown(), rig_.present_lock(), rig_.tables_lock())
     { instance_ = rig_.create_instance();
       physical_ = rig_.physical_device(instance_);
       VkDeviceCreateInfo info = {};

@@ -51,9 +51,9 @@ namespace {
 class IcdProcess {
 public:
     explicit IcdProcess(DdiKmt &kmt)
-        : lock_(trace_, 'H'), send_lock_(trace_, 'S'), memory_lock_(trace_, 'M'), present_lock_(trace_, 'P'), lines_(memory_, log_, "avvk: "),
+        : lock_(trace_, 'H'), send_lock_(trace_, 'S'), memory_lock_(trace_, 'M'), present_lock_(trace_, 'P'), tables_lock_(trace_, 'T'), lines_(memory_, log_, "avvk: "),
           root_(memory_, kmt, lock_, send_lock_, memory_lock_, lines_, av::icd::icd_binding, windows_, chains_,
-                present_thread_, handed_, shown_, present_lock_, wake_thread_)
+                present_thread_, handed_, shown_, present_lock_, tables_lock_, wake_thread_)
     {
     }
 
@@ -67,6 +67,7 @@ private:
     RecordingThreadLock       send_lock_;
     RecordingThreadLock       memory_lock_;
     RecordingThreadLock       present_lock_;
+    RecordingThreadLock       tables_lock_;
     RecordingLog              log_;
     av::KeyedLog              lines_;
     av::ScriptedWindowSurface windows_;

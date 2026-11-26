@@ -2,6 +2,7 @@
 
 #include "core/trace/function_scope.hpp"
 #include "core/trace/state_writer.hpp"
+#include "core/platform/thread_lock_hold.hpp"
 #include "core/log/driver_log.hpp"
 #include "icd/vulkan/handle_bits.hpp"
 #include "proto/wire/foreign_enum.hpp"
@@ -12,8 +13,9 @@ namespace av::icd {
 
 Presentation::Presentation(BlockSource &memory, Kmt &kmt, WindowSurface &windows, WindowChains &chains,
                            DriverLog &log, IcdRoot &root, EntryLookup &entries, ServiceThread &present_thread,
-                           ThreadWake &handed, ThreadWake &shown, ThreadLock &present_lock)
+                           ThreadWake &handed, ThreadWake &shown, ThreadLock &present_lock, ThreadLock &tables_lock)
     : memory_(memory), kmt_(kmt), windows_(windows), chains_(chains), log_(log), root_(root), entries_(entries),
+      tables_lock_(tables_lock),
       ready_(entries), presents_(memory, present_thread, handed, shown, present_lock, ready_, windows, chains, log),
       surfaces_(memory), chains_made_(memory), swapchains_(memory, Pool::paged)
 {
@@ -37,12 +39,14 @@ VkResult Presentation::create_surface(VkInstance instance, const Win32SurfaceCre
         *surface = VK_NULL_HANDLE;
         return VK_ERROR_INITIALIZATION_FAILED;
     }
+    const ThreadLockHold held(tables_lock_);
     return surfaces_.create(instance, info->window_, *surface);
 }
 
 void Presentation::destroy_surface(VkInstance instance, VkSurfaceKHR surface)
 {
     AV_SCOPE("Presentation::destroy_surface");
+    const ThreadLockHold held(tables_lock_);
     surfaces_.destroy(instance, surface);
 }
 
@@ -50,7 +54,7 @@ VkResult Presentation::surface_support(VkSurfaceKHR surface, VkBool32 *supported
 {
     AV_SCOPE("Presentation::surface_support");
     *supported = VK_FALSE;
-    if (surfaces_.window_of(surface) == nullptr) return VK_ERROR_SURFACE_LOST_KHR;
+    if (window_of(surface) == nullptr) return VK_ERROR_SURFACE_LOST_KHR;
     *supported = VK_TRUE;
     return VK_SUCCESS;
 }
@@ -58,7 +62,7 @@ VkResult Presentation::surface_support(VkSurfaceKHR surface, VkBool32 *supported
 VkResult Presentation::capabilities(VkSurfaceKHR surface, VkSurfaceCapabilitiesKHR *capabilities)
 {
     AV_SCOPE("Presentation::capabilities");
-    SurfaceProperties properties(windows_, surfaces_.window_of(surface));
+    SurfaceProperties properties(windows_, window_of(surface));
     return properties.capabilities(*capabilities);
 }
 
@@ -66,15 +70,15 @@ VkResult Presentation::capabilities2(const VkPhysicalDeviceSurfaceInfo2KHR *info
                                      VkSurfaceCapabilities2KHR *capabilities)
 {
     AV_SCOPE("Presentation::capabilities2");
-    SurfaceProperties properties(windows_, surfaces_.window_of(info->surface));
+    SurfaceProperties properties(windows_, window_of(info->surface));
     return properties.capabilities(capabilities->surfaceCapabilities);
 }
 
 VkResult Presentation::formats(VkSurfaceKHR surface, uint32_t *count, VkSurfaceFormatKHR *formats)
 {
     AV_SCOPE("Presentation::formats");
-    if (surfaces_.window_of(surface) == nullptr) return VK_ERROR_SURFACE_LOST_KHR;
-    SurfaceProperties properties(windows_, surfaces_.window_of(surface));
+    if (window_of(surface) == nullptr) return VK_ERROR_SURFACE_LOST_KHR;
+    SurfaceProperties properties(windows_, window_of(surface));
     return properties.formats(*count, formats);
 }
 
@@ -82,16 +86,16 @@ VkResult Presentation::formats2(const VkPhysicalDeviceSurfaceInfo2KHR *info, uin
                                 VkSurfaceFormat2KHR *formats)
 {
     AV_SCOPE("Presentation::formats2");
-    if (surfaces_.window_of(info->surface) == nullptr) return VK_ERROR_SURFACE_LOST_KHR;
-    SurfaceProperties properties(windows_, surfaces_.window_of(info->surface));
+    if (window_of(info->surface) == nullptr) return VK_ERROR_SURFACE_LOST_KHR;
+    SurfaceProperties properties(windows_, window_of(info->surface));
     return properties.formats2(*count, formats);
 }
 
 VkResult Presentation::present_modes(VkSurfaceKHR surface, uint32_t *count, VkPresentModeKHR *modes)
 {
     AV_SCOPE("Presentation::present_modes");
-    if (surfaces_.window_of(surface) == nullptr) return VK_ERROR_SURFACE_LOST_KHR;
-    SurfaceProperties properties(windows_, surfaces_.window_of(surface));
+    if (window_of(surface) == nullptr) return VK_ERROR_SURFACE_LOST_KHR;
+    SurfaceProperties properties(windows_, window_of(surface));
     return properties.present_modes(*count, modes);
 }
 
@@ -107,20 +111,23 @@ VkResult Presentation::create_swapchain(VkDevice device, const VkSwapchainCreate
         log_.write("a swapchain is refused: its device has no adapter to present on");
         return VK_ERROR_INITIALIZATION_FAILED;
     }
-    void *const window = surfaces_.window_of(info->surface);
+    void *const window = window_of(info->surface);
     if (window == nullptr) {
         log_.write("a swapchain is refused: its surface names no window");
         return VK_ERROR_SURFACE_LOST_KHR;
     }
     if (Swapchain *const old = find(device, info->oldSwapchain); old != nullptr) old->retire();
     Swapchain *chain = nullptr;
-    if (swapchains_.reserve(swapchains_.count() + 1u) != Status::ok ||
-        chains_made_.create(chain, windows_, chains_, entries_, device, host_device, physical, kmt_, log_, *connection,
-                            presents_) !=
-            Status::ok)
-        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    {
+        const ThreadLockHold held(tables_lock_);
+        if (swapchains_.reserve(swapchains_.count() + 1u) != Status::ok ||
+            chains_made_.create(chain, windows_, chains_, entries_, device, host_device, physical, kmt_, log_,
+                                *connection, presents_) != Status::ok)
+            return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
     SurfaceProperties properties(windows_, window);
     const VkResult    made = chain->initialize(*info, window, properties);
+    const ThreadLockHold held(tables_lock_);
     if (made != VK_SUCCESS) {
         static_cast<void>(chains_made_.destroy(chain));
         return made;
@@ -183,12 +190,14 @@ void Presentation::refuse_presents()
 void Presentation::forget_instance(VkInstance instance)
 {
     AV_SCOPE("Presentation::forget_instance");
+    const ThreadLockHold held(tables_lock_);
     surfaces_.forget(instance);
 }
 
 void Presentation::forget_device(VkDevice device)
 {
     AV_SCOPE("Presentation::forget_device");
+    const ThreadLockHold held(tables_lock_);
     swapchains_.erase_if([this, device](uint64_t, Swapchain *&chain) {
         if (chain->device() != device) return false;
         static_cast<void>(chains_made_.destroy(chain));
@@ -199,12 +208,14 @@ void Presentation::forget_device(VkDevice device)
 uint32_t Presentation::surfaces() const
 {
     AV_SCOPE("Presentation::surfaces");
+    const ThreadLockHold held(tables_lock_);
     return surfaces_.live();
 }
 
 uint32_t Presentation::swapchains() const
 {
     AV_SCOPE("Presentation::swapchains");
+    const ThreadLockHold held(tables_lock_);
     return swapchains_.count();
 }
 
@@ -212,14 +223,16 @@ void Presentation::report(StateWriter &writer) const
 {
     AV_SCOPE("Presentation::report");
     writer.open("presentation", 0u);
-    writer.number("surfaces", surfaces());
-    writer.number("swapchains", swapchains());
+    tables_lock_.acquire();
+    writer.number("surfaces", surfaces_.live());
+    writer.number("swapchains", swapchains_.count());
     uint64_t number = 0u;
     swapchains_.for_each([&writer, &number](uint64_t, Swapchain *const &chain) {
         writer.open("swapchain", number++);
         writer.number("presented", chain->presented());
         writer.close();
     });
+    tables_lock_.release();
     presents_.report(writer);
     writer.close();
 }
@@ -227,6 +240,7 @@ void Presentation::report(StateWriter &writer) const
 bool Presentation::invariants_hold() const
 {
     AV_SCOPE("Presentation::invariants_hold");
+    const ThreadLockHold held(tables_lock_);
     if (!surfaces_.invariants_hold() || swapchains_.count() != chains_made_.live()) return false;
     bool whole = true;
     swapchains_.for_each([&whole](uint64_t handle, Swapchain *const &chain) {
@@ -238,6 +252,7 @@ bool Presentation::invariants_hold() const
 Swapchain *Presentation::find(VkDevice device, VkSwapchainKHR swapchain)
 {
     AV_SCOPE("Presentation::find");
+    const ThreadLockHold    held(tables_lock_);
     Swapchain *const *const chain = swapchains_.find(HandleBits(swapchain).value());
     if (chain == nullptr) return nullptr;
     return device == VK_NULL_HANDLE || (*chain)->device() == device ? *chain : nullptr;
@@ -246,8 +261,16 @@ Swapchain *Presentation::find(VkDevice device, VkSwapchainKHR swapchain)
 void Presentation::destroy(Swapchain *chain)
 {
     AV_SCOPE("Presentation::destroy");
+    const ThreadLockHold held(tables_lock_);
     static_cast<void>(swapchains_.erase(HandleBits(chain).value()));
     static_cast<void>(chains_made_.destroy(chain));
+}
+
+void *Presentation::window_of(VkSurfaceKHR surface) const
+{
+    AV_SCOPE("Presentation::window_of");
+    const ThreadLockHold held(tables_lock_);
+    return surfaces_.window_of(surface);
 }
 
 VkResult Presentation::worse(VkResult kept, VkResult result) const

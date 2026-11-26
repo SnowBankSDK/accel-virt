@@ -75,6 +75,7 @@ private:
 
     [[nodiscard]] bool loaded();
     uint32_t           device_for(uint64_t luid);
+    uint64_t           shown_on(void *window, uint64_t luid);
     [[nodiscard]] bool make_device(uint64_t luid, Device &made);
     [[nodiscard]] bool kernel_device(uint64_t luid, Device &made);
     [[nodiscard]] bool make_shaders(Device &made);
@@ -97,6 +98,9 @@ private:
     void            *create_device_;
     void            *create_factory_;
     void            *compiler_;
+    void            *user32_;
+    void            *monitor_from_window_;
+    void            *monitor_info_;
     void            *compile_;
     bool             load_refused_;
     Device           devices_[max_devices];

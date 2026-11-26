@@ -1615,4 +1615,23 @@ Status MockKmt::primary_display_luid(std::uint64_t &answered)
 
 void MockKmt::set_primary_display_luid(std::uint64_t luid) { primary_display_luid_ = luid; }
 
+Status MockKmt::display_luid(const std::uint16_t *display, std::uint64_t &answered)
+{
+    answered = 0u;
+    if (display == nullptr) return Status::invalid_parameter;
+    std::size_t at = 0u;
+    while (shown_display_[at] != '\0' && display[at] == static_cast<unsigned char>(shown_display_[at])) at++;
+    if (shown_display_[at] != '\0' || display[at] != 0u || shown_display_luid_ == 0u) return Status::not_found;
+    answered = shown_display_luid_;
+    return Status::ok;
+}
+
+void MockKmt::show_display(const char *display, std::uint64_t luid)
+{
+    std::size_t at = 0u;
+    for (; display[at] != '\0' && at + 1u < sizeof shown_display_; at++) shown_display_[at] = display[at];
+    shown_display_[at] = '\0';
+    shown_display_luid_ = luid;
+}
+
 }

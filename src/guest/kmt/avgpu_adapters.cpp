@@ -118,6 +118,14 @@ uint32_t AvgpuAdapters::index_of(uint64_t luid) const
     return count_;
 }
 
+uint32_t AvgpuAdapters::showing(const uint16_t *display) const
+{
+    AV_SCOPE("AvgpuAdapters::showing");
+    uint64_t luid = 0u;
+    if (kmt_.display_luid(display, luid) != Status::ok) return count_;
+    return index_of(luid);
+}
+
 uint32_t AvgpuAdapters::take(uint32_t index)
 {
     AV_SCOPE("AvgpuAdapters::take");

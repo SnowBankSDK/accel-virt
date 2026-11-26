@@ -96,11 +96,13 @@ VkDeviceMemory as_memory(std::uint64_t host) { return reinterpret_cast<VkDeviceM
 
 class MemoryRig {
 public:
-    MemoryRig()
+    explicit MemoryRig(const char *extension = nullptr)
     { instance_ = rig_.create_instance();
       physical_ = rig_.physical_device(instance_);
       VkDeviceCreateInfo info = {};
       info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+      info.enabledExtensionCount = extension != nullptr ? 1u : 0u;
+      info.ppEnabledExtensionNames = extension != nullptr ? &extension : nullptr;
       rig_.host().vk_handle(0, ScriptedHost::vk_device);
       CHECK_EQ(entry<CreateDevice>("vkCreateDevice")(physical_, &info, nullptr, &device_), VK_SUCCESS); }
     ~MemoryRig()
@@ -466,6 +468,20 @@ TEST(icd_memory, a_placed_allocation_is_made_by_the_host_and_mapped_through_a_pl
   CHECK_EQ(rig.last_command(), static_cast<std::uint32_t>(av::vkproto::kCmd_vkFreeMemory));
   CHECK_EQ(rig.kmt().window_chunks(), 0u);
   CHECK_EQ(rig.map(placed, 0u, 1u, data), VK_ERROR_MEMORY_MAP_FAILED); }
+
+TEST(icd_memory, a_device_that_enables_descriptor_buffers_places_its_host_visible_allocations)
+{ MemoryRig rig("VK_EXT_descriptor_buffer");
+  rig.host().vk_memory_properties(types, visible);
+  rig.host().vk_handle(0, allocated + 16u);
+  VkDeviceMemory placed = VK_NULL_HANDLE;
+  CHECK_EQ(rig.allocate(2u * page, 1u, placed), VK_SUCCESS);
+  CHECK(placed == as_memory(allocated + 16u));
+  CHECK_EQ(rig.last_command(), static_cast<std::uint32_t>(av::vkproto::kCmd_vkAllocateMemory));
+  CHECK_EQ(rig.kmt().window_chunks(), 1u);
+  const av::HostMemoryRequest asked(av::HostMemoryRequest::Kind::placed, 1u);
+  CHECK_EQ(rig.kmt().window_request(MockKmt::first_window_resource).encoded(), asked.encoded());
+  rig.free(placed);
+  CHECK_EQ(rig.kmt().window_chunks(), 0u); }
 
 TEST(icd_memory, the_types_are_asked_for_once)
 { MemoryRig rig;

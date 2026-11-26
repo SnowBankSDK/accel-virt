@@ -7,10 +7,10 @@ namespace av {
 
 IcdLibrary::Seams::Seams()
     : process(L"avvk", "avvk: "), lock(), send_lock(), memory_lock(), windows(), chains_lock(),
-      chains(process.heap(), process.kmt(), chains_lock, process.log()), present_lock(), present_thread(),
+      chains(process.heap(), process.kmt(), chains_lock, process.log()), present_lock(), tables_lock(), present_thread(),
       present_handed(), present_shown(), wake_thread(),
       root(process.heap(), process.kmt(), lock, send_lock, memory_lock, process.log(), icd::icd_binding, windows, chains,
-           present_thread, present_handed, present_shown, present_lock, wake_thread)
+           present_thread, present_handed, present_shown, present_lock, tables_lock, wake_thread)
 {
     AV_SCOPE("IcdLibrary::Seams::Seams");
     if (present_handed.initialize() != Status::ok || present_shown.initialize() != Status::ok) {

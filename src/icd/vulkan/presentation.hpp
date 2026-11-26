@@ -38,7 +38,7 @@ class Presentation {
 public:
     Presentation(BlockSource &memory, Kmt &kmt, WindowSurface &windows, WindowChains &chains, DriverLog &log,
                  IcdRoot &root, EntryLookup &entries, ServiceThread &present_thread, ThreadWake &handed,
-                 ThreadWake &shown, ThreadLock &present_lock);
+                 ThreadWake &shown, ThreadLock &present_lock, ThreadLock &tables_lock);
     ~Presentation();
     Presentation(const Presentation &) = delete;
     Presentation &operator=(const Presentation &) = delete;
@@ -72,6 +72,7 @@ public:
 
 private:
     Swapchain *find(VkDevice device, VkSwapchainKHR swapchain);
+    void      *window_of(VkSurfaceKHR surface) const;
     void       destroy(Swapchain *chain);
     VkResult   worse(VkResult kept, VkResult result) const;
 
@@ -82,6 +83,7 @@ private:
     DriverLog     &log_;
     IcdRoot       &root_;
     EntryLookup   &entries_;
+    ThreadLock    &tables_lock_;
     FenceReady     ready_;
     VkPresentQueue presents_;
     SurfaceTable   surfaces_;

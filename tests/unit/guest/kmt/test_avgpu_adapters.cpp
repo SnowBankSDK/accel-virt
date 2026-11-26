@@ -223,3 +223,25 @@ TEST(avgpu_adapters_invariants, a_count_past_what_it_holds_a_primary_nobody_is_o
   AvgpuAdaptersProbe::hold(adapters, 0u, 0u, 0u);
   AvgpuAdaptersProbe::claim(adapters, 0u, false);
   CHECK(adapters.invariants_hold()); }
+
+TEST(avgpu_adapters, a_display_is_shown_by_the_adapter_the_kernel_names_for_it_whatever_the_primary)
+{ MockKmt kmt;
+  kmt.add_adapter(on_radeon, 3200u);
+  kmt.add_adapter(on_raphael, 3200u);
+  kmt.set_adapter_luid(0u, 0x22u);
+  kmt.set_adapter_luid(1u, 0x33u);
+  kmt.set_primary_display_luid(0x22u);
+  kmt.show_display("\\\\.\\DISPLAY2", 0x33u);
+  AvgpuAdapters adapters(kmt);
+  CHECK_STATUS(adapters.learn(), Status::ok);
+  const std::uint16_t second[] = {'\\', '\\', '.', '\\', 'D', 'I', 'S', 'P', 'L', 'A', 'Y', '2', 0u};
+  const std::uint16_t first[] = {'\\', '\\', '.', '\\', 'D', 'I', 'S', 'P', 'L', 'A', 'Y', '1', 0u};
+  const std::uint16_t longer[] = {'\\', '\\', '.', '\\', 'D', 'I', 'S', 'P', 'L', 'A', 'Y', '2', '0', 0u};
+  CHECK_EQ(adapters.showing(second), 1u);
+  CHECK_EQ(adapters.luid(adapters.showing(second)), 0x33u);
+  CHECK_EQ(adapters.showing(first), adapters.count());
+  CHECK_EQ(adapters.showing(longer), adapters.count());
+  CHECK_EQ(adapters.showing(nullptr), adapters.count());
+  kmt.show_display("\\\\.\\DISPLAY2", 0x77u);
+  CHECK_EQ(adapters.showing(second), adapters.count());
+  CHECK_EQ(kmt.misuses(), 0u); }

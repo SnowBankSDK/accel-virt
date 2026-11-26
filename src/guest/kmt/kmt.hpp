@@ -30,6 +30,7 @@ public:
     virtual Status   close_adapter(uint32_t adapter) = 0;
     virtual Status   adapter_luid(uint32_t adapter, uint64_t &luid) = 0;
     virtual Status   primary_display_luid(uint64_t &luid) = 0;
+    virtual Status   display_luid(const uint16_t *display, uint64_t &luid) = 0;
     virtual Status   query_video_memory(uint32_t adapter, MemorySegmentGroup group, uint64_t &budget,
                                         uint64_t &usage) = 0;
     virtual Status   create_device(uint32_t adapter, uint32_t &device) = 0;

@@ -35,6 +35,7 @@ public:
     Status   close_adapter(uint32_t adapter) override;
     Status   adapter_luid(uint32_t adapter, uint64_t &luid) override;
     Status   primary_display_luid(uint64_t &luid) override;
+    Status   display_luid(const uint16_t *display, uint64_t &luid) override;
     Status   query_video_memory(uint32_t adapter, MemorySegmentGroup group, uint64_t &budget,
                                 uint64_t &usage) override;
     Status   create_device(uint32_t adapter, uint32_t &device) override;
@@ -91,6 +92,7 @@ private:
     Status answer(int32_t code);
     Status await_event();
     [[nodiscard]] Status open_display(uint32_t &adapter, uint32_t &source);
+    [[nodiscard]] Status screen_luid(void *screen, uint64_t &luid);
 
     static constexpr uint32_t max_adapters = 16u;
 

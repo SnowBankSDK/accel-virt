@@ -1150,4 +1150,10 @@ Status DdiKmt::primary_display_luid(std::uint64_t &answered)
     return Status::not_supported;
 }
 
+Status DdiKmt::display_luid(const std::uint16_t *, std::uint64_t &answered)
+{
+    answered = 0u;
+    return Status::not_supported;
+}
+
 }

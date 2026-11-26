@@ -31,6 +31,7 @@ public:
     const PciIdentity   &identity(uint32_t index) const;
     bool                 primary(uint32_t index) const;
     uint32_t             index_of(uint64_t luid) const;
+    uint32_t             showing(const uint16_t *display) const;
     uint32_t             take(uint32_t index);
     void                 close();
 

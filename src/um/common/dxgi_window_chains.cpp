@@ -40,7 +40,8 @@ constexpr uint32_t buffer_count = 2u;
 
 DxgiWindowChains::DxgiWindowChains(BlockSource &memory, Kmt &kmt, ThreadLock &lock, KeyedLog &log)
     : kmt_(kmt), lock_(lock), lines_(log), d3d11_(nullptr), dxgi_(nullptr), create_device_(nullptr),
-      create_factory_(nullptr), compiler_(nullptr), compile_(nullptr), load_refused_(false),
+      create_factory_(nullptr), compiler_(nullptr), user32_(nullptr), monitor_from_window_(nullptr), monitor_info_(nullptr), compile_(nullptr),
+      load_refused_(false),
       devices_(), chains_(memory), windows_(memory, Pool::paged)
 {
     AV_SCOPE("DxgiWindowChains::DxgiWindowChains");
@@ -56,6 +57,7 @@ DxgiWindowChains::~DxgiWindowChains()
     if (d3d11_ != nullptr) FreeLibrary(static_cast<HMODULE>(d3d11_));
     if (dxgi_ != nullptr) FreeLibrary(static_cast<HMODULE>(dxgi_));
     if (compiler_ != nullptr) FreeLibrary(static_cast<HMODULE>(compiler_));
+    if (user32_ != nullptr) FreeLibrary(static_cast<HMODULE>(user32_));
 }
 
 bool DxgiWindowChains::open(void *window, uint64_t luid, uint32_t width, uint32_t height, icd::SlotLayout layout,
@@ -66,7 +68,7 @@ bool DxgiWindowChains::open(void *window, uint64_t luid, uint32_t width, uint32_
         return false;
     lock_.acquire();
     Chain *chain = chain_of(window);
-    const uint32_t device = device_for(luid);
+    const uint32_t device = device_for(shown_on(window, luid));
     if (chain != nullptr && chain->device != device) {
         forget_chain(window);
         chain = nullptr;
@@ -157,6 +159,12 @@ bool DxgiWindowChains::loaded()
         create_device_ = reinterpret_cast<void *>(GetProcAddress(static_cast<HMODULE>(d3d11_), "D3D11CreateDevice"));
     if (dxgi_ != nullptr)
         create_factory_ = reinterpret_cast<void *>(GetProcAddress(static_cast<HMODULE>(dxgi_), "CreateDXGIFactory1"));
+    user32_ = LoadLibraryA("user32.dll");
+    if (user32_ != nullptr) {
+        monitor_from_window_ =
+            reinterpret_cast<void *>(GetProcAddress(static_cast<HMODULE>(user32_), "MonitorFromWindow"));
+        monitor_info_ = reinterpret_cast<void *>(GetProcAddress(static_cast<HMODULE>(user32_), "GetMonitorInfoW"));
+    }
     if (create_device_ != nullptr && create_factory_ != nullptr && compile_ != nullptr) return true;
     load_refused_ = true;
     refuse("d3d11.dll, dxgi.dll or d3dcompiler_47.dll did not load");
@@ -175,6 +183,25 @@ uint32_t DxgiWindowChains::device_for(uint64_t luid)
     if (make_device(luid, devices_[vacant])) return vacant;
     drop_device(devices_[vacant]);
     return max_devices;
+}
+
+uint64_t DxgiWindowChains::shown_on(void *window, uint64_t luid)
+{
+    AV_SCOPE("DxgiWindowChains::shown_on");
+    if (!loaded() || monitor_from_window_ == nullptr || monitor_info_ == nullptr) return luid;
+    using MonitorOf = HMONITOR(WINAPI *)(HWND, DWORD);
+    using MonitorInfo = BOOL(WINAPI *)(HMONITOR, LPMONITORINFO);
+    const HMONITOR monitor =
+        reinterpret_cast<MonitorOf>(monitor_from_window_)(static_cast<HWND>(window), MONITOR_DEFAULTTONEAREST);
+    MONITORINFOEXW described = {};
+    described.cbSize = sizeof described;
+    if (monitor == nullptr ||
+        !reinterpret_cast<MonitorInfo>(monitor_info_)(monitor, reinterpret_cast<LPMONITORINFO>(&described)))
+        return luid;
+    AvgpuAdapters avgpu(kmt_);
+    if (avgpu.learn() != Status::ok) return luid;
+    const uint32_t showing = avgpu.showing(reinterpret_cast<const uint16_t *>(described.szDevice));
+    return showing < avgpu.count() ? avgpu.luid(showing) : luid;
 }
 
 bool DxgiWindowChains::make_device(uint64_t luid, Device &made)

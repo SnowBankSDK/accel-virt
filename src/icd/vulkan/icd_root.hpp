@@ -57,7 +57,7 @@ public:
     IcdRoot(BlockSource &memory, Kmt &kmt, ThreadLock &lock, ThreadLock &send_lock, ThreadLock &memory_lock,
             KeyedLog &log, IcdBinding &binding, WindowSurface &windows, WindowChains &chains,
             ServiceThread &present_thread, ThreadWake &handed, ThreadWake &shown, ThreadLock &present_lock,
-            ServiceThread &wake_thread);
+            ThreadLock &tables_lock, ServiceThread &wake_thread);
     ~IcdRoot();
     IcdRoot(const IcdRoot &) = delete;
     IcdRoot &operator=(const IcdRoot &) = delete;

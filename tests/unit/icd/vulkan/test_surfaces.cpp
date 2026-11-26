@@ -61,7 +61,7 @@ class WsiRig {
 public:
     WsiRig()
         : wsi_(rig_.platform(), rig_.kmt(), rig_.windows(), rig_.chains(), rig_.lines(), rig_.root(), host_,
-               rig_.present_thread(), rig_.handed(), rig_.shown(), rig_.present_lock())
+               rig_.present_thread(), rig_.handed(), rig_.shown(), rig_.present_lock(), rig_.tables_lock())
     {}
 
     IcdRig       &rig() { return rig_; }

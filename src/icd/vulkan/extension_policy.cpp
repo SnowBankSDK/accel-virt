@@ -6,8 +6,7 @@
 namespace av::icd {
 
 namespace {
-const char *const withheld[] = {"VK_KHR_surface", "VK_KHR_win32_surface", "VK_EXT_descriptor_buffer",
-                                "VK_EXT_device_generated_commands"};
+const char *const withheld[] = {"VK_KHR_surface", "VK_KHR_win32_surface", "VK_EXT_device_generated_commands"};
 
 static_assert(ExtensionRows::name_bytes == VK_MAX_EXTENSION_NAME_SIZE);
 

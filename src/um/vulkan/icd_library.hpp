@@ -40,6 +40,7 @@ private:
         SrwLock      chains_lock;
         DxgiWindowChains chains;
         SrwLock              present_lock;
+        SrwLock              tables_lock;
         WindowsServiceThread present_thread;
         WindowsThreadWake    present_handed;
         WindowsThreadWake    present_shown;

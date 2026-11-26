@@ -170,13 +170,26 @@ Status GdiKmt::adapter_luid(uint32_t adapter, uint64_t &luid)
 Status GdiKmt::primary_display_luid(uint64_t &luid)
 {
     AV_SCOPE("GdiKmt::primary_display_luid");
+    return screen_luid(CreateDCW(L"DISPLAY", nullptr, nullptr, nullptr), luid);
+}
+
+Status GdiKmt::display_luid(const uint16_t *display, uint64_t &luid)
+{
+    AV_SCOPE("GdiKmt::display_luid");
     luid = 0u;
-    const HDC screen = CreateDCW(L"DISPLAY", nullptr, nullptr, nullptr);
+    if (display == nullptr) return answer(NtStatus(Status::invalid_parameter).value());
+    return screen_luid(CreateDCW(reinterpret_cast<const wchar_t *>(display), nullptr, nullptr, nullptr), luid);
+}
+
+Status GdiKmt::screen_luid(void *screen, uint64_t &luid)
+{
+    AV_SCOPE("GdiKmt::screen_luid");
+    luid = 0u;
     if (screen == nullptr) return answer(NtStatus(Status::not_found).value());
     D3DKMT_OPENADAPTERFROMHDC open = {};
-    open.hDc = screen;
+    open.hDc = static_cast<HDC>(screen);
     const Status opened = answer(D3DKMTOpenAdapterFromHdc(&open));
-    static_cast<void>(DeleteDC(screen));
+    static_cast<void>(DeleteDC(static_cast<HDC>(screen)));
     if (opened != Status::ok) return opened;
     luid = static_cast<uint64_t>(static_cast<uint32_t>(open.AdapterLuid.HighPart)) << 32u | open.AdapterLuid.LowPart;
     D3DKMT_CLOSEADAPTER close = {};
