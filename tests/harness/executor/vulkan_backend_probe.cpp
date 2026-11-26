@@ -21,6 +21,8 @@ const HostObjectRegistry<uint64_t, VulkanObjectKind, uint64_t> &VulkanBackendPro
 
 uint32_t VulkanBackendProbe::imports_held() const { return backend.imports_ != nullptr ? backend.imports_->count() : 0u; }
 
+uint32_t VulkanBackendProbe::dedicated_images() const { return backend.dedicated_.dedicated(); }
+
 void VulkanBackendProbe::learn_types(VkPhysicalDevice physical) { backend.learn_types(physical); }
 
 const GuestMemoryTypes &VulkanBackendProbe::types() const { return backend.types_; }

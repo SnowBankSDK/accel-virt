@@ -20,7 +20,7 @@ public:
     VkMemoryRequirements requirements() const;
     [[nodiscard]] bool   bind_exportable(uint32_t type);
     [[nodiscard]] bool   bind_imported(OwnedFd &descriptor, VkExternalMemoryHandleTypeFlagBits handle,
-                                       VkDeviceSize size, uint32_t type);
+                                       VkDeviceSize size, uint32_t allowed);
 
     [[nodiscard]] bool make_exportable(const VulkanDeviceTable &table, const VkImageCreateInfo &info);
     [[nodiscard]] bool import_dma_buf(const VulkanDeviceTable &table, const VkImageCreateInfo &info,

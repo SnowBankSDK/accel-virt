@@ -36,8 +36,9 @@ bool VulkanBuffer::import(const VulkanDeviceTable &table, OwnedFd &descriptor, V
     const void *const next = (usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) != 0u
                                  ? static_cast<const void *>(&addressed)
                                  : static_cast<const void *>(&dedicated);
-    const uint32_t type = needs.size <= size ? table.memory_type(types & needs.memoryTypeBits) : VK_MAX_MEMORY_TYPES;
-    if (table.import_memory(descriptor, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, size, type, next, memory_) &&
+    const uint32_t allowed = needs.size <= size ? types & needs.memoryTypeBits : 0u;
+    if (table.import_memory_among(descriptor, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, size, allowed, next,
+                                  memory_) &&
         table.bind_buffer(buffer_, memory_))
         return true;
     release();

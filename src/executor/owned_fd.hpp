@@ -37,6 +37,7 @@ public:
     [[nodiscard]] bool copy_to(OwnedFd &copy) const;
     int                fd() const;
     uint64_t           extent() const;
+    uint64_t           payload(uint64_t claimed) const;
     bool               held() const;
     int                take();
     void               close();

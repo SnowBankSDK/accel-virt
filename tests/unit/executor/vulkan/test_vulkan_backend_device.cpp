@@ -23,6 +23,7 @@
 #include "harness/executor/lease_rig.hpp"
 #include "proto/client/client_blob_arena.hpp"
 #include "proto/resources/host_memory_request.hpp"
+#include "proto/vulkan/exportable_image_info.hpp"
 #include "proto/client/client_transport.hpp"
 #include "proto/generated/vulkan/vk_dispatch_client.h"
 #include "proto/generated/vulkan/vk_protocol_ids.h"
@@ -1950,5 +1951,111 @@ TEST(vulkan_backend_device, allocations_past_the_leased_room_are_refused_up_fron
       }
       CHECK_EQ(ledger.used(), start);
       made.backend().use_vram(nullptr, nullptr);
+  }
+}
+
+TEST(vulkan_backend_device, a_bind_that_runs_past_the_end_of_its_memory_is_refused_and_one_inside_it_is_made)
+{ av::LoaderHostApis &host = opened_host();
+  for (std::uint32_t i = 0u; i < host.gpu_count(); i++) {
+      GuestDevice made(host, i);
+      if (made.device() == 0u) continue;
+      BackendTransport wire(made.backend());
+      const VkDevice device = as_handle<VkDevice>(made.device());
+      const VkBufferCreateInfo buffer_info = storage_buffer();
+      VkBuffer buffer = VK_NULL_HANDLE;
+      CHECK_EQ(vkproto::av_vkCreateBuffer(wire, translation, device, &buffer_info, nullptr, &buffer), VK_SUCCESS);
+      VkMemoryRequirements buffer_needs = {};
+      vkproto::av_vkGetBufferMemoryRequirements(wire, translation, device, buffer, &buffer_needs);
+      const VkMemoryAllocateInfo buffer_memory_info = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, nullptr, buffer_needs.size,
+                                                       lowest(buffer_needs.memoryTypeBits)};
+      VkDeviceMemory buffer_memory = VK_NULL_HANDLE;
+      CHECK_EQ(vkproto::av_vkAllocateMemory(wire, translation, device, &buffer_memory_info, nullptr, &buffer_memory), VK_SUCCESS);
+      const VkDeviceSize step = buffer_needs.alignment != 0u ? buffer_needs.alignment : page;
+      CHECK_EQ(vkproto::av_vkBindBufferMemory(wire, translation, device, buffer, buffer_memory, step),
+               VK_ERROR_OUT_OF_DEVICE_MEMORY);
+      CHECK_EQ(vkproto::av_vkBindBufferMemory(wire, translation, device, buffer, buffer_memory, 0u), VK_SUCCESS);
+
+      const VkImageCreateInfo image_info = colour_image();
+      VkImage image = VK_NULL_HANDLE;
+      CHECK_EQ(vkproto::av_vkCreateImage(wire, translation, device, &image_info, nullptr, &image), VK_SUCCESS);
+      VkMemoryRequirements image_needs = {};
+      vkproto::av_vkGetImageMemoryRequirements(wire, translation, device, image, &image_needs);
+      const VkMemoryAllocateInfo short_info = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, nullptr, image_needs.size / 2u,
+                                               lowest(image_needs.memoryTypeBits)};
+      VkDeviceMemory short_memory = VK_NULL_HANDLE;
+      CHECK_EQ(vkproto::av_vkAllocateMemory(wire, translation, device, &short_info, nullptr, &short_memory), VK_SUCCESS);
+      CHECK_EQ(vkproto::av_vkBindImageMemory(wire, translation, device, image, short_memory, 0u),
+               VK_ERROR_OUT_OF_DEVICE_MEMORY);
+      const VkMemoryAllocateInfo whole_info = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, nullptr, image_needs.size,
+                                               lowest(image_needs.memoryTypeBits)};
+      VkDeviceMemory whole_memory = VK_NULL_HANDLE;
+      CHECK_EQ(vkproto::av_vkAllocateMemory(wire, translation, device, &whole_info, nullptr, &whole_memory), VK_SUCCESS);
+      CHECK_EQ(vkproto::av_vkBindImageMemory(wire, translation, device, image, whole_memory, 0u), VK_SUCCESS);
+
+      vkproto::av_vkDestroyImage(wire, translation, device, image, nullptr);
+      vkproto::av_vkDestroyBuffer(wire, translation, device, buffer, nullptr);
+      vkproto::av_vkFreeMemory(wire, translation, device, short_memory, nullptr);
+      vkproto::av_vkFreeMemory(wire, translation, device, whole_memory, nullptr);
+      vkproto::av_vkFreeMemory(wire, translation, device, buffer_memory, nullptr);
+  }
+}
+
+TEST(vulkan_backend_device, a_window_slot_imported_at_the_size_the_guest_packs_still_holds_its_padded_rows)
+{ av::LoaderHostApis &host = opened_host();
+  constexpr const char *named[] = {"VK_KHR_external_memory", "VK_KHR_external_memory_fd", "VK_EXT_external_memory_dma_buf",
+                                   "VK_KHR_image_format_list", "VK_EXT_image_drm_format_modifier"};
+  constexpr std::uint32_t width = 910u;
+  constexpr std::uint32_t height = 796u;
+  constexpr std::uint32_t bgra = 87u;
+  constexpr std::uint32_t shader_and_target = 0x28u;
+  const std::uint64_t packed = (std::uint64_t{width} * 4u * height + page - 1u) / page * page;
+  for (std::uint32_t i = 0u; i < host.gpu_count(); i++) {
+      GuestDevice made(host, i, 5u, named);
+      if (made.device() == 0u) continue;
+      const VkDevice device = as_handle<VkDevice>(made.device());
+      const av::ExportableImageInfo slot(width, height, 1u, 1u, 1u, bgra, shader_and_target);
+      VkImage exported = VK_NULL_HANDLE;
+      if (::vkCreateImage(device, &slot.info(), nullptr, &exported) != VK_SUCCESS) continue;
+      VkMemoryRequirements exported_needs = {};
+      ::vkGetImageMemoryRequirements(device, exported, &exported_needs);
+      const VkExportMemoryAllocateInfo exporting = {VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO, nullptr,
+                                                    VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT};
+      const VkMemoryDedicatedAllocateInfo dedicated = {VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO, &exporting, exported,
+                                                       VK_NULL_HANDLE};
+      const VkMemoryAllocateInfo exported_info = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, &dedicated, exported_needs.size,
+                                                  lowest(exported_needs.memoryTypeBits)};
+      VkDeviceMemory exported_memory = VK_NULL_HANDLE;
+      auto *const memory_fd = reinterpret_cast<PFN_vkGetMemoryFdKHR>(::vkGetDeviceProcAddr(device, "vkGetMemoryFdKHR"));
+      int fd = -1;
+      const bool shared = memory_fd != nullptr &&
+                          ::vkAllocateMemory(device, &exported_info, nullptr, &exported_memory) == VK_SUCCESS &&
+                          ::vkBindImageMemory(device, exported, exported_memory, 0u) == VK_SUCCESS;
+      const VkMemoryGetFdInfoKHR asked = {VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR, nullptr, exported_memory,
+                                          VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT};
+      if (!shared || memory_fd(device, &asked, &fd) != VK_SUCCESS || exported_needs.size <= packed) {
+          if (fd >= 0) close(fd);
+          ::vkDestroyImage(device, exported, nullptr);
+          if (exported_memory != VK_NULL_HANDLE) ::vkFreeMemory(device, exported_memory, nullptr);
+          continue;
+      }
+      std::uint64_t imported = 0u;
+      CHECK(made.backend().import_object(AV_SHARED_MEMORY, AV_SHARED_HANDLE_DMA_BUF, fd, packed, av::SharedImageShape(),
+                                         made.device(), imported, detail));
+      close(fd);
+      BackendTransport wire(made.backend());
+      VkImage chained = VK_NULL_HANDLE;
+      CHECK_EQ(vkproto::av_vkCreateImage(wire, translation, device, &slot.info(), nullptr, &chained), VK_SUCCESS);
+      VkMemoryRequirements chained_needs = {};
+      vkproto::av_vkGetImageMemoryRequirements(wire, translation, device, chained, &chained_needs);
+      CHECK(chained_needs.size > packed);
+      CHECK_EQ(made.probe().dedicated_images(), 0u);
+      CHECK_EQ(vkproto::av_vkBindImageMemory(wire, translation, device, chained, as_handle<VkDeviceMemory>(imported), 0u),
+               VK_SUCCESS);
+      CHECK_EQ(made.probe().dedicated_images(), 1u);
+      vkproto::av_vkDestroyImage(wire, translation, device, chained, nullptr);
+      CHECK_EQ(made.probe().dedicated_images(), 0u);
+      made.backend().release_object(AV_SHARED_MEMORY, imported, detail);
+      ::vkDestroyImage(device, exported, nullptr);
+      ::vkFreeMemory(device, exported_memory, nullptr);
   }
 }

@@ -66,6 +66,13 @@ uint64_t OwnedFd::extent() const
     return end > 0 ? static_cast<uint64_t>(end) : 0u;
 }
 
+uint64_t OwnedFd::payload(uint64_t claimed) const
+{
+    AV_SCOPE("OwnedFd::payload");
+    const uint64_t end = extent();
+    return end != 0u ? end : claimed;
+}
+
 int OwnedFd::take()
 {
     AV_SCOPE("OwnedFd::take");

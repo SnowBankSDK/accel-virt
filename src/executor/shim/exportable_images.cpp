@@ -69,8 +69,9 @@ ID3D11Texture2D *ExportableImages::import(Vkd3dImageExport &image, const D3D11_T
     }
     OwnedFd memory;
     image.take(memory);
+    const uint32_t type = image.memory_type();
     if (!made_image.bind_imported(memory, VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT, image.size(),
-                                  image.memory_type())) {
+                                  type < VK_MAX_MEMORY_TYPES ? 1u << type : 0u)) {
         refuse(memory.held() ? "the memory's fd was not imported" : "the imported memory was not bound");
         discard(*made);
         return nullptr;

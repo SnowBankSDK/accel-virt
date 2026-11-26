@@ -15,7 +15,7 @@ constexpr uint64_t drm_format_mod_invalid = 0x00ffffffffffffffull;
 }
 
 VulkanDeviceTable::VulkanDeviceTable()
-    : physical_(VK_NULL_HANDLE), device_(VK_NULL_HANDLE), memory_{}, integrated_(false), format_properties_(nullptr),
+    : physical_(VK_NULL_HANDLE), device_(VK_NULL_HANDLE), memory_{}, imports_(memory_), origin_(), integrated_(false), format_properties_(nullptr),
       format_features_(nullptr), image_modifier_(nullptr),
       create_image_(nullptr), destroy_image_(nullptr), requirements_(nullptr), allocate_(nullptr), free_(nullptr), map_(nullptr),
       bind_(nullptr), layout_(nullptr), memory_fd_(nullptr), create_semaphore_(nullptr), destroy_semaphore_(nullptr),
@@ -44,6 +44,7 @@ bool VulkanDeviceTable::load(VkInstance instance, VkPhysicalDevice physical, VkD
     VkPhysicalDeviceProperties described = {};
     if (device_properties != nullptr) device_properties(physical, &described);
     integrated_ = described.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU;
+    learn_origin(instance, physical);
     const auto entry = [device](const char *name) { return vkGetDeviceProcAddr(device, name); };
     create_image_ = reinterpret_cast<PFN_vkCreateImage>(entry("vkCreateImage"));
     destroy_image_ = reinterpret_cast<PFN_vkDestroyImage>(entry("vkDestroyImage"));
@@ -103,9 +104,25 @@ bool VulkanDeviceTable::imports_dma_bufs() const
     return loaded() && fd_properties_ != nullptr;
 }
 
+void VulkanDeviceTable::learn_origin(VkInstance instance, VkPhysicalDevice physical)
+{
+    AV_SCOPE("VulkanDeviceTable::learn_origin");
+    auto described = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
+        vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceProperties2"));
+    if (described == nullptr) return;
+    VkPhysicalDeviceIDProperties identity = {};
+    identity.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES;
+    VkPhysicalDeviceProperties2 properties = {};
+    properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+    properties.pNext = &identity;
+    described(physical, &properties);
+    origin_.learn(identity.deviceUUID);
+}
+
 void VulkanDeviceTable::forget()
 {
     AV_SCOPE("VulkanDeviceTable::forget");
+    origin_.forget();
     physical_ = VK_NULL_HANDLE;
     device_ = VK_NULL_HANDLE;
 }
@@ -251,6 +268,24 @@ uint32_t VulkanDeviceTable::memory_type(uint32_t allowed) const
     return VK_MAX_MEMORY_TYPES;
 }
 
+uint32_t VulkanDeviceTable::import_type(uint32_t allowed) const
+{
+    AV_SCOPE("VulkanDeviceTable::import_type");
+    return imports_.choose(allowed);
+}
+
+uint32_t VulkanDeviceTable::admitted(int fd, uint32_t allowed) const
+{
+    AV_SCOPE("VulkanDeviceTable::admitted");
+    return exported_here(fd) ? allowed : imports_.from_elsewhere(allowed);
+}
+
+bool VulkanDeviceTable::exported_here(int fd) const
+{
+    AV_SCOPE("VulkanDeviceTable::exported_here");
+    return origin_.ours(fd);
+}
+
 uint32_t VulkanDeviceTable::raw_memory_type(uint32_t allowed) const
 {
     AV_SCOPE("VulkanDeviceTable::raw_memory_type");
@@ -326,6 +361,26 @@ bool VulkanDeviceTable::import_memory(OwnedFd &descriptor, VkExternalMemoryHandl
     }
     static_cast<void>(descriptor.take());
     return true;
+}
+
+bool VulkanDeviceTable::import_memory_among(OwnedFd &descriptor, VkExternalMemoryHandleTypeFlagBits handle,
+                                            VkDeviceSize size, uint32_t allowed, const void *next,
+                                            VkDeviceMemory &memory) const
+{
+    AV_SCOPE("VulkanDeviceTable::import_memory_among");
+    memory = VK_NULL_HANDLE;
+    for (uint32_t left = admitted(descriptor.fd(), allowed); descriptor.held();) {
+        const uint32_t type = imports_.choose(left);
+        if (type == DmaBufImportType::no_type) return false;
+        OwnedFd attempt;
+        if (!attempt.hold_copy(descriptor.fd())) return false;
+        if (import_memory(attempt, handle, size, type, next, memory)) {
+            descriptor.close();
+            return true;
+        }
+        left &= ~(1u << type);
+    }
+    return false;
 }
 
 bool VulkanDeviceTable::map_memory(VkDeviceMemory memory, void *&pointer) const
@@ -422,7 +477,10 @@ bool VulkanDeviceTable::memory_fd(VkDeviceMemory memory, VkExternalMemoryHandleT
     fd = -1;
     if (!loaded() || memory_fd_ == nullptr || memory == VK_NULL_HANDLE) return false;
     const VkMemoryGetFdInfoKHR asked = {VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR, nullptr, memory, type};
-    if (memory_fd_(device_, &asked, &fd) == VK_SUCCESS) return true;
+    if (memory_fd_(device_, &asked, &fd) == VK_SUCCESS) {
+        if (type == VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT) static_cast<void>(origin_.stamp(fd));
+        return true;
+    }
     fd = -1;
     return false;
 }

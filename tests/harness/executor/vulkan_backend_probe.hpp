@@ -22,6 +22,7 @@ struct VulkanBackendProbe {
                                    WireReader &payload, WireWriter &reply, WireArena &arena);
     const HostObjectRegistry<uint64_t, VulkanObjectKind, uint64_t> &handles() const;
     uint32_t              imports_held() const;
+    uint32_t              dedicated_images() const;
     void                    learn_types(VkPhysicalDevice physical);
     const GuestMemoryTypes &types() const;
     void                    show_types(const VkPhysicalDeviceMemoryProperties &host, uint32_t backed);

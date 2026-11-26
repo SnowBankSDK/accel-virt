@@ -1,6 +1,9 @@
 #ifndef AV_VULKAN_DEVICE_TABLE_HPP
 #define AV_VULKAN_DEVICE_TABLE_HPP
 
+#include "executor/vulkan/dma_buf_import_type.hpp"
+#include "executor/vulkan/dma_buf_origin.hpp"
+
 #include <stdint.h>
 #include <vulkan/vulkan_core.h>
 
@@ -27,6 +30,9 @@ public:
     uint32_t           tiled_modifiers(const VkImageCreateInfo &rows, uint64_t *modifiers, uint32_t capacity) const;
     uint64_t           modifier_of(VkImage image) const;
     uint32_t           memory_type(uint32_t allowed) const;
+    uint32_t           import_type(uint32_t allowed) const;
+    uint32_t           admitted(int fd, uint32_t allowed) const;
+    bool               exported_here(int fd) const;
     uint32_t           raw_memory_type(uint32_t allowed) const;
     uint32_t           system_memory_type(uint32_t allowed) const;
     void                  memory_properties(VkPhysicalDeviceMemoryProperties &answer) const;
@@ -36,6 +42,9 @@ public:
     [[nodiscard]] bool    import_memory(OwnedFd &descriptor, VkExternalMemoryHandleTypeFlagBits handle,
                                         VkDeviceSize size, uint32_t type, const void *next,
                                         VkDeviceMemory &memory) const;
+    [[nodiscard]] bool    import_memory_among(OwnedFd &descriptor, VkExternalMemoryHandleTypeFlagBits handle,
+                                              VkDeviceSize size, uint32_t allowed, const void *next,
+                                              VkDeviceMemory &memory) const;
     [[nodiscard]] bool    map_memory(VkDeviceMemory memory, void *&pointer) const;
 
     [[nodiscard]] bool   create_image(const VkImageCreateInfo &info, VkImage &image) const;
@@ -75,12 +84,15 @@ public:
     void               queue_idle(VkQueue queue) const;
 
 private:
+    void learn_origin(VkInstance instance, VkPhysicalDevice physical);
     bool supports_layout(const VkImageCreateInfo &info, const VkImageFormatListCreateInfo *views,
                          const uint64_t *modifier) const;
 
     VkPhysicalDevice                 physical_;
     VkDevice                         device_;
     VkPhysicalDeviceMemoryProperties memory_;
+    DmaBufImportType                 imports_;
+    DmaBufOrigin                     origin_;
     bool                             integrated_;
     PFN_vkGetPhysicalDeviceImageFormatProperties2 format_properties_;
     PFN_vkGetPhysicalDeviceFormatProperties2      format_features_;

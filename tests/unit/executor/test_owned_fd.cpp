@@ -82,3 +82,18 @@ TEST(owned_fd_extent, is_nothing_for_an_empty_file_or_no_descriptor)
   CHECK_EQ(none.extent(), 0u);
   OwnedFd empty(memfd_create("empty", 0));
   CHECK_EQ(empty.extent(), 0u); }
+
+TEST(owned_fd_payload, is_the_whole_descriptor_whatever_the_sender_claims)
+{ const int fd = memfd_create("payload", 0);
+  CHECK(fd >= 0);
+  CHECK_EQ(ftruncate(fd, 3145728), 0);
+  OwnedFd owner(fd);
+  CHECK_EQ(owner.payload(2899968u), 3145728u);
+  CHECK_EQ(owner.payload(4194304u), 3145728u);
+  CHECK_EQ(owner.payload(0u), 3145728u); }
+
+TEST(owned_fd_payload, is_the_claim_where_the_descriptor_has_no_extent)
+{ OwnedFd none;
+  CHECK_EQ(none.payload(4096u), 4096u);
+  OwnedFd empty(memfd_create("empty", 0));
+  CHECK_EQ(empty.payload(8192u), 8192u); }

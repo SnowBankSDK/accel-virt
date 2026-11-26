@@ -18,6 +18,9 @@ public:
     bool               imports() const;
     void               release(uint64_t memory);
     uint32_t           dmabuf_types(int fd) const;
+    uint32_t           import_type(uint32_t allowed) const;
+    uint32_t           admitted(int fd, uint32_t allowed) const;
+    bool               exported_here(int fd) const;
     [[nodiscard]] bool import_dmabuf(OwnedFd &descriptor, uint64_t size, uint32_t memory_type, uint64_t &memory);
     VkExternalMemoryHandleTypeFlags buffer_external_types(VkPhysicalDevice physical, const VkBufferCreateInfo &create,
                                                           VkExternalMemoryHandleTypeFlagBits type);
@@ -27,7 +30,8 @@ public:
     [[nodiscard]] bool export_memory(uint64_t memory, VkExternalMemoryHandleTypeFlagBits type, OwnedFd &descriptor);
     [[nodiscard]] bool export_semaphore(uint64_t semaphore, OwnedFd &descriptor);
     [[nodiscard]] bool import_shared_memory(int fd, VkExternalMemoryHandleTypeFlagBits type, uint64_t size,
-                                            uint32_t memory_type, uint64_t &memory);
+                                            uint32_t memory_type, uint64_t &memory, uint64_t &bytes);
+    [[nodiscard]] bool import_dedicated(int fd, uint64_t size, uint32_t memory_type, uint64_t image, uint64_t &memory);
     [[nodiscard]] bool import_shared_semaphore(int fd, uint64_t &semaphore);
     void               destroy_semaphore(uint64_t semaphore);
     [[nodiscard]] bool import_semaphore_payload(int fd, uint64_t semaphore);

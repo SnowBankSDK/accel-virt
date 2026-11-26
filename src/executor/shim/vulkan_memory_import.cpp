@@ -23,6 +23,24 @@ uint32_t VulkanMemoryImport::dmabuf_types(int fd) const
     return table_.dma_buf_types(fd);
 }
 
+uint32_t VulkanMemoryImport::import_type(uint32_t allowed) const
+{
+    AV_SCOPE("VulkanMemoryImport::import_type");
+    return table_.import_type(allowed);
+}
+
+uint32_t VulkanMemoryImport::admitted(int fd, uint32_t allowed) const
+{
+    AV_SCOPE("VulkanMemoryImport::admitted");
+    return table_.admitted(fd, allowed);
+}
+
+bool VulkanMemoryImport::exported_here(int fd) const
+{
+    AV_SCOPE("VulkanMemoryImport::exported_here");
+    return table_.exported_here(fd);
+}
+
 bool VulkanMemoryImport::import_dmabuf(OwnedFd &descriptor, uint64_t size, uint32_t memory_type, uint64_t &memory)
 {
     AV_SCOPE("VulkanMemoryImport::import_dmabuf");
@@ -114,12 +132,30 @@ bool VulkanMemoryImport::export_semaphore(uint64_t semaphore, OwnedFd &descripto
 }
 
 bool VulkanMemoryImport::import_shared_memory(int fd, VkExternalMemoryHandleTypeFlagBits type, uint64_t size,
-                                              uint32_t memory_type, uint64_t &memory)
+                                              uint32_t memory_type, uint64_t &memory, uint64_t &bytes)
 {
     AV_SCOPE("VulkanMemoryImport::import_shared_memory");
     OwnedFd        copy;
     VkDeviceMemory made = VK_NULL_HANDLE;
-    if (!copy.hold_copy(fd) || !table_.import_memory(copy, type, size, memory_type, nullptr, made)) return false;
+    if (!copy.hold_copy(fd)) return false;
+    const uint64_t whole = type == VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT ? copy.payload(size) : size;
+    if (!table_.import_memory(copy, type, whole, memory_type, nullptr, made)) return false;
+    memory = reinterpret_cast<uint64_t>(made);
+    bytes = whole;
+    held_++;
+    return true;
+}
+
+bool VulkanMemoryImport::import_dedicated(int fd, uint64_t size, uint32_t memory_type, uint64_t image, uint64_t &memory)
+{
+    AV_SCOPE("VulkanMemoryImport::import_dedicated");
+    OwnedFd                             copy;
+    VkDeviceMemory                      made = VK_NULL_HANDLE;
+    const VkMemoryDedicatedAllocateInfo dedicated = {VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO, nullptr,
+                                                     reinterpret_cast<VkImage>(image), VK_NULL_HANDLE};
+    if (!copy.hold_copy(fd) ||
+        !table_.import_memory(copy, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, size, memory_type, &dedicated, made))
+        return false;
     memory = reinterpret_cast<uint64_t>(made);
     held_++;
     return true;

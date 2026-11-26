@@ -10,6 +10,8 @@
 #include "executor/vulkan/vulkan_addresses.hpp"
 #include "proto/vulkan/host_copy_images.hpp"
 #include "executor/vulkan/spirv_validator.hpp"
+#include "executor/vulkan/bindable_memory.hpp"
+#include "executor/vulkan/dedicated_imports.hpp"
 #include "executor/vulkan/vram_budget.hpp"
 #include "executor/vulkan/vulkan_fence_targets.hpp"
 #include "executor/vulkan/vulkan_fence_watch.hpp"
@@ -48,6 +50,7 @@ class OwnedFd;
 class SharedImageShape;
 
 class HostGpu;
+class FormatUsages;
 class HostMemorySource;
 class ImportTable;
 class SourceMemory;
@@ -318,6 +321,22 @@ public:
     VkResult on_vkQueueSubmit2KHR(VkQueue queue, uint32_t submitCount, const VkSubmitInfo2 *pSubmits, VkFence fence) override;
     void     on_vkGetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice, VkPhysicalDeviceFeatures2 *pFeatures) override;
     void     on_vkGetPhysicalDeviceFeatures2KHR(VkPhysicalDevice physicalDevice, VkPhysicalDeviceFeatures2 *pFeatures) override;
+    void     on_vkGetPhysicalDeviceFormatProperties(VkPhysicalDevice physicalDevice, VkFormat format,
+                                                    VkFormatProperties *pFormatProperties) override;
+    void     on_vkGetPhysicalDeviceFormatProperties2(VkPhysicalDevice physicalDevice, VkFormat format,
+                                                     VkFormatProperties2 *pFormatProperties) override;
+    void     on_vkGetPhysicalDeviceFormatProperties2KHR(VkPhysicalDevice physicalDevice, VkFormat format,
+                                                        VkFormatProperties2 *pFormatProperties) override;
+    VkResult on_vkGetPhysicalDeviceImageFormatProperties(VkPhysicalDevice physicalDevice, VkFormat format,
+                                                         VkImageType type, VkImageTiling tiling,
+                                                         VkImageUsageFlags usage, VkImageCreateFlags flags,
+                                                         VkImageFormatProperties *pImageFormatProperties) override;
+    VkResult on_vkGetPhysicalDeviceImageFormatProperties2(VkPhysicalDevice                        physicalDevice,
+                                                          const VkPhysicalDeviceImageFormatInfo2 *pImageFormatInfo,
+                                                          VkImageFormatProperties2 *pImageFormatProperties) override;
+    VkResult on_vkGetPhysicalDeviceImageFormatProperties2KHR(VkPhysicalDevice                        physicalDevice,
+                                                             const VkPhysicalDeviceImageFormatInfo2 *pImageFormatInfo,
+                                                             VkImageFormatProperties2 *pImageFormatProperties) override;
     VkResult on_vkQueueBindSparse(VkQueue queue, uint32_t bindInfoCount, const VkBindSparseInfo *pBindInfo, VkFence fence) override;
 
     VkResult on_vkGetMemoryFdKHR(VkDevice device, const VkMemoryGetFdInfoKHR *pGetFdInfo,
@@ -434,6 +453,11 @@ private:
     GuestDevice       *device_of(uint64_t device);
     GuestDevice       *owner_of(uint64_t made);
     [[nodiscard]] bool import_memory(GuestDevice &device, int fd, uint64_t size, uint64_t &wire_handle);
+    bool               image_fits(VkDevice device, const VkBindImageMemoryInfo &bind);
+    bool               buffer_fits(VkDevice device, VkBuffer buffer, VkDeviceMemory memory, VkDeviceSize offset);
+    bool               bind_fits(const char *what, VkDeviceMemory memory, VkDeviceSize offset, VkDeviceSize bytes);
+    bool               dedicates(const VkBindImageMemoryInfo &bind) const;
+    bool               dedicate_bind(VkDevice device, const VkBindImageMemoryInfo &bind, uint64_t &used);
     [[nodiscard]] bool import_payload(int fd, uint64_t into, uint64_t &wire_handle, uint64_t &detail);
     bool               imports_nothing(const void *next) const;
     bool               exports_memory(const void *next) const;
@@ -449,8 +473,10 @@ private:
     bool for_source(VkDevice device, VkImageCreateInfo &create, VkExternalMemoryImageCreateInfo &external);
     void learn_types(VkPhysicalDevice physical);
     uint32_t image_bits(uint32_t host_bits, bool external) const;
-    uint32_t                           first_memory_type(uint32_t mask) const;
     uint32_t                           import_type(const SourceMemory &memory, int fd) const;
+    void                               agree_features(VkPhysicalDevice physical, VkFormat format, FormatUsages &usages);
+    bool                               format_admits(VkPhysicalDevice physical, VkFormat format, VkImageTiling tiling,
+                                                     VkImageUsageFlags usage);
     VkPhysicalDevice bound_device(VkInstance instance);
     VkResult         shader_verdict(VkDevice device, const uint32_t *code, size_t bytes);
     VkResult         stage_verdicts(VkDevice device, const VkPipelineShaderStageCreateInfo *stages, uint32_t count);
@@ -506,6 +532,8 @@ private:
     bool                 ray_limits_learnt_ = false;
     HostCopyImages       copies_;
     VramBudget           vram_;
+    BindableMemory       bindable_;
+    DedicatedImports     dedicated_;
     VulkanSubmitProgress progress_;
     VulkanTimelineSubmit timeline_submit_;
     VulkanFenceTargets   fence_targets_;

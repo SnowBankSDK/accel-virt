@@ -1,6 +1,6 @@
 #include "executor/vulkan/vulkan_backend.hpp"
-
 #include "core/log/driver_log.hpp"
+#include "core/log/log_line.hpp"
 #include "core/trace/function_scope.hpp"
 
 namespace av {
@@ -159,7 +159,9 @@ void VulkanBackend::on_vkDestroyBuffer(VkDevice device, VkBuffer buffer, const V
 void VulkanBackend::on_vkDestroyImage(VkDevice device, VkImage image, const VkAllocationCallbacks *)
 {
     AV_SCOPE("VulkanBackend::on_vkDestroyImage");
+    const uint64_t dedicated = dedicated_.take_dedicated(number(image));
     guard_.destroy(VulkanDestroyKind::image, number(device), 0u, number(image));
+    if (dedicated != 0u) guard_.destroy(VulkanDestroyKind::imported_memory, number(device), 0u, dedicated);
 }
 
 void VulkanBackend::on_vkDestroyImageView(VkDevice device, VkImageView imageView, const VkAllocationCallbacks *)
@@ -379,10 +381,91 @@ bool VulkanBackend::reusable(VkCommandBuffer commandBuffer)
     return true;
 }
 
+bool VulkanBackend::bind_fits(const char *what, VkDeviceMemory memory, VkDeviceSize offset, VkDeviceSize bytes)
+{
+    AV_SCOPE("VulkanBackend::bind_fits");
+    if (bindable_.fits(number(memory), offset, bytes)) return true;
+    LogLine(lines_)
+        .text(what)
+        .text(" of ")
+        .number(bytes)
+        .text(" bytes at offset ")
+        .number(offset)
+        .text(" does not fit its memory; the bind is refused")
+        .write();
+    return false;
+}
+
+bool VulkanBackend::buffer_fits(VkDevice device, VkBuffer buffer, VkDeviceMemory memory, VkDeviceSize offset)
+{
+    AV_SCOPE("VulkanBackend::buffer_fits");
+    VkMemoryRequirements needs = {};
+    RealVulkanDispatch::on_vkGetBufferMemoryRequirements(device, buffer, &needs);
+    return bind_fits("a buffer", memory, offset, needs.size);
+}
+
+bool VulkanBackend::image_fits(VkDevice device, const VkBindImageMemoryInfo &bind)
+{
+    AV_SCOPE("VulkanBackend::image_fits");
+    if (bind.memory == VK_NULL_HANDLE) return true;
+    VkImagePlaneMemoryRequirementsInfo plane = {VK_STRUCTURE_TYPE_IMAGE_PLANE_MEMORY_REQUIREMENTS_INFO, nullptr,
+                                                VK_IMAGE_ASPECT_COLOR_BIT};
+    bool planar = false;
+    for (const auto *node = static_cast<const VkBaseInStructure *>(bind.pNext); node != nullptr; node = node->pNext) {
+        if (node->sType != VK_STRUCTURE_TYPE_BIND_IMAGE_PLANE_MEMORY_INFO) continue;
+        plane.planeAspect = reinterpret_cast<const VkBindImagePlaneMemoryInfo *>(node)->planeAspect;
+        planar = true;
+    }
+    VkMemoryRequirements2 needs = {VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2, nullptr, {}};
+    if (planar) {
+        const VkImageMemoryRequirementsInfo2 asked = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_REQUIREMENTS_INFO_2, &plane,
+                                                      bind.image};
+        RealVulkanDispatch::on_vkGetImageMemoryRequirements2(device, &asked, &needs);
+    } else {
+        RealVulkanDispatch::on_vkGetImageMemoryRequirements(device, bind.image, &needs.memoryRequirements);
+    }
+    return bind_fits("an image", bind.memory, bind.memoryOffset, needs.memoryRequirements.size);
+}
+
+bool VulkanBackend::dedicates(const VkBindImageMemoryInfo &bind) const
+{
+    AV_SCOPE("VulkanBackend::dedicates");
+    return bind.pNext == nullptr && bind.memoryOffset == 0u && dedicated_.payload(number(bind.memory)) >= 0;
+}
+
+bool VulkanBackend::dedicate_bind(VkDevice device, const VkBindImageMemoryInfo &bind, uint64_t &used)
+{
+    AV_SCOPE("VulkanBackend::dedicate_bind");
+    GuestDevice *const owner = device_of(number(device));
+    if (!dedicates(bind) || owner == nullptr) return false;
+    const int      fd = dedicated_.payload(number(bind.memory));
+    VkMemoryRequirements needs = {};
+    RealVulkanDispatch::on_vkGetImageMemoryRequirements(device, bind.image, &needs);
+    const uint32_t types = needs.memoryTypeBits & owner->memory().dmabuf_types(fd);
+    uint64_t       made = 0u;
+    if (types == 0u || !owner->memory().import_dedicated(fd, dedicated_.payload_bytes(number(bind.memory)),
+                                                         owner->memory().import_type(owner->memory().admitted(fd, types)),
+                                                         number(bind.image), made))
+        return false;
+    if (dedicated_.dedicate(number(bind.image), made) != Status::ok) {
+        owner->memory().release(made);
+        return false;
+    }
+    if (RealVulkanDispatch::on_vkBindImageMemory(device, bind.image, reinterpret_cast<VkDeviceMemory>(made), 0u) ==
+        VK_SUCCESS) {
+        used = made;
+        return true;
+    }
+    static_cast<void>(dedicated_.take_dedicated(number(bind.image)));
+    owner->memory().release(made);
+    return false;
+}
+
 VkResult VulkanBackend::on_vkBindBufferMemory(VkDevice device, VkBuffer buffer, VkDeviceMemory memory,
                                               VkDeviceSize memoryOffset)
 {
     AV_SCOPE("VulkanBackend::on_vkBindBufferMemory");
+    if (!buffer_fits(device, buffer, memory, memoryOffset)) return VK_ERROR_OUT_OF_DEVICE_MEMORY;
     const VkResult bound = RealVulkanDispatch::on_vkBindBufferMemory(device, buffer, memory, memoryOffset);
     if (bound != VK_SUCCESS || guard_.depends(number(buffer), number(memory), number(device))) return bound;
     return VK_ERROR_OUT_OF_HOST_MEMORY;
@@ -392,8 +475,13 @@ VkResult VulkanBackend::on_vkBindImageMemory(VkDevice device, VkImage image, VkD
                                              VkDeviceSize memoryOffset)
 {
     AV_SCOPE("VulkanBackend::on_vkBindImageMemory");
-    const VkResult bound = RealVulkanDispatch::on_vkBindImageMemory(device, image, memory, memoryOffset);
-    if (bound != VK_SUCCESS || guard_.depends(number(image), number(memory), number(device))) return bound;
+    const VkBindImageMemoryInfo bind = {VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_INFO, nullptr, image, memory, memoryOffset};
+    if (!image_fits(device, bind)) return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    uint64_t       used = number(memory);
+    const VkResult bound = dedicate_bind(device, bind, used)
+                               ? VK_SUCCESS
+                               : RealVulkanDispatch::on_vkBindImageMemory(device, image, memory, memoryOffset);
+    if (bound != VK_SUCCESS || guard_.depends(number(image), used, number(device))) return bound;
     return VK_ERROR_OUT_OF_HOST_MEMORY;
 }
 
@@ -401,6 +489,9 @@ VkResult VulkanBackend::on_vkBindBufferMemory2(VkDevice device, uint32_t bindInf
                                                const VkBindBufferMemoryInfo *pBindInfos)
 {
     AV_SCOPE("VulkanBackend::on_vkBindBufferMemory2");
+    for (uint32_t index = 0u; index < bindInfoCount; index++)
+        if (!buffer_fits(device, pBindInfos[index].buffer, pBindInfos[index].memory, pBindInfos[index].memoryOffset))
+            return VK_ERROR_OUT_OF_DEVICE_MEMORY;
     const VkResult bound = RealVulkanDispatch::on_vkBindBufferMemory2(device, bindInfoCount, pBindInfos);
     if (bound != VK_SUCCESS) return bound;
     for (uint32_t index = 0u; index < bindInfoCount; index++)
@@ -420,6 +511,22 @@ VkResult VulkanBackend::on_vkBindImageMemory2(VkDevice device, uint32_t bindInfo
                                               const VkBindImageMemoryInfo *pBindInfos)
 {
     AV_SCOPE("VulkanBackend::on_vkBindImageMemory2");
+    bool dedicated = false;
+    for (uint32_t index = 0u; index < bindInfoCount; index++) {
+        if (!image_fits(device, pBindInfos[index])) return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        dedicated = dedicated || dedicates(pBindInfos[index]);
+    }
+    if (dedicated) {
+        for (uint32_t index = 0u; index < bindInfoCount; index++) {
+            uint64_t       used = number(pBindInfos[index].memory);
+            const VkResult one = dedicate_bind(device, pBindInfos[index], used)
+                                     ? VK_SUCCESS
+                                     : RealVulkanDispatch::on_vkBindImageMemory2(device, 1u, &pBindInfos[index]);
+            if (one != VK_SUCCESS) return one;
+            if (!guard_.depends(number(pBindInfos[index].image), used, number(device))) return VK_ERROR_OUT_OF_HOST_MEMORY;
+        }
+        return VK_SUCCESS;
+    }
     const VkResult bound = RealVulkanDispatch::on_vkBindImageMemory2(device, bindInfoCount, pBindInfos);
     if (bound != VK_SUCCESS) return bound;
     for (uint32_t index = 0u; index < bindInfoCount; index++)

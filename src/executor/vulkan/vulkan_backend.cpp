@@ -55,8 +55,7 @@ uint64_t extension_mask(const char *const *names, uint32_t count, Slot slot_of)
     return mask;
 }
 
-constexpr const char *const withheld_extensions[] = {
-    "VK_EXT_device_generated_commands", "VK_EXT_descriptor_buffer"};
+constexpr const char *const withheld_extensions[] = {"VK_EXT_device_generated_commands"};
 
 bool names_withheld(const char *const *names, uint32_t count)
 {
@@ -91,7 +90,7 @@ VulkanBackend::VulkanBackend(BlockSource &blocks, DriverLog &lines)
       application_(), devices_(blocks), adopting_(nullptr), lifecycle_(nullptr), physical_(VK_NULL_HANDLE),
       memory_import_(false), handles_(blocks), buffer_device_(), imports_(nullptr), types_(), types_learnt_(false), timing_(lines),
       templates_(blocks), layouts_(blocks), families_(blocks), host_waits_(blocks), park_clock_(), parked_(blocks, *this, park_clock_), frame_(nullptr, 0u),
-      frame_command_(0u), framed_(false), replaying_(false), last_submit_(VK_SUCCESS), lines_(lines), fence_watch_(), spirv_(), issued_(), addresses_(blocks), copies_(blocks), vram_(blocks), progress_(blocks),
+      frame_command_(0u), framed_(false), replaying_(false), last_submit_(VK_SUCCESS), lines_(lines), fence_watch_(), spirv_(), issued_(), addresses_(blocks), copies_(blocks), vram_(blocks), bindable_(blocks), dedicated_(blocks), progress_(blocks),
       timeline_submit_(blocks), fence_targets_(blocks), guard_(blocks, *this, progress_), robust_(), parent_(0u), created_extensions_(0u), ran_(0u), lost_(false), devices_leaked_(false)
 {
     AV_SCOPE("VulkanBackend::VulkanBackend");
@@ -992,6 +991,7 @@ void VulkanBackend::on_vkFreeMemory(VkDevice device, VkDeviceMemory memory, cons
 {
     AV_SCOPE("VulkanBackend::on_vkFreeMemory");
     const uint64_t            handle = reinterpret_cast<uint64_t>(memory);
+    bindable_.forget(handle);
     if (source_ != nullptr && imports_ != nullptr) source_->drop_placed(reinterpret_cast<uint64_t>(imports_), handle);
     const SourceMemory *const imported = imports_ != nullptr ? imports_->named(handle) : nullptr;
     if (imported == nullptr) {
@@ -1111,10 +1111,13 @@ VkResult VulkanBackend::on_vkAllocateMemory(VkDevice device, const VkMemoryAlloc
         return made;
     }
     if (vram_.commit(heap, reinterpret_cast<uint64_t>(*pMemory), pAllocateInfo->allocationSize) == Status::ok) {
-        if (!placing || place_exported(*placing_device, pAllocateInfo->memoryTypeIndex, reinterpret_cast<uint64_t>(*pMemory),
-                                       pAllocateInfo->allocationSize))
+        const uint64_t handle = reinterpret_cast<uint64_t>(*pMemory);
+        if (bindable_.note(handle, pAllocateInfo->allocationSize) == Status::ok &&
+            (!placing || place_exported(*placing_device, pAllocateInfo->memoryTypeIndex, handle,
+                                        pAllocateInfo->allocationSize)))
             return made;
-        vram_.release(reinterpret_cast<uint64_t>(*pMemory));
+        bindable_.forget(handle);
+        vram_.release(handle);
         RealVulkanDispatch::on_vkFreeMemory(device, *pMemory, nullptr);
         *pMemory = VK_NULL_HANDLE;
         return VK_ERROR_OUT_OF_DEVICE_MEMORY;
@@ -1168,10 +1171,11 @@ uint32_t VulkanBackend::import_type(const SourceMemory &memory, int fd) const
 {
     AV_SCOPE("VulkanBackend::import_type");
     const uint32_t reported = adopting_->memory().dmabuf_types(fd);
-    if (reported == 0u) return memory.memory_type();
-    if (memory.memory_type() < max_memory_types && (reported & (1u << memory.memory_type())) != 0u)
+    const bool     here = adopting_->memory().exported_here(fd);
+    if (here && memory.memory_type() < max_memory_types &&
+        (reported == 0u || (reported & (1u << memory.memory_type())) != 0u))
         return memory.memory_type();
-    return first_memory_type(reported);
+    return adopting_->memory().import_type(adopting_->memory().admitted(fd, reported != 0u ? reported : ~0u));
 }
 
 bool VulkanBackend::adopt(SourceMemory &memory, const BlobRole &role, uint64_t &handle)
@@ -1182,17 +1186,19 @@ bool VulkanBackend::adopt(SourceMemory &memory, const BlobRole &role, uint64_t &
     uint64_t made = 0u;
     uint32_t preferred = max_memory_types;
     uint32_t listed = 0u;
+    uint32_t admitted = 0u;
     {
         OwnedFd probe;
         if (!memory.share(probe)) return false;
         preferred = import_type(memory, probe.fd());
         listed = adopting_->memory().dmabuf_types(probe.fd());
+        admitted = adopting_->memory().admitted(probe.fd(), ~0u);
     }
     bool imported = false;
     for (uint32_t pass = 0u; pass < 3u && !imported; pass++) {
         for (uint32_t type = 0u; type < max_memory_types && !imported; type++) {
             const bool wanted = pass == 0u ? type == preferred : pass == 1u ? (listed & (1u << type)) != 0u : true;
-            if (!wanted || (pass != 0u && type == preferred)) continue;
+            if (!wanted || (pass != 0u && (type == preferred || (admitted & (1u << type)) == 0u))) continue;
             OwnedFd descriptor;
             if (!memory.share(descriptor)) return false;
             imported = adopting_->memory().import_dmabuf(descriptor, memory.size(), type, made);
@@ -1206,16 +1212,13 @@ bool VulkanBackend::adopt(SourceMemory &memory, const BlobRole &role, uint64_t &
         adopting_->memory().release(made);
         return false;
     }
+    if (bindable_.note(made, memory.size()) != Status::ok) {
+        static_cast<void>(forgot(made));
+        adopting_->memory().release(made);
+        return false;
+    }
     handle = made;
     return true;
-}
-
-uint32_t VulkanBackend::first_memory_type(uint32_t mask) const
-{
-    AV_SCOPE("VulkanBackend::first_memory_type");
-    for (uint32_t type = 0u; type < max_memory_types; type++)
-        if ((mask & (1u << type)) != 0u) return type;
-    return max_memory_types;
 }
 
 bool VulkanBackend::export_object(uint32_t kind, uint64_t wire_handle, uint32_t &handle_kind, OwnedFd &descriptor)
@@ -1257,17 +1260,25 @@ bool VulkanBackend::import_memory(GuestDevice &device, int fd, uint64_t size, ui
 {
     AV_SCOPE("VulkanBackend::import_memory");
     const uint32_t listed = device.memory().dmabuf_types(fd);
+    const uint32_t candidates[2] = {device.memory().admitted(fd, listed), device.memory().admitted(fd, ~listed)};
+    uint64_t       bytes = 0u;
     bool           imported = false;
     for (uint32_t pass = 0u; pass < 2u && !imported; pass++) {
-        for (uint32_t type = 0u; type < max_memory_types && !imported; type++) {
-            const bool is_listed = (listed & (1u << type)) != 0u;
-            if (is_listed != (pass == 0u)) continue;
+        for (uint32_t left = candidates[pass]; left != 0u && !imported;) {
+            const uint32_t type = device.memory().import_type(left);
+            if (type >= max_memory_types) break;
             imported = device.memory().import_shared_memory(fd, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, size,
-                                                            type, wire_handle);
+                                                            type, wire_handle, bytes);
+            left &= ~(1u << type);
         }
     }
     if (!imported) { AV_UNTESTABLE("no host driver here refuses an import"); return false; }
-    if (kept_on(device, wire_handle)) return true;
+    if (kept_on(device, wire_handle)) {
+        if (bindable_.note(wire_handle, bytes) == Status::ok &&
+            dedicated_.keep_payload(wire_handle, fd, bytes) == Status::ok)
+            return true;
+        static_cast<void>(forgot(wire_handle));
+    }
     device.memory().release(wire_handle);
     wire_handle = 0u;
     return false;
@@ -1309,6 +1320,8 @@ GuestDevice *VulkanBackend::forgot(uint64_t made)
 {
     AV_SCOPE("VulkanBackend::forgot");
     GuestDevice *const owner = owner_of(made);
+    bindable_.forget(made);
+    dedicated_.drop_payload(made);
     if (handles_.holds(made)) handles_.forget(made);
     buffer_device_ = BufferDevice{};
     return owner;
