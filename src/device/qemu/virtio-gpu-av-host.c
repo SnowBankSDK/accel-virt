@@ -628,9 +628,17 @@ bool virtio_gpu_av_show_image(VirtIOGPUAv *r, uint32_t head, const AvExportedIma
     return true;
 }
 
+static void av_unref_image(pixman_image_t *image, void *data)
+{
+    pixman_image_unref(data);
+}
+
 void virtio_gpu_av_show_surface(VirtIOGPUAv *r, uint32_t head)
 {
     QemuConsole *con = av_head_console(r, head);
+    struct virtio_gpu_scanout *scanout;
+    struct virtio_gpu_simple_resource *res;
+    pixman_image_t *rect;
 
     if (!con || r->showing[head] < 0) {
         return;
@@ -638,6 +646,22 @@ void virtio_gpu_av_show_surface(VirtIOGPUAv *r, uint32_t head)
     fprintf(stderr, "virtio-gpu-av: head %u back to its 2D surface\n", head);
     qemu_console_gl_scanout_disable(con);
     r->showing[head] = -1;
+    scanout = &VIRTIO_GPU_BASE(r)->scanout[head];
+    res = virtio_gpu_find_resource(VIRTIO_GPU(r), scanout->resource_id);
+    if (!res || !res->image) {
+        return;
+    }
+    rect = pixman_image_create_bits(scanout->fb.format, scanout->width, scanout->height,
+                                    (uint32_t *)((uint8_t *)pixman_image_get_data(res->image) + scanout->fb.offset),
+                                    scanout->fb.stride);
+    if (!rect) {
+        return;
+    }
+    pixman_image_ref(res->image);
+    pixman_image_set_destroy_function(rect, av_unref_image, res->image);
+    scanout->ds = qemu_create_displaysurface_pixman(rect);
+    pixman_image_unref(rect);
+    qemu_console_set_surface(con, scanout->ds);
 }
 
 static void av_update_scanout(void *opaque, uint32_t head, uint32_t x, uint32_t y, uint32_t width,
